@@ -29,6 +29,7 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
 - `sdn.py`: Software Defined Networking endpoints: fabrics, route-maps, prefix-lists (PVE 9.2+; degrades gracefully on older clusters) plus the read-only `/sdn/create/stream` NetBox reconciliation route with optional `sync_mode_sdn_bgp` projection into `netbox_bgp`.
 - `services.py`: read-only agentless service-monitoring route `GET /proxmox/services/systemd?endpoint_id=&units=`. Pulls Proxmox systemd unit state over SSH (fixed-argv `systemctl show -p ...` via `services/proxmox_services.py` + one-shot `run_endpoint_command`) using the endpoint's own registered SSH credential; `endpoint_id` is the netbox-proxbox plugin id (browser-terminal id space), not the SQLite id. Units are regex- + allowlist-validated; an SSH-unreachable endpoint returns 200 `reachable=false`. Called by nms-backend's `os.linux_proxmox.show_systemctl_services` RPC handler.
 - `viewer_codegen.py`: runtime endpoints to generate and return Proxmox OpenAPI, Pydantic, and live-route artifacts.
+- `zfs.py`: read-only tiered ZFS storage inventory routes `GET /proxmox/storage/zfs/pools` and `GET /proxmox/storage/zfs/pools/{pool_name}`. Tier 1 uses the structured Proxmox REST API (`/nodes/{node}/disks/zfs*`) via `proxmox-sdk`; InfluxDB and JSON-native SSH are exposed as ordered fallback seams that currently skip/degrade rather than opening external transports.
 
 ## How These Routes Work
 

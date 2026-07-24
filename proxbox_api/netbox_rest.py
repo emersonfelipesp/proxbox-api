@@ -29,6 +29,12 @@ from proxbox_api.utils.retry import (
 
 ReconcileStatus = Literal["created", "updated", "unchanged"]
 
+# Exhaustive list traversal is the default contract for ``rest_list_async``.
+# These deliberately generous ceilings guard against a broken or adversarial
+# ``next`` chain consuming unbounded network requests or process memory.
+NETBOX_REST_LIST_HARD_MAX_PAGES = 10_000
+NETBOX_REST_LIST_HARD_MAX_RECORDS = 1_000_000
+
 
 @dataclass(frozen=True, slots=True)
 class ReconcileResult:
@@ -892,15 +898,132 @@ def _parse_next_link(next_url: object) -> tuple[str, dict[str, object]] | None:
     return parts.path, query
 
 
-async def rest_list_async(
-    nb: object, path: str, *, query: dict[str, object] | None = None
+def _pagination_record_signature(record: dict[str, object]) -> tuple[str, str]:
+    """Return a stable identity used to prove that pagination is advancing."""
+
+    record_id = record.get("id")
+    if record_id not in (None, ""):
+        return "id", str(record_id)
+    try:
+        serialized = json.dumps(record, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        serialized = repr(sorted((str(key), repr(value)) for key, value in record.items()))
+    return "record", serialized
+
+
+def _pagination_protocol_error(path: str, detail: str) -> ProxboxException:
+    return ProxboxException(
+        message="NetBox returned invalid pagination data",
+        detail=f"{detail} while listing {path}; refusing to return a partial collection.",
+        http_status_code=502,
+    )
+
+
+def _pagination_offset(query: dict[str, object]) -> int | None:
+    """Parse exactly one non-negative integer offset, if one is present."""
+
+    if "offset" not in query:
+        return None
+    raw_offset = query["offset"]
+    if isinstance(raw_offset, (list, tuple)):
+        if len(raw_offset) != 1:
+            return None
+        raw_offset = raw_offset[0]
+    if isinstance(raw_offset, bool):
+        return None
+    if isinstance(raw_offset, int):
+        return raw_offset if raw_offset >= 0 else None
+    if not isinstance(raw_offset, str) or not raw_offset.isascii() or not raw_offset.isdigit():
+        return None
+    return int(raw_offset)
+
+
+def _validated_pagination_offset(
+    path: str,
+    query: dict[str, object],
+    *,
+    required: bool,
+    label: str,
+) -> int:
+    """Return a trusted offset or reject an ambiguous pagination cursor."""
+
+    if "offset" not in query:
+        if required:
+            raise _pagination_protocol_error(
+                path,
+                f"{label} did not contain exactly one non-negative integer offset",
+            )
+        return 0
+    parsed = _pagination_offset(query)
+    if parsed is None:
+        raise _pagination_protocol_error(
+            path,
+            f"{label} did not contain exactly one non-negative integer offset",
+        )
+    return parsed
+
+
+def _pagination_query_multimap(
+    query: dict[str, object] | None,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Canonicalize filters while retaining repeated-value multiplicity."""
+
+    normalized: list[tuple[str, tuple[str, ...]]] = []
+    for raw_key, raw_value in (query or {}).items():
+        key = str(raw_key)
+        if key in {"limit", "offset"}:
+            continue
+        values = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+        normalized.append((key, tuple(sorted(str(value) for value in values))))
+    return tuple(sorted(normalized))
+
+
+def _pagination_count(path: str, payload: dict[str, object]) -> int:
+    """Validate NetBox's total collection count without coercion."""
+
+    count = payload.get("count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise _pagination_protocol_error(
+            path,
+            "NetBox returned a paginated object without a non-negative integer count",
+        )
+    return count
+
+
+async def _rest_list_traverse_async(
+    nb: object,
+    path: str,
+    *,
+    query: dict[str, object] | None = None,
+    max_records: int | None = None,
+    max_offset: int | None = None,
 ) -> list[RestRecord]:
+    """Traverse one NetBox list safely, optionally stopping at a caller bound."""
+
     api = _unwrap_api(nb)
     semaphore = _get_netbox_semaphore()
     normalized_path = _normalize_path(path)
+    initial_query = query or {}
+    initial_offset = _validated_pagination_offset(
+        path,
+        initial_query,
+        required=False,
+        label="Initial query",
+    )
+    invariant_query = _pagination_query_multimap(query)
+    if max_offset is not None and initial_offset > max_offset:
+        raise _pagination_protocol_error(
+            path,
+            f"Initial offset {initial_offset} exceeded the explicit maximum {max_offset}",
+        )
 
     cached = _read_get_cache(api, normalized_path, query)
     if cached is not None:
+        if max_records is not None and len(cached) > max_records:
+            raise _pagination_protocol_error(
+                path,
+                f"Cached collection exceeded the explicit record limit of {max_records}",
+            )
         return [RestRecord(api, normalized_path, item) for item in cached]
 
     max_retries = _resolve_netbox_max_retries()
@@ -908,8 +1031,16 @@ async def rest_list_async(
 
     async def _fetch_page(
         page_path: str, page_query: dict[str, object] | None
-    ) -> tuple[list[dict], object]:
-        async def _do_request() -> tuple[list[dict], object]:
+    ) -> tuple[
+        list[dict[str, object]],
+        tuple[str, dict[str, object]] | None,
+        int | None,
+    ]:
+        async def _do_request() -> tuple[
+            list[dict[str, object]],
+            tuple[str, dict[str, object]] | None,
+            int | None,
+        ]:
             try:
                 response = await api.client.request("GET", page_path, query=page_query)
             except Exception as e:
@@ -925,20 +1056,46 @@ async def rest_list_async(
                 raise
 
             if isinstance(payload, dict):
-                results = payload.get("results", [])
+                if "results" not in payload:
+                    raise _pagination_protocol_error(
+                        path,
+                        "NetBox returned an object without a results field",
+                    )
+                results = payload.get("results")
                 next_link = payload.get("next")
+                count: int | None = _pagination_count(path, payload)
             elif isinstance(payload, list):
                 results = payload
                 next_link = None
+                count = None
             else:
-                raise ProxboxException(
-                    message="NetBox REST list response was not JSON array/object"
+                raise _pagination_protocol_error(
+                    path,
+                    "NetBox REST list response was not a JSON array/object",
                 )
             if not isinstance(results, list):
-                raise ProxboxException(message="NetBox REST list response missing results list")
-            return [
-                item if isinstance(item, dict) else to_dict(item) for item in results
-            ], next_link
+                raise _pagination_protocol_error(
+                    path,
+                    "NetBox REST list response did not contain a results list",
+                )
+
+            parsed_next = _parse_next_link(next_link)
+            if next_link is not None and parsed_next is None:
+                raise _pagination_protocol_error(
+                    path,
+                    "NetBox returned a non-null invalid next link",
+                )
+
+            normalized_results: list[dict[str, object]] = []
+            for item in results:
+                normalized_item = item if isinstance(item, dict) else to_dict(item)
+                if not isinstance(normalized_item, dict):
+                    raise _pagination_protocol_error(
+                        path,
+                        "NetBox returned a non-object item in results",
+                    )
+                normalized_results.append(normalized_item)
+            return normalized_results, parsed_next, count
 
         for attempt in range(max_retries + 1):
             async with semaphore:
@@ -962,25 +1119,174 @@ async def rest_list_async(
             await asyncio.sleep(delay)
         return await _do_request()
 
-    aggregated: list[dict] = []
+    aggregated: list[dict[str, object]] = []
     current_path: str = normalized_path
     current_query: dict[str, object] | None = query
     seen_pages: set[tuple[str, str]] = set()
+    seen_records: set[tuple[str, str]] = set()
+    page_count = 0
+    expected_count: int | None = None
+    response_is_paginated: bool | None = None
+    current_offset = initial_offset
+    exhausted = False
     while True:
-        page_results, next_link = await _fetch_page(current_path, current_query)
-        aggregated.extend(page_results)
-        nxt = _parse_next_link(next_link)
-        if nxt is None:
-            break
-        page_signature = (nxt[0], repr(sorted(nxt[1].items())))
-        if page_signature in seen_pages:
-            logger.warning("NetBox pagination produced duplicate next link for %s; stopping", path)
-            break
-        seen_pages.add(page_signature)
-        current_path, current_query = nxt
+        if page_count >= NETBOX_REST_LIST_HARD_MAX_PAGES:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination exceeded the hard limit of {NETBOX_REST_LIST_HARD_MAX_PAGES} pages",
+            )
 
-    _write_get_cache(api, normalized_path, query, aggregated)
+        page_results, nxt, returned_count = await _fetch_page(current_path, current_query)
+        page_count += 1
+        page_is_paginated = returned_count is not None
+        if response_is_paginated is None:
+            response_is_paginated = page_is_paginated
+            expected_count = returned_count
+        elif page_is_paginated != response_is_paginated:
+            raise _pagination_protocol_error(
+                path,
+                "NetBox changed pagination response shape between pages",
+            )
+        elif returned_count != expected_count:
+            raise _pagination_protocol_error(
+                path,
+                f"NetBox changed pagination count from {expected_count} to {returned_count}",
+            )
+        if (
+            expected_count is not None
+            and page_results
+            and current_offset + len(page_results) > expected_count
+        ):
+            raise _pagination_protocol_error(
+                path,
+                "Page results extended beyond the declared pagination count",
+            )
+        page_record_signatures = tuple(
+            _pagination_record_signature(record) for record in page_results
+        )
+        if page_record_signatures:
+            unique_page_signatures = set(page_record_signatures)
+            if len(unique_page_signatures) != len(page_record_signatures) or (
+                unique_page_signatures & seen_records
+            ):
+                raise ProxboxException(
+                    message="NetBox pagination did not advance",
+                    detail=(
+                        f"Overlapping record content while listing {path}; "
+                        "refusing to return a partial collection."
+                    ),
+                    http_status_code=502,
+                )
+            seen_records.update(unique_page_signatures)
+
+        if len(aggregated) + len(page_results) > NETBOX_REST_LIST_HARD_MAX_RECORDS:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination exceeded the hard record limit of {NETBOX_REST_LIST_HARD_MAX_RECORDS}",
+            )
+
+        if max_records is not None and len(aggregated) + len(page_results) > max_records:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination exceeded the explicit record limit of {max_records}",
+            )
+        aggregated.extend(page_results)
+
+        if nxt is None:
+            if expected_count is not None:
+                expected_result_count = max(expected_count - initial_offset, 0)
+                if len(aggregated) != expected_result_count:
+                    raise _pagination_protocol_error(
+                        path,
+                        "Final aggregate length "
+                        f"{len(aggregated)} did not match the declared count "
+                        f"{expected_count} from initial offset {initial_offset}",
+                    )
+            exhausted = True
+            break
+        if not page_results:
+            raise ProxboxException(
+                message="NetBox pagination did not advance",
+                detail=(
+                    f"NetBox returned an empty page with a next link while listing {path}; "
+                    "refusing to return a partial collection."
+                ),
+                http_status_code=502,
+            )
+        next_path, next_query = nxt
+        if _normalize_path(next_path) != normalized_path:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination next link changed resource path to {next_path}",
+            )
+        if _pagination_query_multimap(next_query) != invariant_query:
+            raise _pagination_protocol_error(
+                path,
+                "Pagination next link changed non-pagination query parameters",
+            )
+        next_offset = _validated_pagination_offset(
+            path,
+            next_query,
+            required=True,
+            label="Pagination next link",
+        )
+        expected_next_offset = current_offset + len(page_results)
+        if next_offset != expected_next_offset:
+            raise _pagination_protocol_error(
+                path,
+                "NetBox pagination did not advance continuously: "
+                f"next offset {next_offset}, expected {expected_next_offset}",
+            )
+        if max_offset is not None and next_offset > max_offset:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination next offset {next_offset} exceeded the explicit maximum {max_offset}",
+            )
+        if max_records is not None and len(aggregated) >= max_records:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination reached the explicit record limit of {max_records} before the final page",
+            )
+        if len(aggregated) >= NETBOX_REST_LIST_HARD_MAX_RECORDS:
+            raise _pagination_protocol_error(
+                path,
+                "Pagination reached the hard record limit of "
+                f"{NETBOX_REST_LIST_HARD_MAX_RECORDS} before the final page",
+            )
+        if page_count >= NETBOX_REST_LIST_HARD_MAX_PAGES:
+            raise _pagination_protocol_error(
+                path,
+                f"Pagination reached the hard limit of {NETBOX_REST_LIST_HARD_MAX_PAGES} pages before the final page",
+            )
+
+        page_signature = (normalized_path, _serialize_query(next_query))
+        if page_signature in seen_pages:
+            raise ProxboxException(
+                message="NetBox pagination did not advance",
+                detail=(
+                    f"NetBox produced a repeated next link while listing {path}; "
+                    "refusing to return a partial collection."
+                ),
+                http_status_code=502,
+            )
+        seen_pages.add(page_signature)
+        current_path, current_query = normalized_path, next_query
+        current_offset = next_offset
+
+    if exhausted:
+        _write_get_cache(api, normalized_path, query, aggregated)
     return [RestRecord(api, normalized_path, item) for item in aggregated]
+
+
+async def rest_list_async(
+    nb: object,
+    path: str,
+    *,
+    query: dict[str, object] | None = None,
+) -> list[RestRecord]:
+    """Return an exhaustively traversed NetBox list within hard safety bounds."""
+
+    return await _rest_list_traverse_async(nb, path, query=query)
 
 
 async def rest_first_async(
@@ -1185,39 +1491,34 @@ async def _rest_reconcile_async_impl(  # noqa: C901
         )
         page_size = 200
         max_offset = 10_000
-        offset = 0
-        while offset <= max_offset:
-            records = await rest_list_async(
-                nb,
-                path,
-                query={"limit": page_size, "offset": offset},
-            )
-            if not records:
-                return None
-            for record in records:
-                try:
-                    current_normalized = current_normalizer(record.serialize())
-                    if supports_model_validation:
-                        current_model = schema.model_validate(current_normalized)
-                        current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
-                    else:
-                        current_payload = {
-                            key: value
-                            for key, value in dict(current_normalized or {}).items()
-                            if value is not None
-                        }
-                except Exception:
-                    logger.debug(
-                        "Skipping NetBox record during reconcile scan (validation failed)",
-                        exc_info=True,
-                    )
-                    continue
-                for candidate in candidates:
-                    if all(current_payload.get(key) == value for key, value in candidate.items()):
-                        return record
-            if len(records) < page_size:
-                return None
-            offset += page_size
+        records = await rest_list_paginated_async(
+            nb,
+            path,
+            base_query={"offset": 0},
+            page_size=page_size,
+            max_offset=max_offset,
+        )
+        for record in records:
+            try:
+                current_normalized = current_normalizer(record.serialize())
+                if supports_model_validation:
+                    current_model = schema.model_validate(current_normalized)
+                    current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
+                else:
+                    current_payload = {
+                        key: value
+                        for key, value in dict(current_normalized or {}).items()
+                        if value is not None
+                    }
+            except Exception:
+                logger.debug(
+                    "Skipping NetBox record during reconcile scan (validation failed)",
+                    exc_info=True,
+                )
+                continue
+            for candidate in candidates:
+                if all(current_payload.get(key) == value for key, value in candidate.items()):
+                    return record
         return None
 
     async def _reconcile(existing_record: RestRecord) -> tuple[RestRecord, ReconcileStatus]:
@@ -1794,29 +2095,41 @@ async def rest_list_paginated_async(
     page_size: int = 200,
     max_offset: int | None = None,
 ) -> list[RestRecord]:
-    records: list[RestRecord] = []
+    """Traverse a list while enforcing an optional offset/record ceiling.
+
+    ``max_offset`` is the greatest server-provided offset that may be requested.
+    The companion record cap is ``max_offset + page_size`` for pagination
+    styles without an offset cursor. Exceeding either bound raises a typed 502;
+    partial collections are never returned or cached.
+    """
+
     resolved_page_size = max(1, int(page_size))
-    offset = 0
-    while True:
-        if max_offset is not None and offset > max_offset:
-            logger.warning(
-                "Pagination cap reached for %s at offset=%s; returning %s collected record(s)",
-                path,
-                offset,
-                len(records),
-            )
-            break
-        query = dict(base_query or {})
-        query["limit"] = resolved_page_size
-        query["offset"] = offset
-        page = await rest_list_async(nb, path, query=query)
-        if not page:
-            break
-        records.extend(page)
-        if len(page) < resolved_page_size:
-            break
-        offset += resolved_page_size
-    return records
+    query = dict(base_query or {})
+    query["limit"] = resolved_page_size
+    resolved_max_offset = None if max_offset is None else max(0, int(max_offset))
+    initial_offset = _validated_pagination_offset(
+        path,
+        query,
+        required=False,
+        label="Initial query",
+    )
+    if resolved_max_offset is not None and initial_offset > resolved_max_offset:
+        raise _pagination_protocol_error(
+            path,
+            f"Initial offset {initial_offset} exceeded the explicit maximum {resolved_max_offset}",
+        )
+    max_records = (
+        None
+        if resolved_max_offset is None
+        else resolved_max_offset - initial_offset + resolved_page_size
+    )
+    return await _rest_list_traverse_async(
+        nb,
+        path,
+        query=query,
+        max_records=max_records,
+        max_offset=resolved_max_offset,
+    )
 
 
 async def rest_bulk_reconcile_async(  # noqa: C901
@@ -1835,6 +2148,7 @@ async def rest_bulk_reconcile_async(  # noqa: C901
     lookup_query_field_map: dict[str, str] | None = None,
     strict_lookup: bool = False,
     nullable_fields: set[str] | frozenset[str] | None = None,
+    fallback_to_individual: bool = True,
 ) -> BulkReconcileResult:
     if not payloads:
         return BulkReconcileResult(records=[], created=0, updated=0, unchanged=0, failed=0)
@@ -1956,6 +2270,14 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             records.extend(created_records)
             created += len(created_records)
         except Exception:
+            if not fallback_to_individual:
+                logger.warning(
+                    "Bulk create failed for %s (%s item(s)); per-item fallback is disabled",
+                    path,
+                    len(batch),
+                    exc_info=True,
+                )
+                raise
             logger.warning(
                 "Bulk create fallback triggered for %s (%s item(s))",
                 path,
@@ -2017,6 +2339,14 @@ async def rest_bulk_reconcile_async(  # noqa: C901
             records.extend(patched_records)
             updated += len(patched_records)
         except Exception:
+            if not fallback_to_individual:
+                logger.warning(
+                    "Bulk patch failed for %s (%s item(s)); per-item fallback is disabled",
+                    path,
+                    len(batch),
+                    exc_info=True,
+                )
+                raise
             logger.warning(
                 "Bulk patch fallback triggered for %s (%s item(s))",
                 path,

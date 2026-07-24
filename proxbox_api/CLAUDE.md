@@ -44,6 +44,11 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
   `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox
   sync flow, including VM operation-queue classification, per-object journal
   tracking, and stream progress.
+- `services/sync/task_history.py` owns node-archive task collection and global
+  NetBox reconciliation. VM routes pass successful VM IDs to it once;
+  full-update disables the VM-stage default and runs its dedicated aggregate
+  once. Keep endpoint-aware identity and degraded-result semantics at this
+  service boundary.
 - `proxmox_to_netbox/` is the normalization boundary. Parsing and conversion must happen in schemas and mappers, not in route handlers.
 
 ## Key Data Flow
@@ -91,6 +96,11 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
   fallback runs only when `custom_fields_enabled=true` (and emits a deprecation
   warning). Full custom-field retirement is a later item; do not delete
   custom-field data while the flag exists.
+- Task-history identity is stricter than a best-effort display read: load the VM
+  identity sidecars once, join by `virtual_machine`, and treat each present row
+  as authoritative. Never use custom fields to mask a malformed, incomplete, or
+  duplicate present sidecar. When custom fields are disabled, inability to
+  verify sidecar identity is a fatal sync boundary.
 - Keep deterministic reconciliation logic in `services/sync/reconciliation/`.
   Do not re-grow operation-queue diffing inside VM route modules.
 - For new runtime tunables, prefer a `ProxboxPluginSettings` field on the

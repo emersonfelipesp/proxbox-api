@@ -128,6 +128,7 @@ async def sync_task_history_individual(  # noqa: C901
     task_type = str(target_task.get("type") or "unknown")
     task_id = str(target_task.get("id") or target_task.get("upid", "")[:12])
     task_description = _format_task_description(vm_type, task_id, task_type)
+    final_status = str(target_task.get("exitstatus") or target_task.get("status") or "unknown")
 
     nb_task_payload: dict[str, object] = {
         "vm_type": vm_type,
@@ -141,9 +142,9 @@ async def sync_task_history_individual(  # noqa: C901
         "start_time": task_start_time or now.isoformat(),
         "end_time": task_end_time,
         "description": task_description,
-        "status": str(target_task.get("exitstatus") or target_task.get("status") or "unknown"),
-        "task_state": str(target_task.get("status") or ""),
-        "exitstatus": target_task.get("exitstatus"),
+        "status": final_status,
+        "task_state": "stopped",
+        "exitstatus": final_status,
         "tags": tag_refs,
         "custom_fields": {},
     }

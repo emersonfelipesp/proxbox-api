@@ -144,6 +144,14 @@ Open the nearest scoped guide for the code you are changing.
   dispatch input, kept so an incident rollback to a known-good older SHA is not
   locked out. A dispatch `ref` that is not a full 40-character SHA is refused
   rather than verified imprecisely. Contracts: `tests/test_deploy_ci_gate.py`.
+- `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
+  coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
+  coverage-artifact step must pin `actions/upload-artifact@v3` (SHA
+  `a8a3f3ad30e3422c9c7b888a15615d19a852ae32`), not v4.** Gitea Actions does not
+  implement the `@actions/artifact` v2+ API that `upload-artifact@v4+` requires
+  and fails the step with `GHESNotSupportedError`, turning an otherwise-passing
+  run red and blocking the CI-gated deploy. The `.github/workflows/ci.yml` twin
+  keeps v4 because it runs on GitHub-hosted runners that support it.
 - `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
   committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
   events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
@@ -159,7 +167,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
 - Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
-- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and bootstrap flow for first-time key registration.
+- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and a one-shot bootstrap flow for first-time key registration. Bootstrap is consumed atomically and permanently: `ApiKey.bootstrap_first_key_async()` commits the durable `ApiKeyBootstrapClaim` singleton (`database.py`, CHECK `id = 1`) and the first key's bcrypt hash in one transaction, a lost claim race maps to a stable HTTP 409, and `bootstrap_is_claimed_async()` treats any key row — active or inactive — as consumed, so deactivating or deleting keys never reopens unauthenticated registration. Legacy databases are backfilled on startup by `_migrate_api_key_bootstrap_claim()` (idempotent `INSERT OR IGNORE ... WHERE EXISTS`). Retiring the final active key is refused: `DELETE /auth/keys/{id}` and `POST /auth/keys/{id}/deactivate` serialize through SQLite `BEGIN IMMEDIATE` and return 409 `last_active_api_key_required` when the target is the only active key. Contracts: `tests/test_auth_bootstrap.py`.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration. The NetBox lifecycle owner keeps one current client fingerprint per endpoint, rotates and closes retired transports outside its lock, and drains all clients during lifespan shutdown.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): validate payloads, normalize data, and define contract-safe choice values.
@@ -200,6 +208,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): controllers, zones, VNets, VNet subnets, fabrics, route-maps, prefix-lists, node runtime rows, read-only `create/stream` NetBox reconciliation, and optional `netbox_bgp` projection when `sync_mode_sdn_bgp` is enabled. Unsupported older clusters and missing optional BGP plugin APIs are skipped with warnings instead of failing the stream.
 - **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
+- **Service monitoring** (`routes/proxmox/services.py`, `/proxmox/services/*`): `GET /proxmox/services/systemd` reads systemd unit status (`Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `MainPID`, `ExecMainCode`, `ExecMainStatus`, `NRestarts`, `ActiveEnterTimestamp`, `UnitFileState`) for a Proxmox endpoint over SSH, using the endpoint's own registered SSH credential (agentless — no Proxmox-side agent required). Gated on: NetBox `ProxmoxEndpoint` enabled, `service_monitoring_enabled`, `allow_writes`, `access_methods=api_ssh`, complete SSH credentials, and netbox-rpc not disabled for the endpoint. Bounded 10s SSH command timeout; unit names are validated (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, no `..`, ≤100 chars, ≤32 units/request) and `shlex.quote`'d as defense in depth before the fixed-argv `systemctl show` command runs. `reachable=False` (SSH unreachable) is returned as HTTP 200 — a legitimate monitoring result — while unknown endpoint id / missing or disabled SSH credential / malformed unit request surface as 4xx. Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure, not meant to be called directly by end users. See `routes/proxmox/CLAUDE.md`.
 - **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the NMS route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
 - **Intent** (`routes/intent/`, `/intent/*`): plan, apply, deletion-requests, tag/untag pending-deletion.
 - **SSH Terminal** (`routes/ssh_terminal.py`, `/ssh/*`): `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges the PTY. `GET /ssh/host-key-fingerprint?host=&port=` scans a host's SSH key (no auth — public key only) and returns its canonical `SHA256:<base64>` fingerprint for pinned-fingerprint auto-fill in the NetBox plugin; the scan mirrors the terminal connect args so the value matches what the session later verifies. The terminal's `endpoint_id` is the **NetBox-side** `ProxmoxEndpoint` id, not the proxbox-api SQLite id, so the per-endpoint SSH access-method gate (`access_methods=api_ssh`) for the terminal is enforced in the `netbox-proxbox` plugin at the SSH-credential-serving endpoint — this route is intentionally not SQLite-gated. `POST /ssh/sessions` also accepts an **optional `one_shot_credential`** object (`username`, `port`, `known_host_fingerprint`, `password?`, `private_key?`) for **one-shot (unstored) sessions**: the NetBox plugin supplies inline credentials the operator typed into the Terminal modal for a single connection. The material lives only in the in-memory `TerminalSession` for the ticket TTL, is redacted from `repr()`/logs, and is **never persisted** — `fetch_terminal_credential` builds the credential from it and skips the netbox-proxbox stored-credential fetch entirely (the shared `hardware_discovery.fetch_credential` used by background discovery is untouched). A pinned `known_host_fingerprint` remains mandatory (an empty fingerprint canonicalizes to `SHA256:` and never matches). The field is additive/optional; older callers that omit it are unaffected. Requests without inline creds still fetch stored `NodeSSHCredential` / endpoint-fallback credentials as before.
@@ -334,7 +343,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `proxbox_fetch_max_concurrency` | 8 |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 (4 in task-history) |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in task-history/snapshots) |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in snapshots) |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `backup_batch_size` | 5 |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `backup_batch_delay_ms` | 200 ms |
 | `PROXBOX_BULK_BATCH_SIZE` | `bulk_batch_size` | 50 |
@@ -350,6 +359,43 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 | n/a | `custom_fields_enabled` | false (deprecated legacy reflection custom fields; sidecars are standard. No env override.) |
+
+### Task-history sync ownership
+
+VM create routes expose `sync_task_history` with a backward-compatible default
+of `true`. Standalone and targeted VM syncs run one task-history aggregate after
+the successful VM IDs are known. Full-update is the single-owner exception: it
+passes `sync_task_history=false` into its VM stage, then runs the dedicated
+task-history stage exactly once. Deploy this backend behavior before changing an
+orchestrating plugin to send `false`; older callers that omit the flag continue
+to work.
+
+The task-history service walks each selected Proxmox node archive with
+`start`/`limit=500` pagination and one fixed `until`, under one global fetch
+semaphore. It loads the typed VM sync-state sidecar once and treats its endpoint,
+cluster, VMID, and VM type as authoritative. A present malformed/duplicate
+sidecar for a relevant VM fails closed; successful estate scans skip genuinely
+unmanaged VMs, while explicitly selected VMs without identity remain fatal.
+Legacy custom-field identity is used only for an absent or unreadable sidecar
+when `custom_fields_enabled=true`. Selected NetBox IDs are deduplicated and sent
+in bounded groups of 100 using repeated `id` values, as required by NetBox's
+`MultiValueNumberFilter`. The service deduplicates UPIDs and performs one NetBox
+bulk reconcile without per-UPID status reads or per-item write fallback. Partial
+collection, missing target scopes, ownership conflicts, and archive no-progress
+guards return `degraded=true`; standalone REST converts that result to HTTP 502
+after retaining reconciled rows, while SSE exposes the degraded phase summary.
+Identity verification failure, unsafe NetBox pagination, VM-list failure, no
+usable nodes, total node failure, or global reconcile failure raises
+`ProxboxException` so REST/SSE cannot report success.
+
+All NetBox list helpers follow the server `next` URL and preserve repeated query
+values. Reject malformed pagination objects/links, empty+next pages, and any
+cross-page record overlap. Exhaustive traversal is bounded at 10,000 pages and
+1,000,000 records; explicit offset/record caps raise HTTP 502 before an
+over-bound request and partial collections are never returned or cached.
+Across VM/backup/snapshot/disk selectors, omitted `netbox_vm_ids` means all,
+while present empty/malformed input is HTTP 422. Resolve valid IDs as repeated
+values in deduplicated chunks of at most 100 and fail closed on lookup errors.
 
 ### VM interface sync strategy
 

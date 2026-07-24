@@ -11,16 +11,19 @@ Implements the contract pinned by ``docs/design/operational-verbs.md`` §4:
   60-second TTL; no SQLite write. Process restart clears the dict —
   acceptable for the 60-second window.
 
-The cache is concurrency-safe via an ``asyncio.Lock`` so that two
-near-simultaneous POSTs with the same key resolve to a single dispatch.
+The cache is concurrency-safe via a mutex for the entry map plus per-key
+single-flight locks so that two near-simultaneous POSTs with the same key
+resolve to a single dispatch.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeVar
 
 Verb = Literal[
     "start",
@@ -33,6 +36,7 @@ Verb = Literal[
     "delete_snapshot",
 ]
 TTL_SECONDS = 60.0
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -46,22 +50,35 @@ class CacheKey:
 @dataclass
 class _Entry:
     response: dict[str, object]
+    status_code: int
+    journal_finalization: dict[str, object] | None
     expires_at: float
+
+
+@dataclass
+class _Flight:
+    lock: asyncio.Lock
+    users: int = 0
+
+
+@dataclass(frozen=True)
+class CachedResponse:
+    response: dict[str, object]
+    status_code: int
+    journal_finalization: dict[str, object] | None = None
 
 
 class IdempotencyCache:
     """TTL cache keyed by ``(endpoint_id, verb, vmid, key)``.
 
-    Use :meth:`reserve` from a verb handler. It returns either the
-    cached response (when the same key was seen within ``TTL_SECONDS``)
-    or ``None``, in which case the caller dispatches the verb and then
-    calls :meth:`store` to record the result. A single ``asyncio.Lock``
-    serialises the reserve/store pair to avoid the
-    "two concurrent POSTs both dispatch" race.
+    Verb handlers should wrap the cache miss, write-ahead journal create,
+    Proxmox dispatch, terminal journal update, and response store in
+    :meth:`single_flight` when a caller supplies an Idempotency-Key.
     """
 
     def __init__(self, ttl_seconds: float = TTL_SECONDS) -> None:
         self._entries: dict[CacheKey, _Entry] = {}
+        self._flights: dict[CacheKey, _Flight] = {}
         self._lock = asyncio.Lock()
         self._ttl = ttl_seconds
 
@@ -73,17 +90,106 @@ class IdempotencyCache:
         for k in expired:
             del self._entries[k]
 
+    async def _await_to_completion(self, task: asyncio.Task[T]) -> tuple[T, bool]:
+        was_cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                was_cancelled = True
+                continue
+        return task.result(), was_cancelled
+
+    async def _release_single_flight(self, cache_key: CacheKey, flight: _Flight) -> None:
+        async with self._lock:
+            flight.users -= 1
+            if flight.users == 0 and self._flights.get(cache_key) is flight:
+                del self._flights[cache_key]
+
     async def get(self, cache_key: CacheKey) -> dict[str, object] | None:
+        entry = await self.get_entry(cache_key)
+        return entry.response if entry is not None else None
+
+    async def get_entry(self, cache_key: CacheKey) -> CachedResponse | None:
         async with self._lock:
             now = self._now()
             self._prune(now)
             entry = self._entries.get(cache_key)
-            return dict(entry.response) if entry is not None else None
+            if entry is None:
+                return None
+            return CachedResponse(
+                response=dict(entry.response),
+                status_code=entry.status_code,
+                journal_finalization=(
+                    dict(entry.journal_finalization)
+                    if entry.journal_finalization is not None
+                    else None
+                ),
+            )
 
-    async def store(self, cache_key: CacheKey, response: dict[str, object]) -> None:
+    async def store(
+        self,
+        cache_key: CacheKey,
+        response: dict[str, object],
+        *,
+        status_code: int = 200,
+        journal_finalization: dict[str, object] | None = None,
+    ) -> None:
         async with self._lock:
             now = self._now()
-            self._entries[cache_key] = _Entry(response=dict(response), expires_at=now + self._ttl)
+            existing = self._entries.get(cache_key)
+            new_unfinalized = (
+                journal_finalization is not None or response.get("journal_finalized") is False
+            )
+            existing_finalized = (
+                existing is not None
+                and existing.journal_finalization is None
+                and existing.response.get("journal_finalized") is not False
+            )
+            if existing_finalized and new_unfinalized:
+                return
+            self._entries[cache_key] = _Entry(
+                response=dict(response),
+                status_code=status_code,
+                journal_finalization=(
+                    dict(journal_finalization) if journal_finalization is not None else None
+                ),
+                expires_at=now + self._ttl,
+            )
+
+    @asynccontextmanager
+    async def single_flight(self, cache_key: CacheKey) -> AsyncIterator[None]:
+        """Serialize one miss-to-store operation for ``cache_key``.
+
+        The keyed lock is intentionally separate from the cache mutex:
+        the mutex protects maps, while this lock lets one request run the
+        full write-ahead, Proxmox dispatch, journal-finalize, and cache-store
+        sequence. Waiters then re-check the cache under the same keyed guard.
+        """
+        async with self._lock:
+            self._prune(self._now())
+            flight = self._flights.get(cache_key)
+            if flight is None:
+                flight = _Flight(lock=asyncio.Lock())
+                self._flights[cache_key] = flight
+            flight.users += 1
+
+        lock_acquired = False
+        pending_error: BaseException | None = None
+        try:
+            await flight.lock.acquire()
+            lock_acquired = True
+            yield
+        except BaseException as error:
+            pending_error = error
+            raise
+        finally:
+            if lock_acquired:
+                flight.lock.release()
+            cleanup_task = asyncio.create_task(self._release_single_flight(cache_key, flight))
+            _, cleanup_cancelled = await self._await_to_completion(cleanup_task)
+            if cleanup_cancelled and pending_error is None:
+                raise asyncio.CancelledError()
 
     async def clear(self) -> None:
         async with self._lock:

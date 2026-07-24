@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from collections.abc import Iterable
 from ipaddress import ip_address, ip_interface
 from typing import Literal
 
@@ -17,6 +18,67 @@ _VM_DISK_AGGREGATE_ERROR_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _PROXMOX_NET_CONFIG_KEY_RE = re.compile(r"^net(\d+)$")
+
+# NetBox's MultiValueNumberFilter consumes repeated query values (for example,
+# ``?id=1&id=2``).  Keep each request comfortably below common proxy/request-line
+# limits while still amortizing selected-VM lookups.
+NETBOX_MULTI_VALUE_ID_CHUNK_SIZE = 100
+
+
+def chunk_netbox_multi_value_ids(
+    values: Iterable[object],
+    *,
+    chunk_size: int = NETBOX_MULTI_VALUE_ID_CHUNK_SIZE,
+) -> list[list[int]]:
+    """Return stable, deduplicated positive IDs in bounded NetBox query chunks."""
+
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be at least 1")
+
+    unique_ids: set[int] = set()
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, str):
+            try:
+                parsed = int(value)
+            except ValueError:
+                continue
+        else:
+            continue
+        if parsed > 0:
+            unique_ids.add(parsed)
+
+    ordered_ids = sorted(unique_ids)
+    return [
+        ordered_ids[offset : offset + chunk_size]
+        for offset in range(0, len(ordered_ids), chunk_size)
+    ]
+
+
+def parse_selected_netbox_vm_ids(value: object) -> list[int] | None:
+    """Parse an optional explicit VM selector without collapsing it into "all".
+
+    ``None`` means the selector was omitted. Any present value must contain only
+    comma-separated positive integers; empty or malformed values are rejected.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        from fastapi.params import Param
+
+        if isinstance(value, Param):
+            return None
+        raise ValueError("netbox_vm_ids must be a comma-separated list of positive integers")
+
+    parts = [part.strip() for part in value.split(",")]
+    if not parts or any(not part or not part.isdigit() or int(part) < 1 for part in parts):
+        raise ValueError("netbox_vm_ids must be a comma-separated list of positive integers")
+
+    return [vm_id for chunk in chunk_netbox_multi_value_ids(parts) for vm_id in chunk]
 
 
 def _compute_vm_patchable_fields(
@@ -186,6 +248,129 @@ def relation_id(value: object) -> int | None:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return None
+
+
+async def list_netbox_virtual_machines_by_ids(
+    netbox_session: object,
+    netbox_vm_ids: Iterable[object],
+) -> list[dict[str, object]]:
+    """Resolve selected VMs with NetBox's repeated-ID filter contract.
+
+    Results are normalized from ``RestRecord``/SDK/dict shapes, constrained to
+    the requested IDs, and deduplicated by NetBox record ID. Lookup failures are
+    surfaced as typed gateway failures so an explicit selection can never widen
+    into an unscoped sync.
+    """
+
+    from proxbox_api.exception import ProxboxException
+    from proxbox_api.netbox_rest import rest_list_async
+
+    chunks = chunk_netbox_multi_value_ids(netbox_vm_ids)
+    if not chunks:
+        return []
+
+    requested_ids = {vm_id for chunk in chunks for vm_id in chunk}
+    records_by_id: dict[int, dict[str, object]] = {}
+    for chunk in chunks:
+        try:
+            records = await rest_list_async(
+                netbox_session,
+                "/api/virtualization/virtual-machines/",
+                query={"id": [str(vm_id) for vm_id in chunk]},
+            )
+        except Exception as error:
+            raise ProxboxException(
+                message="Unable to resolve explicitly selected NetBox VMs",
+                detail=f"Selected VM id chunk {chunk}: {error}",
+                http_status_code=502,
+            ) from error
+
+        for record in records:
+            payload = to_mapping(record)
+            vm_id = relation_id(payload.get("id"))
+            if vm_id is None or vm_id not in requested_ids:
+                raise ProxboxException(
+                    message="NetBox returned invalid selected VM data",
+                    detail=(
+                        f"Expected one of NetBox VM ids {sorted(requested_ids)}, "
+                        f"received record id {payload.get('id')!r}."
+                    ),
+                    http_status_code=502,
+                )
+            records_by_id.setdefault(vm_id, payload)
+
+    return [records_by_id[vm_id] for vm_id in sorted(records_by_id)]
+
+
+def require_selected_netbox_vm_coverage(  # noqa: C901
+    records: Iterable[object],
+    netbox_vm_ids: Iterable[object],
+    *,
+    operation: str,
+) -> list[dict[str, object]]:
+    """Require an explicit lookup to return every and only requested VM ID.
+
+    The repeated-ID list helper intentionally remains reusable by selectors
+    whose empty-scope policy differs. Workflows that cannot safely treat a
+    partial or empty lookup as success call this validator immediately after
+    the lookup and receive a typed gateway failure on any coverage mismatch.
+    """
+
+    from proxbox_api.exception import ProxboxException
+    from proxbox_api.services.sync.vmid_helpers import normalize_positive_int
+
+    requested_ids: set[int] = set()
+    invalid_requested_ids: list[object] = []
+    for raw_id in netbox_vm_ids:
+        vm_id = normalize_positive_int(raw_id)
+        if vm_id is None:
+            invalid_requested_ids.append(raw_id)
+        else:
+            requested_ids.add(vm_id)
+
+    message = f"Unable to resolve explicitly selected NetBox VMs for {operation}"
+    if invalid_requested_ids:
+        raise ProxboxException(
+            message=message,
+            detail=f"Invalid selected VM id(s): {invalid_requested_ids!r}.",
+            http_status_code=502,
+        )
+    if not requested_ids:
+        raise ProxboxException(
+            message=message,
+            detail="The explicit NetBox VM selection was empty.",
+            http_status_code=502,
+        )
+
+    normalized_records: list[dict[str, object]] = []
+    returned_ids: set[int] = set()
+    invalid_record_ids: list[object] = []
+    for record in records:
+        payload = to_mapping(record)
+        vm_id = relation_id(payload.get("id"))
+        if vm_id is None:
+            invalid_record_ids.append(payload.get("id"))
+            continue
+        normalized_records.append(payload)
+        returned_ids.add(vm_id)
+
+    missing_ids = sorted(requested_ids.difference(returned_ids))
+    unexpected_ids = sorted(returned_ids.difference(requested_ids))
+    if invalid_record_ids or missing_ids or unexpected_ids:
+        details: list[str] = []
+        if missing_ids:
+            details.append(f"missing id(s): {missing_ids}")
+        if unexpected_ids:
+            details.append(f"unexpected id(s): {unexpected_ids}")
+        if invalid_record_ids:
+            details.append(f"invalid returned id(s): {invalid_record_ids!r}")
+        raise ProxboxException(
+            message=message,
+            detail="Selected lookup coverage mismatch; " + "; ".join(details) + ".",
+            http_status_code=502,
+        )
+
+    return normalized_records
 
 
 def record_id(value: object) -> int | None:

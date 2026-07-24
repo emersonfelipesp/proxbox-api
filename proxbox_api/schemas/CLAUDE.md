@@ -20,6 +20,7 @@ Top-level Pydantic schema package for plugin and API contracts.
 - `firecracker.py`: Firecracker host-agent, image bundle, network, micro-VM state, metrics, and Cloud provisioning contracts.
 - `proxmox.py`: Pydantic schemas for Proxmox sessions, cluster resources, node payloads, and resource payloads.
 - `stream_messages.py`: typed stream event payload schemas used by SSE and WebSocket progress reporting.
+- `zfs.py`: typed ZFS pool summary/detail contracts, recursive vdev tree nodes, and tier-selection metadata for `/proxmox/storage/zfs/*`.
 - `netbox/`: NetBox session, endpoint, and payload schemas.
 - `virtualization/`: VM config and summary schemas.
 

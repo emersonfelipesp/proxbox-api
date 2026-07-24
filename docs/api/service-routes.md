@@ -32,6 +32,7 @@ Proxmox, cloud, and intent routes also depend on the relevant
 | `/ceph` | Read-only Proxmox-managed Ceph status and sync summary routes |
 | `/ceph/v2` | Desired-state Ceph plan/apply/reconcile surface used by `netbox-ceph` |
 | `/ssh` | Short-lived SSH terminal sessions and WebSocket transport |
+| `/proxmox/services` | Read-only agentless systemd service-monitoring over SSH for a Proxmox endpoint |
 
 ## PBS (`/pbs`)
 
@@ -138,6 +139,59 @@ by VM operational verbs.
 | `POST` | `/intent/deletion-requests/{deletion_request_id}/execute` | Execute an approved deletion request |
 | `PUT` | `/intent/tag-pending-deletion` | Add the pending-deletion Proxmox tag without destroying a guest |
 | `PUT` | `/intent/untag-pending-deletion` | Remove the pending-deletion Proxmox tag |
+
+## Proxmox Service Monitoring (`/proxmox`)
+
+Read-only, agentless systemd service-monitoring for a Proxmox endpoint, pulled
+over SSH using the endpoint's own registered SSH credential — no Proxmox-side
+agent required. `endpoint_id` is the **NetBox-side** `ProxmoxEndpoint` id (the
+same id space the browser SSH terminal uses), not proxbox-api's own SQLite
+endpoint id used by the Cloud Image Build Pipeline / Azure VHD import.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/proxmox/services/systemd` | Read current `systemctl show` state for one or more systemd units on a Proxmox endpoint |
+
+**Request:** `endpoint_id` (required, NetBox `ProxmoxEndpoint` id) and an
+optional repeated and/or comma-separated `units` query parameter. When `units`
+is omitted, the endpoint's NetBox `service_monitoring_units` value is used,
+falling back to the default 11-unit Proxmox set (`pve-cluster.service`,
+`corosync.service`, `pvedaemon.service`, `pveproxy.service`,
+`pvestatd.service`, `pve-firewall.service`, `pvescheduler.service`,
+`spiceproxy.service`, `qmeventd.service`, `pve-ha-lrm.service`,
+`pve-ha-crm.service`) when that value is also empty. Unit names are validated
+against `^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, must not contain `..`, are capped
+at 100 characters each, and at most 32 units may be requested per call.
+
+**Response (`ProxmoxServicesResponse`):** `endpoint_id`, `host`,
+`collected_at`, `reachable`, `services` (list of `ProxmoxServiceRecord`:
+`unit`, `id`, `load_state`, `active_state`, `sub_state`, `result`, `main_pid`,
+`exec_main_code`, `exec_main_status`, `n_restarts`,
+`active_enter_timestamp`, `unit_file_state`), and an optional `error`
+(`reason`, `detail`). `reachable=false` (SSH transport could not be reached —
+connect timeout, refused, or authentication failure) is a legitimate
+monitoring result and is returned as HTTP 200 with empty `services` and a
+populated `error`, not as an HTTP error.
+
+**Eligibility gate:** the route refuses to fetch SSH credentials or run any
+command unless the NetBox `ProxmoxEndpoint` is `enabled`,
+`service_monitoring_enabled=true`, `allow_writes=true`,
+`access_methods="api_ssh"`, has complete registered SSH credentials, and
+netbox-rpc is not disabled for the endpoint. Failing this gate returns `403`
+with a `reason` such as `service_monitoring_endpoint_disabled`,
+`service_monitoring_disabled`, or `service_monitoring_ineligible`. Unknown
+`endpoint_id` returns `404`; malformed `units` returns `422`.
+
+**Execution:** the SSH command is a fixed-argv `systemctl show --no-pager -p
+<prop> ... -- <unit> ...` (no `sudo` required); each unit name is additionally
+`shlex.quote`'d as defense in depth even though it was already regex-validated.
+The SSH call is bounded by a 10-second timeout — a timeout is reported via
+`error.reason="command_timeout"` with `reachable=true`, not raised as an
+exception.
+
+Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")`,
+itself dispatched by the matching netbox-rpc procedure; not intended to be
+called directly by end users.
 
 ## Cloud (`/cloud`)
 

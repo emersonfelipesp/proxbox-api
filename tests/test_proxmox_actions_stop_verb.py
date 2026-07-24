@@ -84,6 +84,8 @@ def _patch_route(
     stop_result="UPID:pve-node-01:0001:stop",
     journal_entry: dict | None = None,
     stop_side_effect=None,
+    journal_create_side_effect=None,
+    journal_update_side_effect=None,
 ):
     if journal_entry is None:
         journal_entry = {"id": 790, "url": "/api/extras/journal-entries/790/"}
@@ -94,7 +96,14 @@ def _patch_route(
     netbox_id_mock = AsyncMock(return_value=netbox_vm_id)
     status_mock = AsyncMock(return_value=status_payload)
     stop_mock = AsyncMock(return_value=stop_result, side_effect=stop_side_effect)
-    journal_mock = AsyncMock(return_value=journal_entry)
+    journal_create_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_create_side_effect,
+    )
+    journal_update_mock = AsyncMock(
+        return_value=journal_entry,
+        side_effect=journal_update_side_effect,
+    )
 
     patches = [
         patch("proxbox_api.routes.proxmox_actions._open_proxmox_session", open_session),
@@ -105,7 +114,11 @@ def _patch_route(
         patch("proxbox_api.routes.proxmox_actions.stop_vm", stop_mock),
         patch(
             "proxbox_api.routes.proxmox_actions.write_verb_journal_entry",
-            journal_mock,
+            journal_create_mock,
+        ),
+        patch(
+            "proxbox_api.routes.proxmox_actions.update_verb_journal_entry",
+            journal_update_mock,
         ),
     ]
 
@@ -114,7 +127,8 @@ def _patch_route(
         "node": node_mock,
         "status": status_mock,
         "stop": stop_mock,
-        "journal": journal_mock,
+        "journal": journal_update_mock,
+        "journal_create": journal_create_mock,
     }
 
 
@@ -151,6 +165,59 @@ def test_stop_qemu_success_returns_response_shape_and_writes_journal(
     assert journal_kwargs["kind"] == "info"
     assert "verb: stop" in journal_kwargs["comments"]
     assert "actor: alice@netbox" in journal_kwargs["comments"]
+
+
+def test_stop_qemu_creates_writeahead_journal_before_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    events: list[str] = []
+
+    async def _create_journal(_nb, **kwargs):
+        events.append("journal_create")
+        assert kwargs["kind"] == "info"
+        assert "result: in_progress" in kwargs["comments"]
+        return {"id": 790, "url": "/api/extras/journal-entries/790/"}
+
+    async def _stop_vm(*_args, **_kwargs):
+        events.append("stop_dispatch")
+        return "UPID:pve-node-01:0001:stop"
+
+    handles = _patch_route(
+        stop_side_effect=_stop_vm,
+        journal_create_side_effect=_create_journal,
+    )
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post("/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id})
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 200
+    assert events.index("journal_create") < events.index("stop_dispatch")
+    handles["journal_create"].assert_awaited_once()
+    handles["journal"].assert_awaited_once()
+
+
+def test_stop_qemu_writeahead_journal_without_id_blocks_dispatch(client: TestClient):
+    endpoint_id = _make_endpoint(client)
+    handles = _patch_route(journal_entry={"url": "/api/extras/journal-entries/no-id/"})
+    for p in handles["patches"]:
+        p.start()
+    try:
+        resp = client.post("/proxmox/qemu/100/stop", params={"endpoint_id": endpoint_id})
+    finally:
+        for p in handles["patches"]:
+            p.stop()
+
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["reason"] == "netbox_vm_identity_required_for_audit"
+    assert body["verb"] == "stop"
+    handles["journal_create"].assert_awaited_once()
+    handles["status"].assert_not_awaited()
+    handles["stop"].assert_not_awaited()
+    handles["journal"].assert_not_awaited()
 
 
 def test_stop_qemu_idempotency_key_reuse_returns_cached_response(client: TestClient):

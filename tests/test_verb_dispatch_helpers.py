@@ -243,3 +243,25 @@ async def test_write_verb_journal_entry_raises_on_failure():
                 kind="warning",
                 comments="body",
             )
+
+
+async def test_update_verb_journal_entry_patches_payload():
+    patch_mock = AsyncMock(return_value={"id": 789, "url": "/api/extras/journal-entries/789/"})
+    nb = object()
+    with patch("proxbox_api.services.verb_dispatch.rest_patch_async", new=patch_mock):
+        entry = await verb_dispatch.update_verb_journal_entry(
+            nb=nb,
+            journal_entry_id=789,
+            kind="warning",
+            comments="terminal body",
+        )
+
+    assert entry == {"id": 789, "url": "/api/extras/journal-entries/789/"}
+    patch_mock.assert_awaited_once()
+    args, _ = patch_mock.call_args
+    assert args == (
+        nb,
+        "/api/extras/journal-entries/",
+        789,
+        {"kind": "warning", "comments": "terminal body"},
+    )

@@ -47,3 +47,8 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 - WebSocket broadcasts in `websockets.py` must tolerate disconnected clients silently.
 - `PROXBOX_STRICT_STARTUP=1` turns generated-route load failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP=1` disables the default endpoint bootstrap (useful in test environments).
+- Full-update is the sole owner of its task-history stage: both REST and SSE
+  VM-stage calls pass `sync_task_history=False`, then invoke
+  `sync_all_virtual_machine_task_histories()` once. Forward
+  `fetch_max_concurrency` to that dedicated stage and do not re-enable the
+  standalone VM default inside full-update.

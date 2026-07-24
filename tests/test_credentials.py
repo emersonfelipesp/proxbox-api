@@ -19,7 +19,6 @@ def _recursive_settings_lookup_worker(queue: multiprocessing.Queue) -> None:
 
     child_creds.reset_encryption_cache()
     settings_client.invalidate_settings_cache()
-    settings_client._FETCHING_SETTINGS = False
     os.environ.pop("PROXBOX_ENCRYPTION_KEY", None)
 
     def _raw_session_requiring_decryption() -> None:

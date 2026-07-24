@@ -17,13 +17,13 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 
 All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. See [Authentication](../getting-started/authentication.md) for the full bootstrap flow and key management guide.
 
-- `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt.
-- `POST /auth/register-key` - Register the first API key. Auth-exempt; fails once a key already exists.
+- `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt. `needs_bootstrap` is `false` once the durable bootstrap claim exists or any key row (active or inactive) exists.
+- `POST /auth/register-key` - Register the first API key. Auth-exempt; the durable singleton bootstrap claim and the bcrypt hash are committed in one transaction, so bootstrap can be consumed exactly once per database. Any later call — including after every key is deleted or deactivated — returns `409 Conflict`.
 - `POST /auth/keys` - Create a new API key. Returns the raw key value once; store it securely.
 - `GET /auth/keys` - List all API keys. Key values are redacted (only metadata is returned).
-- `DELETE /auth/keys/{key_id}` - Delete an API key by ID.
+- `DELETE /auth/keys/{key_id}` - Delete an API key by ID. Refuses to delete the final active key with `409` (`last_active_api_key_required`); create and verify a replacement first.
 - `POST /auth/keys/{key_id}/activate` - Re-activate a previously deactivated key.
-- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it.
+- `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it. Refuses to deactivate the final active key with `409` (`last_active_api_key_required`).
 
 ## Admin
 
@@ -174,6 +174,8 @@ Validation rules:
 - `GET /proxmox/`
 - `GET /proxmox/storage`
 - `GET /proxmox/nodes/{node}/storage/{storage}/content`
+- `GET /proxmox/storage/zfs/pools?node=` - Read-only ZFS pool health and capacity summaries. Tier 1 uses Proxmox REST `/nodes/{node}/disks/zfs` via `proxmox-sdk`; the response reports the selected source and attempted fallback tiers.
+- `GET /proxmox/storage/zfs/pools/{name}?node=` - Read-only ZFS pool detail including state/status/action/scan/errors and recursive vdev `children[]` from Proxmox REST `/nodes/{node}/disks/zfs/{name}`. InfluxDB and JSON-native SSH fallback tiers currently degrade gracefully when not configured/implemented.
 - `GET /proxmox/{top_level}` where `top_level` is one of `access`, `cluster`, `nodes`, `storage`, or `version`
 - `GET /proxmox/{node}/{type}/{vmid}/config`
 
@@ -347,6 +349,19 @@ Implemented in `proxbox_api/routes/proxmox/access.py`.
 - `GET /proxmox/access/tokens/{userid}/{tokenid}?cluster_name=` — Retrieve info for a Proxmox API token. Returns `AccessTokenInfoSchema | null`. `value` is only set on regenerate responses.
 - `PUT /proxmox/access/tokens/{userid}/{tokenid}/regenerate?cluster_name=` — Regenerate the secret of an existing API token in-place (PVE 9.2+). All ACL entries are preserved. Returns `TokenRegenerateResponseSchema`. **Store the returned `value` immediately** — it cannot be retrieved again.
 
+### Service Monitoring
+
+Implemented in `proxbox_api/routes/proxmox/services.py`. Read-only, agentless
+systemd service-monitoring pulled over SSH using the endpoint's own registered
+SSH credential — no Proxmox-side agent required. `endpoint_id` is the
+**NetBox-side** `ProxmoxEndpoint` id (same id space as the SSH Terminal below),
+not proxbox-api's own SQLite endpoint id.
+
+- `GET /proxmox/services/systemd?endpoint_id=&units=` — Read current `systemctl show` state for one or more systemd units. `units` is optional and repeatable/comma-separated; when omitted, the endpoint's NetBox `service_monitoring_units` value is used, falling back to the default 11-unit Proxmox set (`pve-cluster.service`, `corosync.service`, `pvedaemon.service`, `pveproxy.service`, `pvestatd.service`, `pve-firewall.service`, `pvescheduler.service`, `spiceproxy.service`, `qmeventd.service`, `pve-ha-lrm.service`, `pve-ha-crm.service`). Unit names must match `^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, contain no `..`, be ≤100 characters, and at most 32 units may be requested per call (`422` on violation). Returns `ProxmoxServicesResponse` (`endpoint_id`, `host`, `collected_at`, `reachable`, `services: list[ProxmoxServiceRecord]`, optional `error`). `reachable=false` (SSH transport unreachable) is a legitimate monitoring result returned as HTTP 200, not an error.
+  - **Gated** on the NetBox `ProxmoxEndpoint` being `enabled`, `service_monitoring_enabled=true`, `allow_writes=true`, `access_methods="api_ssh"`, having complete SSH credentials, and netbox-rpc not disabled for the endpoint; otherwise `403` with a `service_monitoring_*` reason code. Unknown `endpoint_id` returns `404`.
+  - Executes a fixed-argv `systemctl show --no-pager -p <prop> ... -- <unit> ...` command (no `sudo`); each unit name is additionally `shlex.quote`'d as defense in depth. Bounded by a 10-second SSH command timeout (`error.reason="command_timeout"` with `reachable=true` on expiry, not an exception).
+  - Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure; not intended to be called directly by end users.
+
 ### SSH Terminal
 
 Implemented in `proxbox_api/routes/ssh_terminal.py`. Provides a browser-based SSH terminal backed by `asyncssh`.
@@ -483,6 +498,14 @@ Test coverage:
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
+- `GET /virtualization/virtual-machines/task-history/create/stream` - Dedicated
+  task-history SSE stage; accepts comma-separated `netbox_vm_ids`. Omitted means
+  all VMs, while an explicitly empty, malformed, or non-positive value returns
+  HTTP 422 before SSE starts. The optional `fetch_max_concurrency` must be at
+  least 1. Each request resets and re-probes
+  cached optional-sidecar unavailability. Internally, selected IDs are sent to
+  NetBox as repeated values in deduplicated groups of at most 100; any failed
+  group aborts the explicit selection.
 
 ### VM stream overwrite query parameters
 
@@ -491,6 +514,14 @@ Every VM stream endpoint listed above (`/virtualization/virtual-machines/...crea
 - `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
 - `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
 - `sync_vm_network` - when `false`, skips the VM-network sub-step.
+- `sync_task_history` - defaults to `true`; when `false`, skips the single
+  post-VM task-history aggregate because a dedicated stage owns it. This flag
+  is also declared on both targeted VM create routes and their SSE variants.
+  A degraded owned aggregate retains reconciled rows but returns HTTP 502 from
+  standalone REST; SSE reports the degraded task-history phase summary.
+
+Task-history result field `created` is compatibility-named and counts all
+reconciled rows (created, updated, and unchanged), not only POST operations.
 
 See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaults.
 
@@ -501,6 +532,10 @@ query parameter to override the Proxmox VM-config fetch width for that request.
 
 - `GET /full-update` - Runs device sync, storage sync, VM sync, task history sync, disk sync, backup sync, snapshot sync, node interface sync, VM interface sync, VM IP sync, replication sync, and backup routine sync.
 - `GET /full-update/stream` - SSE streaming variant.
+
+Both full-update variants pass `sync_task_history=false` to the VM stage and
+then run the dedicated task-history stage exactly once. Their optional
+`fetch_max_concurrency` query override must be at least 1.
 
 ## Sync State Probe
 

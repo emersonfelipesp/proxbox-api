@@ -21,7 +21,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.snapshots import (
     create_virtual_machine_snapshots as sync_snapshots,
 )
-from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
+from proxbox_api.services.sync.vm_helpers import parse_selected_netbox_vm_ids
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
@@ -37,7 +37,8 @@ async def _create_all_virtual_machine_snapshots(
     fetch_max_concurrency: int | None = None,
     websocket=None,
     use_websocket=False,
-    vmid_filter: int | None = None,
+    vmid_filter: int | list[int] | None = None,
+    netbox_vm_ids: list[int] | None = None,
     delete_nonexistent_snapshot: bool = False,
 ):
     """Internal function that handles snapshot sync with optional websocket support.
@@ -68,6 +69,7 @@ async def _create_all_virtual_machine_snapshots(
             use_css=False,
             fetch_max_concurrency=fetch_max_concurrency,
             vmid=vmid_filter,
+            netbox_vm_ids=netbox_vm_ids,
             delete_nonexistent_snapshot=delete_nonexistent_snapshot,
         )
 
@@ -86,6 +88,17 @@ async def _create_all_virtual_machine_snapshots(
 
         return result
 
+    except ProxboxException as error:
+        error_msg = f"Error during snapshot sync: {str(error)}"
+        if use_websocket and websocket:
+            await websocket.send_json(
+                {
+                    "step": "snapshots",
+                    "status": "failed",
+                    "message": error_msg,
+                }
+            )
+        raise
     except Exception as error:
         error_msg = f"Error during snapshot sync: {str(error)}"
         if use_websocket and websocket:
@@ -163,13 +176,10 @@ async def create_all_virtual_machine_snapshots(
         ),
     ] = False,
 ):
-    vmid_filter = None
-    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-    if vm_ids:
-        proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
-        if proxmox_vmids:
-            vmid_filter = proxmox_vmids[0]
-
+    try:
+        vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return await _create_all_virtual_machine_snapshots(
         netbox_session=netbox_session,
         pxs=pxs,
@@ -177,38 +187,9 @@ async def create_all_virtual_machine_snapshots(
         cluster_resources=cluster_resources,
         tag=tag,
         fetch_max_concurrency=fetch_max_concurrency,
-        vmid_filter=vmid_filter,
+        netbox_vm_ids=vm_ids,
         delete_nonexistent_snapshot=delete_nonexistent_snapshot,
     )
-
-
-async def _get_proxmox_vmids_from_netbox_vm_ids(
-    netbox_session, netbox_vm_ids: list[int]
-) -> list[int]:
-    """Get Proxmox VM IDs from NetBox VM IDs."""
-    if not netbox_vm_ids:
-        return []
-
-    from proxbox_api.netbox_rest import rest_list_async
-
-    try:
-        vms = await rest_list_async(
-            netbox_session,
-            "/api/virtualization/virtual-machines/",
-            query={"id": ",".join(str(vid) for vid in netbox_vm_ids)},
-        )
-        proxmox_vmids: list[int] = []
-        if vms and isinstance(vms, list):
-            for vm in vms:
-                if not isinstance(vm, dict):
-                    continue
-                cf = vm.get("custom_fields", {}) or {}
-                raw_vmid = cf.get("proxmox_vm_id")
-                if raw_vmid is not None and str(raw_vmid).strip().isdigit():
-                    proxmox_vmids.append(int(str(raw_vmid).strip()))
-        return proxmox_vmids
-    except Exception:
-        return []
 
 
 @router.get("/snapshots/all/create/stream", response_model=None)
@@ -239,12 +220,10 @@ async def create_all_virtual_machine_snapshots_stream(  # noqa: C901
         ),
     ] = False,
 ):
-    vmid_filter = None
-    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-    if vm_ids:
-        proxmox_vmids = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
-        if proxmox_vmids:
-            vmid_filter = proxmox_vmids[0]
+    try:
+        vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -258,7 +237,7 @@ async def create_all_virtual_machine_snapshots_stream(  # noqa: C901
                     cluster_resources=cluster_resources,
                     tag=tag,
                     fetch_max_concurrency=fetch_max_concurrency,
-                    vmid_filter=vmid_filter,
+                    netbox_vm_ids=vm_ids,
                     websocket=bridge,
                     use_websocket=True,
                     delete_nonexistent_snapshot=delete_nonexistent_snapshot,
@@ -305,29 +284,9 @@ async def create_virtual_machine_snapshots_by_id_stream(
             detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
         )
 
-    vm_data = (
-        vm_record
-        if isinstance(vm_record, dict)
-        else (vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record))
-    )
-    cf = vm_data.get("custom_fields") or {}
-    raw_vmid = cf.get("proxmox_vm_id")
-    proxmox_vmid: int | None = None
-    if raw_vmid is not None:
-        try:
-            proxmox_vmid = int(str(raw_vmid).strip())
-        except (TypeError, ValueError):
-            pass
-
-    if proxmox_vmid is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Virtual machine id={netbox_vm_id} has no proxmox_vm_id custom field set; "
-                "cannot filter snapshots."
-            ),
-        )
-
+    # Ownership identity is resolved downstream from the authoritative typed
+    # sidecar (legacy custom fields only as a gated fallback), so no legacy
+    # proxmox_vm_id custom-field precondition applies here.
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -342,7 +301,7 @@ async def create_virtual_machine_snapshots_by_id_stream(
                     fetch_max_concurrency=fetch_max_concurrency,
                     websocket=bridge,
                     use_websocket=True,
-                    vmid_filter=proxmox_vmid,
+                    netbox_vm_ids=[netbox_vm_id],
                 )
             finally:
                 await bridge.close()
