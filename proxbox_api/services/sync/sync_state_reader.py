@@ -48,6 +48,20 @@ class SidecarVMOrphanScan:
     sidecar_read_failed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class VMSyncStateIdentityScan:
+    """VM sync-state rows plus an explicit sidecar-read outcome.
+
+    Callers that require verified identity must distinguish an optional route
+    that is unavailable from a transient read failure.  An empty ``rows``
+    tuple alone cannot carry that distinction.
+    """
+
+    rows: tuple[dict[str, object], ...]
+    sidecar_unavailable: bool = False
+    sidecar_read_failed: bool = False
+
+
 def reset_sidecar_reader_availability_cache() -> None:
     """Clear the current sync-run memo of unavailable optional sidecar read routes."""
     _UNAVAILABLE_READER_SIDECAR_PATHS.clear()
@@ -567,6 +581,29 @@ async def load_vm_last_synced_names(
         if name is not None:
             names[parent_id] = name
     return names
+
+
+async def load_vm_sync_state_identities(
+    nb: object,
+    *,
+    page_size: int = 200,
+) -> VMSyncStateIdentityScan:
+    """Load the complete VM identity sidecar once with explicit failure state."""
+
+    sidecars, sidecar_read_failed = await _scan_sidecars(
+        nb,
+        query={},
+        page_size=page_size,
+    )
+    if sidecars is None:
+        return VMSyncStateIdentityScan(
+            rows=(),
+            sidecar_unavailable=not sidecar_read_failed,
+            sidecar_read_failed=sidecar_read_failed,
+        )
+
+    rows = tuple(row for sidecar in sidecars if (row := _record_to_dict(sidecar)) is not None)
+    return VMSyncStateIdentityScan(rows=rows)
 
 
 async def resolve_vm_last_run_id(

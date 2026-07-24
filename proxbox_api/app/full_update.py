@@ -100,7 +100,14 @@ async def full_update_sync(
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
-    fetch_max_concurrency: int | None = None,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            title="Max Fetch Concurrency",
+            description="Maximum number of concurrent Proxmox fetch operations.",
+        ),
+    ] = None,
     netbox_branch_schema_id: Annotated[
         str | None,
         Query(
@@ -246,6 +253,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 tag=tag,
                 use_websocket=False,
                 sync_vm_network=False,
+                sync_task_history=False,
                 overwrite_vm_role=overwrite_flags.overwrite_vm_role,
                 overwrite_vm_type=overwrite_flags.overwrite_vm_type,
                 overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
@@ -270,6 +278,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 pxs=pxs,
                 cluster_status=cluster_status,
                 tag_refs=tag_refs,
+                fetch_max_concurrency=fetch_max_concurrency,
             )
         except ProxboxException:
             raise
@@ -499,7 +508,14 @@ async def full_update_sync_stream(  # noqa: C901
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
-    fetch_max_concurrency: int | None = None,
+    fetch_max_concurrency: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            title="Max Fetch Concurrency",
+            description="Maximum number of concurrent Proxmox fetch operations.",
+        ),
+    ] = None,
     dry_run: bool = Query(
         default=False,
         description=(
@@ -706,6 +722,7 @@ async def full_update_sync_stream(  # noqa: C901
                             websocket=vm_bridge,
                             use_websocket=True,
                             sync_vm_network=False,
+                            sync_task_history=False,
                             overwrite_vm_role=overwrite_flags.overwrite_vm_role,
                             overwrite_vm_type=overwrite_flags.overwrite_vm_type,
                             overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,

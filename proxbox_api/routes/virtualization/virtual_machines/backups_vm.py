@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Annotated
 
@@ -32,7 +33,20 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
-from proxbox_api.services.sync.vm_helpers import parse_comma_separated_ints
+from proxbox_api.services.sync.vm_filter import hydrate_selected_vm_identities
+from proxbox_api.services.sync.vm_helpers import (
+    list_netbox_virtual_machines_by_ids,
+    parse_selected_netbox_vm_ids,
+    relation_id,
+    relation_name,
+    to_mapping,
+)
+from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_endpoint_id,
+    extract_proxmox_session_endpoint_id,
+    extract_proxmox_vmid,
+    normalize_positive_int,
+)
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
 
@@ -105,6 +119,128 @@ _BACKUP_FORMAT_ALIASES: dict[str, str] = {
     "iso": "iso",
     "tzst": "tzst",
 }
+
+_BACKUP_ENDPOINT_ID_KEY = "_proxbox_endpoint_id"
+_BACKUP_CLUSTER_NAME_KEY = "_proxbox_cluster_name"
+_MISSING = object()
+
+
+def _normalize_cluster_name(value: object) -> str | None:
+    name = str(value or "").strip()
+    return name.casefold() if name else None
+
+
+@dataclass(frozen=True, slots=True)
+class _BackupVMScope:
+    """Exact ownership of one explicitly selected NetBox VM."""
+
+    netbox_vm_id: int
+    endpoint_id: int
+    cluster_name: str
+    proxmox_vmid: int
+
+
+@dataclass(slots=True)
+class _BackupVMCache:
+    """Resolve a backup to a VM without guessing across reused Proxmox VMIDs."""
+
+    records: dict[tuple[int | None, str | None, int], dict[str, object] | None] = field(
+        default_factory=dict
+    )
+    selected_scopes: tuple[_BackupVMScope, ...] = ()
+
+    def _insert(
+        self,
+        key: tuple[int | None, str | None, int],
+        record: dict[str, object],
+    ) -> None:
+        existing = self.records.get(key, _MISSING)
+        if existing is _MISSING:
+            self.records[key] = record
+            return
+        if existing is None:
+            return
+        if relation_id(existing.get("id")) != relation_id(record.get("id")):
+            # A less-specific identity is unsafe once more than one VM owns it.
+            self.records[key] = None
+
+    def add(self, record: object) -> None:
+        payload = to_mapping(record)
+        vmid = normalize_positive_int(extract_proxmox_vmid(payload))
+        if vmid is None:
+            return
+        endpoint_id = extract_proxmox_endpoint_id(payload)
+        cluster_name = _normalize_cluster_name(relation_name(payload.get("cluster")))
+        for key in (
+            (endpoint_id, cluster_name, vmid),
+            (endpoint_id, None, vmid),
+            (None, cluster_name, vmid),
+            (None, None, vmid),
+        ):
+            self._insert(key, payload)
+
+    def resolve(
+        self,
+        *,
+        endpoint_id: object,
+        cluster_name: object,
+        proxmox_vmid: object,
+    ) -> dict[str, object] | None:
+        vmid = normalize_positive_int(proxmox_vmid)
+        if vmid is None:
+            return None
+        endpoint = normalize_positive_int(endpoint_id)
+        cluster = _normalize_cluster_name(cluster_name)
+        for key in (
+            (endpoint, cluster, vmid),
+            (endpoint, None, vmid),
+            (None, cluster, vmid),
+            (None, None, vmid),
+        ):
+            if key in self.records:
+                candidate = self.records[key]
+                if candidate is None:
+                    return None
+                candidate_endpoint = extract_proxmox_endpoint_id(candidate)
+                candidate_cluster = _normalize_cluster_name(relation_name(candidate.get("cluster")))
+                if (
+                    endpoint is not None
+                    and candidate_endpoint is not None
+                    and candidate_endpoint != endpoint
+                ):
+                    continue
+                if cluster is not None and candidate_cluster is not None:
+                    if candidate_cluster != cluster:
+                        continue
+                return candidate
+        return None
+
+    def is_unambiguous_scope_owner(self, scope: _BackupVMScope) -> bool:
+        """Return whether an exact Proxmox identity has this one NetBox owner."""
+
+        candidate = self.records.get(
+            (scope.endpoint_id, _normalize_cluster_name(scope.cluster_name), scope.proxmox_vmid)
+        )
+        return candidate is not None and relation_id(candidate.get("id")) == scope.netbox_vm_id
+
+
+def _resolve_backup_virtual_machine(
+    vm_cache: _BackupVMCache | dict[int, dict | None] | None,
+    *,
+    endpoint_id: object,
+    cluster_name: object,
+    proxmox_vmid: object,
+) -> dict[str, object] | None:
+    if isinstance(vm_cache, _BackupVMCache):
+        return vm_cache.resolve(
+            endpoint_id=endpoint_id,
+            cluster_name=cluster_name,
+            proxmox_vmid=proxmox_vmid,
+        )
+    vmid = normalize_positive_int(proxmox_vmid)
+    if vmid is None or vm_cache is None:
+        return None
+    return vm_cache.get(vmid)
 
 
 def _normalize_backup_subtype(raw_subtype: object, volume_id: object) -> str:
@@ -187,9 +323,10 @@ def _build_backup_normalizer():
 
 def compute_backup_payload(
     backup: dict,
-    vm_cache: dict[int, dict | None] | None = None,
+    vm_cache: _BackupVMCache | dict[int, dict | None] | None = None,
     storage_index: dict[tuple[str, str], dict] | None = None,
     cluster_name: str | None = None,
+    endpoint_id: int | None = None,
 ) -> dict | None:
     """Pure function: transform a Proxmox backup dict into a NetBox payload dict.
 
@@ -204,7 +341,14 @@ def compute_backup_payload(
         return None
 
     vmid_int = int(vmid)
-    virtual_machine = vm_cache.get(vmid_int) if vm_cache is not None else None
+    resolved_cluster_name = cluster_name or backup.get(_BACKUP_CLUSTER_NAME_KEY)
+    resolved_endpoint_id = endpoint_id or backup.get(_BACKUP_ENDPOINT_ID_KEY)
+    virtual_machine = _resolve_backup_virtual_machine(
+        vm_cache,
+        endpoint_id=resolved_endpoint_id,
+        cluster_name=resolved_cluster_name,
+        proxmox_vmid=vmid_int,
+    )
     if virtual_machine is None:
         return None
 
@@ -221,7 +365,9 @@ def compute_backup_payload(
     proxmox_storage_id = None
     if storage_index and storage_name:
         storage_record = find_storage_record(
-            storage_index, cluster_name=cluster_name, storage_name=storage_name
+            storage_index,
+            cluster_name=str(resolved_cluster_name or "") or None,
+            storage_name=storage_name,
         )
         if storage_record:
             proxmox_storage_id = storage_record.get("id")
@@ -249,13 +395,14 @@ def compute_backup_payload(
     }
 
 
-async def create_netbox_backups(
+async def create_netbox_backups(  # noqa: C901
     backup,
     netbox_session: NetBoxSessionDep,
     *,
     cluster_name: str | None = None,
+    endpoint_id: int | None = None,
     storage_index: dict[tuple[str, str], dict] | None = None,
-    vm_cache: dict[int, dict | None] | None = None,
+    vm_cache: _BackupVMCache | dict[int, dict | None] | None = None,
 ):
     nb = netbox_session
     vmid_log: str | int | None = None
@@ -269,7 +416,14 @@ async def create_netbox_backups(
             return None
 
         vmid_int = int(vmid)
-        virtual_machine = vm_cache.get(vmid_int) if vm_cache is not None else None
+        resolved_cluster_name = cluster_name or backup.get(_BACKUP_CLUSTER_NAME_KEY)
+        resolved_endpoint_id = endpoint_id or backup.get(_BACKUP_ENDPOINT_ID_KEY)
+        virtual_machine = _resolve_backup_virtual_machine(
+            vm_cache,
+            endpoint_id=resolved_endpoint_id,
+            cluster_name=resolved_cluster_name,
+            proxmox_vmid=vmid_int,
+        )
         if virtual_machine is None:
             # Get the virtual machine on NetBox by the VM ID using custom field filter
             vms = await rest_list_async(
@@ -277,8 +431,15 @@ async def create_netbox_backups(
                 "/api/virtualization/virtual-machines/",
                 query={"cf_proxmox_vm_id": vmid_int},
             )
-            virtual_machine = vms[0] if vms else None
-            if vm_cache is not None:
+            lookup_cache = vm_cache if isinstance(vm_cache, _BackupVMCache) else _BackupVMCache()
+            for vm in vms:
+                lookup_cache.add(vm)
+            virtual_machine = lookup_cache.resolve(
+                endpoint_id=resolved_endpoint_id,
+                cluster_name=resolved_cluster_name,
+                proxmox_vmid=vmid_int,
+            )
+            if isinstance(vm_cache, dict):
                 vm_cache[vmid_int] = virtual_machine
 
         if not virtual_machine:
@@ -299,9 +460,11 @@ async def create_netbox_backups(
             creation_time = datetime.fromtimestamp(ctime).isoformat()
 
         proxmox_storage_id = None
-        if storage_index and storage_name and cluster_name:
+        if storage_index and storage_name and resolved_cluster_name:
             storage_rec = find_storage_record(
-                storage_index, cluster_name=cluster_name, storage_name=storage_name
+                storage_index,
+                cluster_name=str(resolved_cluster_name),
+                storage_name=storage_name,
             )
             if storage_rec:
                 proxmox_storage_id = storage_rec.get("id")
@@ -326,7 +489,10 @@ async def create_netbox_backups(
         netbox_backup = await rest_reconcile_async(
             nb,
             "/api/plugins/proxbox/backups/",
-            lookup={"volume_id": volume_id},
+            lookup={
+                "virtual_machine": virtual_machine.get("id"),
+                "volume_id": volume_id,
+            },
             payload=backup_payload,
             schema=NetBoxBackupSyncState,
             current_normalizer=lambda record: {
@@ -401,10 +567,23 @@ def _compute_backup_diff(
     return diff
 
 
+def _backup_owner_key(record: dict[str, object]) -> tuple[int, str]:
+    virtual_machine_id = _relation_id_or_none(record.get("virtual_machine"))
+    volume_id = str(record.get("volume_id") or "").strip()
+    if virtual_machine_id is None or not volume_id:
+        raise ProxboxException(
+            message="Unable to reconcile backup without stable ownership",
+            detail=(
+                "Every backup must contain a NetBox virtual_machine id and non-empty volume_id."
+            ),
+            http_status_code=502,
+        )
+    return virtual_machine_id, volume_id
+
+
 async def _bulk_reconcile_backups(  # noqa: C901
     nb,
     proxmox_backup_payloads: list[dict],
-    proxmox_volume_ids: set[str],
     bulk_batch_size: int | None = None,
     bulk_batch_delay_ms: int | None = None,
 ) -> tuple[list[dict], int, int]:
@@ -418,29 +597,41 @@ async def _bulk_reconcile_backups(  # noqa: C901
     )
     normalizer = _build_backup_normalizer()
 
-    # Deduplicate input payloads by volume_id.  PBS storage content lists all
+    # Deduplicate input payloads by owning VM plus volume_id. PBS storage content lists all
     # backups for every VM; when multiple VMs share a PBS storage they can each
     # contribute the same volume_id to the payload list, causing bulk-create to
     # fail with a duplicate constraint even though no race condition is present.
-    seen_volume_ids: set[str] = set()
-    deduped_payloads: list[dict] = []
+    # A bare volume_id is not globally unique: separate endpoints may legitimately
+    # expose identical PBS volume names for different NetBox VMs.
+    deduped_by_owner: dict[tuple[int, str], dict] = {}
     for _p in proxmox_backup_payloads:
-        _vid = _p.get("volume_id")
-        if _vid and str(_vid) not in seen_volume_ids:
-            seen_volume_ids.add(str(_vid))
-            deduped_payloads.append(_p)
-    proxmox_backup_payloads = deduped_payloads
+        owner_key = _backup_owner_key(_p)
+        prior = deduped_by_owner.get(owner_key)
+        if prior is not None and prior != _p:
+            raise ProxboxException(
+                message="Conflicting backup payloads share the same owner identity",
+                detail=f"Duplicate backup owner key: {owner_key}.",
+                http_status_code=502,
+            )
+        deduped_by_owner.setdefault(owner_key, _p)
+    proxmox_backup_payloads = list(deduped_by_owner.values())
 
     # Force a fresh fetch: discard any cached list so the pre-fetch reflects the
     # actual current NetBox state and avoids placing already-existing records in
     # `to_create`, which would otherwise cause spurious 400 "already exists" errors.
     clear_rest_get_cache_for_path(nb, "/api/plugins/proxbox/backups/")
     existing_backups_raw = await rest_list_paginated_async(nb, "/api/plugins/proxbox/backups/")
-    existing_by_volume_id: dict[str, RestRecord] = {}
+    existing_by_owner: dict[tuple[int, str], RestRecord] = {}
     for rec in existing_backups_raw:
-        vid = rec.get("volume_id")
-        if vid:
-            existing_by_volume_id[str(vid)] = rec
+        raw = rec.serialize() if isinstance(rec, RestRecord) else to_mapping(rec)
+        owner_key = _backup_owner_key(raw)
+        if owner_key in existing_by_owner:
+            raise ProxboxException(
+                message="Duplicate NetBox backups share the same owner identity",
+                detail=f"Duplicate existing backup owner key: {owner_key}.",
+                http_status_code=502,
+            )
+        existing_by_owner[owner_key] = rec
 
     to_create: list[dict] = []
     to_patch: list[tuple[RestRecord, dict]] = []
@@ -448,8 +639,8 @@ async def _bulk_reconcile_backups(  # noqa: C901
     journal_entries: list[dict] = []
 
     for payload in proxmox_backup_payloads:
-        volume_id = payload.get("volume_id")
-        existing = existing_by_volume_id.get(str(volume_id)) if volume_id else None
+        owner_key = _backup_owner_key(payload)
+        existing = existing_by_owner.get(owner_key)
 
         if existing is None:
             validated = NetBoxBackupSyncState.model_validate(payload)
@@ -492,7 +683,10 @@ async def _bulk_reconcile_backups(  # noqa: C901
                     rec = await rest_reconcile_async(
                         nb,
                         "/api/plugins/proxbox/backups/",
-                        lookup={"volume_id": single_payload.get("volume_id")},
+                        lookup={
+                            "virtual_machine": single_payload.get("virtual_machine"),
+                            "volume_id": single_payload.get("volume_id"),
+                        },
                         payload=single_payload,
                         schema=NetBoxBackupSyncState,
                         current_normalizer=normalizer,
@@ -681,6 +875,7 @@ async def get_node_backups(
                                 backup,
                                 netbox_session=netbox_session,
                                 cluster_name=getattr(cluster, "name", None),
+                                endpoint_id=extract_proxmox_session_endpoint_id(proxmox),
                                 storage_index=storage_index,
                             )
                             for backup in filtered
@@ -744,19 +939,73 @@ async def create_virtual_machine_backups(
     return normalized_results
 
 
-async def _prefetch_vm_cache(nb) -> dict[int, dict | None]:
-    """Load all VMs from NetBox into a cache keyed by cf_proxmox_vm_id."""
-    vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
-    cache: dict[int, dict | None] = {}
+def _backup_vm_scope(record: object) -> _BackupVMScope | None:
+    payload = to_mapping(record)
+    netbox_vm_id = relation_id(payload.get("id"))
+    endpoint_id = extract_proxmox_endpoint_id(payload)
+    cluster_name = _normalize_cluster_name(relation_name(payload.get("cluster")))
+    proxmox_vmid = normalize_positive_int(extract_proxmox_vmid(payload))
+    if netbox_vm_id is None or endpoint_id is None or cluster_name is None or proxmox_vmid is None:
+        return None
+    return _BackupVMScope(
+        netbox_vm_id=netbox_vm_id,
+        endpoint_id=endpoint_id,
+        cluster_name=cluster_name,
+        proxmox_vmid=proxmox_vmid,
+    )
+
+
+async def _prefetch_vm_cache(
+    nb,
+    netbox_vm_ids: list[int] | None = None,
+) -> _BackupVMCache:
+    """Load a collision-safe VM identity cache, optionally for exact NetBox IDs."""
+
+    if netbox_vm_ids is None:
+        vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
+    else:
+        selected = await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
+        # Explicit selections resolve ownership sidecar-first (authoritative
+        # endpoint/cluster/VMID overlay) before scope validation, matching the
+        # targeted VM-sync and task-history selection contract.
+        vms = await hydrate_selected_vm_identities(
+            nb,
+            [to_mapping(vm) for vm in selected],
+        )
+
+    cache = _BackupVMCache()
     for vm in vms:
-        cf = vm.get("custom_fields", {}) or {}
-        raw_vmid = cf.get("proxmox_vm_id")
-        if raw_vmid is not None:
-            try:
-                vmid_int = int(str(raw_vmid).strip())
-                cache[vmid_int] = vm.serialize() if hasattr(vm, "serialize") else vm.dict()
-            except (ValueError, TypeError):
-                continue
+        cache.add(vm)
+
+    scopes = tuple(scope for vm in vms if (scope := _backup_vm_scope(vm)) is not None)
+    cache.selected_scopes = tuple(sorted(scopes, key=lambda scope: scope.netbox_vm_id))
+
+    if netbox_vm_ids is None:
+        return cache
+
+    requested_ids = set(netbox_vm_ids)
+    resolved_ids = {
+        vm_id for vm in vms if (vm_id := relation_id(to_mapping(vm).get("id"))) is not None
+    }
+    missing_ids = requested_ids - resolved_ids
+    if missing_ids:
+        raise ProxboxException(
+            message="Unable to resolve explicitly selected NetBox VMs",
+            detail=f"NetBox did not return selected VM id(s): {sorted(missing_ids)}.",
+            http_status_code=502,
+        )
+
+    scoped_ids = {scope.netbox_vm_id for scope in scopes}
+    invalid_ids = requested_ids - scoped_ids
+    if invalid_ids:
+        raise ProxboxException(
+            message="Unable to verify selected backup VM ownership",
+            detail=(
+                "Selected VM id(s) are missing a positive NetBox id, Proxmox endpoint id, "
+                f"cluster, or Proxmox VMID: {sorted(invalid_ids)}."
+            ),
+            http_status_code=502,
+        )
     return cache
 
 
@@ -769,7 +1018,8 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     fetch_max_concurrency: int | None = None,
     websocket=None,
     use_websocket=False,
-    vmid_filter: str | None = None,
+    vmid_filter: str | int | list[int] | None = None,
+    netbox_vm_ids: list[int] | None = None,
 ):
     """Internal function that handles backup sync with optional websocket support.
 
@@ -777,10 +1027,18 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     1. Discovery: fetch Proxmox backups and build payloads (no NetBox writes)
     2. Reconcile: pre-fetch all existing NetBox backups, diff in memory, bulk dispatch
 
-    When ``vmid_filter`` is provided only backups belonging to that Proxmox VMID
-    are fetched and synced.
+    ``netbox_vm_ids`` carries exact NetBox/endpoint/cluster ownership. The legacy
+    ``vmid_filter`` is retained for direct Proxmox-VMID callers, but must not be
+    used to implement a NetBox-ID selection because VMIDs are endpoint-local.
     """
     nb = netbox_session
+    if vmid_filter is None:
+        selected_vmids: set[str] | None = None
+    elif isinstance(vmid_filter, list):
+        selected_vmids = {str(value).strip() for value in vmid_filter if str(value).strip()}
+    else:
+        selected_vmids = {str(vmid_filter).strip()}
+    selected_netbox_ids = set(netbox_vm_ids) if netbox_vm_ids is not None else None
     results = []
     failure_count = 0
     deleted_count = 0
@@ -797,23 +1055,95 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 }
             )
 
-        vm_cache = await _prefetch_vm_cache(nb)
+        vm_cache = (
+            await _prefetch_vm_cache(nb)
+            if netbox_vm_ids is None
+            else await _prefetch_vm_cache(nb, netbox_vm_ids)
+        )
+
+        ambiguous_exact_identities = {
+            (scope.endpoint_id, scope.cluster_name, scope.proxmox_vmid)
+            for scope in vm_cache.selected_scopes
+            if not vm_cache.is_unambiguous_scope_owner(scope)
+        }
+        if ambiguous_exact_identities:
+            failure_count += len(ambiguous_exact_identities)
+            logger.error(
+                "Backup sync found %s ambiguous endpoint/cluster/VMID owner identity(s); "
+                "their payloads and destructive cleanup are disabled: %s",
+                len(ambiguous_exact_identities),
+                sorted(ambiguous_exact_identities),
+            )
+
+        selected_owner_vmids: dict[tuple[int, str], set[str]] | None = None
+        if netbox_vm_ids is not None:
+            if not isinstance(vm_cache, _BackupVMCache):
+                raise ProxboxException(
+                    message="Unable to verify selected backup VM ownership",
+                    detail="The selected VM cache did not preserve endpoint ownership.",
+                    http_status_code=502,
+                )
+            selected_owner_vmids = {}
+            selected_identity_keys: set[tuple[int, str, int]] = set()
+            for scope in vm_cache.selected_scopes:
+                identity_key = (scope.endpoint_id, scope.cluster_name, scope.proxmox_vmid)
+                if identity_key in selected_identity_keys:
+                    raise ProxboxException(
+                        message="Unable to verify selected backup VM ownership",
+                        detail=(
+                            "Multiple selected NetBox VMs claim endpoint/cluster/VMID "
+                            f"identity {identity_key}."
+                        ),
+                        http_status_code=502,
+                    )
+                selected_identity_keys.add(identity_key)
+                selected_owner_vmids.setdefault((scope.endpoint_id, scope.cluster_name), set()).add(
+                    str(scope.proxmox_vmid)
+                )
+
+            if not selected_owner_vmids:
+                logger.info("Backup sync received an explicit empty VM selection")
+                return results
+
+            available_owner_keys = {
+                (endpoint_id, cluster_name)
+                for proxmox, cluster in zip(pxs, cluster_status)
+                if (endpoint_id := extract_proxmox_session_endpoint_id(proxmox)) is not None
+                and (cluster_name := _normalize_cluster_name(getattr(cluster, "name", None)))
+                is not None
+            }
+            missing_owners = set(selected_owner_vmids) - available_owner_keys
+            if missing_owners:
+                raise ProxboxException(
+                    message="Selected backup VM owner is unavailable",
+                    detail=(
+                        "No active Proxmox session/cluster pair exists for selected owner(s): "
+                        f"{sorted(missing_owners)}."
+                    ),
+                    http_status_code=502,
+                )
 
         all_raw_backups: list[dict] = []
-        proxmox_backups: set[str] = set()
         discovery_tasks: list[asyncio.Task] = []
+        discovery_task_owners: list[tuple[int, str] | None] = []
+        owner_discovery_ok: dict[tuple[int, str], bool] = {}
         fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _resolve_fetch_concurrency())
 
         async def _discover_backups_for_node_storage(
             proxmox,
+            endpoint_id: int | None,
             cluster_name: str,
             node_name: str,
             storage_name: str,
+            allowed_vmids: set[str] | None,
         ) -> tuple[list[dict], set[str]]:
+            effective_vmids = allowed_vmids if allowed_vmids is not None else selected_vmids
+            if effective_vmids is not None and not effective_vmids:
+                return [], set()
             async with fetch_semaphore:
                 _extra: dict = {}
-                if vmid_filter is not None:
-                    _extra["vmid"] = vmid_filter
+                if effective_vmids is not None and len(effective_vmids) == 1:
+                    _extra["vmid"] = next(iter(effective_vmids))
                 raw_backups = await get_node_storage_content(
                     proxmox,
                     node=node_name,
@@ -822,19 +1152,42 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                     **_extra,
                 )
                 backups = dump_models(raw_backups)
-                if vmid_filter is not None:
-                    filtered_vmid = str(vmid_filter).strip()
+                if effective_vmids is not None:
                     backups = [
                         backup
                         for backup in backups
-                        if str(backup.get("vmid", "")).strip() == filtered_vmid
+                        if str(backup.get("vmid", "")).strip() in effective_vmids
                     ]
                 volids = _volids_from_proxmox_storage_backup_items(backups)
-                filtered = [b for b in backups if b.get("content") == "backup"]
+                filtered = []
+                for backup in backups:
+                    if backup.get("content") != "backup":
+                        continue
+                    annotated_backup = dict(backup)
+                    annotated_backup[_BACKUP_ENDPOINT_ID_KEY] = endpoint_id
+                    annotated_backup[_BACKUP_CLUSTER_NAME_KEY] = cluster_name
+                    filtered.append(annotated_backup)
             return filtered, volids
 
         for proxmox, cluster in zip(pxs, cluster_status):
             cluster_name = getattr(cluster, "name", None) if cluster else None
+            endpoint_id = extract_proxmox_session_endpoint_id(proxmox)
+            owner_key = (
+                endpoint_id,
+                _normalize_cluster_name(cluster_name),
+            )
+            discovery_owner = (
+                (endpoint_id, owner_key[1])
+                if endpoint_id is not None and owner_key[1] is not None
+                else None
+            )
+            allowed_vmids = None
+            if selected_owner_vmids is not None:
+                if owner_key not in selected_owner_vmids:
+                    continue
+                allowed_vmids = selected_owner_vmids[owner_key]
+            if discovery_owner is not None:
+                owner_discovery_ok.setdefault(discovery_owner, True)
             storage_payload = await resolve_async(proxmox.session.storage.get())
             storage_list = [
                 {
@@ -845,6 +1198,8 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 if "backup" in storage_dict.get("content")
             ]
 
+            if discovery_owner is not None and not (cluster and cluster.node_list):
+                owner_discovery_ok[discovery_owner] = False
             if cluster and cluster.node_list:
                 for cluster_node in cluster.node_list:
                     for storage in storage_list:
@@ -855,22 +1210,44 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                                 asyncio.create_task(
                                     _discover_backups_for_node_storage(
                                         proxmox=proxmox,
+                                        endpoint_id=endpoint_id,
                                         cluster_name=cluster_name,
                                         node_name=cluster_node.name,
                                         storage_name=storage.get("storage"),
+                                        allowed_vmids=allowed_vmids,
                                     )
                                 )
                             )
+                            discovery_task_owners.append(discovery_owner)
 
         if discovery_tasks:
             discovery_results = await asyncio.gather(*discovery_tasks, return_exceptions=True)
-            for result in discovery_results:
+            for owner, result in zip(discovery_task_owners, discovery_results):
                 if isinstance(result, Exception):
+                    failure_count += 1
+                    if owner is not None:
+                        owner_discovery_ok[owner] = False
                     logger.warning("Backup discovery failed: %s", result, exc_info=True)
                     continue
-                node_backups, node_volids = result
+                node_backups, _node_volids = result
                 all_raw_backups.extend(node_backups)
-                proxmox_backups.update(node_volids)
+
+        cleanup_covered_vm_ids: set[int] = set()
+        if isinstance(vm_cache, _BackupVMCache):
+            for scope in vm_cache.selected_scopes:
+                if owner_discovery_ok.get((scope.endpoint_id, scope.cluster_name)) is not True:
+                    continue
+                if not vm_cache.is_unambiguous_scope_owner(scope):
+                    logger.warning(
+                        "Suppressing stale backup cleanup for ambiguous VM ownership: "
+                        "endpoint=%s cluster=%s vmid=%s netbox_vm_id=%s",
+                        scope.endpoint_id,
+                        scope.cluster_name,
+                        scope.proxmox_vmid,
+                        scope.netbox_vm_id,
+                    )
+                    continue
+                cleanup_covered_vm_ids.add(scope.netbox_vm_id)
 
         all_payloads: list[dict] = []
         for backup in all_raw_backups:
@@ -878,9 +1255,13 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 backup,
                 vm_cache=vm_cache,
                 storage_index=storage_index,
+                cluster_name=backup.get(_BACKUP_CLUSTER_NAME_KEY),
+                endpoint_id=backup.get(_BACKUP_ENDPOINT_ID_KEY),
             )
             if payload is not None:
                 all_payloads.append(payload)
+
+        proxmox_backup_owner_keys = {_backup_owner_key(payload) for payload in all_payloads}
 
         if not all_payloads:
             warning_msg = "No backups found to process"
@@ -892,44 +1273,47 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                         "message": warning_msg,
                     }
                 )
-            # An empty cluster (no backups configured, or no backups matched to a
-            # NetBox VM) is a valid operational state — not an error.  Return early
-            # so the SSE stream emits complete with ok=True and the full-sync job
-            # continues to the next stage.
+            # A complete empty discovery is meaningful when stale deletion is
+            # enabled: skip reconciliation, but continue into owner-covered cleanup.
             logger.info("Backup sync: %s — skipping reconcile", warning_msg)
-            return results
+            if not delete_nonexistent_backup:
+                return results
+        else:
+            if use_websocket and websocket:
+                await websocket.send_json(
+                    {
+                        "step": "backups",
+                        "status": "discovered",
+                        "message": f"Found {len(all_payloads)} backups to reconcile.",
+                        "count": len(all_payloads),
+                    }
+                )
 
-        if use_websocket and websocket:
-            await websocket.send_json(
-                {
-                    "step": "backups",
-                    "status": "discovered",
-                    "message": f"Found {len(all_payloads)} backups to reconcile.",
-                    "count": len(all_payloads),
-                }
+            logger.info(
+                "Starting bulk backup reconcile: %s payloads, batch_size=%s, delay_ms=%s",
+                len(all_payloads),
+                _resolve_bulk_batch_size(),
+                _resolve_bulk_batch_delay_ms(),
             )
 
-        logger.info(
-            "Starting bulk backup reconcile: %s payloads, batch_size=%s, delay_ms=%s",
-            len(all_payloads),
-            _resolve_bulk_batch_size(),
-            _resolve_bulk_batch_delay_ms(),
-        )
+            results, created_count, patched_count = await _bulk_reconcile_backups(
+                nb,
+                all_payloads,
+            )
 
-        results, created_count, patched_count = await _bulk_reconcile_backups(
-            nb,
-            all_payloads,
-            proxmox_backups,
-        )
+            logger.info(
+                "Bulk reconcile completed: %s created, %s patched, %s total results",
+                created_count,
+                patched_count,
+                len(results),
+            )
 
-        logger.info(
-            "Bulk reconcile completed: %s created, %s patched, %s total results",
-            created_count,
-            patched_count,
-            len(results),
-        )
-
-        if delete_nonexistent_backup:
+        if delete_nonexistent_backup and failure_count:
+            logger.warning(
+                "Skipping backup deletion because %s Proxmox discovery scope(s) failed",
+                failure_count,
+            )
+        elif delete_nonexistent_backup and cleanup_covered_vm_ids:
             try:
                 netbox_backups = await rest_list_paginated_async(
                     nb,
@@ -939,11 +1323,17 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 skipped_no_volid = 0
 
                 for backup in netbox_backups:
+                    virtual_machine_id = _relation_id_or_none(backup.get("virtual_machine"))
+                    if virtual_machine_id not in cleanup_covered_vm_ids:
+                        continue
+                    if selected_netbox_ids is not None:
+                        if virtual_machine_id not in selected_netbox_ids:
+                            continue
                     vid = backup.volume_id
                     if not vid:
                         skipped_no_volid += 1
                         continue
-                    if vid not in proxmox_backups:
+                    if (virtual_machine_id, str(vid)) not in proxmox_backup_owner_keys:
                         backup_id = backup.id
                         if backup_id is not None:
                             ids_to_delete.append(int(backup_id))
@@ -980,6 +1370,10 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                     )
             except Exception:
                 logger.warning("Error during backup deletion pass", exc_info=True)
+        elif delete_nonexistent_backup:
+            logger.warning(
+                "Skipping backup deletion because no unambiguous VM owner had complete discovery"
+            )
 
         backup_sync_ok = True
 
@@ -1047,11 +1441,10 @@ async def create_all_virtual_machine_backups(
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
 ):
-    vmid_filter_list = None
-    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-    if vm_ids:
-        vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
-
+    try:
+        vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return await _create_all_virtual_machine_backups(
         netbox_session=netbox_session,
         pxs=pxs,
@@ -1059,35 +1452,8 @@ async def create_all_virtual_machine_backups(
         tag=tag,
         delete_nonexistent_backup=delete_nonexistent_backup,
         fetch_max_concurrency=fetch_max_concurrency,
-        vmid_filter=vmid_filter_list,
+        netbox_vm_ids=vm_ids,
     )
-
-
-async def _get_proxmox_vmids_from_netbox_vm_ids(
-    netbox_session, netbox_vm_ids: list[int]
-) -> list[int]:
-    """Get Proxmox VM IDs from NetBox VM IDs."""
-    if not netbox_vm_ids:
-        return []
-
-    try:
-        vms = await rest_list_async(
-            netbox_session,
-            "/api/virtualization/virtual-machines/",
-            query={"id": ",".join(str(vid) for vid in netbox_vm_ids)},
-        )
-        proxmox_vmids: list[int] = []
-        if vms and isinstance(vms, list):
-            for vm in vms:
-                if not isinstance(vm, dict):
-                    continue
-                cf = vm.get("custom_fields", {}) or {}
-                raw_vmid = cf.get("proxmox_vm_id")
-                if raw_vmid is not None and str(raw_vmid).strip().isdigit():
-                    proxmox_vmids.append(int(str(raw_vmid).strip()))
-        return proxmox_vmids
-    except Exception:
-        return []
 
 
 @router.get("/backups/all/create/stream", response_model=None)
@@ -1117,10 +1483,10 @@ async def create_all_virtual_machine_backups_stream(
         description="Comma-separated list of NetBox VM IDs to sync. When provided, only these VMs will be synced.",
     ),
 ):
-    vmid_filter_list = None
-    vm_ids = parse_comma_separated_ints(netbox_vm_ids)
-    if vm_ids:
-        vmid_filter_list = await _get_proxmox_vmids_from_netbox_vm_ids(netbox_session, vm_ids)
+    try:
+        vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -1134,7 +1500,7 @@ async def create_all_virtual_machine_backups_stream(
                     tag=tag,
                     delete_nonexistent_backup=delete_nonexistent_backup,
                     fetch_max_concurrency=fetch_max_concurrency,
-                    vmid_filter=vmid_filter_list,
+                    netbox_vm_ids=vm_ids,
                     websocket=bridge,
                     use_websocket=True,
                 )
@@ -1186,28 +1552,9 @@ async def create_virtual_machine_backups_by_id_stream(
             detail=f"Virtual machine id={netbox_vm_id} was not found in NetBox.",
         )
 
-    vm_data = (
-        vm_record
-        if isinstance(vm_record, dict)
-        else (vm_record.serialize() if hasattr(vm_record, "serialize") else dict(vm_record))
-    )
-    cf = vm_data.get("custom_fields") or {}
-    raw_vmid = cf.get("proxmox_vm_id")
-    proxmox_vmid: str | None = None
-    if raw_vmid is not None:
-        stripped = str(raw_vmid).strip()
-        if stripped.isdigit():
-            proxmox_vmid = stripped
-
-    if proxmox_vmid is None:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Virtual machine id={netbox_vm_id} has no proxmox_vm_id custom field set; "
-                "cannot filter backups."
-            ),
-        )
-
+    # Ownership identity is resolved downstream from the authoritative typed
+    # sidecar (legacy custom fields only as a gated fallback), so no legacy
+    # proxmox_vm_id custom-field precondition applies here.
     async def event_stream():
         bridge = WebSocketSSEBridge()
 
@@ -1222,7 +1569,7 @@ async def create_virtual_machine_backups_by_id_stream(
                     fetch_max_concurrency=fetch_max_concurrency,
                     websocket=bridge,
                     use_websocket=True,
-                    vmid_filter=proxmox_vmid,
+                    netbox_vm_ids=[netbox_vm_id],
                 )
             finally:
                 await bridge.close()

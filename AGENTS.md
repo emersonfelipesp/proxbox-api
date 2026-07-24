@@ -33,6 +33,37 @@ failing core interface/IP sync.
 `use_guest_agent_interface_name=true` behavior that renames the core
 VMInterface to the guest OS name and must emit a deprecation warning.
 
+## Task History Sync Ownership
+
+VM create routes default `sync_task_history=true` for backward compatibility
+and run one aggregate after successful VM IDs are known. Full-update passes
+`false` to the VM stage and owns one dedicated task-history stage. Roll out the
+backend first before an orchestrating plugin begins sending `false`.
+
+Bulk task history is node-oriented: paginate each selected node archive with a
+fixed run-start `until`, load the typed VM sync-state sidecar once, map by its
+endpoint + cluster + VMID identity, deduplicate UPIDs, then issue one NetBox bulk
+reconcile. A present malformed/duplicate sidecar for a relevant VM always fails closed; legacy CF
+fallback is allowed only for an absent/unreadable sidecar when
+`custom_fields_enabled=true`. A successful estate scan skips unmanaged VMs,
+but explicitly selected VMs without identity remain fatal. Encode selected
+NetBox IDs as repeated multi-value parameters in deduplicated groups of at most
+100; comma text is invalid for `MultiValueNumberFilter`. Never restore per-VM
+node scans, per-UPID status requests, or per-record NetBox fallback. Preserve
+safe partial rows and report `degraded=true` for missing scopes, ownership
+ambiguity, and repeated/no-progress archive pages. Standalone REST raises 502
+for that degraded result after reconciliation; SSE exposes the degraded phase
+summary. Raise `ProxboxException` at fatal identity, coverage, pagination, or
+reconcile boundaries so REST/SSE ends with `ok=false`.
+
+Shared NetBox list traversal follows the server `next` URL with repeated query
+values intact. Malformed pagination objects/links, empty+next pages, and any
+record overlap fail closed. The 10,000-page/1,000,000-record hard bounds and any
+caller offset/record cap raise HTTP 502 before another over-bound request; never
+return or cache partial data. Omitted `netbox_vm_ids` means all, but present
+empty/malformed selectors are HTTP 422. VM, backup, snapshot, and disk lookups
+use deduplicated repeated-ID chunks of at most 100 and propagate lookup failure.
+
 ## Required Checks
 
 Run these before pushing anything that touches the backend package:

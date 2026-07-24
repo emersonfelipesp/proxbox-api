@@ -11,7 +11,9 @@ from typing import Annotated, Any, ClassVar
 
 import bcrypt
 from fastapi import Depends
-from sqlalchemy import JSON, Column, UniqueConstraint, event, inspect, text
+from sqlalchemy import JSON, CheckConstraint, Column, UniqueConstraint, event, inspect, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 from sqlmodel import Field, Session, SQLModel, create_engine, select
@@ -580,6 +582,23 @@ class AuthLockout(SQLModel, table=True):
             await session.commit()
 
 
+class ApiKeyBootstrapConflict(RuntimeError):
+    """A first-key bootstrap lost the durable database claim."""
+
+
+class ApiKeyBootstrapClaim(SQLModel, table=True):
+    """Permanent singleton proving that public key bootstrap was consumed."""
+
+    __tablename__: ClassVar[str] = "api_key_bootstrap_claim"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_api_key_bootstrap_claim_singleton"),
+        {"extend_existing": True},
+    )
+
+    id: int = Field(default=1, primary_key=True)
+    initialized_at: float = Field(default_factory=time.time)
+
+
 class ApiKey(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
 
@@ -591,12 +610,31 @@ class ApiKey(SQLModel, table=True):
 
     @staticmethod
     async def has_any_key_async(session: AsyncSession) -> bool:
+        """Return whether at least one active key can authenticate."""
+
         result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
         return result.first() is not None
 
     @staticmethod
     def has_any_key(session: Session) -> bool:
+        """Return whether at least one active key can authenticate."""
+
         return session.exec(select(ApiKey).where(ApiKey.is_active == True)).first() is not None  # noqa: E712
+
+    @staticmethod
+    async def has_any_record_async(session: AsyncSession) -> bool:
+        """Return whether any key row exists, including inactive history."""
+
+        result = await session.exec(select(ApiKey.id).limit(1))
+        return result.first() is not None
+
+    @staticmethod
+    async def bootstrap_is_claimed_async(session: AsyncSession) -> bool:
+        """Return whether this database was ever initialized with an API key."""
+
+        if await session.get(ApiKeyBootstrapClaim, 1) is not None:
+            return True
+        return await ApiKey.has_any_record_async(session)
 
     @staticmethod
     def store_key(session: Session, raw_key: str, label: str = "") -> "ApiKey":
@@ -615,6 +653,38 @@ class ApiKey(SQLModel, table=True):
         obj = ApiKey(label=label, key_hash=key_hash)
         session.add(obj)
         await session.commit()
+        await session.refresh(obj)
+        return obj
+
+    @staticmethod
+    async def bootstrap_first_key_async(
+        session: AsyncSession,
+        raw_key: str,
+        label: str = "",
+    ) -> "ApiKey":
+        """Atomically consume the permanent claim and store the first key.
+
+        The singleton primary key is the cross-process correctness boundary.
+        The claim and bcrypt hash share one transaction, so a failed insert
+        cannot permanently consume bootstrap without also storing the key.
+        """
+
+        key_hash = (
+            await asyncio.to_thread(
+                bcrypt.hashpw,
+                raw_key.encode(),
+                bcrypt.gensalt(rounds=12),
+            )
+        ).decode()
+        claim = ApiKeyBootstrapClaim(id=1)
+        obj = ApiKey(label=label, key_hash=key_hash)
+        session.add(claim)
+        session.add(obj)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            raise ApiKeyBootstrapConflict from None
         await session.refresh(obj)
         return obj
 
@@ -639,6 +709,27 @@ class ApiKey(SQLModel, table=True):
             except Exception:
                 continue
         return False
+
+
+def _migrate_api_key_bootstrap_claim(target_engine: Engine = engine) -> None:
+    """Permanently close bootstrap for every legacy database with key history."""
+
+    claim_table = ApiKeyBootstrapClaim.__tablename__
+    key_table = ApiKey.__tablename__
+    try:
+        inspector = inspect(target_engine)
+        if not inspector.has_table(claim_table) or not inspector.has_table(key_table):
+            return
+    except Exception:
+        return
+    with target_engine.begin() as connection:
+        connection.execute(
+            text(
+                f"INSERT OR IGNORE INTO {claim_table} (id, initialized_at) "
+                f"SELECT 1, :initialized_at WHERE EXISTS (SELECT 1 FROM {key_table} LIMIT 1)"
+            ),
+            {"initialized_at": time.time()},
+        )
 
 
 def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
@@ -1191,6 +1282,7 @@ def _migrate_ceph_external_cluster_columns() -> None:
 
 def create_db_and_tables() -> None:
     SQLModel.metadata.create_all(engine)
+    _migrate_api_key_bootstrap_claim()
     _migrate_proxmox_endpoint_columns()
     _migrate_netbox_endpoint_columns()
     _migrate_deletion_request_columns()

@@ -39,7 +39,9 @@ Comportamento principal:
 - Cria dependencias como cluster, device e role quando necessario.
 - Cria interfaces e IPs da VM quando possivel.
 - Escreve journal entries para auditoria.
-- No modo full-update, a criacao de VM nao faz writes de rede, porque as etapas dedicadas de interface e IP cuidam disso.
+- No modo full-update, a criacao de VM nao faz writes de rede nem task history,
+  porque as etapas dedicadas de interface, IP e task history sao as unicas donas
+  desses trabalhos.
 - Nomes duplicados de VM dentro de um mesmo cluster NetBox sao resolvidos de forma deterministica antes da fila de operacoes. Veja [Resolvedor de Colisoes de Nome de VM](./name-collision-resolver.md).
 
 ### Modelo Assincrono com Ordem de Dependencias
@@ -68,9 +70,25 @@ Ordem obrigatoria por VM:
 2. Reconciliar VM no NetBox (create/patch).
 3. Reconciliar interfaces e IPs da VM (quando habilitado).
 4. Reconciliar discos da VM.
-5. Reconciliar task history da VM.
+5. Depois de conhecer todas as VMs bem-sucedidas, reconciliar o task history em
+   um unico agregado por nodes (a menos que `sync_task_history=false`).
 
 Assim, o async e usado para throughput quando os objetos sao independentes, mas dependencias pai-filho sempre sao aguardadas em sequencia.
+
+### Propriedade do task history
+
+As rotas de criacao gerais e direcionadas usam `sync_task_history=true` por
+padrao, preservando o comportamento standalone. Elas enviam somente os IDs
+NetBox das VMs reconciliadas com sucesso para uma unica chamada agregada. O
+full-update define a flag da etapa de VM como `false` e executa depois uma unica
+etapa dedicada para todas as VMs. O coletor pagina uma vez o arquivo de cada
+node selecionado, em vez de consultar todos os nodes para cada VM; cobertura
+parcial retorna `degraded=true`. O REST standalone converte esse agregado
+degradado em HTTP 502 depois de preservar as linhas reconciliadas, enquanto o
+SSE publica o resumo degradado da etapa. Consultas de IDs selecionados no NetBox
+usam lotes limitados de valores repetidos e falham de forma fechada se qualquer
+lote nao puder ser lido. Veja
+[Sincronizacao de Task History](./task-history.md).
 
 ### Regras de Paralelismo
 
@@ -155,6 +173,7 @@ Endpoints:
 - `GET /virtualization/virtual-machines/backups/create`
 - `GET /virtualization/virtual-machines/backups/all/create`
 - `GET /virtualization/virtual-machines/backups/all/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/backups/create/stream`
 
 Comportamento principal:
 
@@ -162,7 +181,24 @@ Comportamento principal:
 - Mapeia backups para VMs do NetBox.
 - Cria objetos de backup no modelo do plugin NetBox.
 - Trata duplicidade.
-- Pode remover backups que nao existem mais na origem Proxmox.
+- Pode remover backups que nao existem mais na origem Proxmox quando
+  `delete_nonexistent_backup=true`.
+
+As rotas direcionadas e as selecoes por `netbox_vm_ids` resolvem cada VM do
+NetBox para seu dono exato `(ID do endpoint Proxmox, nome normalizado do cluster,
+VMID Proxmox)`. A descoberta consulta somente esse endpoint e cluster; ela nunca
+amplia o escopo selecionado para outro endpoint que reutilize o mesmo VMID.
+Propriedade ausente, sessao do dono indisponivel ou varias VMs selecionadas
+reivindicando a mesma identidade falham de forma fechada, sem adivinhacao. A
+reconciliacao identifica cada backup pela VM dona no NetBox mais o `volume_id`,
+portanto volume IDs iguais pertencentes a VMs diferentes continuam independentes.
+
+A remocao de registros obsoletos e limitada as VMs cuja descoberta no
+endpoint/cluster dono terminou com sucesso. Qualquer falha de descoberta em
+node/storage torna a execucao parcial e suprime a etapa de remocao de backups.
+Por outro lado, uma descoberta totalmente bem-sucedida que encontra zero
+backups e autoritativa e pode remover registros obsoletos, mas somente para as
+VMs com cobertura comprovada dentro do escopo solicitado.
 
 ## Fluxo de Snapshot
 
@@ -171,12 +207,28 @@ Endpoints:
 - `GET /virtualization/virtual-machines/snapshots/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create`
 - `GET /virtualization/virtual-machines/snapshots/all/create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/snapshots/create/stream`
 
 Comportamento principal:
 
 - Descobre snapshots para VMs do NetBox mapeadas para VM IDs do Proxmox.
 - Reconcilia objetos de snapshot no modelo do plugin NetBox.
 - Resolve registros de storage relacionados quando possivel.
+
+As rotas direcionadas e as selecoes por `netbox_vm_ids` preservam o escopo de
+propriedade exato da VM do NetBox, endpoint Proxmox, cluster e VMID. Somente a
+sessao do endpoint correspondente pode ser consultada. Uma sessao dona ausente
+ou ambigua, ou um node nao resolvido, falha de forma fechada para aquela VM, sem
+fallback para outro endpoint com o mesmo VMID. A reconciliacao de snapshots
+tambem inclui a VM dona no NetBox na identidade de lookup, evitando patches
+entre donos quando nomes e VMIDs colidem.
+
+Com `delete_nonexistent_snapshot=true`, a limpeza de registros obsoletos tem
+escopo por dono e so e habilitada para uma VM depois que sua descoberta de
+snapshots termina com sucesso. Uma falha parcial de endpoint, node ou fetch
+suprime a limpeza destrutiva para aquele dono. Uma descoberta vazia e totalmente
+bem-sucedida pode remover snapshots obsoletos daquela VM exata no NetBox;
+snapshots de VMs fora do escopo com cobertura comprovada nao sao alterados.
 
 ## Fluxo de Storage
 

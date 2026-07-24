@@ -5,7 +5,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
+from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_rest import RestRecord
+from proxbox_api.routes.virtualization.virtual_machines.disks_vm import (
+    create_virtual_disks as create_virtual_disks_route,
+)
+from proxbox_api.services.sync import virtual_disks as virtual_disks_module
 from proxbox_api.services.sync.virtual_disks import create_virtual_disks
 
 
@@ -17,6 +24,137 @@ def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
             True if settings_key == "custom_fields_enabled" else default
         ),
     )
+
+    async def _legacy_list_bridge(
+        netbox_session,
+        path,
+        *,
+        base_query=None,
+        page_size=200,
+        max_offset=None,
+    ):
+        del max_offset
+        query = dict(base_query or {})
+        query["limit"] = page_size
+        return await virtual_disks_module.rest_list_async(
+            netbox_session,
+            path,
+            query=query,
+        )
+
+    # Existing workflow tests provide one path-aware REST list fake. Bridge the
+    # migrated exhaustive VM snapshot call to that fake; pagination behavior is
+    # covered independently by the netbox_rest contract tests.
+    monkeypatch.setattr(
+        virtual_disks_module,
+        "rest_list_paginated_async",
+        _legacy_list_bridge,
+    )
+
+
+def test_selected_virtual_disk_vm_lookup_uses_repeated_ids_and_rest_records(monkeypatch):
+    queries: list[dict[str, object]] = []
+
+    async def _selected_list(_nb, path, *, query=None):
+        queries.append(dict(query or {}))
+        return [RestRecord(SimpleNamespace(), path, {"id": 7, "custom_fields": {}})]
+
+    async def _other_lists(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_list_async",
+        _other_lists,
+    )
+
+    result = asyncio.run(
+        create_virtual_disks(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=None,
+            netbox_vm_ids=[7],
+        )
+    )
+
+    assert queries == [{"id": ["7"]}]
+    assert result == {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+
+
+def test_explicit_empty_virtual_disk_scope_fails_without_listing_all_vms(monkeypatch):
+    selected_queries: list[dict[str, object]] = []
+
+    async def _unexpected_selected_list(*_args, **_kwargs):
+        selected_queries.append(dict(_kwargs.get("query") or {}))
+        return []
+
+    async def _other_lists(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _unexpected_selected_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.virtual_disks.rest_list_async",
+        _other_lists,
+    )
+
+    with pytest.raises(ProxboxException, match="explicitly selected NetBox VMs") as exc_info:
+        asyncio.run(
+            create_virtual_disks(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                tag=None,
+                netbox_vm_ids=[],
+            )
+        )
+
+    assert selected_queries == []
+    assert exc_info.value.http_status_code == 502
+    assert "selection was empty" in str(exc_info.value.detail)
+
+
+def test_partial_selected_virtual_disk_lookup_is_typed_failure(monkeypatch):
+    async def _partial_selected_list(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        assert query == {"id": ["7", "8"]}
+        return [{"id": 7, "custom_fields": {"proxmox_vm_id": 107}}]
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _partial_selected_list)
+
+    with pytest.raises(ProxboxException, match="explicitly selected NetBox VMs") as exc_info:
+        asyncio.run(
+            create_virtual_disks(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                tag=None,
+                netbox_vm_ids=[7, 8],
+            )
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert "missing id(s): [8]" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize("selector", ["", "bad", "1,bad"])
+def test_virtual_disk_route_rejects_present_invalid_scope(selector):
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            create_virtual_disks_route(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                tag=None,
+                netbox_vm_ids=selector,
+            )
+        )
+
+    assert exc_info.value.status_code == 422
 
 
 def _run_virtual_disk_sync_for_vm(monkeypatch, *, vm, cluster_resources):
