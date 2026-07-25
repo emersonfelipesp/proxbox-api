@@ -89,11 +89,18 @@ async def test_sync_node_network_maps_types_enabled_and_topology(monkeypatch):
     # `lo` is skipped entirely.
     assert "lo" not in iface_ids
 
-    # Phase-1 create payloads (first call per interface).
+    # Phase-1 vs phase-2 calls carry disjoint patchable_fields whitelists:
+    # phase 1 owns the scalar fields (incl. `enabled`); phase 2 owns the
+    # topology cross-references. Detect phase 1 by its `enabled` whitelist entry.
+    def _is_phase1(call):
+        return call["patchable"] is not None and "enabled" in call["patchable"]
+
     phase1 = {}
+    phase1_patchable = {}
     for c in iface_calls:
-        if c["patchable"] is None and c["name"] not in phase1:
+        if _is_phase1(c) and c["name"] not in phase1:
             phase1[c["name"]] = c["payload"]
+            phase1_patchable[c["name"]] = c["patchable"]
 
     # Type mapping: eth -> other, bridge -> bridge, vlan -> virtual.
     assert phase1["eno1"]["type"] == "other"
@@ -104,8 +111,14 @@ async def test_sync_node_network_maps_types_enabled_and_topology(monkeypatch):
     assert phase1["eno1"]["enabled"] is True
     assert phase1["eno3"]["enabled"] is False
 
-    # Phase-2 topology patches (patchable_fields set).
-    patches = {c["name"]: c["payload"] for c in iface_calls if c["patchable"] is not None}
+    # Phase 1 must NEVER be allowed to touch topology / VLAN membership, or a
+    # re-sync would clear the VLANs that phase 2 assigns (the desired payload
+    # carries tagged_vlans=[] via the schema default). Its whitelist is scalar-only.
+    for name, patchable in phase1_patchable.items():
+        assert {"bridge", "lag", "parent", "mode", "tagged_vlans"}.isdisjoint(patchable), name
+
+    # Phase-2 topology patches (scalar `enabled` field absent from the whitelist).
+    patches = {c["name"]: c["payload"] for c in iface_calls if c["patchable"] and not _is_phase1(c)}
 
     # Bridge membership: eno1 -> vmbr0, eno2 -> vmbr1.
     assert patches["eno1"]["bridge"] == iface_ids["vmbr0"]

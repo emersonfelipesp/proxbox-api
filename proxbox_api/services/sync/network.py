@@ -390,6 +390,14 @@ async def sync_node_network(  # noqa: C901
             },
             schema=NetBoxInterfaceSyncState,
             current_normalizer=_node_iface_normalizer,
+            # Phase 1 owns only scalar fields. Topology FKs and VLAN membership
+            # (bridge/lag/parent/mode/tagged_vlans) are reconciled in phase 2;
+            # never let phase 1 clear them on re-sync. NetBoxInterfaceSyncState
+            # defaults tagged_vlans to [] (survives exclude_none), so without
+            # this whitelist a re-sync would PATCH away phase 2's VLAN membership.
+            patchable_fields=frozenset(
+                {"device", "name", "status", "enabled", "type", "tags", "custom_fields"}
+            ),
         )
         iface_id = _record_id(interface)
         if iface_id is not None:

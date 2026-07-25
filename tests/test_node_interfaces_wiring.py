@@ -9,8 +9,20 @@ Verifies that ``create_all_device_interfaces``:
 
 from types import SimpleNamespace
 
+import pytest
+
 import proxbox_api.services.sync.network as network
+from proxbox_api.exception import ProxboxException
 from proxbox_api.routes import dcim
+
+
+class _CapturingWebSocket:
+    def __init__(self):
+        self.events: list[dict] = []
+
+    async def send_json(self, payload):
+        self.events.append(payload)
+
 
 RAW_NETWORK = [
     {"iface": "vmbr0", "type": "bridge", "active": 1, "bridge_ports": "eno1"},
@@ -44,9 +56,9 @@ async def test_flag_on_routes_to_sync_node_network_with_raw_payload(monkeypatch)
         return {"id": 42, "name": "pve01"}
 
     async def fake_load_node_network(session, node):
-        # The normalized loader is still called for the node, but its result is
-        # unused on the full-topology path (the raw payload is fetched instead).
-        return []
+        # The full-topology path re-fetches the raw payload itself, so the
+        # normalized loader is skipped entirely when the flag is on.
+        raise AssertionError("load_proxmox_node_network must not run on the full-topology path")
 
     async def fake_sync_node_network(nb, device, network_entries, tag_refs, **kw):
         calls["network"].append({"device": device, "entries": network_entries})
@@ -113,3 +125,41 @@ async def test_flag_off_keeps_per_interface_path(monkeypatch):
     # Full-topology reconcile untouched; the per-interface path handled the node.
     assert calls["network"] == 0
     assert calls["per_iface"] == 1
+
+
+async def test_flag_on_topology_failure_raises_and_emits_error_event(monkeypatch):
+    """A failed topology reconcile must surface, not report a silent count:0 success."""
+
+    async def fake_resolve_device(nb, node_name, *, clusters_status, cluster_name):
+        return {"id": 42, "name": node_name}
+
+    async def fake_sync_node_network(*args, **kwargs):
+        raise RuntimeError("netbox exploded")
+
+    monkeypatch.setattr(dcim, "_resolve_netbox_device_by_name", fake_resolve_device)
+    monkeypatch.setattr(network, "sync_node_network", fake_sync_node_network)
+    monkeypatch.setattr(dcim, "nested_tag_payload", lambda tag: [])
+
+    websocket = _CapturingWebSocket()
+
+    with pytest.raises(ProxboxException):
+        await dcim.create_all_device_interfaces(
+            netbox_session=object(),
+            tag=object(),
+            clusters_status=_cluster_status(),
+            pxs=[_fake_proxmox_session({})],
+            websocket=websocket,
+            use_websocket=True,
+            behavior_flags=SimpleNamespace(sync_node_interfaces=True),
+        )
+
+    # The node-level failure is visible in the stream as a completed:False error.
+    error_events = [
+        e
+        for e in websocket.events
+        if e.get("object") == "node_interface"
+        and e.get("data", {}).get("completed") is False
+        and "error" in e.get("data", {})
+    ]
+    assert error_events, "expected a completed:False node_interface error event"
+    assert error_events[-1]["data"]["error"] == "netbox exploded"

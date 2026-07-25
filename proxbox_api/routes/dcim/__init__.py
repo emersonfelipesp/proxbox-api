@@ -389,6 +389,25 @@ async def _emit_node_interface_event(websocket, use_websocket: bool, payload: di
         await websocket.send_json(payload)
 
 
+async def _emit_node_network_error(
+    websocket, use_websocket: bool, node_name: str, exc: Exception
+) -> None:
+    """Emit a node-level failure event mirroring the legacy per-interface error shape."""
+    await _emit_node_interface_event(
+        websocket,
+        use_websocket,
+        {
+            "object": "node_interface",
+            "data": {
+                "completed": False,
+                "rowid": node_name,
+                "name": node_name,
+                "error": str(exc),
+            },
+        },
+    )
+
+
 async def _sync_node_network_topology(
     netbox_session,
     tag_refs: list[dict[str, object]],
@@ -428,9 +447,18 @@ async def _sync_node_network_topology(
         raw_network = await resolve_async(
             proxmox_session.session(f"/nodes/{node_name}/network").get()
         )
+    except ProxboxException:
+        raise
     except Exception as exc:
-        logger.warning("Failed to fetch raw network for node %s: %s", node_name, exc)
-        return []
+        # A failed fetch means the node topology could not be reconciled at all.
+        # Surface it (stream event + raised error) instead of reporting a silent
+        # zero-interface success, matching the legacy per-interface path.
+        await _emit_node_network_error(websocket, use_websocket, node_name, exc)
+        raise ProxboxException(
+            message=f"Failed to fetch node network for '{node_name}'",
+            detail=f"{type(exc).__name__}: {getattr(exc, 'detail', str(exc))}",
+            python_exception=str(exc),
+        ) from exc
 
     try:
         results = await sync_node_network(
@@ -439,9 +467,15 @@ async def _sync_node_network_topology(
             list(raw_network or []),
             tag_refs,
         )
+    except ProxboxException:
+        raise
     except Exception as exc:
-        logger.warning("Failed to sync node network topology for %s: %s", node_name, exc)
-        return []
+        await _emit_node_network_error(websocket, use_websocket, node_name, exc)
+        raise ProxboxException(
+            message=f"Failed to reconcile node network topology for '{node_name}'",
+            detail=f"{type(exc).__name__}: {getattr(exc, 'detail', str(exc))}",
+            python_exception=str(exc),
+        ) from exc
 
     for result in results:
         await _emit_node_interface_event(
@@ -687,7 +721,13 @@ async def create_all_device_interfaces(
                 clusters_status=[cluster_status],
                 cluster_name=cluster_name,
             )
-            node_networks = await load_proxmox_node_network(proxmox_session, node_name)
+            # The full-topology path re-fetches the raw payload itself, so the
+            # normalized loader would be a wasted round-trip when the flag is on.
+            node_networks = (
+                []
+                if sync_full_topology
+                else await load_proxmox_node_network(proxmox_session, node_name)
+            )
             all_results.extend(
                 await _sync_node_interfaces_for_node(
                     netbox_session,
