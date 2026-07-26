@@ -248,6 +248,23 @@ def test_zfs_error_detail_redacts_credentials() -> None:
         ('{"password": "p@ss"}', ["p@ss"], '"password": "[REDACTED]"'),
         ("http://:secret@h/p", ["secret"], "http://[REDACTED]@h/p"),
         ("http://user:secret@h/p", ["user:secret"], "http://[REDACTED]@h/p"),
+        # Compound key names (issue #272): the old standalone-only
+        # (?<![-\w])…(?![-\w]) boundaries rejected these, leaking the value.
+        ("secret_key=AKIASEKRET", ["AKIASEKRET"], "secret_key=[REDACTED]"),
+        ("access_token=eyJSEKRET", ["eyJSEKRET"], "access_token=[REDACTED]"),
+        ("refresh_token: 'r0ffSEKRET'", ["r0ffSEKRET"], "refresh_token: [REDACTED]"),
+        ("client_secret=oauthSEKRET", ["oauthSEKRET"], "client_secret=[REDACTED]"),
+        ('{"secret_key": "AKIASEKRET"}', ["AKIASEKRET"], '"secret_key": "[REDACTED]"'),
+        ('{"access_token": "eyJSEKRET"}', ["eyJSEKRET"], '"access_token": "[REDACTED]"'),
+        # *_key credential family + Proxmox's canonical no-separator token name.
+        ("private_key=PEMSEKRET", ["PEMSEKRET"], "private_key=[REDACTED]"),
+        ("ssh_key=SSHSEKRET", ["SSHSEKRET"], "ssh_key=[REDACTED]"),
+        ("PVEAPIToken=PVESEKRET", ["PVESEKRET"], "PVEAPIToken=[REDACTED]"),
+        ('{"private_key": "PEMSEKRET"}', ["PEMSEKRET"], '"private_key": "[REDACTED]"'),
+        # Rotated / versioned suffixes.
+        ("secret_key_2=ROT2SEKRET", ["ROT2SEKRET"], "secret_key_2=[REDACTED]"),
+        ("api_key2=ROTAPISEKRET", ["ROTAPISEKRET"], "api_key2=[REDACTED]"),
+        ("access_token_2=ROTATSEKRET", ["ROTATSEKRET"], "access_token_2=[REDACTED]"),
     ],
 )
 def test_zfs_error_detail_redacts_adversarial_secret_forms(
@@ -260,6 +277,24 @@ def test_zfs_error_detail_redacts_adversarial_secret_forms(
     for leaked_fragment in leaked_fragments:
         assert leaked_fragment not in detail
     assert expected_fragment in detail
+
+
+def test_zfs_error_detail_does_not_over_redact_non_secret_keys() -> None:
+    # Non-secret keys, and a keyword appearing only in a *value*, must pass
+    # through unchanged (issue #272 — avoid over-redaction regressions).
+    for message in (
+        "timeout: 30",
+        "max_retries=3",
+        "bypass=1",
+        "passthrough=on",
+        "vmname=secret-lab",
+        "token_count: 5",
+        "token_count2=9",
+        "password_policy=strict",
+        "sort_key=name",
+        "access_keyboard=usb",
+    ):
+        assert zfs_service._safe_error_detail(RuntimeError(message)) == message
 
 
 def test_zfs_vdev_tree_rejects_adversarial_depth() -> None:
