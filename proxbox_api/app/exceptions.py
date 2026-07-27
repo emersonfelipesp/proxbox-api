@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import ProxboxException
@@ -19,7 +20,34 @@ def _expose_internal_errors(app: FastAPI) -> bool:
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    """Register ProxboxException and generic exception JSON handlers."""
+    """Register secret-safe validation, ProxboxException, and generic handlers."""
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        """Return a stable error without reflecting Pydantic input or context.
+
+        ``RequestValidationError.errors()`` can contain the complete request body in
+        its ``input`` member. Cloud image requests can contain keys, user-data, and
+        signed URLs, so neither the exception nor its error details cross this
+        application boundary.
+        """
+
+        del request, exc
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {
+                        "type": "request_validation_error",
+                        "loc": ["body"],
+                        "msg": "Request validation failed.",
+                    }
+                ]
+            },
+        )
 
     @app.exception_handler(ProxboxException)
     async def proxbox_exception_handler(request: Request, exc: ProxboxException) -> JSONResponse:

@@ -214,8 +214,17 @@ def test_lxc_novnc_returns_422(auth_test_client, db_engine):
 
     assert resp.status_code == 422
     body = resp.json()
-    detail_text = str(body)
-    assert "novnc" in detail_text or "lxc" in detail_text
+    # The app-wide RequestValidationError handler returns a fixed, input-free
+    # payload so request bodies (which can carry secrets) are never reflected.
+    assert body == {
+        "detail": [
+            {
+                "type": "request_validation_error",
+                "loc": ["body"],
+                "msg": "Request validation failed.",
+            }
+        ]
+    }
 
 
 def test_vmid_zero_returns_422(auth_test_client, db_engine):

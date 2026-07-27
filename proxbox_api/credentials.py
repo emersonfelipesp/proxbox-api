@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import os
+import secrets
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -38,6 +40,7 @@ _ENCRYPTION_KEY: bytes | None = None
 _FERNET: Fernet | None = None
 _ENCRYPTION_WARNING_LOGGED: bool = False
 _KEY_LOCK = threading.Lock()
+_PROCESS_SERVICE_KEY = secrets.token_bytes(32)
 
 KeySource = Literal["env", "plugin", "local"]
 
@@ -134,7 +137,7 @@ def _get_fernet() -> Fernet | None:
                 logger.critical(
                     "Credential encryption is DISABLED. "
                     "Set PROXBOX_ENCRYPTION_KEY to encrypt credentials at rest. "
-                    "Without encryption, all credentials will be stored in plaintext."
+                    "Credential writes are refused unless the lab-only plaintext opt-in is set."
                 )
                 _ENCRYPTION_WARNING_LOGGED = True
             _FERNET = None
@@ -166,6 +169,20 @@ def assert_encryption_configured() -> None:
 def is_encryption_enabled() -> bool:
     """Check if credential encryption is enabled."""
     return _get_encryption_key() is not None
+
+
+def derive_service_signing_key(context: str) -> bytes:
+    """Derive a purpose-bound HMAC key without exposing credential key material.
+
+    Production deployments inherit the configured credential-encryption key so
+    signed plans remain valid across workers. Development instances without a
+    configured key use one process-local seed; their short-lived plans are
+    intentionally invalidated by a restart instead of being signed by a public
+    or hard-coded fallback.
+    """
+
+    root_key = _get_encryption_key() or _PROCESS_SERVICE_KEY
+    return hmac.new(root_key, f"proxbox-service:{context}".encode(), hashlib.sha256).digest()
 
 
 def get_encryption_source() -> KeySource | None:
