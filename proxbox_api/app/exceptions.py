@@ -6,7 +6,6 @@ import re
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -59,10 +58,21 @@ def register_exception_handlers(app: FastAPI) -> None:
         ``RequestValidationError.errors()`` can contain the complete request body in
         its ``input`` member. Cloud image requests can contain keys, user-data, and
         signed URLs, so neither the exception nor its error details cross this
-        application boundary.
+        application boundary. Ceph v2 paths additionally keep sanitized structural
+        locations so operators can identify the failing field without echoing
+        attacker-controlled keys or secret aliases.
         """
 
-        del request, exc
+        if request.url.path.startswith("/ceph/v2"):
+            errors = [
+                {
+                    "type": str(error.get("type") or "value_error"),
+                    "loc": _safe_validation_locations(error),
+                    "msg": "Request validation failed.",
+                }
+                for error in exc.errors()
+            ]
+            return JSONResponse(status_code=422, content={"detail": errors})
         return JSONResponse(
             status_code=422,
             content={
@@ -75,26 +85,6 @@ def register_exception_handlers(app: FastAPI) -> None:
                 ]
             },
         )
-
-    @app.exception_handler(RequestValidationError)
-    async def request_validation_handler(
-        request: Request,
-        exc: RequestValidationError,
-    ) -> JSONResponse:
-        if not request.url.path.startswith("/ceph/v2"):
-            return await request_validation_exception_handler(request, exc)
-        # FastAPI's default payload includes the rejected ``input`` value. Ceph
-        # operations deliberately reject arbitrary secret aliases, so echoing
-        # that input would turn validation into a credential disclosure path.
-        errors = [
-            {
-                "type": str(error.get("type") or "value_error"),
-                "loc": _safe_validation_locations(error),
-                "msg": "Request validation failed.",
-            }
-            for error in exc.errors()
-        ]
-        return JSONResponse(status_code=422, content={"detail": errors})
 
     @app.exception_handler(ProxboxException)
     async def proxbox_exception_handler(request: Request, exc: ProxboxException) -> JSONResponse:

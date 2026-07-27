@@ -314,7 +314,7 @@ class ProxmoxSession:
                 if not isinstance(error, Exception):
                     raise
                 logger.info(
-                    "Proxmox connection using domain failed, trying IP %s error_type=%s",
+                    "Proxmox connection using domain failed; trying configured IP %s error_type=%s",
                     self.ip_address,
                     type(error).__name__,
                 )
