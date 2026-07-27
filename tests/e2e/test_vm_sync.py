@@ -29,8 +29,20 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
     _relation_id,
 )
+from proxbox_api.services.custom_fields import (
+    custom_fields_enabled,
+    legacy_custom_fields_payload,
+)
 from proxbox_api.services.sync.device_ensure import _slugify
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
+
+# Legacy reflection custom fields are deprecated and gated by the
+# ``custom_fields_enabled`` plugin setting (default false), so the VM payload
+# builder output must pass through the same gate the sync services apply before
+# it reaches NetBox. Without the gate these tests POST ``custom_fields`` keys
+# whose definitions the extras reconcile no longer creates, and NetBox rejects
+# the whole write.
+LEGACY_CF_CONTEXT = "e2e VM custom-field payload"
 
 pytestmark = pytest.mark.usefixtures("requires_pve_schema")
 
@@ -129,7 +141,11 @@ class TestVMSync:
             nb,
             "/api/virtualization/virtual-machines/",
             lookup={"name": vm.name},
-            payload=netbox_vm_payload,
+            payload=legacy_custom_fields_payload(
+                netbox_vm_payload,
+                overwrite=True,
+                context=LEGACY_CF_CONTEXT,
+            ),
             schema=NetBoxVirtualMachineCreateBody,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
@@ -253,7 +269,11 @@ class TestVMSync:
             nb,
             "/api/virtualization/virtual-machines/",
             lookup={"name": lxc_vm.name},
-            payload=netbox_vm_payload,
+            payload=legacy_custom_fields_payload(
+                netbox_vm_payload,
+                overwrite=True,
+                context=LEGACY_CF_CONTEXT,
+            ),
             schema=NetBoxVirtualMachineCreateBody,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
@@ -367,7 +387,11 @@ class TestVMSync:
             nb,
             "/api/virtualization/virtual-machines/",
             lookup={"name": vm.name},
-            payload=netbox_vm_payload,
+            payload=legacy_custom_fields_payload(
+                netbox_vm_payload,
+                overwrite=True,
+                context=LEGACY_CF_CONTEXT,
+            ),
             schema=NetBoxVirtualMachineCreateBody,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
@@ -386,6 +410,11 @@ class TestVMSync:
 
         vm_data = virtual_machine.serialize()
         custom_fields = vm_data.get("custom_fields") or {}
+        if not custom_fields_enabled():
+            # Deprecated legacy reflection: with custom_fields_enabled=false the
+            # gate strips the key, so NetBox must not carry any Proxmox value.
+            assert custom_fields.get("proxmox_vm_id") is None
+            return
         if custom_fields.get("proxmox_vm_id") is None:
             pytest.skip(
                 "NetBox demo does not return Proxmox VM custom fields (unset or no permission)."
@@ -486,7 +515,11 @@ class TestVMSync:
                 nb,
                 "/api/virtualization/virtual-machines/",
                 lookup={"name": vm.name},
-                payload=payload,
+                payload=legacy_custom_fields_payload(
+                    payload,
+                    overwrite=True,
+                    context=LEGACY_CF_CONTEXT,
+                ),
                 schema=NetBoxVirtualMachineCreateBody,
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
