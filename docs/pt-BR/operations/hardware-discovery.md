@@ -105,6 +105,27 @@ As escritas passam pelo PATCH com drift-detect existente
 (`netbox_rest.rest_patch_async`), então um segundo sync consecutivo bem-sucedido
 não gera nenhum `extras.ObjectChange` para esses campos.
 
+## Endereços MAC de NICs físicas
+
+A descoberta é o único caminho capaz de preencher o MAC de uma NIC **física**.
+O `/nodes/{node}/network` expõe a opção `hwaddress` apenas para bridges e bonds,
+portanto o `sync_node_network()` (somente API) deixa interfaces como `eno1` sem
+MAC. Quando uma execução de descoberta obtém `NicFacts.mac_address` (via
+`ethtool`/`ip`, ambos já na allowlist de comandos SSH), o `reflect_to_netbox()`
+reconcilia o valor pelo mesmo helper
+`services/sync/mac_address.py::reconcile_mac_for_interface` usado pelo caminho
+de node-network para MACs de bridge/bond — de modo que ambos produzem linhas
+`dcim.MACAddress` idênticas e definem `primary_mac_address`.
+
+Este é um campo **nativo** do NetBox, não um custom field, portanto não é
+afetado pelo gate `custom_fields_enabled`. Uma falha de MAC é registrada como
+warning e nunca aborta a execução da descoberta.
+
+Por rodar no caminho da descoberta, herda os gates dele:
+`hardware_discovery_enabled` (padrão `false`), `access_methods=api_ssh` e uma
+`NodeSSHCredential` completa com fingerprint de host fixado. O node-network sync
+em si permanece somente API e não abre nenhum socket SSH.
+
 ## Fronteira de segurança
 
 - Credenciais ficam criptografadas (Fernet) no netbox-proxbox; texto puro

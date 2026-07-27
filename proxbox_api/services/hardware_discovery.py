@@ -186,6 +186,39 @@ def fetch_credential(  # noqa: C901 — sequential transport branches read top-d
     return _coerce_credential(node_id, host, payload)
 
 
+async def _reflect_nic_mac(netbox_session: Api, nic: Any, iface_id: int) -> None:
+    """Store a discovered NIC MAC as the interface's ``primary_mac_address``.
+
+    Reuses the same reconciler ``sync_node_network()`` uses for bridge/bond
+    ``hwaddress`` MACs, so physical and virtual interfaces end up with
+    identical ``dcim.MACAddress`` rows. No-ops when the NIC has no MAC, and
+    never raises: a MAC failure must not abort the discovery run.
+    """
+    from proxbox_api.services.sync.mac_address import (
+        DCIM_INTERFACE_CONTENT_TYPE,
+        reconcile_mac_for_interface,
+    )
+
+    mac = getattr(nic, "mac_address", None)
+    if not mac:
+        return
+    try:
+        await reconcile_mac_for_interface(
+            netbox_session,
+            mac=mac,
+            assigned_object_type=DCIM_INTERFACE_CONTENT_TYPE,
+            assigned_object_id=iface_id,
+            interface_list_path="/api/dcim/interfaces/",
+        )
+    except Exception as mac_exc:  # noqa: BLE001 — reflect failure must not break the run
+        logger.warning(
+            "Failed to sync MAC %s on node interface %s: %s",
+            mac,
+            getattr(nic, "name", ""),
+            mac_exc,
+        )
+
+
 async def reflect_to_netbox(
     netbox_session: Api,
     node_id: int,
@@ -199,6 +232,12 @@ async def reflect_to_netbox(
     ``interface_lookup`` ``{nic_name: interface_id}`` map. NICs without a
     matching interface are silently skipped (the device-sync pass owns
     interface lifecycle).
+
+    Discovered NIC MACs are also reconciled into ``dcim.MACAddress`` rows and
+    set as ``primary_mac_address``. This is the only path that can populate a
+    *physical* NIC's MAC: ``/nodes/{node}/network`` exposes ``hwaddress`` for
+    bridges/bonds only, so the API-only node-network sync leaves ``eno1``-style
+    interfaces without one.
     """
     from proxbox_api.netbox_rest import rest_list_async, rest_patch_async
 
@@ -264,6 +303,8 @@ async def reflect_to_netbox(
             int(iface_id),
             iface_payload,
         )
+
+        await _reflect_nic_mac(netbox_session, nic, int(iface_id))
 
 
 async def run_for_nodes(  # noqa: C901 — sequential per-node state machine with named branches
