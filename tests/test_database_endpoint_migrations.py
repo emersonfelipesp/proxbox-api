@@ -131,6 +131,7 @@ def test_ceph_control_plane_tables_and_audit_columns_upgrade_additively(tmp_path
     run_table = database.CephOperationRunRecord.__tablename__
     with engine.begin() as conn:
         conn.execute(text(f"CREATE TABLE {run_table} (id VARCHAR PRIMARY KEY)"))
+        conn.execute(text(f"INSERT INTO {run_table} (id) VALUES ('legacy-run')"))
 
     database._migrate_ceph_operation_run_columns()
     assert {
@@ -142,7 +143,13 @@ def test_ceph_control_plane_tables_and_audit_columns_upgrade_additively(tmp_path
         "approval_id",
         "lease_expires_at",
         "lease_owner",
+        "lease_duration_seconds",
     } <= _columns(engine, run_table)
+    with engine.begin() as conn:
+        lease_duration = conn.execute(
+            text(f"SELECT lease_duration_seconds FROM {run_table} WHERE id = 'legacy-run'")
+        ).scalar_one()
+    assert lease_duration == 360.0
 
     SQLModel.metadata.create_all(engine)
     inspector = inspect(engine)

@@ -224,6 +224,9 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent Proxmox VM config fetches during VM and virtual-disk sync. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Per-call timeout (seconds, range 1-600) for the QEMU guest-agent `network-get-interfaces` request. Interface-dense guests (many VRRP/alias interfaces) can be slow to enumerate; raise this if guest-agent interface fetches time out. Maps to the `ProxboxPluginSettings.guest_agent_timeout` plugin field. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Optional env override for `ProxboxPluginSettings.reconciliation_engine`. Valid values are `python`, `compare`, and `rust`. |
+| `PROXBOX_CEPH_TASK_TIMEOUT` | `300` | Maximum total wait for a submitted Proxmox Ceph task (range 1-3600). Maps to `ProxboxPluginSettings.ceph_task_timeout`; one immutable value bounds every status call and sleep. |
+| `PROXBOX_CEPH_TASK_POLL_INTERVAL` | `1` | Delay between Ceph task-status checks (range 0.1-60). Maps to `ProxboxPluginSettings.ceph_task_poll_interval` and is normalized to at most the task timeout. |
+| `PROXBOX_CEPH_RUN_LEASE_SECONDS` | `360` | Renewable durable Ceph run lease (range 1-3600). Maps to `ProxboxPluginSettings.ceph_run_lease_seconds` and is persisted on each operation run so later settings changes cannot alter in-flight heartbeat or recovery behavior. Heartbeat cadence is independent of provider polling. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync, virtual disks) / `4` (snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. Task-history reconciliation uses bounded bulk requests instead of per-VM write dispatch. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
@@ -235,9 +238,9 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `5` | Number of VM interfaces synced per NetBox write batch. Reduce to lower write pressure. Mapped to `ProxboxPluginSettings.interface_batch_size`. |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `100` | Milliseconds to wait between interface write batches. Mapped to `ProxboxPluginSettings.interface_batch_delay_ms`. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Backup sync batch size. Reduce to lower NetBox write pressure during backup sync. |
-| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches. |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches; `0` disables the delay. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Per-batch size for bulk VM-related sync requests (volumes, backups). |
-| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay in milliseconds between bulk batches. |
+| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay in milliseconds between bulk batches; `0` disables the delay. |
 | `PROXBOX_NETBOX_GET_CACHE_TTL` | `60` | TTL (seconds) for the in-memory NetBox GET response cache. Set `0` to disable caching. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximum entries kept in the NetBox GET cache before LRU eviction kicks in. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Maximum total bytes held in the NetBox GET cache before LRU eviction kicks in. |

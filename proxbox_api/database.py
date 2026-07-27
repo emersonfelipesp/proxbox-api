@@ -346,6 +346,7 @@ class CephOperationRunRecord(SQLModel, table=True):
     updated_at: float = Field(default_factory=time.time, index=True)
     lease_expires_at: float | None = Field(default=None, index=True)
     lease_owner: str | None = Field(default=None, index=True)
+    lease_duration_seconds: float = Field(default=360.0)
     warnings: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     errors: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     result_summary: dict[str, Any] = Field(
@@ -1019,6 +1020,7 @@ def _migrate_ceph_operation_run_columns() -> None:
         "updated_at": "REAL NOT NULL DEFAULT 0",
         "lease_expires_at": "REAL",
         "lease_owner": "VARCHAR",
+        "lease_duration_seconds": "REAL NOT NULL DEFAULT 360",
         "warnings": "JSON NOT NULL DEFAULT '[]'",
         "errors": "JSON NOT NULL DEFAULT '[]'",
         "result_summary": "JSON NOT NULL DEFAULT '{}'",

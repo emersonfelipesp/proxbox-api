@@ -15,10 +15,14 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import event
+from sqlalchemy import update as sa_update
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from proxbox_api.ceph import timing as ceph_timing
+from proxbox_api.ceph import v2_engine
 from proxbox_api.ceph.v2_engine import (
     CephApplyError,
     _append_event_checkpoint,
@@ -28,6 +32,10 @@ from proxbox_api.ceph.v2_engine import (
     load_persisted_plan,
     recover_stale_operation_run,
     utcnow,
+)
+from proxbox_api.ceph.v2_providers.base import (
+    CephProviderBoundaryError,
+    CephWriteGateDenied,
 )
 from proxbox_api.ceph.v2_providers.proxmox import ProxmoxCephProviderAdapter
 from proxbox_api.ceph.v2_providers.proxmox_writer import execute_operation
@@ -43,6 +51,27 @@ from proxbox_api.database import (
 
 ATOMIC_UPID = "UPID:node1:00000001:00000002:00000003:cephcreate:rbd:root@pam:"
 INTERRUPT_UPID = "UPID:node1:00000004:00000005:00000006:cephcreate:rbd:root@pam:"
+
+
+@pytest.mark.asyncio
+async def test_run_lease_tunable_resolves_env_then_plugin_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", raising=False)
+    monkeypatch.setattr(
+        ceph_timing,
+        "get_settings",
+        lambda **_kwargs: {
+            "ceph_task_timeout": 300.0,
+            "ceph_task_poll_interval": 1.0,
+            "ceph_run_lease_seconds": 480.0,
+        },
+    )
+
+    assert (await ceph_timing.resolve_ceph_timing_settings()).run_lease_seconds == 480.0
+
+    monkeypatch.setenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", "720")
+    assert (await ceph_timing.resolve_ceph_timing_settings()).run_lease_seconds == 720.0
 
 
 async def _cancel_repeatedly_while_inner_task_is_blocked(
@@ -77,6 +106,50 @@ class _CountingAdapter:
         assert node == "node1"
         assert upid == ATOMIC_UPID
         return {"state": "completed", "code": "provider_task_completed"}
+
+
+class _IndependentGateFailureAdapter:
+    """Rollback or mutate only a second real AsyncSession before failing dispatch."""
+
+    def __init__(self, gate_session: AsyncSession, failure: str, plan_id: str) -> None:
+        self._gate_session = gate_session
+        self._failure = failure
+        self._plan_id = plan_id
+        self.database_session_lock = asyncio.Lock()
+
+    async def apply(
+        self,
+        operation: ProviderOperation,
+        *,
+        confirm_destructive: bool,
+    ) -> dict[str, Any]:
+        assert confirm_destructive is True
+        await self._gate_session.rollback()
+        if self._failure == "owner_change":
+            result = await self._gate_session.exec(
+                select(CephOperationRunRecord).where(
+                    CephOperationRunRecord.plan_id == self._plan_id
+                )
+            )
+            run = result.one()
+            await self._gate_session.exec(
+                sa_update(CephOperationRunRecord)
+                .where(CephOperationRunRecord.id == run.id)
+                .values(lease_owner="replacement-worker")
+                .execution_options(synchronize_session=False)
+            )
+            await self._gate_session.commit()
+            raise CephWriteGateDenied("endpoint_writes_disabled", "Endpoint gate changed.")
+        if self._failure == "gate":
+            raise CephWriteGateDenied("endpoint_writes_disabled", "Endpoint gate changed.")
+        if self._failure == "node":
+            raise CephProviderBoundaryError(
+                "provider_node_authority_unavailable",
+                "Current node membership is unavailable.",
+            )
+        if self._failure == "cancel":
+            raise asyncio.CancelledError
+        raise RuntimeError("secret-bearing-sdk-failure")
 
 
 def _canonical_plan(endpoint_id: int = 17) -> PlanResponse:
@@ -142,6 +215,312 @@ def _seed_control_plane(
             )
         )
         session.commit()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_event"),
+    [
+        ("gate", "failed", "dispatch_denied"),
+        ("node", "outcome_unknown", "dispatch_outcome_unknown"),
+        ("sdk", "outcome_unknown", "dispatch_outcome_unknown"),
+        ("cancel", "outcome_unknown", "dispatch_cancelled"),
+        ("owner_change", "dispatching", None),
+    ],
+)
+def test_independent_real_async_gate_session_preserves_audit_checkpoints(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    expected_status: str,
+    expected_event: str | None,
+) -> None:
+    """Gate rollback cannot expire audit state or adopt a replacement lease owner."""
+
+    database_path = tmp_path / f"ceph-independent-gate-{failure}.db"
+    sync_engine = create_engine(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+    )
+    event.listen(sync_engine, "connect", _apply_sqlite_pragmas)
+    plan = _canonical_plan()
+    raw_token = secrets.token_urlsafe(48)
+    _seed_control_plane(
+        sync_engine,
+        plan=plan,
+        raw_token=raw_token,
+        approval_id=str(uuid4()),
+    )
+    sync_engine.dispose()
+    monkeypatch.setenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", "30")
+
+    async def exercise() -> tuple[str, list[str], str | None]:
+        async_engine = create_async_engine(
+            f"sqlite+aiosqlite:///{database_path}",
+            connect_args={"check_same_thread": False, "timeout": 5},
+        )
+        event.listen(async_engine.sync_engine, "connect", _apply_sqlite_pragmas)
+        session_factory = async_sessionmaker(
+            async_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        try:
+            async with session_factory() as audit_session, session_factory() as gate_session:
+                persisted = await load_persisted_plan(audit_session, plan.id)
+                adapter = _IndependentGateFailureAdapter(gate_session, failure, plan.id)
+                request = ApplyRequest(
+                    plan_id=plan.id,
+                    endpoint_id=plan.endpoint_id,
+                    approval_token=raw_token,
+                    actor="alice",
+                )
+                if failure == "gate":
+                    with pytest.raises(CephApplyError) as raised:
+                        await apply_plan(persisted, request, adapter, audit_session)
+                    assert raised.value.detail["reason"] == "endpoint_writes_disabled"
+                elif failure == "cancel":
+                    with pytest.raises(asyncio.CancelledError):
+                        await apply_plan(persisted, request, adapter, audit_session)
+                else:
+                    await apply_plan(persisted, request, adapter, audit_session)
+
+            async with session_factory() as verifier:
+                run_result = await verifier.exec(
+                    select(CephOperationRunRecord).where(CephOperationRunRecord.plan_id == plan.id)
+                )
+                run = run_result.one()
+                event_result = await verifier.exec(
+                    select(CephOperationEventRecord)
+                    .where(CephOperationEventRecord.run_id == run.id)
+                    .order_by(CephOperationEventRecord.sequence)
+                )
+                return run.status, [item.event for item in event_result.all()], run.lease_owner
+        finally:
+            await async_engine.dispose()
+
+    status, events, lease_owner = asyncio.run(exercise())
+    assert status == expected_status
+    assert "dispatch_intent" in events
+    if expected_event is None:
+        assert "dispatch_denied" not in events
+        assert lease_owner == "replacement-worker"
+    else:
+        assert expected_event in events
+        assert lease_owner is None
+
+
+def test_persisted_run_lease_snapshot_controls_heartbeat_after_setting_change(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live setting change cannot alter cadence or extension for an accepted run."""
+
+    database_path = tmp_path / "ceph-run-lease-snapshot.db"
+    sync_engine = create_engine(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+    )
+    event.listen(sync_engine, "connect", _apply_sqlite_pragmas)
+    SQLModel.metadata.create_all(sync_engine)
+    started_at = time.time()
+    run_id = str(uuid4())
+    with Session(sync_engine) as session:
+        session.add(
+            CephOperationRunRecord(
+                id=run_id,
+                provider="proxmox",
+                status="dispatching",
+                created_at=started_at,
+                updated_at=started_at,
+                lease_expires_at=started_at + 1.0,
+                lease_owner="snapshot-worker",
+                lease_duration_seconds=1.0,
+            )
+        )
+        session.commit()
+    sync_engine.dispose()
+    # The operator changes the configured value after this run already owns a
+    # one-second persisted snapshot. Neither heartbeat cadence nor renewal may
+    # adopt the new value.
+    monkeypatch.setenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", "3600")
+    renewal_times: list[float] = []
+    original_renew = v2_engine._renew_run_lease
+
+    async def counted_renew(*args: Any, **kwargs: Any) -> bool:
+        renewal_times.append(time.monotonic())
+        return await original_renew(*args, **kwargs)
+
+    monkeypatch.setattr(v2_engine, "_renew_run_lease", counted_renew)
+
+    class _SlowAdapter:
+        database_session_lock = asyncio.Lock()
+
+        async def apply(
+            self,
+            _operation: ProviderOperation,
+            *,
+            confirm_destructive: bool,
+        ) -> dict[str, str]:
+            assert confirm_destructive is True
+            await asyncio.sleep(0.45)
+            return {"result": "submitted"}
+
+    async def exercise() -> tuple[float, float]:
+        async_engine = create_async_engine(
+            f"sqlite+aiosqlite:///{database_path}",
+            connect_args={"check_same_thread": False, "timeout": 5},
+        )
+        event.listen(async_engine.sync_engine, "connect", _apply_sqlite_pragmas)
+        session_factory = async_sessionmaker(
+            async_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        try:
+            async with session_factory() as session:
+                record = await session.get(CephOperationRunRecord, run_id)
+                assert record is not None
+                result = await v2_engine._apply_with_lease_heartbeat(
+                    session,
+                    record,
+                    _SlowAdapter(),
+                    _canonical_plan().operations[0],
+                )
+                assert result == {"result": "submitted"}
+            async with session_factory() as verifier:
+                refreshed = await verifier.get(CephOperationRunRecord, run_id)
+                assert refreshed is not None
+                assert refreshed.lease_expires_at is not None
+                return refreshed.updated_at, refreshed.lease_expires_at
+        finally:
+            await async_engine.dispose()
+
+    updated_at, lease_expires_at = asyncio.run(exercise())
+    assert len(renewal_times) >= 2
+    assert 0.9 <= lease_expires_at - updated_at <= 1.1
+
+
+def test_delayed_lease_cas_cannot_renew_after_database_expiry(tmp_path) -> None:
+    """A CAS evaluates database wall time after delay, never caller-captured time."""
+
+    database_path = tmp_path / "ceph-delayed-lease-cas.db"
+    sync_engine = create_engine(f"sqlite:///{database_path}")
+    SQLModel.metadata.create_all(sync_engine)
+    run_id = str(uuid4())
+    original_expiry = time.time() + 0.12
+
+    class _DelayedExecSession:
+        def __init__(self, session: Session) -> None:
+            self._session = session
+
+        async def exec(self, statement: Any) -> Any:
+            await asyncio.sleep(0.2)
+            return self._session.exec(statement)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._session, name)
+
+    try:
+        with Session(sync_engine) as session:
+            session.add(
+                CephOperationRunRecord(
+                    id=run_id,
+                    provider="proxmox",
+                    status="dispatching",
+                    lease_owner="delayed-worker",
+                    lease_expires_at=original_expiry,
+                    lease_duration_seconds=1.0,
+                )
+            )
+            session.commit()
+            record = session.get(CephOperationRunRecord, run_id)
+            assert record is not None
+
+            renewed = asyncio.run(v2_engine._renew_run_lease(_DelayedExecSession(session), record))
+            session.expire_all()
+            persisted = session.get(CephOperationRunRecord, run_id)
+            assert persisted is not None
+            assert renewed is False
+            assert persisted.lease_expires_at == pytest.approx(original_expiry)
+
+            checkpoint_run_id = str(uuid4())
+            session.add(
+                CephOperationRunRecord(
+                    id=checkpoint_run_id,
+                    provider="proxmox",
+                    status="dispatching",
+                    lease_owner="delayed-checkpoint-worker",
+                    lease_expires_at=time.time() + 0.12,
+                    lease_duration_seconds=1.0,
+                )
+            )
+            session.commit()
+            checkpoint_record = session.get(CephOperationRunRecord, checkpoint_run_id)
+            assert checkpoint_record is not None
+            with pytest.raises(_CephRunLeaseLost):
+                asyncio.run(
+                    _append_event_checkpoint(
+                        _DelayedExecSession(session),
+                        checkpoint_record,
+                        event="late_checkpoint",
+                        status="completed",
+                        code="late_checkpoint",
+                        message="expired checkpoint must be rejected",
+                    )
+                )
+            assert (
+                session.exec(
+                    select(CephOperationEventRecord).where(
+                        CephOperationEventRecord.run_id == checkpoint_run_id
+                    )
+                ).all()
+                == []
+            )
+    finally:
+        sync_engine.dispose()
+
+
+def test_lease_cas_database_clock_compiles_for_supported_databases() -> None:
+    database_clock = v2_engine._DatabaseEpochSeconds()
+
+    assert "julianday('now')" in str(database_clock.compile(dialect=sqlite.dialect()))
+    assert "clock_timestamp()" in str(database_clock.compile(dialect=postgresql.dialect()))
+
+
+@pytest.mark.asyncio
+async def test_custom_apply_override_survives_indirect_subclass_and_duck_adapter() -> None:
+    operation = _canonical_plan().operations[0]
+
+    class _CustomProxmoxAdapter(ProxmoxCephProviderAdapter):
+        async def apply(
+            self,
+            _operation: ProviderOperation,
+            *,
+            confirm_destructive: bool,
+        ) -> dict[str, Any]:
+            assert confirm_destructive is True
+            return {"path": "custom"}
+
+    class _WrappedCustomAdapter(_CustomProxmoxAdapter):
+        pass
+
+    class _DuckAdapter:
+        async def apply(
+            self,
+            _operation: ProviderOperation,
+            *,
+            confirm_destructive: bool,
+        ) -> dict[str, Any]:
+            assert confirm_destructive is True
+            return {"path": "duck"}
+
+    for adapter, expected_path in (
+        (_CustomProxmoxAdapter(), "custom"),
+        (_WrappedCustomAdapter(), "custom"),
+        (_DuckAdapter(), "duck"),
+    ):
+        dispatch = await v2_engine._prepare_provider_dispatch(adapter, operation)
+        assert await dispatch() == {"path": expected_path}
 
 
 @pytest.mark.skipif(
@@ -1453,6 +1832,20 @@ def test_late_terminal_result_cannot_resurrect_an_expired_run_lease(
         approval_id=str(uuid4()),
     )
     monkeypatch.setenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", "1")
+    from proxbox_api.ceph import v2_engine as engine_module
+
+    poll_started = asyncio.Event()
+    original_renew = engine_module._renew_run_lease
+
+    async def lease_lost_during_poll(session, record):
+        if poll_started.is_set():
+            # Model a renewal stalled beyond the persisted lease followed by a
+            # compare-and-set miss (for example, recovery already won).
+            await asyncio.sleep(1.05)
+            return False
+        return await original_renew(session, record)
+
+    monkeypatch.setattr(engine_module, "_renew_run_lease", lease_lost_during_poll)
 
     class _LateTerminalAdapter:
         async def apply(
@@ -1465,6 +1858,7 @@ def test_late_terminal_result_cannot_resurrect_an_expired_run_lease(
             return {"provider_task_ref": ATOMIC_UPID, "node": "node1"}
 
         async def wait_for_terminal(self, _node: str, _upid: str) -> dict[str, str]:
+            poll_started.set()
             await asyncio.sleep(1.1)
             return {"state": "completed", "code": "provider_task_completed"}
 

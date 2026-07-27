@@ -26,8 +26,8 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
 | `ceph/test_v2_orchestration.py` | Ceph v2 HTTP safety contract: exact endpoint/session/node, real mapped `netbox-ceph` request, strict per-pair payloads, durable plan, actor/approval binding, recursive persistence/API/SSE exception/non-JSON redaction, unique node-consistent UPIDs, expiry/tamper/replay, audit recovery, and read-only reconcile |
-| `ceph/test_v2_proxmox_writer.py` | Proxmox Ceph writer mapping, exact no-fallback node binding, canonical node-free no-op detection, strict payload rejection, SDK-proven synchronous completion typing, heartbeat/session serialization, and exhaustive common per-mutation gate coverage |
-| `ceph/test_v2_approval_concurrency.py` | Atomic approval race, same/cross-endpoint sequential/concurrent provider-global task-claim uniqueness, double/triple-cancellation-safe dispatch/task/synchronous/cancellation evidence, live dispatching lease ownership, expiry recovery, and stale-worker rejection; exact AsyncSession path runs on CI Python 3.12 and has a narrow local Python 3.14 aiosqlite skip |
+| `ceph/test_v2_proxmox_writer.py` | Proxmox Ceph writer mapping, exact no-fallback node binding, typed live node-membership refresh and secret-safe failure boundary, post-gate owner CAS before dispatch, immutable timing normalization, deadline-bounded status calls/sleeps, strict payload rejection, SDK-proven synchronous completion typing, independent gate/heartbeat sessions, and exhaustive common per-mutation gate coverage |
+| `ceph/test_v2_approval_concurrency.py` | Atomic approval race, same/cross-endpoint sequential/concurrent provider-global task-claim uniqueness, dedicated real AsyncSession gate/audit failure matrix, double/triple-cancellation-safe dispatch/task/synchronous/cancellation evidence, persisted lease-duration heartbeat behavior, database-clock delayed-CAS rejection, inherited custom/duck adapter dispatch compatibility, expiry recovery, and stale-worker rejection; exact AsyncSession path runs on CI Python 3.12 and has a narrow local Python 3.14 aiosqlite skip |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
@@ -36,7 +36,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_generated_proxmox_routes.py` | Runtime registration of generated Proxmox proxy routes |
 | `test_health.py` | Health check and root metadata endpoints |
 | `test_individual_sync.py` | Individual per-object sync service and dry-run workflows |
-| `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
+| `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination, idempotent sensitive-data filtering, nested secret aliases, and traceback redaction |
 | `test_logger_settings.py` | Logger configuration plus real-handler recursive key/URL/extra/exception/traceback redaction canaries |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |

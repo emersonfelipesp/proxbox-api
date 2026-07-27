@@ -23,10 +23,11 @@ import json
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.ceph.dashboard_client import (
     DashboardEndpointConfig,
@@ -41,6 +42,7 @@ from proxbox_api.ceph.prometheus import (
     validate_source,
 )
 from proxbox_api.ceph.rgw_client import RGWAdminConfig
+from proxbox_api.ceph.timing import resolve_ceph_timing_settings
 from proxbox_api.ceph.v2_engine import (
     CephApplyError,
     CephApprovalError,
@@ -98,6 +100,7 @@ from proxbox_api.database import (
     CephOperationRunRecord,
     PrometheusSource,
     ProxmoxEndpoint,
+    get_async_session,
 )
 from proxbox_api.logger import logger
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -106,6 +109,10 @@ from proxbox_api.session.proxmox_core import ProxmoxSession
 router = APIRouter()
 
 ActorHeader = Annotated[str | None, Header(alias="X-Proxbox-Actor")]
+CephGateDatabaseSessionDep = Annotated[
+    AsyncSession,
+    Depends(get_async_session, use_cache=False),
+]
 _FORBIDDEN_PROXMOX_SELECTORS = {
     "source",
     "name",
@@ -241,7 +248,10 @@ def _provider_http_error(exc: CephProviderBoundaryError) -> HTTPException:
 async def _exact_proxmox_adapter(
     session: AsyncDatabaseSessionDep,
     endpoint_id: int,
+    *,
+    gate_session: AsyncSession | None = None,
 ) -> tuple[ProxmoxCephProviderAdapter, BoundProxmoxSession]:
+    timing_settings = await resolve_ceph_timing_settings()
     try:
         bound, endpoint = await create_bound_proxmox_session(session, endpoint_id)
     except CephWriteGateDenied as exc:
@@ -251,8 +261,9 @@ async def _exact_proxmox_adapter(
     return (
         ProxmoxCephProviderAdapter(
             bound_session=bound,
-            database_session=session,
+            database_session=gate_session or session,
             writes_authorized=bool(endpoint.enabled and endpoint.allow_writes),
+            timing_settings=timing_settings,
         ),
         bound,
     )
@@ -618,6 +629,7 @@ async def ceph_v2_apply_plan(
     http_request: Request,
     request: ApplyRequest,
     session: AsyncDatabaseSessionDep,
+    gate_session: CephGateDatabaseSessionDep,
     actor: ActorHeader = None,
 ) -> OperationRun:
     """Execute one immutable persisted plan using a single-use approval token."""
@@ -666,11 +678,15 @@ async def ceph_v2_apply_plan(
                 **exc.recovery,
             },
         ) from exc
-    adapter, bound = await _exact_proxmox_adapter(session, plan.endpoint_id)
+    adapter, bound = await _exact_proxmox_adapter(
+        session,
+        plan.endpoint_id,
+        gate_session=gate_session,
+    )
     try:
         try:
             await bound.verify_fresh(
-                session,
+                gate_session,
                 expected_revision=plan.endpoint_config_revision,
             )
         except CephWriteGateDenied as exc:
@@ -875,6 +891,7 @@ async def ceph_v2_apply_compat(
     http_request: Request,
     request: ApplyRequest,
     session: AsyncDatabaseSessionDep,
+    gate_session: CephGateDatabaseSessionDep,
     actor: ActorHeader = None,
 ) -> OperationRun:
     """Compatibility path that accepts only a durable plan id and approval token."""
@@ -895,6 +912,7 @@ async def ceph_v2_apply_compat(
         http_request,
         request,
         session,
+        gate_session,
         actor,
     )
 

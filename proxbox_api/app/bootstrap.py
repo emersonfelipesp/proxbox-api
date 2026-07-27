@@ -9,7 +9,12 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
 from proxbox_api.constants import DEFAULT_LOG_PATH
-from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
+from proxbox_api.database import (
+    CephProviderTaskClaimMigrationError,
+    NetBoxEndpoint,
+    create_db_and_tables,
+    get_session,
+)
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import configure_file_logging_path, logger
 from proxbox_api.netbox_compat import NetBoxBase
@@ -50,6 +55,20 @@ def _configure_backend_file_logging() -> None:
     )
 
 
+def _refuse_ceph_task_claim_collision(error: CephProviderTaskClaimMigrationError) -> None:
+    """Record one stable fatal reason and abort every database bootstrap path."""
+
+    global init_ok, last_init_error
+
+    init_ok = False
+    last_init_error = str(error)
+    logger.critical(
+        "bootstrap: ambiguous Ceph provider task evidence; refusing startup",
+        extra={"reason_code": last_init_error},
+    )
+    raise error
+
+
 def init_database_and_netbox() -> None:
     """Create tables if needed, open a DB session, and configure the default NetBox client."""
     global netbox_session, database_session, netbox_endpoints, init_ok, last_init_error
@@ -81,6 +100,8 @@ def init_database_and_netbox() -> None:
             netbox_session = get_netbox_session(database_session=database_session)
             NetBoxBase.nb = netbox_session
             init_ok = True
+    except CephProviderTaskClaimMigrationError as error:
+        _refuse_ceph_task_claim_collision(error)
     except ProxboxException as error:
         last_init_error = str(error)
         logger.warning("bootstrap: NetBox is not connected — %s", error)
@@ -100,6 +121,8 @@ def init_database_and_netbox() -> None:
             try:
                 create_db_and_tables()
                 netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
+            except CephProviderTaskClaimMigrationError as error:
+                _refuse_ceph_task_claim_collision(error)
             except Exception as error:  # noqa: BLE001
                 logger.exception("Failed to load NetBox endpoint rows after schema retry")
                 netbox_endpoints = []

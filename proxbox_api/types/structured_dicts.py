@@ -53,6 +53,9 @@ class ProxboxSettingsDict(TypedDict):
     cloud_customer_bridge: NotRequired[str]
     cloud_customer_vlan_tag: NotRequired[int | None]
     cloud_customer_gateway: NotRequired[str]
+    ceph_task_timeout: NotRequired[float]
+    ceph_task_poll_interval: NotRequired[float]
+    ceph_run_lease_seconds: NotRequired[float]
 
 
 class SyncResultDict(TypedDict):

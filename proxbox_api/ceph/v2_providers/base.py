@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
@@ -18,6 +17,7 @@ from proxbox_api.ceph.v2_schemas import (
 CEPH_WRITE_EXECUTION_ENV = "PROXBOX_ENABLE_CEPH_V2_WRITES"
 CEPH_TRUSTED_ACTOR_GATEWAY_ENV = "PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY"
 TaskHeartbeat = Callable[[], Awaitable[None]]
+ProviderDispatch = Callable[[], Awaitable[dict[str, Any]]]
 
 
 def _enabled_env(name: str) -> bool:
@@ -63,13 +63,6 @@ class CephProviderAdapter(ABC):
     """Provider adapter contract for the Ceph v2 plan/apply engine."""
 
     provider: str
-    supports_task_heartbeat = False
-
-    @property
-    def database_session_lock(self) -> asyncio.Lock | None:
-        """Optional lock serializing adapter and engine use of one DB session."""
-
-        return None
 
     @abstractmethod
     async def capabilities(self) -> ProviderCapabilities:
@@ -99,6 +92,28 @@ class CephProviderAdapter(ABC):
         confirm_destructive: bool,
     ) -> dict[str, Any]:
         """Apply one provider operation."""
+
+    async def prepare_apply(
+        self,
+        operation: ProviderOperation,
+        *,
+        confirm_destructive: bool,
+    ) -> ProviderDispatch:
+        """Prepare a mutation and return the provider-call boundary.
+
+        The engine renews its durable owner lease after this method returns and
+        before invoking the returned callable. Providers with slow pre-dispatch
+        authority checks should override this method so those checks cannot
+        consume the lease immediately preceding the external mutation.
+        """
+
+        async def dispatch() -> dict[str, Any]:
+            return await self.apply(
+                operation,
+                confirm_destructive=confirm_destructive,
+            )
+
+        return dispatch
 
     async def wait_for_terminal(
         self,
@@ -205,6 +220,7 @@ __all__ = [
     "CephWriteGateDenied",
     "CEPH_TRUSTED_ACTOR_GATEWAY_ENV",
     "CEPH_WRITE_EXECUTION_ENV",
+    "ProviderDispatch",
     "RBDCephProviderAdapter",
     "RGWAdminCephProviderAdapter",
     "TaskHeartbeat",

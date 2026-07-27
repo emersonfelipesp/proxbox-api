@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import math
-import os
 from typing import Any
 
 from proxbox_api.ceph.endpoint_binding import BoundProxmoxSession
 from proxbox_api.ceph.routes import _client_for, _node_names, _session_host, _session_name
+from proxbox_api.ceph.timing import CephTimingSettings
 from proxbox_api.ceph.v2_providers.base import (
     CephCapabilityUnsupported,
     CephProviderAdapter,
     CephProviderBoundaryError,
     CephWriteGateDenied,
+    ProviderDispatch,
     TaskHeartbeat,
     ceph_write_execution_enabled,
 )
@@ -32,39 +32,11 @@ from proxbox_api.ceph.v2_schemas import (
     ProviderOperation,
 )
 from proxbox_api.database_protocols import DatabaseSessionProtocol
+from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.proxmox_helpers import get_node_task_status
 from proxbox_api.session.proxmox_core import ProxmoxSession
-
-
-def _bounded_float_env(
-    name: str,
-    *,
-    default: float,
-    minimum: float,
-    maximum: float,
-) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except ValueError:
-        return default
-    if not math.isfinite(value):
-        return default
-    return min(maximum, max(minimum, value))
-
-
-_TASK_POLL_TIMEOUT_SECONDS = _bounded_float_env(
-    "PROXBOX_CEPH_TASK_TIMEOUT",
-    default=300.0,
-    minimum=1.0,
-    maximum=3600.0,
-)
-_TASK_POLL_INTERVAL_SECONDS = _bounded_float_env(
-    "PROXBOX_CEPH_TASK_POLL_INTERVAL",
-    default=1.0,
-    minimum=0.1,
-    maximum=60.0,
-)
 
 
 def _plain(value: Any) -> Any:
@@ -138,11 +110,43 @@ def _payload_matches(desired_payload: dict[str, Any], live_summary: dict[str, An
     return True
 
 
+async def _fresh_node_names(px: ProxmoxSession) -> list[str]:
+    """Fetch current provider node membership without trusting session bootstrap cache."""
+
+    try:
+        session = px.session
+        if session is None:
+            raise RuntimeError("Proxmox SDK session is unavailable")
+        raw_status = await resolve_async(session("cluster/status").get())
+        status = generated_models.GetClusterStatusResponse.model_validate(raw_status).root
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - upstream errors can contain credentials
+        failure = CephProviderBoundaryError(
+            "provider_node_authority_unavailable",
+            "Current Proxmox node membership could not be verified safely.",
+        )
+        logger.warning(
+            "Ceph v2 node authority unavailable correlation_id=%s endpoint_id=%s",
+            failure.correlation_id,
+            getattr(px, "db_endpoint_id", None),
+        )
+        raise failure from None
+
+    nodes: set[str] = set()
+    for item in status:
+        plain = _plain(item)
+        if not isinstance(plain, dict):
+            continue
+        if plain.get("type") == "node" and plain.get("name"):
+            nodes.add(str(plain["name"]))
+    return sorted(nodes)
+
+
 class ProxmoxCephProviderAdapter(CephProviderAdapter):
     """Ceph v2 adapter bound to one explicitly selected Proxmox endpoint."""
 
     provider = "proxmox"
-    supports_task_heartbeat = True
 
     def __init__(
         self,
@@ -151,20 +155,29 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         bound_session: BoundProxmoxSession | None = None,
         database_session: DatabaseSessionProtocol | None = None,
         writes_authorized: bool = False,
-        task_poll_timeout: float = _TASK_POLL_TIMEOUT_SECONDS,
-        task_poll_interval: float = _TASK_POLL_INTERVAL_SECONDS,
+        timing_settings: CephTimingSettings | None = None,
+        task_poll_timeout: float | None = None,
+        task_poll_interval: float | None = None,
     ) -> None:
         self._bound_session = bound_session
         self._database_session = database_session
-        self._database_session_lock = asyncio.Lock()
         self._read_sessions = (
             [bound_session.raw_session()]
             if bound_session is not None
             else list(read_sessions or [])
         )
         self._writes_authorized = writes_authorized
-        self._task_poll_timeout = max(0.0, task_poll_timeout)
-        self._task_poll_interval = max(0.0, task_poll_interval)
+        timing = timing_settings or CephTimingSettings()
+        self._run_lease_seconds = timing.run_lease_seconds
+        self._task_poll_timeout = max(
+            0.0,
+            timing.task_timeout if task_poll_timeout is None else task_poll_timeout,
+        )
+        requested_poll_interval = max(
+            0.0,
+            timing.task_poll_interval if task_poll_interval is None else task_poll_interval,
+        )
+        self._task_poll_interval = min(requested_poll_interval, self._task_poll_timeout)
 
     def _selected_session(self) -> ProxmoxSession:
         if not isinstance(self._bound_session, BoundProxmoxSession):
@@ -175,14 +188,14 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         return self._bound_session.raw_session()
 
     @property
-    def database_session_lock(self) -> asyncio.Lock:
-        """Serialize the endpoint gate with engine lease heartbeats."""
-
-        return self._database_session_lock
-
-    @property
     def endpoint_id(self) -> int | None:
         return self._bound_session.endpoint_id if self._bound_session is not None else None
+
+    @property
+    def run_lease_seconds(self) -> float:
+        """Return the immutable duration paired with this adapter request."""
+
+        return self._run_lease_seconds
 
     async def capabilities(self) -> ProviderCapabilities:
         sdk_writes = cephwrite_importable()
@@ -422,17 +435,37 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         *,
         confirm_destructive: bool,
     ) -> dict[str, Any]:
+        """Prepare and execute one operation for direct adapter callers."""
+
+        dispatch = await self.prepare_apply(
+            operation,
+            confirm_destructive=confirm_destructive,
+        )
+        return await dispatch()
+
+    async def prepare_apply(
+        self,
+        operation: ProviderOperation,
+        *,
+        confirm_destructive: bool,
+    ) -> ProviderDispatch:
+        """Finish all awaited gates before returning the mutation boundary."""
+
         operation_key = f"{operation.kind}:{operation.action}"
         if operation_kinds(True).get(operation_key) is not True:
             raise CephCapabilityUnsupported(
                 "The Proxmox Ceph operation pair is not explicitly allowlisted."
             )
         if operation.action == "noop":
-            return {
-                "operation_id": operation.id,
-                "result": "noop",
-                "target_ref": operation.target_ref,
-            }
+
+            async def dispatch_noop() -> dict[str, Any]:
+                return {
+                    "operation_id": operation.id,
+                    "result": "noop",
+                    "target_ref": operation.target_ref,
+                }
+
+            return dispatch_noop
         if not ceph_write_execution_enabled():
             raise CephWriteGateDenied(
                 "ceph_write_execution_disabled",
@@ -452,22 +485,31 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
                 "upgrade to a release that ships the CephWrite domain to enable "
                 "Proxmox-backed Ceph writes."
             )
-        node = resolve_node(operation, _node_names(px))
         if self._bound_session is None:
             raise CephWriteGateDenied(
                 "endpoint_session_untagged",
                 "Ceph writes require one privately bound local endpoint session.",
             )
-        # This HMAC-backed database/session comparison is deliberately adjacent
-        # to dispatch and repeats for every operation in a multi-operation plan.
-        async with self._database_session_lock:
-            await self._bound_session.verify_fresh(self._database_session)
-        result = await execute_operation(
-            write, operation, node, confirm_destructive=confirm_destructive
-        )
-        return {**result, "node": node}
+        # Fetch remote membership before the final local authority check so a
+        # slow provider read cannot widen the post-verification mutation window.
+        node = resolve_node(operation, await _fresh_node_names(px))
+        # This HMAC-backed comparison is the final provider-authority gate. The
+        # engine performs a fresh durable-owner CAS after preparation returns
+        # and before it invokes the returned mutation boundary.
+        await self._bound_session.verify_fresh(self._database_session)
 
-    async def wait_for_terminal(
+        async def dispatch() -> dict[str, Any]:
+            result = await execute_operation(
+                write,
+                operation,
+                node,
+                confirm_destructive=confirm_destructive,
+            )
+            return {**result, "node": node}
+
+        return dispatch
+
+    async def wait_for_terminal(  # noqa: C901 - deadline/error boundary matrix
         self,
         node: str,
         upid: str,
@@ -480,17 +522,28 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._task_poll_timeout
         while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return {"state": "outcome_unknown", "code": "provider_task_timeout"}
             if heartbeat is not None:
                 await heartbeat()
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return {"state": "outcome_unknown", "code": "provider_task_timeout"}
             try:
-                status = await get_node_task_status(px, node, upid)
+                async with asyncio.timeout(remaining):
+                    status = await get_node_task_status(px, node, upid)
             except asyncio.CancelledError:
                 raise
+            except TimeoutError:
+                return {"state": "outcome_unknown", "code": "provider_task_timeout"}
             except Exception:  # noqa: BLE001 - transport details are secret-bearing
                 return {
                     "state": "outcome_unknown",
                     "code": "provider_task_status_unavailable",
                 }
+            if loop.time() >= deadline:
+                return {"state": "outcome_unknown", "code": "provider_task_timeout"}
             raw_state = (
                 status.get("status")
                 if isinstance(status, dict)
@@ -505,9 +558,10 @@ class ProxmoxCephProviderAdapter(CephProviderAdapter):
                 if str(raw_exit or "").casefold() == "ok":
                     return {"state": "completed", "code": "provider_task_completed"}
                 return {"state": "failed", "code": "provider_task_failed"}
-            if loop.time() >= deadline:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 return {"state": "outcome_unknown", "code": "provider_task_timeout"}
-            await asyncio.sleep(self._task_poll_interval)
+            await asyncio.sleep(min(self._task_poll_interval, remaining))
 
     def declares_synchronous_success(
         self,

@@ -450,7 +450,13 @@ def configure_buffer_logger(logger_name: str = "proxbox", level: int = logging.D
         logger_name: Name of the logger to attach the handler to
         level: Logging level to set on the logger
     """
+    # Import locally so the low-level buffer module remains usable while the
+    # application logger is being initialized.
+    from proxbox_api.logger import SensitiveDataFilter
+
     buffer = get_log_buffer()
+    if not any(isinstance(filter_, SensitiveDataFilter) for filter_ in buffer.filters):
+        buffer.addFilter(SensitiveDataFilter())
     target_logger = logging.getLogger(logger_name)
     if buffer not in target_logger.handlers:
         target_logger.addHandler(buffer)

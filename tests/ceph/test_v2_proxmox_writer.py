@@ -14,10 +14,15 @@ from typing import Any
 
 import pytest
 
+from proxbox_api.ceph import timing as ceph_timing
 from proxbox_api.ceph.endpoint_binding import BoundProxmoxSession
-from proxbox_api.ceph.v2_engine import _apply_with_lease_heartbeat
+from proxbox_api.ceph.v2_engine import _apply_with_lease_heartbeat, _CephRunLeaseLost
 from proxbox_api.ceph.v2_providers import proxmox as proxmox_adapter
-from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephWriteGateDenied
+from proxbox_api.ceph.v2_providers.base import (
+    CephCapabilityUnsupported,
+    CephProviderBoundaryError,
+    CephWriteGateDenied,
+)
 from proxbox_api.ceph.v2_providers.proxmox import ProxmoxCephProviderAdapter
 from proxbox_api.ceph.v2_providers.proxmox_writer import (
     SYNCHRONOUS_OPERATION_KINDS,
@@ -427,7 +432,11 @@ class _FakeClient:
 async def test_adapter_apply_dispatches_through_write(monkeypatch: pytest.MonkeyPatch) -> None:
     write = _FakeWrite()
     monkeypatch.setattr(proxmox_adapter, "_client_for", lambda _px: _FakeClient(write))
-    monkeypatch.setattr(proxmox_adapter, "_node_names", lambda _px: ["node1"])
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", current_nodes)
 
     gate_calls: list[str] = []
 
@@ -449,7 +458,139 @@ async def test_adapter_apply_dispatches_through_write(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
-async def test_endpoint_gate_and_lease_heartbeat_serialize_one_database_session(
+async def test_adapter_rechecks_provider_node_membership_before_every_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later operation must not reuse node membership cached at session creation."""
+
+    write = _FakeWrite()
+    live_membership = iter(([{"type": "node", "name": "node1"}], []))
+    membership_calls = 0
+
+    async def changing_cluster_status(_px: object) -> list[str]:
+        nonlocal membership_calls
+        membership_calls += 1
+        return [
+            str(item["name"])
+            for item in next(live_membership)
+            if item.get("type") == "node" and item.get("name")
+        ]
+
+    async def gate(_bound_session: BoundProxmoxSession, _database: object) -> None:
+        return None
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", changing_cluster_status)
+    monkeypatch.setattr(proxmox_adapter, "_client_for", lambda _px: _FakeClient(write))
+    monkeypatch.setattr(BoundProxmoxSession, "verify_fresh", gate)
+    bound, px = _bound()
+    adapter = ProxmoxCephProviderAdapter(
+        bound_session=bound,
+        database_session=object(),
+        writes_authorized=True,
+    )
+
+    await adapter.apply(_op("pool", "create", "first", size=3), confirm_destructive=False)
+    with pytest.raises(CephCapabilityUnsupported, match="not present"):
+        await adapter.apply(
+            _op("pool", "create", "second", size=3),
+            confirm_destructive=False,
+        )
+
+    assert membership_calls == 2
+    assert px.cluster_status == [{"type": "node", "name": "node1"}]
+    assert [call[1][1] for call in write.calls] == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_fresh_node_membership_boundary_never_logs_upstream_exception_values() -> None:
+    from proxbox_api.log_buffer import configure_buffer_logger, get_log_buffer
+
+    canary = "CEPH-NODE-ERROR-CANARY"
+
+    class _FailingStatus:
+        def get(self) -> object:
+            raise RuntimeError(canary)
+
+    px = SimpleNamespace(
+        db_endpoint_id=7,
+        session=lambda path: _FailingStatus() if path == "cluster/status" else None,
+    )
+    buffer = get_log_buffer()
+    buffer.clear()
+    configure_buffer_logger(proxmox_adapter.logger.name)
+
+    try:
+        with pytest.raises(
+            CephProviderBoundaryError,
+            match="Current Proxmox node membership could not be verified safely",
+        ):
+            await proxmox_adapter._fresh_node_names(px)
+
+        rendered = repr([record.to_dict() for record in buffer.buffer])
+        assert canary not in rendered
+        assert "node authority unavailable" in rendered
+    finally:
+        buffer.clear()
+
+
+@pytest.mark.asyncio
+async def test_fresh_node_membership_fails_closed_without_sdk_session() -> None:
+    px = SimpleNamespace(db_endpoint_id=7, session=None)
+
+    with pytest.raises(
+        CephProviderBoundaryError,
+        match="Current Proxmox node membership could not be verified safely",
+    ):
+        await proxmox_adapter._fresh_node_names(px)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_authority_is_rechecked_after_slow_node_membership_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gate change during discovery must stop dispatch after discovery completes."""
+
+    membership_started = asyncio.Event()
+    release_membership = asyncio.Event()
+    authority = {"enabled": True}
+    write = _FakeWrite()
+
+    async def slow_membership(_px: object) -> list[str]:
+        membership_started.set()
+        await release_membership.wait()
+        return ["node1"]
+
+    async def gate(_bound_session: BoundProxmoxSession, _database: object) -> None:
+        if not authority["enabled"]:
+            raise CephWriteGateDenied(
+                "endpoint_write_gate_changed",
+                "The endpoint write gate changed while node authority was refreshed.",
+            )
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", slow_membership)
+    monkeypatch.setattr(proxmox_adapter, "_client_for", lambda _px: _FakeClient(write))
+    monkeypatch.setattr(BoundProxmoxSession, "verify_fresh", gate)
+    bound, _px = _bound()
+    adapter = ProxmoxCephProviderAdapter(
+        bound_session=bound,
+        database_session=object(),
+        writes_authorized=True,
+    )
+
+    apply_task = asyncio.create_task(
+        adapter.apply(_op("pool", "create", "rbd", size=3), confirm_destructive=False)
+    )
+    await membership_started.wait()
+    authority["enabled"] = False
+    release_membership.set()
+
+    with pytest.raises(CephWriteGateDenied, match="write gate changed"):
+        await apply_task
+    assert write.calls == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_gate_uses_independent_session_while_lease_renews(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _SerializedSession:
@@ -491,14 +632,31 @@ async def test_endpoint_gate_and_lease_heartbeat_serialize_one_database_session(
         async def get(self, _entity: Any, _identity: Any) -> Any:
             return None
 
-    database = _SerializedSession()
+    audit_database = _SerializedSession()
+    gate_database = _SerializedSession()
+    gate_active = asyncio.Event()
+    renewals_during_gate = 0
+    original_audit_exec = audit_database.exec
+
+    async def audit_exec(statement: Any) -> Any:
+        nonlocal renewals_during_gate
+        result = await original_audit_exec(statement)
+        if gate_active.is_set():
+            renewals_during_gate += 1
+        return result
+
+    audit_database.exec = audit_exec  # type: ignore[method-assign]
     bound, _px = _bound()
 
     async def delayed_gate(
         _bound_session: BoundProxmoxSession,
         database_session: _SerializedSession,
     ) -> None:
-        await database_session.hold_gate()
+        gate_active.set()
+        try:
+            await database_session.hold_gate()
+        finally:
+            gate_active.clear()
 
     async def dispatched(
         _write: Any,
@@ -512,13 +670,18 @@ async def test_endpoint_gate_and_lease_heartbeat_serialize_one_database_session(
 
     monkeypatch.setenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", "1")
     monkeypatch.setattr(proxmox_adapter, "_client_for", lambda _px: _FakeClient(_FakeWrite()))
-    monkeypatch.setattr(proxmox_adapter, "_node_names", lambda _px: ["node1"])
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", current_nodes)
     monkeypatch.setattr(proxmox_adapter, "execute_operation", dispatched)
     monkeypatch.setattr(BoundProxmoxSession, "verify_fresh", delayed_gate)
     adapter = ProxmoxCephProviderAdapter(
         bound_session=bound,
-        database_session=database,
+        database_session=gate_database,
         writes_authorized=True,
+        timing_settings=ceph_timing.CephTimingSettings(run_lease_seconds=1),
     )
     run_record = CephOperationRunRecord(
         id="heartbeat-serialization",
@@ -526,18 +689,109 @@ async def test_endpoint_gate_and_lease_heartbeat_serialize_one_database_session(
         status="dispatching",
         lease_owner="worker",
         lease_expires_at=10**12,
+        lease_duration_seconds=1,
     )
 
     result = await _apply_with_lease_heartbeat(
-        database,
+        audit_database,
         run_record,
         adapter,
         _op("pool", "create", "rbd", size=3),
     )
 
     assert result["result"] == "submitted"
-    assert database.overlaps == 0
-    assert database.renewals >= 1
+    assert audit_database.overlaps == 0
+    assert gate_database.overlaps == 0
+    assert audit_database.renewals >= 1
+    assert renewals_during_gate >= 1
+
+
+@pytest.mark.asyncio
+async def test_expired_owner_after_final_gate_cannot_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _LeaseSession:
+        def __init__(self) -> None:
+            self.renewals = 0
+
+        async def rollback(self) -> None:
+            return None
+
+        async def refresh(self, _instance: Any) -> None:
+            return None
+
+        async def exec(self, _statement: Any) -> Any:
+            self.renewals += 1
+            # Preparation may start under a live lease, but the mandatory CAS
+            # after the slow endpoint gate observes that ownership was lost.
+            return SimpleNamespace(rowcount=1 if self.renewals == 1 else 0)
+
+        async def commit(self) -> None:
+            return None
+
+        def add(self, _instance: Any) -> None:
+            return None
+
+    bound, _px = _bound()
+    gate_completed = False
+    provider_calls: list[str] = []
+
+    async def delayed_gate(
+        _bound_session: BoundProxmoxSession,
+        _database_session: object,
+    ) -> None:
+        nonlocal gate_completed
+        await asyncio.sleep(0)
+        gate_completed = True
+
+    async def dispatched(
+        _write: Any,
+        _operation: ProviderOperation,
+        _node: str,
+        *,
+        confirm_destructive: bool,
+    ) -> dict[str, Any]:
+        assert confirm_destructive is True
+        provider_calls.append("called")
+        return {"result": "submitted"}
+
+    monkeypatch.setattr(
+        proxmox_adapter,
+        "_client_for",
+        lambda _px: SimpleNamespace(write=object()),
+    )
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", current_nodes)
+    monkeypatch.setattr(BoundProxmoxSession, "verify_fresh", delayed_gate)
+    monkeypatch.setattr(proxmox_adapter, "execute_operation", dispatched)
+    adapter = ProxmoxCephProviderAdapter(
+        bound_session=bound,
+        database_session=object(),
+        writes_authorized=True,
+        timing_settings=ceph_timing.CephTimingSettings(run_lease_seconds=1),
+    )
+    run_record = CephOperationRunRecord(
+        id="lease-lost-after-gate",
+        provider="proxmox",
+        status="dispatching",
+        lease_owner="worker",
+        lease_expires_at=10**12,
+        lease_duration_seconds=1,
+    )
+
+    with pytest.raises(_CephRunLeaseLost):
+        await _apply_with_lease_heartbeat(
+            _LeaseSession(),
+            run_record,
+            adapter,
+            _op("pool", "create", "rbd", size=3),
+        )
+
+    assert gate_completed is True
+    assert provider_calls == []
 
 
 @pytest.mark.asyncio
@@ -559,7 +813,11 @@ async def test_adapter_apply_without_write_support_is_blocked(
         write = None
 
     monkeypatch.setattr(proxmox_adapter, "_client_for", lambda _px: _NoWriteClient())
-    monkeypatch.setattr(proxmox_adapter, "_node_names", lambda _px: ["node1"])
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", current_nodes)
 
     async def gate(_bound_session: BoundProxmoxSession, _database: object) -> None:
         return None
@@ -621,7 +879,62 @@ async def test_task_poll_timeout_is_outcome_unknown_on_exact_session(
     outcome = await adapter.wait_for_terminal("node1", "UPID:timeout")
 
     assert outcome == {"state": "outcome_unknown", "code": "provider_task_timeout"}
-    assert observed == [(px, "node1", "UPID:timeout")]
+    assert observed == []
+
+
+@pytest.mark.asyncio
+async def test_task_status_call_cannot_exceed_remaining_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bound, _px = _bound()
+
+    async def slow_status(_session: object, _node: str, _upid: str) -> dict[str, str]:
+        await asyncio.sleep(0.2)
+        return {"status": "stopped", "exitstatus": "OK"}
+
+    monkeypatch.setattr(proxmox_adapter, "get_node_task_status", slow_status)
+    adapter = ProxmoxCephProviderAdapter(
+        bound_session=bound,
+        database_session=object(),
+        writes_authorized=True,
+        task_poll_timeout=0.05,
+        task_poll_interval=0.01,
+    )
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    outcome = await adapter.wait_for_terminal("node1", "UPID:slow-status")
+
+    assert outcome == {"state": "outcome_unknown", "code": "provider_task_timeout"}
+    assert loop.time() - started < 0.15
+
+
+@pytest.mark.asyncio
+async def test_task_poll_sleep_is_capped_by_remaining_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bound, _px = _bound()
+    calls = 0
+
+    async def running(_session: object, _node: str, _upid: str) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return {"status": "running", "exitstatus": ""}
+
+    monkeypatch.setattr(proxmox_adapter, "get_node_task_status", running)
+    adapter = ProxmoxCephProviderAdapter(
+        bound_session=bound,
+        database_session=object(),
+        writes_authorized=True,
+        task_poll_timeout=0.05,
+        task_poll_interval=1.2,
+    )
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    outcome = await adapter.wait_for_terminal("node1", "UPID:slow-poll")
+
+    assert outcome == {"state": "outcome_unknown", "code": "provider_task_timeout"}
+    assert calls == 1
+    assert loop.time() - started < 0.15
 
 
 @pytest.mark.asyncio
@@ -664,21 +977,64 @@ async def test_task_poll_renews_worker_lease_until_terminal_status(
 
 
 @pytest.mark.parametrize("raw", ["not-a-number", "nan", "inf", "-inf"])
-def test_task_poll_environment_rejects_nonfinite_or_invalid_values(
+@pytest.mark.asyncio
+async def test_task_poll_environment_falls_back_to_typed_plugin_setting(
     monkeypatch: pytest.MonkeyPatch,
     raw: str,
 ) -> None:
     monkeypatch.setenv("PROXBOX_CEPH_TASK_TIMEOUT", raw)
-
-    assert (
-        proxmox_adapter._bounded_float_env(
-            "PROXBOX_CEPH_TASK_TIMEOUT",
-            default=300.0,
-            minimum=1.0,
-            maximum=3600.0,
-        )
-        == 300.0
+    monkeypatch.setattr(
+        ceph_timing,
+        "get_settings",
+        lambda **_kwargs: {
+            "ceph_task_timeout": 420.5,
+            "ceph_task_poll_interval": 1.0,
+            "ceph_run_lease_seconds": 360.0,
+        },
     )
+
+    assert (await ceph_timing.resolve_ceph_timing_settings()).task_timeout == 420.5
+
+
+@pytest.mark.asyncio
+async def test_ceph_poll_tunables_resolve_env_then_plugin_settings_then_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PROXBOX_CEPH_TASK_TIMEOUT", raising=False)
+    monkeypatch.delenv("PROXBOX_CEPH_TASK_POLL_INTERVAL", raising=False)
+    monkeypatch.setattr(
+        ceph_timing,
+        "get_settings",
+        lambda **_kwargs: {
+            "ceph_task_timeout": 480.0,
+            "ceph_task_poll_interval": 2.5,
+            "ceph_run_lease_seconds": 360.0,
+        },
+    )
+
+    plugin_snapshot = await ceph_timing.resolve_ceph_timing_settings()
+    assert plugin_snapshot.task_timeout == 480.0
+    assert plugin_snapshot.task_poll_interval == 2.5
+
+    monkeypatch.setenv("PROXBOX_CEPH_TASK_TIMEOUT", "720")
+    monkeypatch.setenv("PROXBOX_CEPH_TASK_POLL_INTERVAL", "3.5")
+    environment_snapshot = await ceph_timing.resolve_ceph_timing_settings()
+    assert environment_snapshot.task_timeout == 720.0
+    assert environment_snapshot.task_poll_interval == 3.5
+
+
+@pytest.mark.asyncio
+async def test_ceph_poll_interval_is_normalized_to_task_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROXBOX_CEPH_TASK_TIMEOUT", "1")
+    monkeypatch.setenv("PROXBOX_CEPH_TASK_POLL_INTERVAL", "60")
+    monkeypatch.setattr(ceph_timing, "get_settings", lambda **_kwargs: {})
+
+    snapshot = await ceph_timing.resolve_ceph_timing_settings()
+
+    assert snapshot.task_timeout == 1.0
+    assert snapshot.task_poll_interval == 1.0
 
 
 @pytest.mark.asyncio
@@ -740,7 +1096,11 @@ async def test_every_declared_mutation_passes_through_common_gate(
         "_client_for",
         lambda _px: SimpleNamespace(write=object()),
     )
-    monkeypatch.setattr(proxmox_adapter, "_node_names", lambda _px: ["node1"])
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", current_nodes)
     monkeypatch.setattr(proxmox_adapter, "execute_operation", fake_execute)
     monkeypatch.setattr(BoundProxmoxSession, "verify_fresh", gate)
     bound, _px = _bound(endpoint_id)
@@ -771,7 +1131,11 @@ async def test_adapter_never_falls_back_to_first_session(
         "_client_for",
         lambda px: used.append(px) or SimpleNamespace(write=_FakeWrite()),
     )
-    monkeypatch.setattr(proxmox_adapter, "_node_names", lambda _px: ["node1"])
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(proxmox_adapter, "_fresh_node_names", current_nodes)
     monkeypatch.setattr(BoundProxmoxSession, "verify_fresh", gate)
     bound, selected = _bound(2)
     adapter = ProxmoxCephProviderAdapter(

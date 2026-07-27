@@ -18,7 +18,7 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | File | Role |
 |------|------|
 | `factory.py` | `create_app()` — assembles the full FastAPI application: registers all routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts generated Proxmox route registration during lifespan. |
-| `bootstrap.py` | Initializes SQLite tables, opens the default NetBox session, and records bootstrap status for health checks. Called once during lifespan startup. |
+| `bootstrap.py` | Initializes SQLite tables, opens the default NetBox session, and records bootstrap status for health checks. Called once during lifespan startup. A `CephProviderTaskClaimMigrationError` is fatal in both the initial and schema-retry paths: application construction stops before Ceph routes can mount against ambiguous legacy evidence. |
 | `cors.py` | Builds CORS allowed-origin list from active NetBox endpoint records. |
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
 | `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including NetBox GET and custom-field reconcile cache invalidation. |

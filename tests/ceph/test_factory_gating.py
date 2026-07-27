@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
 
 def test_ceph_v2_endpoint_binding_and_routes_import_in_a_cold_process():
     result = subprocess.run(
@@ -55,6 +57,67 @@ def _registered_paths(app) -> set[str]:
                 if isinstance(getattr(context, "path", None), str)
             )
     return paths
+
+
+def test_ceph_task_claim_collision_refuses_application_startup(monkeypatch):
+    """Ambiguous legacy task evidence must prevent every route from mounting."""
+
+    from proxbox_api.app import bootstrap
+    from proxbox_api.app.factory import create_app
+    from proxbox_api.database import CephProviderTaskClaimMigrationError
+
+    reason = "ceph_provider_task_claim_cross_endpoint_collision"
+
+    def _raise_collision() -> None:
+        raise CephProviderTaskClaimMigrationError(reason)
+
+    monkeypatch.setattr(bootstrap, "create_db_and_tables", _raise_collision)
+    monkeypatch.setattr(bootstrap, "_configure_backend_file_logging", lambda: None)
+
+    with pytest.raises(CephProviderTaskClaimMigrationError, match=f"^{reason}$"):
+        create_app()
+
+    assert bootstrap.init_ok is False
+    assert bootstrap.last_init_error == reason
+
+
+def test_ceph_task_claim_collision_during_schema_retry_refuses_startup(monkeypatch):
+    """The OperationalError retry path must not downgrade a claim collision."""
+
+    from sqlalchemy.exc import OperationalError
+
+    from proxbox_api.app import bootstrap
+    from proxbox_api.app.factory import create_app
+    from proxbox_api.database import CephProviderTaskClaimMigrationError
+
+    reason = "ceph_provider_task_claim_cross_endpoint_collision"
+    create_calls = 0
+
+    class _SchemaRetrySession:
+        def exec(self, _statement):
+            raise OperationalError("SELECT", {}, RuntimeError("schema unavailable"))
+
+        def close(self) -> None:
+            return None
+
+    def _create_then_collide() -> None:
+        nonlocal create_calls
+        create_calls += 1
+        if create_calls == 2:
+            raise CephProviderTaskClaimMigrationError(reason)
+
+    session = _SchemaRetrySession()
+    monkeypatch.setenv("PROXBOX_SKIP_NETBOX_BOOTSTRAP", "true")
+    monkeypatch.setattr(bootstrap, "create_db_and_tables", _create_then_collide)
+    monkeypatch.setattr(bootstrap, "get_session", lambda: iter((session,)))
+    monkeypatch.setattr(bootstrap, "_configure_backend_file_logging", lambda: None)
+
+    with pytest.raises(CephProviderTaskClaimMigrationError, match=f"^{reason}$"):
+        create_app()
+
+    assert create_calls == 2
+    assert bootstrap.init_ok is False
+    assert bootstrap.last_init_error == reason
 
 
 def test_default_app_mounts_ceph_alongside_existing_surfaces():

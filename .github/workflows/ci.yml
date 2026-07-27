@@ -49,7 +49,10 @@ jobs:
             proxbox_api/schemas/sync.py \
             proxbox_api/database_protocols.py \
             proxbox_api/utils/async_compat.py \
+            proxbox_api/runtime_settings.py \
+            proxbox_api/settings_client.py \
             proxbox_api/ceph/endpoint_binding.py \
+            proxbox_api/ceph/timing.py \
             proxbox_api/ceph/v2_schemas.py \
             proxbox_api/ceph/v2_engine.py \
             proxbox_api/ceph/v2_routes.py \

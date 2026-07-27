@@ -15,8 +15,9 @@ values without repeating the same boilerplate at every read site.
 
 from __future__ import annotations
 
+import math
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 from proxbox_api.logger import logger
 
@@ -24,11 +25,18 @@ if TYPE_CHECKING:
     from proxbox_api.types.structured_dicts import ProxboxSettingsDict
 
 
-def _load_settings() -> "ProxboxSettingsDict | None":
+def _load_settings(
+    *,
+    request_timeout_seconds: float | None = None,
+    cache_fallback: bool = True,
+) -> "ProxboxSettingsDict | None":
     try:
         from proxbox_api.settings_client import get_settings
 
-        return get_settings()
+        return get_settings(
+            request_timeout_seconds=request_timeout_seconds,
+            cache_fallback=cache_fallback,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.debug("runtime_settings: could not load plugin settings: %s", exc)
         return None
@@ -70,6 +78,9 @@ def get_float(
     default: float,
     minimum: float | None = None,
     maximum: float | None = None,
+    settings_timeout_seconds: float | None = None,
+    cache_fallback: bool = True,
+    settings_override: Mapping[str, object] | None = None,
 ) -> float:
     raw = os.environ.get(env, "").strip()
     if raw:
@@ -78,11 +89,24 @@ def get_float(
         except ValueError:
             logger.warning("Invalid float for %s=%r, falling back to settings/default", env, raw)
 
-    settings = _load_settings()
+    if settings_override is not None:
+        settings = settings_override
+    elif settings_timeout_seconds is None and cache_fallback:
+        # Preserve the original no-argument seam for ordinary callers and
+        # tests that replace the private loader. Explicit non-default lookup
+        # behavior still crosses the keyword-only path below.
+        settings = _load_settings()
+    else:
+        settings = _load_settings(
+            request_timeout_seconds=settings_timeout_seconds,
+            cache_fallback=cache_fallback,
+        )
     if settings is not None:
         value = settings.get(settings_key)
         if value is not None and value != "":
             try:
+                if isinstance(value, bool) or not isinstance(value, str | int | float):
+                    raise TypeError
                 return _clamp_float(float(value), minimum, maximum)
             except (TypeError, ValueError):
                 logger.warning(
@@ -165,6 +189,8 @@ def _clamp_int(value: int, minimum: int | None, maximum: int | None) -> int:
 
 
 def _clamp_float(value: float, minimum: float | None, maximum: float | None) -> float:
+    if not math.isfinite(value):
+        raise ValueError("runtime float setting must be finite")
     if minimum is not None and value < minimum:
         return minimum
     if maximum is not None and value > maximum:

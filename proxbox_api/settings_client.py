@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import ssl
 import threading
 import time
@@ -13,7 +14,7 @@ import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from netbox_sdk.config import authorization_header_value
 
@@ -64,22 +65,21 @@ def _coerce_role_id(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, dict):
-        raw = value.get("id")
+        raw = cast(dict[str, object], value).get("id")
         if raw is None:
             return None
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
+        return _coerce_int(raw, default=None)
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
 
 
-def parse_cidr_list(text: str | None) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+def parse_cidr_list(text: object) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     """Parse newline-separated CIDR ranges into a list of IPNetwork objects."""
-    if not text:
+    if not isinstance(text, str) or not text:
         return []
     networks = []
     for line in text.split("\n"):
@@ -140,6 +140,9 @@ def get_default_settings() -> ProxboxSettingsDict:
         "cloud_customer_bridge": "",
         "cloud_customer_vlan_tag": None,
         "cloud_customer_gateway": "",
+        "ceph_task_timeout": 300.0,
+        "ceph_task_poll_interval": 1.0,
+        "ceph_run_lease_seconds": 360.0,
     }
 
 
@@ -178,23 +181,47 @@ def _coerce_bool(value: object, *, default: bool = False) -> bool:
     return default
 
 
+def _coerce_int(value: object, *, default: int | None) -> int | None:
+    """Parse one JSON integer setting without accepting booleans."""
+
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_finite_float(value: object, *, default: float) -> float:
+    """Parse one JSON numeric setting without accepting booleans or NaN/Inf."""
+
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if math.isfinite(parsed) else default
+
+
 def _extract_settings_payload(data: object) -> dict[str, object] | None:
     """Normalize supported NetBox settings API response shapes."""
     if isinstance(data, list):
         first = data[0] if data else None
-        return first if isinstance(first, dict) else None
+        return cast(dict[str, object], first) if isinstance(first, dict) else None
 
     if not isinstance(data, dict):
         return None
 
-    if "results" in data:
-        results = data.get("results")
+    payload = cast(dict[str, object], data)
+    if "results" in payload:
+        results = payload.get("results")
         if not isinstance(results, list) or not results:
             return None
         first = results[0]
-        return first if isinstance(first, dict) else None
+        return cast(dict[str, object], first) if isinstance(first, dict) else None
 
-    return data
+    return payload
 
 
 def _request_settings_json(
@@ -210,12 +237,23 @@ def _request_settings_json(
         url,
         headers={"Authorization": auth, "Accept": "application/json"},
     )
-    urlopen_kwargs: dict[str, object] = {"timeout": request_timeout_seconds}
+    context: ssl.SSLContext | None = None
     if ssl_verify is False and urllib.parse.urlsplit(base_url).scheme.lower() == "https":
-        urlopen_kwargs["context"] = ssl._create_unverified_context()
+        context = ssl._create_unverified_context()
 
     try:
-        with urllib.request.urlopen(req, **urlopen_kwargs) as resp:
+        if context is None:
+            response = urllib.request.urlopen(
+                req,
+                timeout=request_timeout_seconds,
+            )
+        else:
+            response = urllib.request.urlopen(
+                req,
+                timeout=request_timeout_seconds,
+                context=context,
+            )
+        with response as resp:
             if resp.status != 200:
                 return None, resp.status
             return json.loads(resp.read().decode()), resp.status
@@ -289,41 +327,73 @@ def fetch_settings_from_netbox(  # noqa: C901
             logger.warning("Unexpected ProxboxPluginSettings response format")
             return None
 
+        backup_batch_delay_ms = _coerce_int(settings.get("backup_batch_delay_ms"), default=None)
+        if backup_batch_delay_ms is None:
+            backup_batch_delay_ms = 200
+        bulk_batch_delay_ms = _coerce_int(settings.get("bulk_batch_delay_ms"), default=None)
+        if bulk_batch_delay_ms is None:
+            bulk_batch_delay_ms = 500
+
         return {
             "backend_log_file_path": normalize_backend_log_file_path(
                 settings.get("backend_log_file_path")
             ),
-            "ssrf_protection_enabled": settings.get("ssrf_protection_enabled", True),
-            "allow_private_ips": settings.get("allow_private_ips", True),
+            "ssrf_protection_enabled": _coerce_bool(
+                settings.get("ssrf_protection_enabled"), default=True
+            ),
+            "allow_private_ips": _coerce_bool(settings.get("allow_private_ips"), default=True),
             "allowed_ip_ranges": parse_cidr_list(settings.get("additional_allowed_ip_ranges", "")),
             "blocked_ip_ranges": parse_cidr_list(settings.get("explicitly_blocked_ip_ranges", "")),
             "encryption_key": str(settings.get("encryption_key", "")).strip(),
-            "use_guest_agent_interface_name": settings.get("use_guest_agent_interface_name", True),
-            "proxbox_fetch_max_concurrency": int(settings.get("proxbox_fetch_max_concurrency", 8)),
-            "ignore_ipv6_link_local_addresses": settings.get(
-                "ignore_ipv6_link_local_addresses", True
+            "use_guest_agent_interface_name": _coerce_bool(
+                settings.get("use_guest_agent_interface_name"), default=True
+            ),
+            "proxbox_fetch_max_concurrency": _coerce_int(
+                settings.get("proxbox_fetch_max_concurrency"), default=8
+            )
+            or 8,
+            "ignore_ipv6_link_local_addresses": _coerce_bool(
+                settings.get("ignore_ipv6_link_local_addresses"), default=True
             ),
             "primary_ip_preference": (
                 "ipv6"
                 if str(settings.get("primary_ip_preference", "ipv4")).strip().lower() == "ipv6"
                 else "ipv4"
             ),
-            "netbox_timeout": int(settings.get("netbox_timeout", 120)),
-            "netbox_max_concurrent": int(settings.get("netbox_max_concurrent", 1)),
-            "netbox_max_retries": int(settings.get("netbox_max_retries", 5)),
-            "netbox_retry_delay": float(settings.get("netbox_retry_delay", 2.0)),
-            "netbox_get_cache_ttl": float(settings.get("netbox_get_cache_ttl", 60.0)),
-            "netbox_get_cache_max_entries": int(settings.get("netbox_get_cache_max_entries", 4096)),
-            "netbox_get_cache_max_bytes": int(
-                settings.get("netbox_get_cache_max_bytes", 52_428_800)
+            "netbox_timeout": _coerce_int(settings.get("netbox_timeout"), default=120) or 120,
+            "netbox_max_concurrent": _coerce_int(settings.get("netbox_max_concurrent"), default=1)
+            or 1,
+            "netbox_max_retries": _coerce_int(settings.get("netbox_max_retries"), default=5) or 0,
+            "netbox_retry_delay": _coerce_finite_float(
+                settings.get("netbox_retry_delay"), default=2.0
             ),
-            "netbox_write_concurrency": int(settings.get("netbox_write_concurrency", 8)),
-            "proxmox_fetch_concurrency": int(settings.get("proxmox_fetch_concurrency", 8)),
-            "backup_batch_size": int(settings.get("backup_batch_size", 5)),
-            "backup_batch_delay_ms": int(settings.get("backup_batch_delay_ms", 200)),
-            "bulk_batch_size": int(settings.get("bulk_batch_size", 50)),
-            "bulk_batch_delay_ms": int(settings.get("bulk_batch_delay_ms", 500)),
-            "vm_sync_max_concurrency": int(settings.get("vm_sync_max_concurrency", 4)),
+            "netbox_get_cache_ttl": _coerce_finite_float(
+                settings.get("netbox_get_cache_ttl"), default=60.0
+            ),
+            "netbox_get_cache_max_entries": _coerce_int(
+                settings.get("netbox_get_cache_max_entries"), default=4096
+            )
+            or 4096,
+            "netbox_get_cache_max_bytes": _coerce_int(
+                settings.get("netbox_get_cache_max_bytes"), default=52_428_800
+            )
+            or 52_428_800,
+            "netbox_write_concurrency": _coerce_int(
+                settings.get("netbox_write_concurrency"), default=8
+            )
+            or 8,
+            "proxmox_fetch_concurrency": _coerce_int(
+                settings.get("proxmox_fetch_concurrency"), default=8
+            )
+            or 8,
+            "backup_batch_size": _coerce_int(settings.get("backup_batch_size"), default=5) or 5,
+            "backup_batch_delay_ms": backup_batch_delay_ms,
+            "bulk_batch_size": _coerce_int(settings.get("bulk_batch_size"), default=50) or 50,
+            "bulk_batch_delay_ms": bulk_batch_delay_ms,
+            "vm_sync_max_concurrency": _coerce_int(
+                settings.get("vm_sync_max_concurrency"), default=4
+            )
+            or 4,
             "reconciliation_engine": _normalize_reconciliation_engine(
                 settings.get("reconciliation_engine")
             ),
@@ -331,22 +401,34 @@ def fetch_settings_from_netbox(  # noqa: C901
                 settings.get("reconciliation_compare_strict"),
                 default=False,
             ),
-            "custom_fields_request_delay": float(settings.get("custom_fields_request_delay", 0.0)),
+            "custom_fields_request_delay": _coerce_finite_float(
+                settings.get("custom_fields_request_delay"), default=0.0
+            ),
             "custom_fields_enabled": _coerce_bool(
                 settings.get("custom_fields_enabled"),
                 default=False,
             ),
-            "ensure_netbox_objects": bool(settings.get("ensure_netbox_objects", True)),
-            "delete_orphans": bool(settings.get("delete_orphans", False)),
-            "debug_cache": bool(settings.get("debug_cache", False)),
-            "expose_internal_errors": bool(settings.get("expose_internal_errors", False)),
-            "netbox_openapi_persist": bool(settings.get("netbox_openapi_persist", True)),
-            "proxmox_timeout": int(settings.get("proxmox_timeout", 5)),
-            "proxmox_max_retries": int(settings.get("proxmox_max_retries", 0)),
-            "proxmox_retry_backoff": float(settings.get("proxmox_retry_backoff", 0.5)),
+            "ensure_netbox_objects": _coerce_bool(
+                settings.get("ensure_netbox_objects"), default=True
+            ),
+            "delete_orphans": _coerce_bool(settings.get("delete_orphans"), default=False),
+            "debug_cache": _coerce_bool(settings.get("debug_cache"), default=False),
+            "expose_internal_errors": _coerce_bool(
+                settings.get("expose_internal_errors"), default=False
+            ),
+            "netbox_openapi_persist": _coerce_bool(
+                settings.get("netbox_openapi_persist"), default=True
+            ),
+            "proxmox_timeout": _coerce_int(settings.get("proxmox_timeout"), default=5) or 5,
+            "proxmox_max_retries": _coerce_int(settings.get("proxmox_max_retries"), default=0) or 0,
+            "proxmox_retry_backoff": _coerce_finite_float(
+                settings.get("proxmox_retry_backoff"), default=0.5
+            ),
             "default_role_qemu_id": _coerce_role_id(settings.get("default_role_qemu")),
             "default_role_lxc_id": _coerce_role_id(settings.get("default_role_lxc")),
-            "hardware_discovery_enabled": bool(settings.get("hardware_discovery_enabled", False)),
+            "hardware_discovery_enabled": _coerce_bool(
+                settings.get("hardware_discovery_enabled"), default=False
+            ),
             "cloud_network_lock_enabled": _coerce_bool(
                 settings.get("cloud_network_lock_enabled"),
                 default=False,
@@ -355,6 +437,15 @@ def fetch_settings_from_netbox(  # noqa: C901
             "cloud_customer_bridge": str(settings.get("cloud_customer_bridge", "")).strip(),
             "cloud_customer_vlan_tag": _coerce_role_id(settings.get("cloud_customer_vlan_tag")),
             "cloud_customer_gateway": str(settings.get("cloud_customer_gateway", "")).strip(),
+            "ceph_task_timeout": _coerce_finite_float(
+                settings.get("ceph_task_timeout"), default=300.0
+            ),
+            "ceph_task_poll_interval": _coerce_finite_float(
+                settings.get("ceph_task_poll_interval"), default=1.0
+            ),
+            "ceph_run_lease_seconds": _coerce_finite_float(
+                settings.get("ceph_run_lease_seconds"), default=360.0
+            ),
         }
 
     except urllib.error.URLError as exc:
@@ -425,7 +516,7 @@ def get_settings(  # noqa: C901
             from proxbox_api.app.netbox_session import get_raw_netbox_session
 
             try:
-                netbox_session = get_raw_netbox_session()
+                netbox_session = cast("Api | None", get_raw_netbox_session())
             except Exception as exc:
                 logger.debug("Could not get NetBox session for settings: %s", exc)
 

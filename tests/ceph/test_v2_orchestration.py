@@ -232,6 +232,14 @@ async def ceph_v2_harness(db_engine, db_session, monkeypatch) -> _Harness:
         "proxbox_api.ceph.v2_providers.proxmox._node_names",
         lambda _px: ["node1"],
     )
+
+    async def current_nodes(_px: object) -> list[str]:
+        return ["node1"]
+
+    monkeypatch.setattr(
+        "proxbox_api.ceph.v2_providers.proxmox._fresh_node_names",
+        current_nodes,
+    )
     task_status = SimpleNamespace(value={"status": "stopped", "exitstatus": "OK"})
 
     async def get_task_status(_px: Any, _node: str, _upid: str) -> Any:

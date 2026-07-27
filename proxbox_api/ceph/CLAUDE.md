@@ -36,8 +36,9 @@ Both routers are mounted in `proxbox_api/app/factory.py` (`/ceph` and `/ceph/v2`
 | `v2_schemas.py` | Pydantic contract: desired state, exact operation-node binding, endpoint-bound plan/approval/apply, safe approval status, ordered operation events, run, provider, validation, metric, and SSE schemas. It recursively normalizes/redacts secret aliases. Legacy apply fields remain parseable only for stable rejection; they are not write authority. |
 | `v2_engine.py` | Durable plan/approval/apply engine: canonical digests, expiring hashed approvals, atomic consumption, owner-bound live leases, append-only pre-dispatch/task checkpoints, permanent provider-global atomic task claims, repeated-cancellation-safe task/synchronous/cancellation evidence, unique node-consistent UPID handling, replay recovery, recursive secret/fallback redaction, and read-only reconciliation. There is no process-local plan authority. |
 | `endpoint_binding.py` | Resolves exactly one local DB endpoint, creates exactly one request-private session, persists only a stable server-keyed revision of the complete mutation-relevant endpoint configuration, and binds endpoint/session connection/auth/TLS/timeout/retry schemas with a second per-request secret HMAC. No endpoint secret or ephemeral key/tag is persisted or exposed. |
+| `timing.py` | Resolves one frozen Ceph task timeout, poll interval, and run lease snapshot off the event loop through a bounded settings request. Precedence is environment override → validated `ProxboxPluginSettings` value → default; availability failures are not cached as authoritative settings. |
 | `v2_providers/base.py` | Adapter contract plus fail-closed capability, provider-boundary and write-gate errors and terminal-task polling hook. |
-| `v2_providers/proxmox.py` | Reads/diffs/plans and applies through the privately bound endpoint session. Every mutation keeps one exact node outside the SDK payload, reloads `enabled`/`allow_writes`, and constant-time compares both HMAC-bound schemas immediately before dispatch. The endpoint gate and run heartbeat serialize database access; UPIDs are polled on the same node/session. Never restore `_pxs[0]`, first-node, or `localhost` mutation fallback. |
+| `v2_providers/proxmox.py` | Reads/diffs/plans and applies through the privately bound endpoint session. Every mutation fetches typed live `cluster/status` membership, keeps one exact node outside the SDK payload, then reloads `enabled`/`allow_writes` and constant-time compares both HMAC-bound schemas during preparation. The engine renews and compare-and-swaps durable ownership after preparation and before invoking the returned provider mutation. Gate and audit/lease sessions remain independent; UPIDs are polled on the same node/provider session under an independent heartbeat and strict remaining-time budget. Never restore cached node authority, `_pxs[0]`, first-node, or `localhost` mutation fallback. |
 | `v2_providers/proxmox_writer.py` | Explicit-default-deny `(kind, action) -> CephWrite` table plus strict Pydantic payload schemas used at planning and dispatch. Supports pool, flag, OSD, MON/MGR/MDS and CephFS operations listed in the map; unsupported pairs, unknown keys, and missing required fields are blocked rather than filtered. A returned UPID is `submitted`, never proof of completion. Only SDK-proven flag create/update/delete and OSD update return explicit typed synchronous completion after a successful `None`. |
 | `v2_providers/__init__.py` | Adapter registry: `adapter_for_provider(provider, pxs)`, `provider_names()`. Stub adapters for `dashboard` (#98), `rgw_admin` (#12), `rbd` (#12), `prometheus` (#94), `external` (#97). |
 | `v2_routes.py` | FastAPI router for all `/ceph/v2/*` endpoints (thin; delegates to the engine). |
@@ -99,7 +100,9 @@ endpoint `allow_writes` values.
   node/session. Only stopped/OK is completed; failure is failed, and
   crash/transport/timeout/cancellation is `outcome_unknown` and must not be
   blindly retried. The pre-SDK state stays nonterminal `dispatching` while the
-  worker heartbeats a renewable lease. Every later live checkpoint CASes the
+  worker heartbeats a renewable lease. Renewal and checkpoint CAS predicates
+  evaluate database wall-clock time after row-lock waits, so delayed statements
+  cannot reclaim expired authority. Every later live checkpoint CASes the
   unexposed lease owner and expiry; a stale status/SSE read atomically records
   `run_lease_expired`, clears ownership, preserves task references for operator
   recovery, and prevents a late worker from appending or overwriting recovery.
@@ -107,7 +110,17 @@ endpoint `allow_writes` values.
   checkpoints repeatedly re-enter cancellation shielding until the inner
   durability task finishes, then re-raise the remembered cancellation before
   conservative recovery returns control.
-  Endpoint freshness queries and heartbeat renewal share one database lock.
+  Endpoint freshness uses a dedicated uncached gate session while heartbeat
+  renewal uses the independent audit/lease session. Preparation returns a
+  provider-call boundary only after live gates pass; the engine then performs
+  another live owner CAS before invoking it, so a slow gate cannot dispatch for
+  an expired worker. Gate rollback cannot expire or discard durable events.
+- **Timing is immutable per run.** Resolve the three bounded values once when
+  constructing the provider adapter. Persist `lease_duration_seconds` on the
+  run and use it for creation, renewal, heartbeat cadence, and recovery; a
+  mutable setting change must never alter an in-flight run. Normalize poll
+  interval to at most the task timeout, bound each status request and sleep by
+  the remaining deadline, and heartbeat independently from polling cadence.
 - **No legacy confirmation authority.** Boolean/predictable confirmation and
   inline apply remain parseable only for explicit rejection. Only the hashed,
   expiring, single-use, two-person approval bound to the canonical plan,

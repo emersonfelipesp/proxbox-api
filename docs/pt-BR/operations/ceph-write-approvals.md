@@ -53,7 +53,8 @@ identificador opaco valido. Excecoes e valores nao-JSON do provider passam pela
 mesma fronteira de redacao; o fallback textual bruto nunca e persistido. O logger aplica a mesma regra
 a argumentos de formatacao tardia, extras estruturados, credenciais em
 userinfo/query de URL, excecoes aninhadas e traceback antes do handler real
-renderiza-los.
+renderiza-los. O filtro e anexado de forma idempotente a todos os handlers,
+inclusive ao buffer administrativo DEBUG em memoria.
 
 ## Registros duraveis
 
@@ -61,7 +62,7 @@ renderiza-los.
 |---|---|
 | `ceph_plan` | Payload canonico, digest SHA-256, endpoint, revisao estavel da configuracao calculada com chave do servidor, solicitante, branch e validade de 15 minutos. O apply recarrega e valida todos os campos de identidade e o digest. |
 | `ceph_approval` | Uma autoridade de aprovacao por plano. Guarda apenas o hash SHA-256 do token, digest, endpoint e revisao, solicitante, aprovador distinto, expiracao, consumo e operation-run. |
-| `ceph_operation_run` | Resultado duravel, revisao do endpoint, referencias de tarefas do provider, lease da execucao em curso e nonce aleatorio nao exposto do dono do lease. Os campos de vinculo do plano/aprovacao sao fixados na criacao; atualizacoes de ciclo alteram apenas lease, status e resultado. |
+| `ceph_operation_run` | Resultado duravel, revisao do endpoint, referencias de tarefas do provider, lease da execucao em curso e nonce aleatorio nao exposto do dono do lease. `lease_duration_seconds` e capturado de forma imutavel na criacao e governa renovacao, cadencia do heartbeat e expiracao desse run. Os campos de vinculo do plano/aprovacao sao fixados na criacao; atualizacoes de ciclo alteram apenas lease, status e resultado. |
 | `ceph_operation_event` | Checkpoints ordenados e append-only: consumo, intencao antes do SDK, submissao do UPID e transicao terminal ou `outcome_unknown`. `(run_id, sequence)` e unico. |
 | `ceph_provider_task_claim` | Posse permanente e global ao provider de cada `(provider, provider_task_ref)`; `endpoint_id` permanece apenas como contexto de auditoria. A constraint unica e o primeiro evento de submissao fazem commit atomico, impedindo reutilizacao sequencial ou concorrente inclusive entre endpoints. A migracao reconstrui tabelas legadas sem colisao em uma transacao. Se o mesmo ref legado aparecer em endpoints distintos, o startup recusa com `ceph_provider_task_claim_cross_endpoint_collision` e preserva toda a evidencia para investigacao. |
 
@@ -71,12 +72,20 @@ replay. IDs de plano/aprovacao nao sao credenciais. Booleanos legados,
 `confirm_destructive`, `confirmation_token` e strings derivadas do ID do plano
 nao autorizam escrita.
 
-Os tempos de seguranca sao limitados e voltam aos padroes quando o valor e
-invalido ou nao finito: `PROXBOX_CEPH_TASK_TIMEOUT` usa 300 segundos (1–3600),
-`PROXBOX_CEPH_TASK_POLL_INTERVAL` usa 1 segundo (0,1–60) e
-`PROXBOX_CEPH_RUN_LEASE_SECONDS` usa 360 segundos (1–3600). Mantenha o lease
-maior que uma requisicao individual de status. O worker de polling renova o
-lease enquanto a tarefa esta ativa, mas nao pode recupera-lo depois de expirar.
+Os tempos de seguranca resolvem uma vez por adapter na ordem **override de
+ambiente → valor de `ProxboxPluginSettings` → padrao embutido**. Os campos do
+plugin sao `ceph_task_timeout` (300 segundos, faixa 1–3600),
+`ceph_task_poll_interval` (1 segundo, faixa 0,1–60) e
+`ceph_run_lease_seconds` (360 segundos, faixa 1–3600), com overrides
+`PROXBOX_CEPH_TASK_TIMEOUT`, `PROXBOX_CEPH_TASK_POLL_INTERVAL` e
+`PROXBOX_CEPH_RUN_LEASE_SECONDS`. Valor de ambiente invalido ou nao finito volta
+ao valor validado do plugin e depois ao padrao; valor finito fora da faixa e
+limitado aos bounds documentados. Se um override deixar o intervalo maior que o
+timeout, o snapshot imutavel limita o intervalo ao timeout. A consulta de
+settings roda fora do event loop, tem timeout limitado e nao transforma falha
+de disponibilidade em configuracao autoritativa no cache. Um heartbeat
+independente renova o lease durante gates, dispatch, chamadas de status e
+sleeps, mas nao pode recupera-lo depois de expirar.
 
 ## Fluxo obrigatorio
 
@@ -137,13 +146,20 @@ sessao unica interrompe a proxima mutacao. O adapter compara a revisao estavel
 persistida e tambem, em tempo constante, um HMAC privado com chave aleatoria por
 requisicao dos campos de conexao, autenticacao, TLS, timeout e retry do endpoint
 e da sessao real. Qualquer mudanca interrompe a proxima mutacao. `noop` nao chama
-o provider.
+o provider. Para cada mutacao, o adapter tambem busca e valida a lista atual de
+nodes por `cluster/status`. Essa leitura potencialmente lenta acontece antes do
+gate local de endpoint/sessao em uma sessao dedicada. O cache de nodes criado no
+bootstrap da sessao nunca e autoridade de escrita.
 
 Antes de cada chamada SDK, o motor persiste a intencao `dispatching` enquanto o
-run ainda possui um lease vivo. Um heartbeat em background renova esse lease
-durante todo o await do SDK. A consulta de freshness do endpoint e o heartbeat
-serializam em um lock compartilhado e nunca usam a mesma sessao SQLModel em
-concorrencia. Cada checkpoint posterior usa compare-and-swap
+run ainda possui um lease vivo. Preparacao e dispatch sao fases separadas: um
+heartbeat independente renova o lease durante os gates lentos de node e
+endpoint, e o motor executa outro compare-and-swap de dono/expiracao antes de
+invocar a fronteira de mutacao preparada. As `AsyncSession` de gate e de
+auditoria/lease sao independentes; rollback do gate nao expira o registro nem
+bloqueia o heartbeat. O mesmo heartbeat continua durante o await do SDK e o
+polling, e cada chamada de status e sleep respeita o budget restante do timeout.
+Cada checkpoint posterior usa compare-and-swap
 exigindo o mesmo nonce nao exposto de dono e lease nao expirado; worker tardio
 nao pode acrescentar evento, terminalizar ou readquirir um run que nao possui.
 Um crash deixa um run `dispatching` nao terminal e auditavel ate a expiracao do
@@ -200,7 +216,10 @@ retorna somente metadados seguros e nunca o token ou seu hash. Para run
 `running`/`dispatching` cujo lease expira, a proxima leitura de status/SSE muda
 atomicamente o estado para `outcome_unknown`, acrescenta `run_lease_expired` e
 preserva as referencias de tarefa com uma acao explicita de recuperacao.
-Recuperacao limpa o dono do lease. Uma resposta tardia do SDK ou polling nao
+Os predicados compare-and-swap de renovacao e checkpoint usam o relogio do
+banco avaliado depois de qualquer espera pelo lock da linha; uma instrucao
+atrasada nao renova nem registra checkpoint de um lease que expirou durante a
+espera. Recuperacao limpa o dono do lease. Uma resposta tardia do SDK ou polling nao
 pode readquirir o lease expirado, acrescentar evento terminal nem substituir a
 recuperacao por `completed`. Enquanto o lease ainda esta vivo, perder sua posse
 nao terminaliza o run prematuramente: o worker autorizado ou a recuperacao apos
@@ -225,7 +244,8 @@ autoridade de mutacao.
 
 A mudanca de schema e aditiva: o startup cria `ceph_plan`, `ceph_approval`,
 `ceph_operation_event` e `ceph_provider_task_claim`; adiciona a revisao de configuracao a planos, approvals e
-runs; e adiciona o lease e o `lease_owner` nullable a tabelas antigas de
+runs; e adiciona o lease, o `lease_duration_seconds` imutavel e o
+`lease_owner` nullable a tabelas antigas de
 `ceph_operation_run`. Planos ou
 approvals Proxmox legados sem revisao nao sao autoridade valida e falham
 fechados. Eventos legados que carregam task ID sao convertidos de forma
@@ -271,7 +291,7 @@ planos aprovados.
 | Requisitos e risco | SWE-050, SWE-051, SWE-053, SWE-054, SWE-055, SWE-184 | Issue/change record, limite de ameacas, criterios de aceite e testes de substituicao de endpoint, replay, segredo e cancelamento. Nao e baseline completo de requisitos nem matriz bidirecional de rastreabilidade do projeto. |
 | Arquitetura e design | SWE-057, SWE-058 | Fluxo documentado plano → approval → consumo atomico → revisao/sessao do endpoint → eventos/lease. Nao se alega revisao formal de arquitetura nem baseline de design aprovado. |
 | Implementacao | SWE-060, SWE-061, SWE-062, SWE-135, SWE-136, SWE-186 | Implementacao tipada Pydantic/SQLModel, migracao aditiva, comandos Ruff/compile/test, lock de dependencias e testes de concorrencia. Acreditacao de ferramentas e registros de analise/codificacao do projeto inteiro ficam fora desta mudanca. |
-| Testes | SWE-065, SWE-066, SWE-068, SWE-071, SWE-187, SWE-189, SWE-190, SWE-191, SWE-192, SWE-193, SWE-211 | Testes locais focados de unidade, HTTP, concorrencia, migracao e canarios de seguranca, incluindo binding exato de node, comparacao canonica de noop sem node, rejeicao estrita de payload, CAS/nao-ressurreicao do lease, unicidade duravel de claims sequenciais/concorrentes, checkpoints seguros contra cancelamento, serializacao heartbeat/sessao, conclusao sincrona explicita e redacao recursiva em API/SSE/persistencia/log por handler real. Nao e qualificacao da plataforma alvo, matriz de hazards do projeto, disposicao completa de cobertura nem aceite de release. |
+| Testes | SWE-065, SWE-066, SWE-068, SWE-071, SWE-187, SWE-189, SWE-190, SWE-191, SWE-192, SWE-193, SWE-211 | Testes locais focados de unidade, HTTP, concorrencia, migracao e canarios de seguranca, incluindo binding exato de node, comparacao canonica de noop sem node, rejeicao estrita de payload, CAS pos-gate/nao-ressurreicao do lease, sessoes independentes para gate/heartbeat, polling limitado pelo deadline, unicidade duravel de claims sequenciais/concorrentes, checkpoints seguros contra cancelamento, conclusao sincrona explicita e redacao recursiva em API/SSE/persistencia/log por handler real. Nao e qualificacao da plataforma alvo, matriz de hazards do projeto, disposicao completa de cobertura nem aceite de release. |
 | Operacoes e manutencao | SWE-075, SWE-077, SWE-194, SWE-195, SWE-196 | Rollout, rollback, recuperacao fail-closed, campos de auditoria e gates do operador estao documentados. Aprovacao de entrega, custodia/acesso de arquivo, execucao de retencao e registros de retirada nao sao estabelecidos aqui. |
 
 ### Disposicoes explicitamente abertas

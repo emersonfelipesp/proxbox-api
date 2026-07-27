@@ -76,7 +76,9 @@ uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
 uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py \
   proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py \
-  proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/v2_schemas.py \
+  proxbox_api/runtime_settings.py proxbox_api/settings_client.py \
+  proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/timing.py \
+  proxbox_api/ceph/v2_schemas.py \
   proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py \
   proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py \
   proxbox_api/ceph/v2_providers/proxmox_writer.py
@@ -119,9 +121,16 @@ approval/run records, and reject same-ID retargeting. Require a distinct
 delegated actor to issue one hashed/expiring/single-use approval, consume it
 atomically, append a live `dispatching` intent before every SDK call, and reload
 `enabled`, `allow_writes`, revision, endpoint/session binding, and node
-immediately before every mutation. Every live checkpoint must retain the same
-unexposed lease-owner nonce and non-expired lease. Serialize endpoint freshness
-checks and lease heartbeats on the request's database session. For task-based
+immediately before every mutation. Fetch and validate live `cluster/status`
+node membership first, then verify the endpoint/session through a dedicated
+uncached gate session; bootstrap-cached node membership is never write
+authority. Keep durable audit/lease work on an independent request session so
+heartbeats continue during slow gates, then require a fresh owner/expiry CAS
+after preparation and before invoking the provider mutation. Renewal and
+checkpoint predicates use database wall-clock time evaluated after row-lock
+waits, so delayed statements cannot reclaim expired authority. Every live
+checkpoint must retain the same unexposed lease-owner nonce and non-expired
+lease. For task-based
 mutations, UPID means submitted until terminal polling; atomically claim exactly
 one provider-globally unseen complete UPID whose returned and embedded nodes equal the
 plan node. Only `flag:create/update/delete` and `osd:update` are SDK-proven
@@ -130,11 +139,16 @@ claim/submission, synchronous-completion, and cancellation checkpoints through
 repeated cancellation until the inner durability task finishes, then propagate
 the remembered cancellation. Refuse startup with
 `ceph_provider_task_claim_cross_endpoint_collision` rather than selecting or
-discarding ambiguous cross-endpoint legacy evidence.
+discarding ambiguous cross-endpoint legacy evidence; this migration failure is
+fatal and must stop route mounting. Resolve bounded Ceph task timeout, poll
+interval, and run lease once off-loop as env override → plugin setting →
+default, normalize poll interval to at most timeout, persist the immutable lease
+duration, and bound every task-status call and sleep by the remaining deadline.
 Missing/multiple/reused or node-inconsistent task IDs, expired run leases, crashes, and cancellation become
 `outcome_unknown` and are not retried or overwritten by a late worker. Recursively
 redact normalized secret aliases, exception values, and non-JSON fallback text
-across persistence, API, SSE, and logs. `netbox-ceph` must resolve the plugin
+across persistence, API, SSE, every handler, and the DEBUG admin buffer.
+`netbox-ceph` must resolve the plugin
 endpoint to the canonical proxbox-api endpoint ID; a plugin PK is never a
 substitute. Ceph
 writes remain default-off unless both `PROXBOX_ENABLE_CEPH_V2_WRITES=true` and
@@ -255,7 +269,7 @@ All violations block CI. Fix before pushing.
 
 **Type Checking (Pyright strict):**
 ```bash
-uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/v2_schemas.py proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py proxbox_api/ceph/v2_providers/proxmox_writer.py
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py proxbox_api/runtime_settings.py proxbox_api/settings_client.py proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/timing.py proxbox_api/ceph/v2_schemas.py proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py proxbox_api/ceph/v2_providers/proxmox_writer.py
 ```
 Type mismatches block merge. Use `# type: ignore` only with justification.
 

@@ -56,7 +56,9 @@ objects and non-JSON provider values are converted only through the same
 redacting boundary, never by persisting their raw fallback strings. The logger
 recursively applies the same rule to deferred
 format arguments, structured extras, URL userinfo/query credentials, nested
-exception objects, and traceback text before a real handler renders them.
+exception objects, and traceback text before a real handler renders them. The
+filter is attached idempotently to every handler, including the in-memory DEBUG
+admin buffer.
 
 ## Durable control-plane records
 
@@ -66,7 +68,7 @@ SQLite stores five related records:
 |---|---|
 | `ceph_plan` | Canonical plan payload, SHA-256 digest, endpoint ID, stable server-keyed endpoint configuration revision, requester, branch, and 15-minute validity window. Apply reloads this record and verifies every duplicated identity field plus the digest. |
 | `ceph_approval` | One approval authority per plan. Stores only a SHA-256 token hash, the bound plan digest, endpoint ID and configuration revision, requester, distinct approver, expiry, consumption timestamp, consumer, and operation-run ID. |
-| `ceph_operation_run` | Durable execution result, endpoint revision, provider task references, and an in-flight lease plus an unexposed random lease-owner nonce. The plan/endpoint/digest/requester/approver/approval identity fields are fixed when the run is created; lifecycle updates change only lease, status, and result fields. |
+| `ceph_operation_run` | Durable execution result, endpoint revision, provider task references, and an in-flight lease plus an unexposed random lease-owner nonce. `lease_duration_seconds` is captured immutably when the run is created and governs every renewal, heartbeat cadence, and expiry decision for that run. The plan/endpoint/digest/requester/approver/approval identity fields are fixed when the run is created; lifecycle updates change only lease, status, and result fields. |
 | `ceph_operation_event` | Ordered, append-only checkpoints. The engine records approval consumption, dispatch intent before each SDK call, UPID submission, and the observed terminal or `outcome_unknown` transition. `(run_id, sequence)` is unique. |
 | `ceph_provider_task_claim` | Permanent provider-global ownership of each `(provider, provider_task_ref)`; `endpoint_id` remains audit context but is not part of identity. The unique constraint and first submission event commit atomically, so sequential or concurrent runs on the same or different endpoints cannot adopt and poll an earlier task as fresh execution evidence. The startup migration transactionally rebuilds collision-free endpoint-scoped legacy tables. If legacy rows/events contain the same provider reference on different endpoints, startup refuses with `ceph_provider_task_claim_cross_endpoint_collision` and leaves all evidence untouched for operator investigation. |
 
@@ -74,12 +76,22 @@ The raw approval token is returned only by the approval-creation response. It
 is never written to the database, operation summary, log payload, or replay
 response.
 
-Safety timing settings are bounded and fall back to defaults when malformed or
-non-finite: `PROXBOX_CEPH_TASK_TIMEOUT` defaults to 300 seconds (1–3600),
-`PROXBOX_CEPH_TASK_POLL_INTERVAL` defaults to 1 second (0.1–60), and
-`PROXBOX_CEPH_RUN_LEASE_SECONDS` defaults to 360 seconds (1–3600). Keep the
-lease longer than any single provider-status request. The polling worker
-renews it while the task is active but cannot reclaim it after expiry.
+Safety timing resolves once per provider adapter request as **environment
+override → `ProxboxPluginSettings` value → built-in default**. The paired
+plugin fields are `ceph_task_timeout` (300 seconds, range 1–3600),
+`ceph_task_poll_interval` (1 second, range 0.1–60), and
+`ceph_run_lease_seconds` (360 seconds, range 1–3600); the matching environment
+overrides are `PROXBOX_CEPH_TASK_TIMEOUT`,
+`PROXBOX_CEPH_TASK_POLL_INTERVAL`, and `PROXBOX_CEPH_RUN_LEASE_SECONDS`.
+Malformed or non-finite environment values fall back to the validated plugin
+value and then the default; finite out-of-range overrides are clamped to the
+documented bounds. If an environment override makes the polling interval longer
+than the task timeout, the immutable runtime snapshot clamps the interval to the
+timeout. The settings request runs off the event loop with a bounded timeout
+and does not cache an availability failure as authoritative configuration. An
+independent heartbeat renews the persisted per-run lease during provider gates,
+SDK dispatch, status calls, and polling sleeps, but it cannot reclaim the lease
+after expiry.
 
 Plan IDs and approval IDs are identifiers, not credentials. Legacy booleans,
 `confirm_destructive`, `confirmation_token`, and strings derived from a plan ID
@@ -202,12 +214,24 @@ of the endpoint and actual session schemas. Revoking
 `allow_writes`, disabling/deleting the endpoint, or changing connection,
 credential, TLS, timeout, retry, or session fields stops the next mutation. A
 `noop` is not a provider mutation and does not invoke the write gate.
+The adapter also fetches and validates current `cluster/status` node membership
+for every mutation. It performs that potentially slow provider read first, then
+runs the local endpoint/session freshness check through a dedicated gate
+session. Cached session-bootstrap node membership is never write authority.
 
 Before every SDK call, the engine durably appends a `dispatching` intent while
-the run still owns a live lease. A background heartbeat renews that lease for
-the whole SDK await. The Proxmox adapter's endpoint-freshness query and the
-heartbeat serialize on one shared lock, so they never concurrently use the
-request's SQLModel session. Every later checkpoint uses a compare-and-swap requiring
+the run still owns a live lease. Provider preparation and dispatch are separate
+phases: an independent background heartbeat renews the lease during slow node
+and endpoint gates, then the engine performs another owner/expiry
+compare-and-swap before invoking the prepared mutation boundary. The uncached
+gate `AsyncSession` and durable audit/lease `AsyncSession` are independent, so
+gate rollback cannot expire or roll back the operation record and cannot block
+the heartbeat. Lease renewal and checkpoint compare-and-swap predicates use
+database wall-clock time evaluated after any row-lock wait; a delayed statement
+therefore cannot renew or checkpoint a lease that expired while it waited. The
+same independent heartbeat continues through the SDK await
+and provider-task polling. Every status request and sleep is capped by the
+remaining task-timeout budget. Every later checkpoint uses a compare-and-swap requiring
 the same unexposed lease-owner nonce and a non-expired lease; a late worker
 cannot append, terminalize, or reacquire a run it no longer owns. A process
 crash leaves a nonterminal, auditable `dispatching` run until lease expiry,
@@ -297,7 +321,8 @@ support do not imply mutation authority.
 
 The schema change is additive: startup creates `ceph_plan`, `ceph_approval`,
 `ceph_operation_event`, and `ceph_provider_task_claim`; adds endpoint configuration revisions to plan,
-approval, and run records; and adds the run lease plus nullable `lease_owner`
+approval, and run records; and adds the run lease, immutable
+`lease_duration_seconds`, plus nullable `lease_owner`
 to existing
 `ceph_operation_run` tables. Legacy Proxmox plans/approvals without a revision
 are invalid authority and fail closed. Existing task-bearing audit events are
@@ -345,7 +370,7 @@ review against the official applicability matrix and approved plans.
 | Requirements and risk | SWE-050, SWE-051, SWE-053, SWE-054, SWE-055, SWE-184 | Issue/change record, threat boundary, acceptance criteria, endpoint substitution/replay/secret/cancellation tests. This is not a complete project requirements baseline or bidirectional traceability matrix. |
 | Architecture and design | SWE-057, SWE-058 | Documented plan → approval → atomic consumption → endpoint revision/session gate → event/lease state machine. No formal project architecture review or approved design baseline is claimed. |
 | Implementation | SWE-060, SWE-061, SWE-062, SWE-135, SWE-136, SWE-186 | Typed Pydantic/SQLModel implementation, additive migration, Ruff/compile/test commands, pinned dependency lock, and concurrency tests. Tool accreditation and project-wide coding/analysis records remain outside this change. |
-| Testing | SWE-065, SWE-066, SWE-068, SWE-071, SWE-187, SWE-189, SWE-190, SWE-191, SWE-192, SWE-193, SWE-211 | Focused unit/HTTP/concurrency/migration/security canaries, including exact node binding, canonical node-free no-op comparison, strict payload rejection, lease-owner CAS/non-resurrection, durable sequential/concurrent task-claim uniqueness, cancellation-safe task/synchronous checkpoints, serialized heartbeat/session access, explicit synchronous-pair completion, recursive API/SSE/persistence/log redaction through a real handler, and recorded local results. This is not target-platform qualification, a project hazard matrix, full coverage disposition, or release acceptance. |
+| Testing | SWE-065, SWE-066, SWE-068, SWE-071, SWE-187, SWE-189, SWE-190, SWE-191, SWE-192, SWE-193, SWE-211 | Focused unit/HTTP/concurrency/migration/security canaries, including exact node binding, canonical node-free no-op comparison, strict payload rejection, post-gate lease-owner CAS/non-resurrection, independent gate/heartbeat sessions, deadline-bounded status polling, durable sequential/concurrent task-claim uniqueness, cancellation-safe task/synchronous checkpoints, explicit synchronous-pair completion, recursive API/SSE/persistence/log redaction through a real handler, and recorded local results. This is not target-platform qualification, a project hazard matrix, full coverage disposition, or release acceptance. |
 | Operations and maintenance | SWE-075, SWE-077, SWE-194, SWE-195, SWE-196 | Rollout, rollback, fail-closed recovery, audit fields, and operator gates are documented. Delivery approval, archive ownership/access, retention execution, and retirement records are not established here. |
 
 ### Explicit open dispositions

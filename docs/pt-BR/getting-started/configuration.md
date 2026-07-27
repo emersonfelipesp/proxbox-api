@@ -209,15 +209,18 @@ Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximo de fetches concorrentes de configuracao de VM Proxmox durante o sync de VMs e discos. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Timeout por chamada (segundos, intervalo 1-600) para a requisicao `network-get-interfaces` do guest-agent QEMU. Guests com muitas interfaces (VRRP/alias) podem demorar a enumerar; aumente este valor se as buscas de interface via guest-agent expirarem. Mapeia para o campo `ProxboxPluginSettings.guest_agent_timeout`. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Override opcional para `ProxboxPluginSettings.reconciliation_engine`. Valores validos: `python`, `compare` e `rust`. |
+| `PROXBOX_CEPH_TASK_TIMEOUT` | `300` | Espera total maxima por uma tarefa Ceph submetida ao Proxmox (faixa 1-3600). Mapeia para `ProxboxPluginSettings.ceph_task_timeout`; um valor imutavel limita cada chamada de status e sleep. |
+| `PROXBOX_CEPH_TASK_POLL_INTERVAL` | `1` | Intervalo entre consultas de status da tarefa Ceph (faixa 0,1-60). Mapeia para `ProxboxPluginSettings.ceph_task_poll_interval` e e limitado ao timeout da tarefa. |
+| `PROXBOX_CEPH_RUN_LEASE_SECONDS` | `360` | Lease duravel e renovavel do run Ceph (faixa 1-3600). Mapeia para `ProxboxPluginSettings.ceph_run_lease_seconds` e e persistido no run para que mudancas posteriores nao alterem heartbeat ou recuperacao em curso. A cadencia do heartbeat independe do polling do provider. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (sync de VM, discos) / `4` (snapshots) | Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync. A reconciliacao de task history usa requisicoes bulk limitadas em vez de dispatch de escrita por VM. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (maioria dos fluxos) / `4` (task-history) | Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Override legado de concorrencia usado por alguns entrypoints de sync. |
 | `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |
 | `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | nao definido | Quando `1`, `true` ou `yes`, permite execucao SSH remota no Cloud Image Pipeline. Desabilitado por padrao. Mantenha ausente/falso em staging e producao ate o netbox-packer possuir e validar seu contrato real de consumidor; a fixture consumer-shaped local pertence ao produtor e nao remove este HOLD. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox. |
-| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup; `0` desabilita o delay. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Tamanho do lote para requisicoes em massa relacionadas a VMs (volumes, backups). |
-| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay em milissegundos entre lotes em massa. |
+| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay em milissegundos entre lotes em massa; `0` desabilita o delay. |
 | `PROXBOX_NETBOX_GET_CACHE_TTL` | `60` | TTL em segundos do cache de GETs no NetBox. `0` desabilita o cache. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximo de entradas armazenadas no cache de GETs do NetBox antes de eviccao LRU. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Tamanho total maximo em bytes do cache de GETs do NetBox. |

@@ -6,26 +6,31 @@ import asyncio
 import hashlib
 import json
 import math
-import os
 import re
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, TypeVar, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import and_, or_
+from sqlalchemy import Float, and_, or_
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.compiler import SQLCompiler
+from sqlalchemy.sql.functions import FunctionElement
 from sqlmodel import col, select
 
+from proxbox_api.ceph.timing import resolve_ceph_timing_settings
 from proxbox_api.ceph.v2_providers.base import (
     CephCapabilityUnsupported,
     CephProviderAdapter,
     CephProviderBoundaryError,
     CephWriteGateDenied,
+    ProviderDispatch,
     ceph_write_execution_enabled,
 )
 from proxbox_api.ceph.v2_schemas import (
@@ -99,6 +104,42 @@ _DESTRUCTIVE_KIND_ACTIONS = {
     "key": _DESTRUCTIVE_ACTIONS,
     "user": _DESTRUCTIVE_ACTIONS,
 }
+
+
+class _DatabaseEpochSeconds(FunctionElement[float]):
+    """Return wall-clock Unix time at the point the database evaluates a CAS."""
+
+    type = Float()
+    inherit_cache = True
+
+
+@compiles(_DatabaseEpochSeconds)
+def _compile_database_epoch_seconds(
+    _element: _DatabaseEpochSeconds,
+    _compiler: SQLCompiler,
+    **_kwargs: Any,
+) -> str:
+    return "EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)"
+
+
+@compiles(_DatabaseEpochSeconds, "postgresql")
+def _compile_postgresql_database_epoch_seconds(
+    _element: _DatabaseEpochSeconds,
+    _compiler: SQLCompiler,
+    **_kwargs: Any,
+) -> str:
+    # PostgreSQL CURRENT_TIMESTAMP is fixed at transaction start. A lease CAS
+    # must instead observe the clock after any row-lock wait has completed.
+    return "EXTRACT(EPOCH FROM clock_timestamp())"
+
+
+@compiles(_DatabaseEpochSeconds, "sqlite")
+def _compile_sqlite_database_epoch_seconds(
+    _element: _DatabaseEpochSeconds,
+    _compiler: SQLCompiler,
+    **_kwargs: Any,
+) -> str:
+    return "((julianday('now') - 2440587.5) * 86400.0)"
 
 
 class CephPlanNotFound(KeyError):
@@ -254,19 +295,33 @@ def _safe_text(value: object | None) -> str | None:
     return str(safe)
 
 
-def _run_lease_seconds() -> float:
-    raw = os.getenv("PROXBOX_CEPH_RUN_LEASE_SECONDS", str(_DEFAULT_RUN_LEASE_SECONDS))
+async def _snapshot_run_lease_seconds(adapter: object | None = None) -> float:
+    """Resolve one bounded lease duration off-loop for the entire durable run."""
+
+    injected = getattr(adapter, "run_lease_seconds", None)
+    if injected is not None:
+        return _persisted_lease_seconds(injected)
+    return (await resolve_ceph_timing_settings()).run_lease_seconds
+
+
+def _persisted_lease_seconds(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return float(_DEFAULT_RUN_LEASE_SECONDS)
     try:
-        parsed = float(raw)
-    except ValueError:
+        parsed = float(value)
+    except (TypeError, ValueError):
         return float(_DEFAULT_RUN_LEASE_SECONDS)
     if not math.isfinite(parsed):
         return float(_DEFAULT_RUN_LEASE_SECONDS)
     return min(3600.0, max(1.0, parsed))
 
 
-def _lease_expiry(status: str, now: float) -> float | None:
-    return now + _run_lease_seconds() if status in {"running", "dispatching"} else None
+def _lease_expiry(status: str, now: float, lease_seconds: float) -> float | None:
+    return (
+        now + _persisted_lease_seconds(lease_seconds)
+        if status in {"running", "dispatching"}
+        else None
+    )
 
 
 def _lease_owner(status: str) -> str | None:
@@ -686,8 +741,18 @@ async def _create_run(
     warnings: list[str] | None = None,
     errors: list[str] | None = None,
     result_summary: dict[str, Any] | None = None,
+    lease_duration_seconds: float | None = None,
 ) -> CephOperationRunRecord:
     now = time.time()
+    resolved_lease_seconds = (
+        _persisted_lease_seconds(lease_duration_seconds)
+        if lease_duration_seconds is not None
+        else (
+            await _snapshot_run_lease_seconds()
+            if status in {"running", "dispatching"}
+            else float(_DEFAULT_RUN_LEASE_SECONDS)
+        )
+    )
     record = CephOperationRunRecord(
         id=str(uuid4()),
         plan_id=plan.id if plan is not None else None,
@@ -711,8 +776,9 @@ async def _create_run(
         provider_task_refs=[],
         created_at=now,
         updated_at=now,
-        lease_expires_at=_lease_expiry(status, now),
+        lease_expires_at=_lease_expiry(status, now, resolved_lease_seconds),
         lease_owner=_lease_owner(status),
+        lease_duration_seconds=resolved_lease_seconds,
         warnings=redact_secrets(warnings or []),
         errors=redact_secrets(errors or []),
         result_summary=redact_secrets(result_summary or {}),
@@ -760,6 +826,7 @@ async def _append_event_checkpoint(
     """
 
     now = time.time()
+    database_now = _DatabaseEpochSeconds()
     run_id = run_record.id
     previous_status = run_record.status
     expected_owner = run_record.lease_owner
@@ -777,7 +844,10 @@ async def _append_event_checkpoint(
         if result_summary is None
         else redact_secrets(result_summary)
     )
-    next_expiry = _lease_expiry(status, now)
+    lease_seconds = _persisted_lease_seconds(run_record.lease_duration_seconds)
+    database_next_expiry = (
+        database_now + lease_seconds if status in {"running", "dispatching"} else None
+    )
     next_owner = expected_owner if status in {"running", "dispatching"} else None
 
     if previous_status in {"running", "dispatching"}:
@@ -789,11 +859,11 @@ async def _append_event_checkpoint(
             .where(col(CephOperationRunRecord.id) == run_id)
             .where(col(CephOperationRunRecord.status).in_(("running", "dispatching")))
             .where(col(CephOperationRunRecord.lease_owner) == expected_owner)
-            .where(col(CephOperationRunRecord.lease_expires_at) > now)
+            .where(col(CephOperationRunRecord.lease_expires_at) > database_now)
             .values(
                 status=status,
-                updated_at=now,
-                lease_expires_at=next_expiry,
+                updated_at=database_now,
+                lease_expires_at=database_next_expiry,
                 lease_owner=next_owner,
                 provider_task_refs=next_task_refs,
                 warnings=next_warnings,
@@ -833,7 +903,7 @@ async def _append_event_checkpoint(
     if previous_status not in {"running", "dispatching"}:
         run_record.status = status
         run_record.updated_at = now
-        run_record.lease_expires_at = next_expiry
+        run_record.lease_expires_at = _lease_expiry(status, now, lease_seconds)
         run_record.lease_owner = next_owner
         run_record.provider_task_refs = next_task_refs
         run_record.warnings = next_warnings
@@ -908,17 +978,17 @@ async def _renew_run_lease(
     expected_owner = record.lease_owner
     if record.status not in {"running", "dispatching"} or not expected_owner:
         return False
-    now = time.time()
-    lease_seconds = _run_lease_seconds()
+    database_now = _DatabaseEpochSeconds()
+    lease_seconds = _persisted_lease_seconds(record.lease_duration_seconds)
     statement = (
         sa_update(CephOperationRunRecord)
         .where(col(CephOperationRunRecord.id) == record_id)
         .where(col(CephOperationRunRecord.status).in_(("running", "dispatching")))
         .where(col(CephOperationRunRecord.lease_owner) == expected_owner)
-        .where(col(CephOperationRunRecord.lease_expires_at) > now)
+        .where(col(CephOperationRunRecord.lease_expires_at) > database_now)
         .values(
-            updated_at=now,
-            lease_expires_at=now + lease_seconds,
+            updated_at=database_now,
+            lease_expires_at=database_now + lease_seconds,
         )
         .execution_options(synchronize_session=False)
     )
@@ -945,7 +1015,7 @@ async def recover_stale_operation_run(
     if record.status not in {"running", "dispatching"}:
         return record
     now = time.time()
-    legacy_cutoff = now - _run_lease_seconds()
+    legacy_cutoff = now - _persisted_lease_seconds(record.lease_duration_seconds)
     if record.lease_expires_at is not None and record.lease_expires_at > now:
         return record
     if record.lease_expires_at is None and record.updated_at > legacy_cutoff:
@@ -1424,6 +1494,7 @@ async def _consume_approval_and_create_run(
     *,
     plan: PlanResponse,
     request: ApplyRequest,
+    lease_duration_seconds: float,
 ) -> CephOperationRunRecord:
     """Atomically consume one bound approval and create its immutable audit run."""
 
@@ -1519,8 +1590,9 @@ async def _consume_approval_and_create_run(
         provider_task_refs=[],
         created_at=now,
         updated_at=now,
-        lease_expires_at=_lease_expiry("running", now),
+        lease_expires_at=_lease_expiry("running", now, lease_duration_seconds),
         lease_owner=_lease_owner("running"),
+        lease_duration_seconds=_persisted_lease_seconds(lease_duration_seconds),
         warnings=plan.warnings,
         errors=[],
         result_summary={},
@@ -1892,55 +1964,110 @@ async def _apply_with_lease_heartbeat(  # noqa: C901 - dispatch/heartbeat owners
     adapter: CephProviderAdapter,
     operation: ProviderOperation,
 ) -> dict[str, Any]:
-    """Await one SDK dispatch while renewing and verifying worker ownership."""
+    """Prepare, re-authorize, and dispatch while retaining worker ownership."""
 
-    interval = min(30.0, max(0.1, _run_lease_seconds() / 3))
+    prepared = await _await_with_lease_heartbeat(
+        session,
+        run_record,
+        lambda: _prepare_provider_dispatch(adapter, operation),
+    )
+    return await _await_with_lease_heartbeat(
+        session,
+        run_record,
+        prepared,
+    )
+
+
+async def _prepare_provider_dispatch(
+    adapter: CephProviderAdapter,
+    operation: ProviderOperation,
+) -> ProviderDispatch:
+    """Preserve legacy duck-typed adapters while using two-phase providers."""
+
+    adapter_mro = type(adapter).__mro__
+    apply_owner = next(
+        (position for position, owner in enumerate(adapter_mro) if "apply" in owner.__dict__),
+        len(adapter_mro),
+    )
+    prepare_owner = next(
+        (
+            position
+            for position, owner in enumerate(adapter_mro)
+            if "prepare_apply" in owner.__dict__
+        ),
+        len(adapter_mro),
+    )
+    if apply_owner < prepare_owner:
+
+        async def dispatch_override() -> dict[str, Any]:
+            return await adapter.apply(operation, confirm_destructive=True)
+
+        return dispatch_override
+
+    prepare = getattr(adapter, "prepare_apply", None)
+    if callable(prepare):
+        return await prepare(operation, confirm_destructive=True)
+
+    async def dispatch() -> dict[str, Any]:
+        return await adapter.apply(operation, confirm_destructive=True)
+
+    return dispatch
+
+
+async def _await_with_lease_heartbeat(  # noqa: C901 - lease/task ownership matrix
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    task_factory: Callable[[], Awaitable[_TaskResultT]],
+) -> _TaskResultT:
+    """Run one phase only while the current durable lease remains live."""
+
+    lease_seconds = _persisted_lease_seconds(run_record.lease_duration_seconds)
+    interval = min(30.0, max(0.1, lease_seconds / 3))
     # Capture the primary key before any renewal: a failed renewal has rolled
     # the session back, expiring ``run_record``, and reading ``.id`` off an
     # expired instance would lazy-load through the sync facade and raise
     # ``MissingGreenlet`` instead of the intended lease-lost error.
     run_record_id = run_record.id
-    dispatch_task = asyncio.create_task(adapter.apply(operation, confirm_destructive=True))
+    if not await _renew_run_lease(session, run_record):
+        raise _CephRunLeaseLost(run_record_id)
 
-    async def renew_lease() -> bool:
-        lock = getattr(adapter, "database_session_lock", None)
-        if lock is None:
-            return await _renew_run_lease(session, run_record)
-        async with lock:
-            return await _renew_run_lease(session, run_record)
+    async def run_phase() -> _TaskResultT:
+        return await task_factory()
+
+    phase_task = asyncio.create_task(run_phase())
 
     async def heartbeat() -> None:
         while True:
             await asyncio.sleep(interval)
-            if dispatch_task.done():
+            if phase_task.done():
                 return
-            if not await renew_lease():
+            if not await _renew_run_lease(session, run_record):
                 raise _CephRunLeaseLost(run_record_id)
 
     heartbeat_task = asyncio.create_task(heartbeat())
     try:
         done, _pending = await asyncio.wait(
-            {dispatch_task, heartbeat_task},
+            {phase_task, heartbeat_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
         if heartbeat_task in done:
             heartbeat_error = heartbeat_task.exception()
             if heartbeat_error is not None:
-                dispatch_task.cancel()
-                await asyncio.gather(dispatch_task, return_exceptions=True)
+                phase_task.cancel()
+                await asyncio.gather(phase_task, return_exceptions=True)
                 raise heartbeat_error
-        result = await dispatch_task
+        result = await phase_task
         # Do not let the background heartbeat use the same AsyncSession while
         # the foreground performs its final ownership check.
         if not heartbeat_task.done():
             heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
-        if not await renew_lease():
+        if not await _renew_run_lease(session, run_record):
             raise _CephRunLeaseLost(run_record_id)
         return result
     except asyncio.CancelledError:
-        dispatch_task.cancel()
-        await asyncio.gather(dispatch_task, return_exceptions=True)
+        phase_task.cancel()
+        await asyncio.gather(phase_task, return_exceptions=True)
         raise
     finally:
         heartbeat_task.cancel()
@@ -1955,33 +2082,13 @@ async def _wait_for_provider_task(
     node: str,
     upid: str,
 ) -> dict[str, Any]:
-    """Poll a submitted task while retaining one non-reclaimable run lease."""
+    """Poll a submitted task with an independent durable lease heartbeat."""
 
-    # Same expired-instance hazard as _apply_with_lease_heartbeat: a failed
-    # renewal has rolled the session back, so read the id before any renewal.
-    run_record_id = run_record.id
-
-    async def heartbeat() -> None:
-        lock = getattr(adapter, "database_session_lock", None)
-        if lock is None:
-            renewed = await _renew_run_lease(session, run_record)
-        else:
-            async with lock:
-                renewed = await _renew_run_lease(session, run_record)
-        if not renewed:
-            raise _CephRunLeaseLost(run_record_id)
-
-    if getattr(adapter, "supports_task_heartbeat", False):
-        outcome = await adapter.wait_for_terminal(
-            node,
-            upid,
-            heartbeat=heartbeat,
-        )
-    else:
-        await heartbeat()
-        outcome = await adapter.wait_for_terminal(node, upid)
-    await heartbeat()
-    return outcome
+    return await _await_with_lease_heartbeat(
+        session,
+        run_record,
+        lambda: adapter.wait_for_terminal(node, upid),
+    )
 
 
 async def _claim_and_checkpoint_provider_task(
@@ -2662,10 +2769,12 @@ async def apply_plan(
         )
 
     try:
+        lease_duration_seconds = await _snapshot_run_lease_seconds(adapter)
         run_record = await _consume_approval_and_create_run(
             session,
             plan=plan,
             request=request,
+            lease_duration_seconds=lease_duration_seconds,
         )
     except CephApprovalError as exc:
         raise CephApplyError(
