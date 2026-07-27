@@ -287,6 +287,14 @@ def _parse_db_endpoint(
     )
 
 
+def proxmox_session_schema_from_endpoint(
+    endpoint: ProxmoxEndpoint,
+) -> ProxmoxSessionSchema:
+    """Build API authority from one caller-owned endpoint snapshot."""
+
+    return _parse_db_endpoint(endpoint)
+
+
 def _decrypt_db_secret(
     *,
     endpoint: ProxmoxEndpoint,

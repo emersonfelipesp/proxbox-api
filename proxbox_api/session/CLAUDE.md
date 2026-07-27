@@ -39,5 +39,14 @@ Session management utilities for NetBox and Proxmox API clients.
   `SensitiveDataFilter` effective for deferred string, mapping, and exception
   arguments so access keys, private keys, URLs, and provider response bodies
   cannot be rendered after the call site.
+- Preserve structured connection details for callers while setting
+  `redact_log_details=True` for session-created exceptions so raw SDK error text
+  never enters constructor debug logs; owned log sites should emit error types only.
+- `ProxmoxSession.create()` owns every SDK client acquired during
+  initialization. Any `BaseException` from authentication or post-connect
+  metadata discovery must trigger one shielded `aclose()` before the original
+  failure is re-raised. Clear SDK ownership before invoking `close()` so cleanup
+  failure, cancellation, or repeated cleanup cannot dispatch a second close;
+  cleanup logs may contain only the exception type.
 - Keep dependency aliases in this package rather than duplicating them in route modules.
 - When adjusting NetBox client timeouts, update the root docs and any setup documentation that mentions the environment variable.

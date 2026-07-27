@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import ValidationError
 
+import proxbox_api.schemas.cloud_image_security as ssh_security
 import proxbox_api.schemas.cloud_provision as cloud_schema
+from proxbox_api.schemas.cloud_image_security import validate_ssh_identity_file_security
 from proxbox_api.schemas.cloud_provision import CloudImageTemplateBuildRequest
 
 PUBLIC_IMAGE_URL = "http://93.184.216.34/cloud.qcow2"
@@ -93,6 +97,56 @@ def test_ssh_identity_file_validator_rejects_path_escape(monkeypatch, tmp_path) 
 
     with pytest.raises(ValidationError, match="PROXBOX_SSH_KEY_DIR"):
         _request(ssh_identity_file=str(outside_file))
+
+
+def test_ssh_identity_file_validator_rejects_symlink(monkeypatch, tmp_path) -> None:
+    allowed_dir = tmp_path / "ssh_keys"
+    allowed_dir.mkdir()
+    target = allowed_dir / "actual_key"
+    target.write_text("private", encoding="utf-8")
+    target.chmod(0o600)
+    identity_file = allowed_dir / "id_ed25519"
+    identity_file.symlink_to(target)
+    monkeypatch.setenv("PROXBOX_SSH_KEY_DIR", str(allowed_dir))
+
+    with pytest.raises(ValidationError, match="symbolic link"):
+        _request(ssh_identity_file=str(identity_file))
+
+
+def test_execution_identity_check_rejects_group_permissions(monkeypatch, tmp_path) -> None:
+    allowed_dir = tmp_path / "ssh_keys"
+    allowed_dir.mkdir()
+    identity_file = allowed_dir / "id_ed25519"
+    identity_file.write_text("private", encoding="utf-8")
+    identity_file.chmod(0o640)
+    monkeypatch.setenv("PROXBOX_SSH_KEY_DIR", str(allowed_dir))
+
+    with pytest.raises(ValueError, match="group or world permissions"):
+        validate_ssh_identity_file_security(str(identity_file))
+
+
+def test_execution_identity_check_rejects_untrusted_owner(monkeypatch, tmp_path) -> None:
+    allowed_dir = tmp_path / "ssh_keys"
+    allowed_dir.mkdir()
+    identity_file = allowed_dir / "id_ed25519"
+    identity_file.write_text("private", encoding="utf-8")
+    identity_file.chmod(0o600)
+    monkeypatch.setenv("PROXBOX_SSH_KEY_DIR", str(allowed_dir))
+    real_fstat = ssh_security.os.fstat
+
+    def fake_fstat(fd: int):
+        metadata = real_fstat(fd)
+        return SimpleNamespace(
+            st_mode=metadata.st_mode,
+            st_uid=12345,
+            st_dev=metadata.st_dev,
+            st_ino=metadata.st_ino,
+        )
+
+    monkeypatch.setattr(ssh_security.os, "fstat", fake_fstat)
+
+    with pytest.raises(ValueError, match="owned by root or the service account"):
+        validate_ssh_identity_file_security(str(identity_file))
 
 
 def test_image_url_validator_accepts_public_url() -> None:

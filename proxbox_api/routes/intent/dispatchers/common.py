@@ -10,9 +10,16 @@ from proxbox_api.logger import logger
 from proxbox_api.services.verb_dispatch import build_journal_comments, utcnow_iso
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.utils.log_scrubbing import scrub_cloud_init
+from proxbox_api.utils.secret_keywords import SECRET_KEY_CORE, is_sensitive_key_name
 
-SENSITIVE_KEYS = {"password", "cipassword", "secret", "token"}
-PASSWORD_LINE_VALUE_RE = re.compile(r"(?im)\bpassword\s*:\s*([^\r\n]+)")
+# Capture the value following any shared secret keyword (dict-repr, `:`/`=`,
+# optionally quoted) so structured secrets can be cross-referenced out of a
+# free-text message.
+_SECRET_VALUE_RE = re.compile(
+    r"(?im)(?:"
+    + SECRET_KEY_CORE
+    + r")(?:[_-]?\d+)?['\"]?\s*[:=]\s*['\"]?(?P<value>[^\r\n,}\]\"']+)"
+)
 
 
 @dataclass(frozen=True)
@@ -46,7 +53,7 @@ def collect_sensitive_values(value: object) -> list[str]:
     found: list[str] = []
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if str(key).lower() in SENSITIVE_KEYS and isinstance(item, str) and item:
+            if is_sensitive_key_name(key) and isinstance(item, str) and item:
                 found.append(item)
             else:
                 found.extend(collect_sensitive_values(item))
@@ -54,21 +61,18 @@ def collect_sensitive_values(value: object) -> list[str]:
         for item in value:
             found.extend(collect_sensitive_values(item))
     elif isinstance(value, str):
-        for match in PASSWORD_LINE_VALUE_RE.finditer(value):
-            secret = match.group(1).strip().strip("\"'")
+        for match in _SECRET_VALUE_RE.finditer(value):
+            secret = match.group("value").strip().strip("\"'")
             if secret and secret != "***":
                 found.append(secret)
     return found
 
 
 def scrub_message(message: str, payload: object | None = None) -> str:
-    scrubbed = re.sub(
-        r"(?i)(password|cipassword|secret|token)([\"']?\s*[:=]\s*[\"']?)([^,\"'\s}\]]+)",
-        r"\1\2***",
-        message,
-    )
-    scrubbed_value = scrub_cloud_init({"message": scrubbed})["message"]
-    scrubbed = str(scrubbed_value)
+    # Route the message text through the shared cloud-init scrubber (which now
+    # covers the full secret keyword set), then string-replace any secret values
+    # collected from the structured payload as defense-in-depth.
+    scrubbed = str(scrub_cloud_init({"message": message})["message"])
     if payload is not None:
         for secret in collect_sensitive_values(payload):
             scrubbed = scrubbed.replace(secret, "***")

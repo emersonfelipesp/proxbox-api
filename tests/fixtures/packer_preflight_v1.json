@@ -1,0 +1,68 @@
+{
+  "contract_version": "1.0",
+  "endpoint_id": 7,
+  "target_node": "pve01",
+  "vmid": 9010,
+  "ready": true,
+  "writes_enabled": false,
+  "recipe_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "capabilities": [
+    {
+      "capability": "endpoint_session",
+      "status": "passed",
+      "target": "endpoint:7"
+    },
+    {
+      "capability": "node_online",
+      "status": "passed",
+      "target": "node:pve01"
+    },
+    {
+      "capability": "vm_storage_images",
+      "status": "passed",
+      "target": "storage:local-zfs"
+    },
+    {
+      "capability": "snippets_storage_snippets",
+      "status": "passed",
+      "target": "storage:local"
+    },
+    {
+      "capability": "vmid_available",
+      "status": "passed",
+      "target": "vmid:9010"
+    }
+  ],
+  "findings": [
+    {
+      "code": "endpoint_session_exact",
+      "severity": "info",
+      "target": "endpoint:7",
+      "message": "Exactly one enabled session matched the persisted endpoint."
+    },
+    {
+      "code": "node_online",
+      "severity": "info",
+      "target": "node:pve01",
+      "message": "The target node is online."
+    },
+    {
+      "code": "storage_compatible",
+      "severity": "info",
+      "target": "storage:local-zfs",
+      "message": "The storage supports required content type 'images'."
+    },
+    {
+      "code": "storage_compatible",
+      "severity": "info",
+      "target": "storage:local",
+      "message": "The storage supports required content type 'snippets'."
+    },
+    {
+      "code": "vmid_available",
+      "severity": "info",
+      "target": "vmid:9010",
+      "message": "The requested VMID is available."
+    }
+  ]
+}

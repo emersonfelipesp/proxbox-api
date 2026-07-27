@@ -50,6 +50,62 @@ def test_scrub_cloud_init_redacts_cipassword_in_error_strings():
         assert "***" in scrubbed["error"], text
 
 
+def test_scrub_cloud_init_redacts_non_password_secret_categories():
+    # Issue #272: call sites stringify errors as {"e"/"error": str(error)}, so
+    # only the free-text pass runs. It previously matched only (ci)password,
+    # leaking token/secret/authorization/ticket/client_secret and compound keys
+    # (access_token, secret_key) into 502 bodies / SSE frames / journal comments.
+    cases = [
+        ("token=tok-SEKRET", "tok-SEKRET"),
+        ("secret: sec-SEKRET", "sec-SEKRET"),
+        ("Authorization: Bearer bear-SEKRET", "bear-SEKRET"),
+        ("ticket=PVE:root@pam:tick-SEKRET", "tick-SEKRET"),
+        ("client_secret=oauth-SEKRET", "oauth-SEKRET"),
+        ("access_token=at-SEKRET", "at-SEKRET"),
+        ("secret_key=AKIA-SEKRET", "AKIA-SEKRET"),
+        ("private_key=PEM-SEKRET", "PEM-SEKRET"),
+        ("PVEAPIToken=PVE-SEKRET", "PVE-SEKRET"),
+        ("secret_key_2=ROT2-SEKRET", "ROT2-SEKRET"),
+        ("api_key2=ROTAPI-SEKRET", "ROTAPI-SEKRET"),
+    ]
+    for text, leaked in cases:
+        scrubbed = scrub_cloud_init({"e": text})
+        assert leaked not in scrubbed["e"], text
+        assert "***" in scrubbed["e"], text
+
+
+def test_scrub_cloud_init_redacts_compound_and_camelcase_dict_keys():
+    # is_sensitive_key_name covers the *_key family and camelCase/PascalCase
+    # canonical names (PVEAPIToken, apiToken) as dict keys; benign structural
+    # keys (sort_key) and non-secret fields (timeout) are left alone.
+    payload = {
+        "private_key": "PEM-SEKRET",
+        "PVEAPIToken": "PVE-SEKRET",
+        "apiToken": "AT-SEKRET",
+        "clientSecret": "CS-SEKRET",
+        "apiKey2": "AK2-SEKRET",
+        "sort_key": "keep-me",
+        "max_retries2": 3,
+        "timeout": 30,
+    }
+    scrubbed = scrub_cloud_init(payload)
+    assert scrubbed["private_key"] == "***"
+    assert scrubbed["PVEAPIToken"] == "***"
+    assert scrubbed["apiToken"] == "***"
+    assert scrubbed["clientSecret"] == "***"
+    assert scrubbed["apiKey2"] == "***"
+    assert scrubbed["sort_key"] == "keep-me"
+    assert scrubbed["max_retries2"] == 3
+    assert scrubbed["timeout"] == 30
+    assert "SEKRET" not in repr(scrubbed)
+
+
+def test_scrub_cloud_init_does_not_over_redact_non_secrets():
+    # A non-secret field and plain prose must pass through unchanged.
+    for text in ("timeout: 30", "token_count: 5", "operation completed cleanly"):
+        assert scrub_cloud_init({"e": text})["e"] == text
+
+
 async def test_write_verb_journal_entry_scrubs_comments_at_write_boundary(monkeypatch):
     captured: dict[str, object] = {}
 

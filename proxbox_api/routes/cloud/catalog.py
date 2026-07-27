@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from proxbox_api.schemas.cloud_provision import (
     CloudImageBuildProvider,
     CloudImageProductType,
+    CloudImageSourceBuildCommand,
     CloudImageVersionEntry,
 )
 
@@ -120,8 +121,8 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
                 "pfSense-CE-memstick-serial-2.8.1-RELEASE-amd64.img.gz"
             ),
             compression="gz",
-            source_tree_path="nmulticloud-context/pfsense",
-            source_build_command="./build.sh memstickserial",
+            source_tree_path="/opt/proxbox/image-sources/pfsense",
+            source_build_command=CloudImageSourceBuildCommand.PFSENSE_MEMSTICKSERIAL,
             notes="pfSense release-image URLs can be overridden per request.",
         ),
         CloudImageVersionEntry(
@@ -140,8 +141,8 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
                 "pfSense-CE-memstick-serial-2.8.0-RELEASE-amd64.img.gz"
             ),
             compression="gz",
-            source_tree_path="nmulticloud-context/pfsense",
-            source_build_command="./build.sh memstickserial",
+            source_tree_path="/opt/proxbox/image-sources/pfsense",
+            source_build_command=CloudImageSourceBuildCommand.PFSENSE_MEMSTICKSERIAL,
         ),
     ],
     CloudImageProductType.OPNSENSE: [
@@ -161,8 +162,8 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
                 "OPNsense-26.1-serial-amd64.img.bz2"
             ),
             compression="bz2",
-            source_tree_path="nmulticloud-context/opnsense",
-            source_build_command="make dvd",
+            source_tree_path="/opt/proxbox/image-sources/opnsense",
+            source_build_command=CloudImageSourceBuildCommand.OPNSENSE_DVD,
             notes=(
                 "Release images are installed from the 26.1 series and can be updated by "
                 "OPNsense after first boot."
@@ -185,8 +186,8 @@ PRODUCT_CATALOG: dict[CloudImageProductType, list[CloudImageVersionEntry]] = {
             ),
             sha256="aaca6d4c44371673c555be354317533cf91ced86fc86c026716325c29c451d79",
             compression="bz2",
-            source_tree_path="nmulticloud-context/opnsense",
-            source_build_command="make dvd",
+            source_tree_path="/opt/proxbox/image-sources/opnsense",
+            source_build_command=CloudImageSourceBuildCommand.OPNSENSE_DVD,
         ),
     ],
     CloudImageProductType.FIRECRACKER: [

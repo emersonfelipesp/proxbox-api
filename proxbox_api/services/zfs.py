@@ -19,6 +19,7 @@ from proxbox_api.schemas.zfs import (
 )
 from proxbox_api.services.proxmox_helpers import get_node_zfs_pool_detail, get_node_zfs_pools
 from proxbox_api.session.proxmox import ProxmoxSession
+from proxbox_api.utils.secret_keywords import SECRET_KEY_IDENT
 
 _DEFAULT_TIER_ORDER: tuple[ZfsTierName, ...] = ("proxmox_api", "influxdb", "ssh_cli")
 _MAX_VDEV_TREE_DEPTH = 64
@@ -66,9 +67,9 @@ _AUTH_SCHEME_TOKEN_PATTERN = re.compile(
 _SENSITIVE_JSON_VALUE_PATTERN = re.compile(
     r"""
     (?P<prefix>
-        "
-        (?:password|token_value|token|api_key|apikey|client_secret|secret|csrfpreventiontoken|cookie|authorization)
-        "
+        "(?:"""
+    + SECRET_KEY_IDENT
+    + r""")"
         \s*:\s*
     )
     (?:
@@ -86,10 +87,9 @@ _SENSITIVE_KEY_VALUE_PATTERN = re.compile(
     (?<![-\w])
     (?P<key>
         (?P<key_quote>["'])?
-        (?P<key_name>
-        password|passwd|pass|token(?:_value)?|api[_-]?key|csrfpreventiontoken|
-        cookie|secret|client[_-]?secret|authorization|ticket
-        )
+        (?P<key_name>"""
+    + SECRET_KEY_IDENT
+    + r""")
         (?(key_quote)(?P=key_quote))
     )
     (?![-\w])
