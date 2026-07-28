@@ -764,7 +764,12 @@ def test_proxmox_endpoint_requires_complete_token_pair(db_session):
         )
 
 
-def test_netbox_endpoint_crud_and_singleton_rule(db_session):
+def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
+    settings_cache_invalidations: list[None] = []
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.invalidate_settings_cache",
+        lambda: settings_cache_invalidations.append(None),
+    )
     payload = NetBoxEndpoint(
         name="netbox-primary",
         ip_address="1.1.1.3",
@@ -775,6 +780,7 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
     )
     created = asyncio.run(create_netbox_endpoint(payload, db_session))
     endpoint_id = created.id
+    assert len(settings_cache_invalidations) == 1
 
     with pytest.raises(HTTPException, match="Only one NetBox endpoint is allowed"):
         asyncio.run(
@@ -809,6 +815,7 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
         )
     )
     assert updated.name == "netbox-primary-updated"
+    assert len(settings_cache_invalidations) == 2
 
     retrieved = asyncio.run(get_netbox_endpoint(endpoint_id, db_session))
     assert retrieved.name == "netbox-primary-updated"
@@ -816,6 +823,7 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session):
     assert asyncio.run(delete_netbox_endpoint(endpoint_id, db_session)) == {
         "message": "NetBox Endpoint deleted."
     }
+    assert len(settings_cache_invalidations) == 3
 
 
 def test_netbox_endpoint_rejects_v1_without_token(db_session):
