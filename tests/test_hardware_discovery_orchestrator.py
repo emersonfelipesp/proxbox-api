@@ -172,9 +172,11 @@ async def test_success_emits_hardware_discovery_frame(
         netbox_session=MagicMock(),
         nodes=[{"id": 1, "name": "node-a", "host": "10.0.0.1", "cluster": "edge"}],
         bridge=bridge,
+        tag_refs=[{"name": "Proxbox", "slug": "proxbox"}],
     )
 
     assert patch_reflect.await_count == 1
+    assert patch_reflect.await_args.kwargs["tag_refs"] == [{"name": "Proxbox", "slug": "proxbox"}]
     assert len(bridge.frames) == 1
     kind, payload = bridge.frames[0]
     assert kind == "hardware_discovery"

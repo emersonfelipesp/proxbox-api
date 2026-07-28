@@ -71,6 +71,7 @@ def _install(monkeypatch, *, mac_side_effect: Exception | None = None):
     monkeypatch.setattr(
         "proxbox_api.services.sync.mac_address.reconcile_mac_for_interface", fake_mac
     )
+    monkeypatch.setattr(hardware_discovery, "nic_mac_sync_enabled", lambda: True)
     return patches, macs
 
 
@@ -82,6 +83,7 @@ async def test_reflect_sets_primary_mac_for_physical_nic(monkeypatch):
         11,
         FakeFacts(nics=(FakeNic(name="eno1", mac_address="a0:42:3f:4c:61:aa"),)),
         interface_lookup={"eno1": 42},
+        tag_refs=[{"name": "Proxbox", "slug": "proxbox"}],
     )
 
     assert len(macs) == 1
@@ -90,6 +92,7 @@ async def test_reflect_sets_primary_mac_for_physical_nic(monkeypatch):
     assert macs[0]["assigned_object_id"] == 42
     # Must target dcim, not the virtualization interface path.
     assert macs[0]["interface_list_path"] == "/api/dcim/interfaces/"
+    assert macs[0]["tag_refs"] == [{"name": "Proxbox", "slug": "proxbox"}]
 
     # The pre-existing speed/duplex/link reflection is untouched.
     iface_patch = [p for p in patches if p[0] == "/api/dcim/interfaces/"]
@@ -110,6 +113,42 @@ async def test_reflect_skips_mac_when_nic_has_none(monkeypatch):
     assert macs == []
     # The custom-field reflection still ran.
     assert any(p[0] == "/api/dcim/interfaces/" for p in patches)
+
+
+async def test_reflect_skips_mac_when_dedicated_opt_in_is_disabled(monkeypatch):
+    patches, macs = _install(monkeypatch)
+    monkeypatch.setattr(hardware_discovery, "nic_mac_sync_enabled", lambda: False)
+
+    await hardware_discovery.reflect_to_netbox(
+        object(),
+        11,
+        FakeFacts(nics=(FakeNic(name="eno1", mac_address="AA:BB:CC:DD:EE:01"),)),
+        interface_lookup={"eno1": 42},
+    )
+
+    assert macs == []
+    assert any(p[0] == "/api/dcim/interfaces/" for p in patches)
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, False),
+        ({"hardware_discovery_enabled": True}, False),
+        ({"hardware_discovery_sync_nic_macs": True}, False),
+        (
+            {
+                "hardware_discovery_enabled": True,
+                "hardware_discovery_sync_nic_macs": True,
+            },
+            True,
+        ),
+    ],
+)
+def test_physical_nic_mac_sync_requires_both_opt_ins(monkeypatch, settings, expected):
+    monkeypatch.setattr(hardware_discovery, "get_settings", lambda: settings)
+
+    assert hardware_discovery.nic_mac_sync_enabled() is expected
 
 
 async def test_reflect_mac_failure_does_not_abort_remaining_nics(monkeypatch):

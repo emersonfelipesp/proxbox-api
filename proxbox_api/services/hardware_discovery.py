@@ -48,6 +48,7 @@ __all__ = [
     "NodeSSHCredential",
     "fetch_credential",
     "is_enabled",
+    "nic_mac_sync_enabled",
     "reflect_to_netbox",
     "run_for_nodes",
 ]
@@ -88,6 +89,19 @@ def is_enabled() -> bool:
     """
     settings = get_settings()
     return bool(settings.get("hardware_discovery_enabled", False))
+
+
+def nic_mac_sync_enabled() -> bool:
+    """Return whether physical-NIC MAC reconciliation was explicitly enabled.
+
+    The dedicated flag composes with the hardware-discovery master gate. A
+    missing field from an older netbox-proxbox release is deliberately false,
+    keeping upgrades and mixed-version deployments write-neutral.
+    """
+    settings = get_settings()
+    return bool(settings.get("hardware_discovery_enabled", False)) and bool(
+        settings.get("hardware_discovery_sync_nic_macs", False)
+    )
 
 
 def _credential_url(base_url: str, node_id: int) -> str:
@@ -186,13 +200,20 @@ def fetch_credential(  # noqa: C901 — sequential transport branches read top-d
     return _coerce_credential(node_id, host, payload)
 
 
-async def _reflect_nic_mac(netbox_session: Api, nic: Any, iface_id: int) -> None:
+async def _reflect_nic_mac(
+    netbox_session: Api,
+    nic: Any,
+    iface_id: int,
+    *,
+    tag_refs: list[dict[str, object]] | None = None,
+) -> None:
     """Store a discovered NIC MAC as the interface's ``primary_mac_address``.
 
     Reuses the same reconciler ``sync_node_network()`` uses for bridge/bond
     ``hwaddress`` MACs, so physical and virtual interfaces end up with
-    identical ``dcim.MACAddress`` rows. No-ops when the NIC has no MAC, and
-    never raises: a MAC failure must not abort the discovery run.
+    identical ``dcim.MACAddress`` rows, including the sync's Proxbox tag.
+    No-ops when the NIC has no MAC, and never raises: a MAC failure must not
+    abort the discovery run.
     """
     from proxbox_api.services.sync.mac_address import (
         DCIM_INTERFACE_CONTENT_TYPE,
@@ -209,6 +230,7 @@ async def _reflect_nic_mac(netbox_session: Api, nic: Any, iface_id: int) -> None
             assigned_object_type=DCIM_INTERFACE_CONTENT_TYPE,
             assigned_object_id=iface_id,
             interface_list_path="/api/dcim/interfaces/",
+            tag_refs=tag_refs,
         )
     except Exception as mac_exc:  # noqa: BLE001 — reflect failure must not break the run
         logger.warning(
@@ -224,6 +246,8 @@ async def reflect_to_netbox(
     node_id: int,
     facts: Any,
     interface_lookup: dict[str, int] | None = None,
+    *,
+    tag_refs: list[dict[str, object]] | None = None,
 ) -> None:
     """Reflect parsed :class:`HardwareFacts` onto NetBox custom fields.
 
@@ -233,13 +257,16 @@ async def reflect_to_netbox(
     matching interface are silently skipped (the device-sync pass owns
     interface lifecycle).
 
-    Discovered NIC MACs are also reconciled into ``dcim.MACAddress`` rows and
-    set as ``primary_mac_address``. This is the only path that can populate a
+    When both hardware-discovery settings are explicitly enabled, discovered
+    NIC MACs are reconciled into ``dcim.MACAddress`` rows and set as
+    ``primary_mac_address``. This is the only path that can populate a
     *physical* NIC's MAC: ``/nodes/{node}/network`` exposes ``hwaddress`` for
     bridges/bonds only, so the API-only node-network sync leaves ``eno1``-style
-    interfaces without one.
+    interfaces without one. The dedicated MAC opt-in defaults to false.
     """
     from proxbox_api.netbox_rest import rest_list_async, rest_patch_async
+
+    reflect_nic_macs = nic_mac_sync_enabled()
 
     chassis_payload: dict[str, object] = {
         "custom_fields": {
@@ -304,7 +331,13 @@ async def reflect_to_netbox(
             iface_payload,
         )
 
-        await _reflect_nic_mac(netbox_session, nic, int(iface_id))
+        if reflect_nic_macs:
+            await _reflect_nic_mac(
+                netbox_session,
+                nic,
+                int(iface_id),
+                tag_refs=tag_refs,
+            )
 
 
 async def run_for_nodes(  # noqa: C901 — sequential per-node state machine with named branches
@@ -313,6 +346,7 @@ async def run_for_nodes(  # noqa: C901 — sequential per-node state machine wit
     *,
     bridge: WebSocketSSEBridge | None = None,
     interface_lookup_by_node: dict[int, dict[str, int]] | None = None,
+    tag_refs: list[dict[str, object]] | None = None,
 ) -> None:
     """Run hardware discovery for every node, sequentially.
 
@@ -497,6 +531,7 @@ async def run_for_nodes(  # noqa: C901 — sequential per-node state machine wit
                 node_id,
                 facts,
                 interface_lookup=interface_lookup_by_node.get(node_id),
+                tag_refs=tag_refs,
             )
         except Exception as exc:  # noqa: BLE001 — reflect failure must not break the run
             logger.warning("Hardware discovery reflect failed for %s: %s", node_name, exc)

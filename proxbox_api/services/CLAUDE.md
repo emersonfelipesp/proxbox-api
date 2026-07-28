@@ -33,8 +33,11 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   chassis/NIC custom fields and, via `_reflect_nic_mac()`, the physical-NIC MAC
   as a native `dcim.MACAddress` plus `primary_mac_address`. It reuses
   `sync/mac_address.py::reconcile_mac_for_interface` so physical and
-  bridge/bond MACs are stored identically. A MAC failure warns and never aborts
-  the run.
+  bridge/bond MACs are stored identically and receive the same Proxbox tag.
+  The native MAC write requires both
+  `hardware_discovery_enabled` and the separate default-off
+  `hardware_discovery_sync_nic_macs` UI setting. A missing setting is false; a
+  MAC failure warns and never aborts the run.
 - `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue
