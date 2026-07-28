@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 import time
 from collections.abc import AsyncGenerator, Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any, ClassVar
 
@@ -42,6 +44,37 @@ async_engine = create_async_engine(async_sqlite_url, connect_args=connect_args)
 async_session_factory = async_sessionmaker(
     async_engine, class_=AsyncSession, expire_on_commit=False
 )
+
+
+@contextmanager
+def _database_bootstrap_lock(
+    lock_path: Path | None = None,
+) -> Generator[None, None, None]:
+    """Serialize SQLite DDL across Uvicorn worker processes.
+
+    ``MetaData.create_all(checkfirst=True)`` checks for a missing table before
+    issuing ``CREATE TABLE``.  Separate worker processes can both pass that
+    check and then race on the same SQLite file, leaving one worker's bootstrap
+    failed even though the other completed the schema.  A sibling advisory
+    lock covers the complete create-and-migrate sequence.  The kernel releases
+    the lock automatically if a worker exits.
+
+    Non-SQLite engines do not use this local-file lock.
+    """
+    if engine.dialect.name != "sqlite":
+        yield
+        return
+
+    resolved_path = lock_path or sqlite_file_name.with_name(
+        f"{sqlite_file_name.name}.bootstrap.lock"
+    )
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    with resolved_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ARG001
@@ -1026,17 +1059,18 @@ def _migrate_ceph_external_cluster_columns() -> None:
 
 
 def create_db_and_tables() -> None:
-    SQLModel.metadata.create_all(engine)
-    _migrate_api_key_bootstrap_claim()
-    _migrate_proxmox_endpoint_columns()
-    _migrate_netbox_endpoint_columns()
-    _migrate_deletion_request_columns()
-    _migrate_pbs_endpoint_columns()
-    _migrate_pdm_endpoint_columns()
-    _migrate_ceph_operation_run_columns()
-    _migrate_prometheus_source_columns()
-    _migrate_ceph_dashboard_endpoint_columns()
-    _migrate_ceph_external_cluster_columns()
+    with _database_bootstrap_lock():
+        SQLModel.metadata.create_all(engine)
+        _migrate_api_key_bootstrap_claim()
+        _migrate_proxmox_endpoint_columns()
+        _migrate_netbox_endpoint_columns()
+        _migrate_deletion_request_columns()
+        _migrate_pbs_endpoint_columns()
+        _migrate_pdm_endpoint_columns()
+        _migrate_ceph_operation_run_columns()
+        _migrate_prometheus_source_columns()
+        _migrate_ceph_dashboard_endpoint_columns()
+        _migrate_ceph_external_cluster_columns()
 
 
 def get_session() -> Generator[Session, None, None]:

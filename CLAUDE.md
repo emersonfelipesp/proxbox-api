@@ -231,6 +231,10 @@ repository under `/opt/nmulticloud/deploy`:
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
 - Runtime secrets: `/etc/nms/proxbox-api-production.env`
 - SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
+- SQLite schema bootstrap is process-safe: all Uvicorn workers serialize
+  `create_all()` plus legacy column migrations through the adjacent
+  `database.db.bootstrap.lock` advisory lock. The lock file carries no state and
+  is kernel-released on worker exit; it must share the SQLite filesystem.
 - Staging compose project: `nmc-proxbox-api-staging`
 - Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
 - Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`
