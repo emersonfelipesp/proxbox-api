@@ -732,6 +732,7 @@ def test_unscoped_task_history_ignores_unmanaged_vm_after_successful_sidecar_sca
 ):
     vms = [
         {"id": 501, "name": "owned"},
+        {"id": 998, "name": "retired-owned"},
         {"id": 999, "name": "manually-managed"},
     ]
 
@@ -747,6 +748,12 @@ def test_unscoped_task_history_ignores_unmanaged_vm_after_successful_sidecar_sca
                     "proxmox_endpoint_raw_id": 11,
                     "proxmox_vm_type": "qemu",
                     "proxmox_cluster_name": "lab",
+                },
+                {
+                    "virtual_machine": {"id": 998},
+                    "proxmox_vm_id": 202,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_cluster_name": "retired-lab",
                 },
             )
         )
@@ -783,7 +790,7 @@ def test_unscoped_task_history_ignores_unmanaged_vm_after_successful_sidecar_sca
         )
     )
 
-    assert result == {"count": 1, "created": 1, "skipped": 1}
+    assert result == {"count": 1, "created": 1, "skipped": 2}
 
 
 @pytest.mark.parametrize("legacy_fallback_enabled", [False, True])
@@ -840,7 +847,7 @@ def test_selected_task_history_missing_identity_is_fatal(
             {
                 "virtual_machine": {"id": 501},
                 "proxmox_vm_id": 101,
-                "proxmox_endpoint_raw_id": 22,
+                "proxmox_endpoint_raw_id": 11,
                 "proxmox_vm_type": "qemu",
                 "proxmox_cluster_name": "lab",
             },
@@ -884,6 +891,41 @@ def test_present_invalid_sidecar_never_falls_back_to_enabled_custom_fields(
                 cluster_status=[
                     SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
                 ],
+            )
+        )
+
+    assert "Refusing legacy custom-field fallback" in str(exc_info.value.detail)
+
+
+def test_selected_task_history_keeps_retired_malformed_sidecar_strict(monkeypatch):
+    async def _list_vms(*_args, **_kwargs):
+        return [{"id": 998, "name": "retired-selected"}]
+
+    async def _scan(_nb: object) -> VMSyncStateIdentityScan:
+        return VMSyncStateIdentityScan(
+            rows=(
+                {
+                    "virtual_machine": {"id": 998},
+                    "proxmox_vm_id": 202,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_cluster_name": "retired-lab",
+                },
+            )
+        )
+
+    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
+    monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
+    monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
+
+    with pytest.raises(ProxboxException, match="Unable to verify VM identity") as exc_info:
+        asyncio.run(
+            sync_all_virtual_machine_task_histories(
+                netbox_session=object(),
+                pxs=[SimpleNamespace(db_endpoint_id=11)],
+                cluster_status=[
+                    SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
+                ],
+                netbox_vm_ids=[998],
             )
         )
 

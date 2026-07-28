@@ -92,6 +92,12 @@ publishes the degraded phase summary. Selected NetBox ID lookups use bounded
 repeated-value chunks and fail closed if any chunk cannot be read. See
 [Task History Synchronization](./task-history.md).
 
+Unselected aggregate task-history runs validate sidecar identity only within
+the active `(endpoint, cluster)` session scopes. Retired endpoint-less rows from
+unrelated clusters are unmanaged for that run and are skipped; malformed or
+duplicate identity inside an active scope still fails closed. Explicit NetBox
+VM selections remain strict regardless of scope.
+
 ### Parallelism Rules
 
 Allowed in parallel:

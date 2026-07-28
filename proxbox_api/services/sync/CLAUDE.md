@@ -82,6 +82,10 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   do the same, while unrelated archive VMIDs are normal skips. Fatal
   identity/total-coverage/pagination/reconcile failures raise
   `ProxboxException`, and cancellation must propagate before reconciliation.
+  Unselected aggregates scope authoritative sidecar validation to the active
+  `(endpoint, cluster)` sessions, so retired endpoint-less rows outside those
+  clusters are ignored. Active-scope corruption and all explicitly selected VM
+  identity gaps remain fail-closed.
 - `virtual_disks.py` resolves VM config targets from live Proxmox
   `cluster/resources` VMID/type data before falling back to NetBox VM custom
   fields or `device.name`; this avoids disk sync calls against stale or FQDN
