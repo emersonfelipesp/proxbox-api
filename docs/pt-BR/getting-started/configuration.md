@@ -5,6 +5,10 @@
 ## Localizacao do banco
 
 - Arquivo SQLite padrao: `database.db` na raiz do repositorio.
+- A inicializacao com varios workers serializa a criacao e as migracoes do
+  schema com um lock consultivo adjacente `database.db.bootstrap.lock`. O lock
+  nao contem dados e e liberado automaticamente pelo kernel quando o worker
+  termina; mantenha-o no mesmo sistema de arquivos local do banco SQLite.
 - ORM: SQLModel.
 - As tabelas sao criadas automaticamente no startup.
 

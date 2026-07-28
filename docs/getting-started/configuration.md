@@ -5,6 +5,10 @@
 ## Database Location
 
 - Default SQLite file: `database.db` in the repository root.
+- Multi-worker startup serializes schema creation and migrations with a sibling
+  `database.db.bootstrap.lock` advisory lock. The lock contains no data and the
+  kernel releases it automatically when a worker exits; keep it on the same
+  local filesystem as the SQLite database.
 - ORM: SQLModel.
 - Tables are created automatically at startup.
 
