@@ -82,6 +82,10 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   do the same, while unrelated archive VMIDs are normal skips. Fatal
   identity/total-coverage/pagination/reconcile failures raise
   `ProxboxException`, and cancellation must propagate before reconciliation.
+  Unselected aggregates scope authoritative sidecar validation to the active
+  `(endpoint, cluster)` sessions, so retired endpoint-less rows outside those
+  clusters are ignored. Active-scope corruption and all explicitly selected VM
+  identity gaps remain fail-closed.
 - `virtual_disks.py` resolves VM config targets from live Proxmox
   `cluster/resources` VMID/type data before falling back to NetBox VM custom
   fields or `device.name`; this avoids disk sync calls against stale or FQDN
@@ -106,6 +110,11 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   IPs onto a VM and returns `assigned_to_other_object` instead of stealing an
   address owned elsewhere. This prevents the "VM interface wrongly matched to
   another server's IP" defect; both paths stay idempotent across re-syncs.
+- **Node-interface type wire invariant.**
+  `network.py::sync_node_interface_and_ip` must serialize
+  `NetBoxInterfaceType` through `.value` before REST reconciliation. NetBox
+  accepts `bridge`, `lag`, `virtual`, `loopback`, and `other`; Python enum
+  labels such as `netboxinterfacetype.bridge` are invalid API choices.
 - **Cluster/site placement invariant.** After cluster reconciliation, dependent
   device and VM writes use `device_ensure._effective_cluster_site_id()` so a
   cluster's actual `dcim.site` scope wins over a stale endpoint/default site.

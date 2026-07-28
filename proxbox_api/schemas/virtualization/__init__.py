@@ -178,7 +178,7 @@ class VMConfig(BaseModel):
     # ------------------------------------------------------------------ #
     # Advanced / vendor-specific (Proxmox API uses dash-names for these)
     # ------------------------------------------------------------------ #
-    allow_ksm: str | None = Field(None, alias="allow-ksm")
+    allow_ksm: bool | None = Field(None, alias="allow-ksm")
     amd_sev: str | None = Field(None, alias="amd-sev")
     intel_tdx: str | None = Field(None, alias="intel-tdx")
     running_nets_host_mtu: str | None = Field(None, alias="running-nets-host-mtu")
@@ -215,6 +215,7 @@ class VMConfig(BaseModel):
         "tablet",
         "tdf",
         "template",
+        "allow_ksm",
         mode="before",
     )
     @classmethod

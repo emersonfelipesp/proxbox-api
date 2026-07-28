@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from proxbox_api.enum.status_mapping import NetBoxInterfaceType
+import pytest
+
 from proxbox_api.routes.dcim import create_all_device_interfaces, create_proxmox_device_interfaces
 from proxbox_api.routes.proxmox.nodes import ProxmoxNodeInterfaceSchema
 from proxbox_api.schemas.proxmox import ClusterNodeStatusSchema, ClusterStatusSchema
@@ -114,7 +115,7 @@ def test_batch_node_interface_sync_fetches_per_node_network_and_uses_device_name
                 "device": 42,
                 "name": "eno1",
                 "status": "active",
-                "type": NetBoxInterfaceType.other,
+                "type": "other",
                 "untagged_vlan": None,
                 "mode": None,
                 "tags": [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
@@ -307,7 +308,7 @@ def test_named_node_interface_sync_resolves_same_name_device_by_cluster_site(
                 "device": 2002,
                 "name": "eno1",
                 "status": "active",
-                "type": NetBoxInterfaceType.other,
+                "type": "other",
                 "untagged_vlan": None,
                 "mode": None,
                 "tags": [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
@@ -317,7 +318,21 @@ def test_named_node_interface_sync_resolves_same_name_device_by_cluster_site(
     assert list_calls == [("/api/virtualization/clusters/", {"name": "lab-b", "limit": 2})]
 
 
-def test_node_interface_reconcile_uses_strict_device_scoped_lookup(monkeypatch):
+@pytest.mark.parametrize(
+    ("proxmox_type", "netbox_type"),
+    [
+        ("bridge", "bridge"),
+        ("bond", "lag"),
+        ("vlan", "virtual"),
+        ("lo", "loopback"),
+        ("eth", "other"),
+    ],
+)
+def test_node_interface_reconcile_uses_wire_type_and_strict_device_scoped_lookup(
+    monkeypatch,
+    proxmox_type: str,
+    netbox_type: str,
+):
     reconcile_calls: list[dict[str, object]] = []
 
     async def _fake_reconcile(_nb, path, *, lookup, payload, **kwargs):
@@ -341,7 +356,7 @@ def test_node_interface_reconcile_uses_strict_device_scoped_lookup(monkeypatch):
             nb=object(),
             device={"id": 202, "name": "pve-b"},
             interface_name="eno1",
-            interface_config={"type": "eth"},
+            interface_config={"type": proxmox_type},
             tag_refs=[],
         )
     )
@@ -355,7 +370,7 @@ def test_node_interface_reconcile_uses_strict_device_scoped_lookup(monkeypatch):
                 "device": 202,
                 "name": "eno1",
                 "status": "active",
-                "type": NetBoxInterfaceType.other,
+                "type": netbox_type,
                 "untagged_vlan": None,
                 "mode": None,
                 "tags": [],

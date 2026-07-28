@@ -25,6 +25,11 @@ Current execution order:
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 
+The node-interface stage maps Proxmox interface kinds to NetBox REST choice
+values at the write boundary: `bridge`, `lag`, `virtual`, `loopback`, or
+`other`. Python enum names are internal implementation details and must never
+be sent in a `dcim.Interface.type` payload.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:
@@ -86,6 +91,12 @@ owned degraded aggregate to HTTP 502 after retaining reconciled rows, while SSE
 publishes the degraded phase summary. Selected NetBox ID lookups use bounded
 repeated-value chunks and fail closed if any chunk cannot be read. See
 [Task History Synchronization](./task-history.md).
+
+Unselected aggregate task-history runs validate sidecar identity only within
+the active `(endpoint, cluster)` session scopes. Retired endpoint-less rows from
+unrelated clusters are unmanaged for that run and are skipped; malformed or
+duplicate identity inside an active scope still fails closed. Explicit NetBox
+VM selections remain strict regardless of scope.
 
 ### Parallelism Rules
 

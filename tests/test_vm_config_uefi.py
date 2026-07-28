@@ -171,18 +171,26 @@ def test_vm_config_accepts_dynamic_numbered_field(key: str, value: str) -> None:
 @pytest.mark.parametrize(
     "key,value",
     [
+        ("allow-ksm", True),
         ("allow-ksm", "1"),
         ("amd-sev", "type=snp"),
         ("intel-tdx", "1"),
         ("running-nets-host-mtu", "net0=1500"),
     ],
 )
-def test_vm_config_accepts_hyphenated_field(key: str, value: str) -> None:
+def test_vm_config_accepts_hyphenated_field(key: str, value: object) -> None:
     """Fields with dash-aliases in the Proxmox API must not be rejected."""
     cfg = VMConfig.model_validate({"digest": "abc", key: value})
     # The value is accessible via model_extra since the Python field name uses underscores
     # but the alias is a dash-name.  Both should resolve without error.
     assert cfg is not None
+
+
+def test_vm_config_preserves_native_allow_ksm_boolean_in_response_dump() -> None:
+    cfg = VMConfig.model_validate({"digest": "abc", "allow-ksm": False})
+
+    assert cfg.allow_ksm is False
+    assert cfg.model_dump(by_alias=True)["allow-ksm"] is False
 
 
 # ---------------------------------------------------------------------------
