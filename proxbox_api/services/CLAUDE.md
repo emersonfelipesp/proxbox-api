@@ -28,6 +28,16 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   It preserves valid-empty versus malformed collection semantics so malformed
   payloads fail closed, and it requires affirmative storage health state. It
   must remain usable when endpoint writes are disabled.
+- `hardware_discovery.py`: opt-in SSH node hardware discovery
+  (`dmidecode`/`ip`/`ethtool` allowlist). `reflect_to_netbox()` writes
+  chassis/NIC custom fields and, via `_reflect_nic_mac()`, the physical-NIC MAC
+  as a native `dcim.MACAddress` plus `primary_mac_address`. It reuses
+  `sync/mac_address.py::reconcile_mac_for_interface` so physical and
+  bridge/bond MACs are stored identically and receive the same Proxbox tag.
+  The native MAC write requires both
+  `hardware_discovery_enabled` and the separate default-off
+  `hardware_discovery_sync_nic_macs` UI setting. A missing setting is false; a
+  MAC failure warns and never aborts the run.
 - `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue

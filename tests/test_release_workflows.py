@@ -41,6 +41,20 @@ def test_ci_e2e_uses_http_mock_for_container_path_and_backend_mock_separately():
     assert 'uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v' in workflow
 
 
+def test_ci_e2e_explicitly_opts_into_legacy_custom_field_coverage():
+    workflow = _read(CI_WORKFLOW_PATH)
+    e2e_block = workflow.split("e2e-docker:", 1)[1]
+
+    _assert_order(
+        e2e_block,
+        "Wait for NetBox and create API token",
+        '"${{ matrix.netbox_public_url }}/api/plugins/proxbox/settings/"',
+        "--data '{\"custom_fields_enabled\":true}'",
+        "Create Proxbox custom fields in NetBox",
+        'uv run pytest tests/e2e/ -m "mock_http" --tb=short -v',
+    )
+
+
 def test_primary_ci_enforces_repository_coverage_ratchet():
     workflow = yaml.safe_load(_read(CI_WORKFLOW_PATH))
     test_steps = {

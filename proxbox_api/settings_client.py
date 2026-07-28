@@ -135,6 +135,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "default_role_qemu_id": None,
         "default_role_lxc_id": None,
         "hardware_discovery_enabled": False,
+        "hardware_discovery_sync_nic_macs": False,
         "cloud_network_lock_enabled": False,
         "cloud_customer_prefix_id": None,
         "cloud_customer_bridge": "",
@@ -428,6 +429,10 @@ def fetch_settings_from_netbox(  # noqa: C901
             "default_role_lxc_id": _coerce_role_id(settings.get("default_role_lxc")),
             "hardware_discovery_enabled": _coerce_bool(
                 settings.get("hardware_discovery_enabled"), default=False
+            ),
+            "hardware_discovery_sync_nic_macs": _coerce_bool(
+                settings.get("hardware_discovery_sync_nic_macs"),
+                default=False,
             ),
             "cloud_network_lock_enabled": _coerce_bool(
                 settings.get("cloud_network_lock_enabled"),

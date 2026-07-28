@@ -21,6 +21,7 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["reconciliation_engine"] == "python"
     assert settings["reconciliation_compare_strict"] is False
     assert settings["custom_fields_enabled"] is False
+    assert settings["hardware_discovery_sync_nic_macs"] is False
     assert settings["netbox_openapi_persist"] is True
     assert settings["cloud_network_lock_enabled"] is False
     assert settings["cloud_customer_prefix_id"] is None
@@ -60,6 +61,8 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "reconciliation_engine": "rust",
         "reconciliation_compare_strict": True,
         "custom_fields_enabled": True,
+        "hardware_discovery_enabled": True,
+        "hardware_discovery_sync_nic_macs": True,
         "cloud_network_lock_enabled": True,
         "cloud_customer_prefix_id": 321,
         "cloud_customer_bridge": "vmbr1",
@@ -89,6 +92,8 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["reconciliation_engine"] == "rust"
     assert settings["reconciliation_compare_strict"] is True
     assert settings["custom_fields_enabled"] is True
+    assert settings["hardware_discovery_enabled"] is True
+    assert settings["hardware_discovery_sync_nic_macs"] is True
     assert settings["cloud_network_lock_enabled"] is True
     assert settings["cloud_customer_prefix_id"] == 321
     assert settings["cloud_customer_bridge"] == "vmbr1"

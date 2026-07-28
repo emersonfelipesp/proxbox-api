@@ -354,6 +354,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 | n/a | `custom_fields_enabled` | false (deprecated legacy reflection custom fields; sidecars are standard. No env override.) |
+| n/a | `hardware_discovery_sync_nic_macs` | false (plugin-only; requires `hardware_discovery_enabled=true`; missing/older plugin field is false.) |
 
 ### Task-history sync ownership
 
