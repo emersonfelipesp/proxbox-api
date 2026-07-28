@@ -13,7 +13,7 @@ from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
 from proxbox_api.session.netbox import invalidate_netbox_api_cache
-from proxbox_api.settings_client import get_settings
+from proxbox_api.settings_client import get_settings, invalidate_settings_cache
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
@@ -138,6 +138,8 @@ async def create_netbox_endpoint(
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(db_endpoint))
     clear_endpoint_cache()
+    invalidate_netbox_api_cache(db_endpoint.id)
+    invalidate_settings_cache()
     return NetBoxEndpointResponse.model_validate(db_endpoint)
 
 
@@ -213,6 +215,7 @@ async def update_netbox_endpoint(
     await _maybe_await(session.refresh(db_netbox))
     clear_endpoint_cache()
     invalidate_netbox_api_cache(db_netbox.id)
+    invalidate_settings_cache()
     return NetBoxEndpointResponse.model_validate(db_netbox)
 
 
@@ -226,6 +229,7 @@ async def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
     await _maybe_await(session.commit())
     clear_endpoint_cache()
     invalidate_netbox_api_cache(deleted_id)
+    invalidate_settings_cache()
     return {"message": "NetBox Endpoint deleted."}
 
 
