@@ -96,6 +96,9 @@ Main synchronization endpoints for virtual machines and related resources.
   CPU validation/payload building and NetBox dependency calls out of the fetch
   semaphore so pending Proxmox HTTP responses are drained promptly and aiohttp
   wall-clock timeouts do not fire while other slots are doing CPU or NetBox work.
+  Each config request also has an independent wall-clock deadline from
+  `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` (default 30 seconds). A timed-out VM
+  is counted as failed while the remaining batch reaches a terminal summary.
 - **VM lookups are scoped by `(proxmox_endpoint_id, vmid)` first (issue #255).**
   Proxmox `vmid` values can repeat across standalone endpoints, even when those
   endpoints have no shared NetBox cluster identity. The VM snapshot index is

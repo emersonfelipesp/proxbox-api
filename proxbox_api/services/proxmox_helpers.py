@@ -9,7 +9,7 @@ from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypeVar
+from typing import TypeVar, get_args
 
 from proxmox_sdk.sdk.exceptions import (
     ProxmoxConnectionError,
@@ -39,6 +39,32 @@ def _task_upid_from_payload(payload: object) -> str:
 
 
 _T = TypeVar("_T")
+
+
+def _normalize_blank_optional_boolean_fields(
+    payload: object,
+    model_type: type[object],
+) -> object:
+    """Treat blank Proxmox values as absent for optional boolean fields.
+
+    Proxmox can serialize an unset LXC boolean as whitespace (observed for
+    ``unprivileged``). Generated Pydantic models correctly reject whitespace as
+    a boolean, so normalize only optional boolean fields before validation and
+    preserve every other upstream value unchanged.
+    """
+    if not isinstance(payload, dict):
+        return payload
+
+    normalized = dict(payload)
+    for field_name, field_info in getattr(model_type, "model_fields", {}).items():
+        annotation = field_info.annotation
+        if not (annotation is bool or bool in get_args(annotation)) or field_info.is_required():
+            continue
+        for key in {field_name, field_info.alias} - {None}:
+            value = normalized.get(key)
+            if isinstance(value, str) and not value.strip():
+                normalized[key] = None
+    return normalized
 
 
 def _dual_mode(async_fn: Callable[..., _T]) -> Callable[..., _T]:
@@ -299,10 +325,16 @@ async def get_vm_config(
     try:
         if vm_type == "qemu":
             payload = await resolve_async(session.session.nodes(node).qemu(vmid).config.get())
-            return generated_models.GetNodesNodeQemuVmidConfigResponse.model_validate(payload)
+            model_type = generated_models.GetNodesNodeQemuVmidConfigResponse
+            return model_type.model_validate(
+                _normalize_blank_optional_boolean_fields(payload, model_type)
+            )
         if vm_type == "lxc":
             payload = await resolve_async(session.session.nodes(node).lxc(vmid).config.get())
-            return generated_models.GetNodesNodeLxcVmidConfigResponse.model_validate(payload)
+            model_type = generated_models.GetNodesNodeLxcVmidConfigResponse
+            return model_type.model_validate(
+                _normalize_blank_optional_boolean_fields(payload, model_type)
+            )
         raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:
         raise

@@ -167,6 +167,7 @@ def _install_full_update_stubs(
     sync_state_writer.reset_sidecar_availability_cache()
     monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 4)
+    monkeypatch.setattr(sync_vm, "resolve_vm_config_fetch_timeout_seconds", lambda: 30)
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 4)
     for name in (
         "_ensure_cluster_type",
@@ -419,6 +420,38 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
     assert [record["id"] for record in result] == [101]
     assert sorted(fetch_calls) == [101, 102]
     assert bridge.phase_summaries[-1]["created"] == 1
+    assert bridge.phase_summaries[-1]["failed"] == 1
+
+
+def test_full_update_fetch_timeout_isolated_and_stage_completes(monkeypatch):
+    fetch_calls = _install_full_update_stubs(monkeypatch)
+
+    async def _fake_get_vm_config(**kwargs):
+        vmid = int(kwargs["vmid"])
+        fetch_calls.append(vmid)
+        await asyncio.Event().wait()
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "resolve_vm_config_fetch_timeout_seconds", lambda: 0.01)
+    bridge = _CapturingBridge()
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(102)]}],
+            custom_fields=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            websocket=bridge,
+            sync_vm_network=False,
+        )
+    )
+
+    assert result == []
+    assert fetch_calls == [102]
+    assert bridge.phase_summaries[-1]["created"] == 0
     assert bridge.phase_summaries[-1]["failed"] == 1
 
 

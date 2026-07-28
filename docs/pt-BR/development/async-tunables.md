@@ -40,6 +40,7 @@ efeito em até 5 minutos (ou imediatamente ao reiniciar).
 | Variável de Env | Chave de Configurações do Plugin | Padrão | Mín | Descrição |
 |---|---|---|---|---|
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | 1 | Máx de fetches concorrentes de configuração de VM Proxmox nas fases de sync de VMs e discos |
+| `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` | — | 30 | 1 | Segundos maximos para um fetch de configuracao de VM no sync completo antes de isolar essa VM como falha |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | 1 | Máx de tarefas concorrentes de sync por VM com escrita intensa no NetBox (VMs e discos) |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 | 1 | Máx de leituras concorrentes da API Proxmox para interfaces |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 | 1 | VMs por lote de sincronização de interfaces (evita sobrecarga do NetBox) |

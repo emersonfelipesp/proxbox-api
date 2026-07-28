@@ -49,6 +49,7 @@ from proxbox_api.routes.proxmox import get_vm_config
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines.helpers import (
     resolve_netbox_write_concurrency,
+    resolve_vm_config_fetch_timeout_seconds,
     resolve_vm_sync_concurrency,
 )
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation, SubstepStatus
@@ -2323,6 +2324,7 @@ async def create_virtual_machines(  # noqa: C901
             return [], 0
 
         fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
+        fetch_timeout_seconds = resolve_vm_config_fetch_timeout_seconds()
 
         async def _fetch_with_limit(
             cluster_name: str,
@@ -2331,7 +2333,10 @@ async def create_virtual_machines(  # noqa: C901
             async with fetch_semaphore:
                 cluster_px = px_by_cluster.get(str(cluster_name))
                 fetch_pxs = [cluster_px] if cluster_px is not None else pxs
-                return await _fetch_vm_config_only(pxs=fetch_pxs, resource=resource)
+                return await asyncio.wait_for(
+                    _fetch_vm_config_only(pxs=fetch_pxs, resource=resource),
+                    timeout=fetch_timeout_seconds,
+                )
 
         fetch_t0 = time.perf_counter()
         fetch_results = await asyncio.gather(

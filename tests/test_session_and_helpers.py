@@ -1893,6 +1893,32 @@ def test_typed_vm_config_wraps_model_validation_failures(monkeypatch):
         get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
 
 
+def test_typed_lxc_config_normalizes_blank_optional_boolean() -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": "abc123",
+        "description": " ",
+        "hostname": "ct01",
+        "unprivileged": " ",
+    }
+
+    class _LxcAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def lxc(self, vmid):
+            assert vmid == 102
+            return _LxcAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    config = get_typed_vm_config(session, node="pve01", vm_type="lxc", vmid=102)
+
+    assert config.unprivileged is None
+    assert config.description == " "
+    assert raw_payload["unprivileged"] == " "
+
+
 def test_proxmox_session_supports_token_auth(monkeypatch):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 
