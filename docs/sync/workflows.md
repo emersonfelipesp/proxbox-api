@@ -25,6 +25,11 @@ Current execution order:
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 
+The node-interface stage maps Proxmox interface kinds to NetBox REST choice
+values at the write boundary: `bridge`, `lag`, `virtual`, `loopback`, or
+`other`. Python enum names are internal implementation details and must never
+be sent in a `dcim.Interface.type` payload.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:

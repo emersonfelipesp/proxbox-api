@@ -106,6 +106,11 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   IPs onto a VM and returns `assigned_to_other_object` instead of stealing an
   address owned elsewhere. This prevents the "VM interface wrongly matched to
   another server's IP" defect; both paths stay idempotent across re-syncs.
+- **Node-interface type wire invariant.**
+  `network.py::sync_node_interface_and_ip` must serialize
+  `NetBoxInterfaceType` through `.value` before REST reconciliation. NetBox
+  accepts `bridge`, `lag`, `virtual`, `loopback`, and `other`; Python enum
+  labels such as `netboxinterfacetype.bridge` are invalid API choices.
 - **Cluster/site placement invariant.** After cluster reconciliation, dependent
   device and VM writes use `device_ensure._effective_cluster_site_id()` so a
   cluster's actual `dcim.site` scope wins over a stale endpoint/default site.
