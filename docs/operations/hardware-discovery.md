@@ -26,6 +26,7 @@ proxmox-sdk (library — owns all SSH primitives + parsers)
 
 netbox-proxbox (NetBox plugin)
   ├── ProxboxPluginSettings.hardware_discovery_enabled
+  ├── ProxboxPluginSettings.hardware_discovery_sync_nic_macs
   └── NodeSSHCredential model + REST endpoint
         /api/plugins/proxbox/ssh-credentials/by-node/{node_id}/credentials/
 ```
@@ -38,6 +39,9 @@ package and fails on any import of `paramiko`, `asyncssh`, `fabric`, etc.
 
 1. In NetBox → Plugins → Proxbox → Settings, toggle
    **Hardware discovery enabled**.
+   To write native physical-NIC MAC records, also toggle
+   **Sync physical NIC MAC addresses** on the same card. That second setting is
+   independently off by default.
 2. For each node, create a `NodeSSHCredential` (NetBox → Plugins → Proxbox →
    SSH Credentials). Configure:
    - username
@@ -120,10 +124,16 @@ This is a **native** NetBox field, not a custom field, so it is unaffected by
 the `custom_fields_enabled` gate. A MAC failure is logged as a warning and
 never aborts the discovery run.
 
-Because it rides the discovery path, it inherits that path's gates:
-`hardware_discovery_enabled` (default `false`), `access_methods=api_ssh`, and a
-complete `NodeSSHCredential` with a pinned host-key fingerprint. Node-network
-sync itself stays API-only and opens no SSH sockets.
+The MAC write requires two explicit NetBox UI opt-ins:
+`hardware_discovery_enabled=true` **and**
+`hardware_discovery_sync_nic_macs=true`. Both default to `false`, and a missing
+MAC setting from an older netbox-proxbox release is treated as `false`. This
+keeps upgrades write-neutral for operators who already enabled discovery only
+for chassis or link facts. `access_methods=api_ssh` and a complete
+`NodeSSHCredential` with a pinned host-key fingerprint remain mandatory.
+Node-network sync itself stays API-only and opens no SSH sockets.
+Created or reconciled physical-NIC MAC rows receive the same Proxbox tag as
+bridge and bond MAC rows.
 
 ## Security boundary
 

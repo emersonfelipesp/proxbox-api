@@ -32,6 +32,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_fetch_concurrency_kwarg.py` | `PROXBOX_FETCH_MAX_CONCURRENCY` and per-call concurrency overrides |
 | `test_generated_proxmox_routes.py` | Runtime registration of generated Proxmox proxy routes |
 | `test_health.py` | Health check and root metadata endpoints |
+| `test_hardware_discovery_nic_mac.py` | Default-off physical-NIC MAC opt-in, dual-gate resolution, native `dcim.MACAddress` reconciliation, interface targeting, and per-NIC failure isolation |
 | `test_individual_sync.py` | Individual per-object sync service and dry-run workflows |
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
 | `test_logger_settings.py` | Logger configuration via env vars |

@@ -328,6 +328,12 @@ the `netbox-proxbox` side, do all five — the existing fields in
 See `CLAUDE.md → Environment Variables → Adding a new tunable` for the full keep-list
 and resolution-order details.
 
+Physical-NIC MAC reflection is a native NetBox write and therefore uses its own
+plugin-only opt-in, `hardware_discovery_sync_nic_macs` (default `false`), in
+addition to the `hardware_discovery_enabled` master gate. Treat a missing field
+from an older netbox-proxbox release as `false`; both flags must be true before
+creating `dcim.MACAddress` rows or assigning `primary_mac_address`.
+
 ## Firecracker Cloud
 
 Firecracker provisioning lives in `proxbox_api/routes/cloud/firecracker.py`,
