@@ -115,6 +115,13 @@ from proxbox_api.services.sync.reconciliation.vm_queue import (
 from proxbox_api.services.sync.reconciliation.vm_queue import (
     select_existing_vm_record as _select_existing_vm_record,
 )
+from proxbox_api.services.sync.role_resolution import (
+    RoleSnapshotDecision,
+    apply_role_snapshot_policy,
+    compute_role_snapshot_decision,
+    persist_sync_state_with_role_compensation,
+    resolve_snapshot_read_from_scan,
+)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -123,6 +130,7 @@ from proxbox_api.services.sync.storage_links import (
 from proxbox_api.services.sync.sync_state_reader import (
     load_vm_last_synced_names,
     resolve_virtual_machine_by_sync_state,
+    scan_vm_last_synced_role_ids,
 )
 from proxbox_api.services.sync.sync_state_writer import (
     reset_sidecar_availability_cache,
@@ -967,6 +975,7 @@ async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
     *,
+    overwrite_vm_role: bool = True,
     overwrite_vm_custom_fields: bool = True,
     custom_fields_enabled_flag: bool | None = None,
 ) -> tuple[dict[tuple[str, int, str], dict[str, object]], set[tuple[str, int, str]]]:
@@ -986,6 +995,51 @@ async def _dispatch_vm_operation_queue(
         return resolved_records, failed_keys
 
     write_semaphore = asyncio.Semaphore(max(1, resolve_netbox_write_concurrency()))
+    role_snapshot_scan = await scan_vm_last_synced_role_ids(nb)
+
+    def _snapshot_read_for(record: dict[str, object]):
+        return resolve_snapshot_read_from_scan(
+            role_snapshot_scan,
+            record,
+            legacy_custom_fields_enabled=custom_fields_enabled_flag is not False,
+        )
+
+    def _role_decision(
+        operation: _NetBoxVMOperation,
+        existing_record: dict[str, object] | None,
+    ) -> RoleSnapshotDecision:
+        operation.role_previous_id = (
+            _relation_id(existing_record.get("role")) if existing_record is not None else None
+        )
+        snapshot_read = _snapshot_read_for(existing_record) if existing_record is not None else None
+        if existing_record is not None and snapshot_read is not None and not snapshot_read.verified:
+            decision = RoleSnapshotDecision(
+                role_value=_relation_id(existing_record.get("role")),
+                snapshot_value=snapshot_read.snapshot_id,
+                write_role=False,
+                write_snapshot=False,
+            )
+        else:
+            decision = compute_role_snapshot_decision(
+                existing_role_id=(
+                    _relation_id(existing_record.get("role"))
+                    if existing_record is not None
+                    else None
+                ),
+                existing_snapshot_id=(
+                    snapshot_read.snapshot_id if snapshot_read is not None else None
+                ),
+                desired_role_id=_relation_id(operation.prepared.desired_payload.get("role")),
+                overwrite_vm_role=overwrite_vm_role,
+            )
+        operation.role_snapshot_id_to_write = (
+            decision.snapshot_value if decision.write_snapshot else None
+        )
+        operation.role_snapshot_previous_id = (
+            snapshot_read.snapshot_id if snapshot_read is not None else None
+        )
+        operation.role_write_applied = decision.write_role
+        return decision
 
     async def _run_single(operation: _NetBoxVMOperation) -> None:
         vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
@@ -993,8 +1047,37 @@ async def _dispatch_vm_operation_queue(
         async with write_semaphore:
             try:
                 if operation.method == "GET":
-                    if operation.existing_record is not None:
+                    if operation.existing_record is None:
+                        raise ProxboxException(
+                            message="Cannot resolve VM GET without existing NetBox record",
+                            python_exception=(
+                                f"cluster={operation.prepared.cluster_name} vmid={vmid}"
+                            ),
+                        )
+                    decision = _role_decision(operation, operation.existing_record)
+                    if not decision.write_role:
                         resolved_records[key] = operation.existing_record
+                        return
+                    record_id = _relation_id(operation.existing_record.get("id"))
+                    if record_id is None:
+                        raise ProxboxException(
+                            message="Cannot update VM role without NetBox id",
+                            python_exception=(
+                                f"cluster={operation.prepared.cluster_name} vmid={vmid}"
+                            ),
+                        )
+                    patched = await _patch_vm_with_disk_aggregate_retry(
+                        nb,
+                        record_id=record_id,
+                        payload={"role": decision.role_value},
+                        cluster_name=operation.prepared.cluster_name,
+                        vmid=vmid,
+                    )
+                    resolved_records[key] = _to_mapping(patched) or {
+                        **operation.existing_record,
+                        "id": record_id,
+                        "role": decision.role_value,
+                    }
                     return
 
                 if operation.method == "CREATE":
@@ -1009,19 +1092,37 @@ async def _dispatch_vm_operation_queue(
                         ),
                         fail_on_ambiguous=True,
                     )
-                    netbox_create_payload = legacy_custom_fields_payload(
-                        operation.prepared.desired_payload,
-                        overwrite=overwrite_vm_custom_fields,
-                        enabled=custom_fields_enabled_flag,
-                        context="legacy VM custom-field payload",
-                    )
                     if existing_resolution is not None:
+                        existing_record = _to_mapping(existing_resolution.record)
+                        desired_payload, patchable_fields, decision = apply_role_snapshot_policy(
+                            existing_record=existing_record,
+                            existing_snapshot_id=(
+                                snapshot_read := _snapshot_read_for(existing_record)
+                            ).snapshot_id,
+                            desired_payload=operation.prepared.desired_payload,
+                            patchable_fields=operation.prepared.desired_payload.keys(),
+                            overwrite_vm_role=overwrite_vm_role,
+                            snapshot_read_verified=snapshot_read.verified,
+                        )
+                        operation.role_snapshot_id_to_write = (
+                            decision.snapshot_value if decision.write_snapshot else None
+                        )
+                        operation.role_snapshot_previous_id = snapshot_read.snapshot_id
+                        operation.role_previous_id = _relation_id(existing_record.get("role"))
+                        operation.role_write_applied = decision.write_role
+                        netbox_create_payload = legacy_custom_fields_payload(
+                            desired_payload,
+                            overwrite=overwrite_vm_custom_fields,
+                            enabled=custom_fields_enabled_flag,
+                            context="legacy VM custom-field payload",
+                        )
                         reconciled = await rest_reconcile_async(
                             nb,
                             "/api/virtualization/virtual-machines/",
                             lookup=operation.prepared.lookup,
                             payload=netbox_create_payload,
                             schema=NetBoxVirtualMachineCreateBody,
+                            patchable_fields=patchable_fields,
                             current_normalizer=lambda record: (
                                 _normalize_current_virtual_machine_payload(
                                     record,
@@ -1033,6 +1134,13 @@ async def _dispatch_vm_operation_queue(
                         )
                         resolved_records[key] = _to_mapping(reconciled)
                         return
+                    decision = _role_decision(operation, None)
+                    netbox_create_payload = legacy_custom_fields_payload(
+                        operation.prepared.desired_payload,
+                        overwrite=overwrite_vm_custom_fields,
+                        enabled=custom_fields_enabled_flag,
+                        context="legacy VM custom-field payload",
+                    )
                     try:
                         created = await rest_create_async(
                             nb,
@@ -1055,7 +1163,26 @@ async def _dispatch_vm_operation_queue(
                         )
                         if existing is None:
                             raise
-                        resolved_records[key] = _to_mapping(existing)
+                        existing_record = _to_mapping(existing)
+                        decision = _role_decision(operation, existing_record)
+                        if decision.write_role:
+                            record_id = _relation_id(existing_record.get("id"))
+                            if record_id is None:
+                                raise
+                            patched = await _patch_vm_with_disk_aggregate_retry(
+                                nb,
+                                record_id=record_id,
+                                payload={"role": decision.role_value},
+                                cluster_name=operation.prepared.cluster_name,
+                                vmid=vmid,
+                            )
+                            resolved_records[key] = _to_mapping(patched) or {
+                                **existing_record,
+                                "id": record_id,
+                                "role": decision.role_value,
+                            }
+                        else:
+                            resolved_records[key] = existing_record
                     return
 
                 if operation.existing_record is None:
@@ -1071,8 +1198,14 @@ async def _dispatch_vm_operation_queue(
                         python_exception=f"cluster={operation.prepared.cluster_name} vmid={vmid}",
                     )
 
+                decision = _role_decision(operation, operation.existing_record)
+                operation_patch_payload = dict(operation.patch_payload)
+                if decision.write_role:
+                    operation_patch_payload["role"] = decision.role_value
+                else:
+                    operation_patch_payload.pop("role", None)
                 patch_payload = legacy_custom_fields_payload(
-                    operation.patch_payload,
+                    operation_patch_payload,
                     overwrite=overwrite_vm_custom_fields,
                     enabled=custom_fields_enabled_flag,
                     context="legacy VM custom-field payload",
@@ -2429,6 +2562,7 @@ async def create_virtual_machines(  # noqa: C901
         resolved_records, failed_operation_keys = await _dispatch_vm_operation_queue(
             nb,
             operation_queue,
+            overwrite_vm_role=overwrite_vm_role,
             overwrite_vm_custom_fields=overwrite_vm_custom_fields,
             custom_fields_enabled_flag=behavior_flags.custom_fields_enabled,
         )
@@ -2454,21 +2588,43 @@ async def create_virtual_machines(  # noqa: C901
                 )
                 failed_vms += 1
                 continue
-            await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
             desired_custom_fields = operation.prepared.desired_payload.get("custom_fields")
-            await write_virtual_machine_sync_state(
-                nb,
-                virtual_machine_id=vm_record.get("id"),
-                custom_fields=(
-                    desired_custom_fields if isinstance(desired_custom_fields, dict) else None
-                ),
-                overwrite_custom_fields=overwrite_vm_custom_fields,
-                # The live Proxmox name, NOT desired_payload["name"] -- the name
-                # resolver may have rewritten that to preserve an operator's
-                # NetBox-side rename, and recording it here would cement the
-                # stale name as "what Proxmox last said".
-                proxmox_vm_name=operation.prepared.resource.get("name"),
-            )
+            try:
+                await persist_sync_state_with_role_compensation(
+                    nb,
+                    persistence=write_virtual_machine_sync_state(
+                        nb,
+                        virtual_machine_id=vm_record.get("id"),
+                        custom_fields=(
+                            desired_custom_fields
+                            if isinstance(desired_custom_fields, dict)
+                            else None
+                        ),
+                        overwrite_custom_fields=overwrite_vm_custom_fields,
+                        # The live Proxmox name, NOT desired_payload["name"] -- the name
+                        # resolver may have rewritten that to preserve an operator's
+                        # NetBox-side rename, and recording it here would cement the
+                        # stale name as "what Proxmox last said".
+                        proxmox_vm_name=operation.prepared.resource.get("name"),
+                        proxmox_last_synced_role_id=operation.role_snapshot_id_to_write,
+                    ),
+                    virtual_machine_id=_relation_id(vm_record.get("id")),
+                    previous_role_id=operation.role_previous_id,
+                    previous_snapshot_id=operation.role_snapshot_previous_id,
+                    expected_snapshot_id=operation.role_snapshot_id_to_write,
+                    role_write_applied=operation.role_write_applied,
+                )
+            except Exception as exc:
+                logger.error(
+                    "VM role ownership snapshot failed after reconciliation: "
+                    "cluster=%s vmid=%s error=%s",
+                    operation.prepared.cluster_name,
+                    vmid,
+                    exc,
+                )
+                failed_vms += 1
+                continue
+            await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
             results.append(vm_record)
 
         batch_ms = (time.perf_counter() - batch_t0) * 1000
@@ -2519,6 +2675,9 @@ async def create_virtual_machines(  # noqa: C901
         )
         return flattened_results
 
+    # Network-enabled sync still reconciles VMs one task at a time, so preload
+    # role ownership once here to avoid a sidecar request per VM.
+    network_role_snapshot_scan = await scan_vm_last_synced_role_ids(nb)
     default_resolved_vm_names: dict[tuple[str, int, str], str] = {}
     name_prepass_vms: list[_PreparedVMState] = []
     name_prepass_now = datetime.now(timezone.utc)
@@ -2811,6 +2970,22 @@ async def create_virtual_machines(  # noqa: C901
             ),
             fail_on_ambiguous=True,
         )
+        existing_record = (
+            _to_mapping(existing_resolution.record) if existing_resolution is not None else None
+        )
+        snapshot_read = resolve_snapshot_read_from_scan(
+            network_role_snapshot_scan,
+            existing_record,
+            legacy_custom_fields_enabled=behavior_flags.custom_fields_enabled,
+        )
+        netbox_vm_payload, effective_patchable_fields, role_decision = apply_role_snapshot_policy(
+            existing_record=existing_record,
+            existing_snapshot_id=snapshot_read.snapshot_id,
+            desired_payload=netbox_vm_payload,
+            patchable_fields=vm_patchable_fields,
+            overwrite_vm_role=overwrite_vm_role,
+            snapshot_read_verified=snapshot_read.verified,
+        )
         virtual_machine = await rest_reconcile_async(
             nb,
             "/api/virtualization/virtual-machines/",
@@ -2822,7 +2997,7 @@ async def create_virtual_machines(  # noqa: C901
                 context="legacy VM custom-field payload",
             ),
             schema=NetBoxVirtualMachineCreateBody,
-            patchable_fields=vm_patchable_fields,
+            patchable_fields=effective_patchable_fields,
             current_normalizer=lambda record: _normalize_current_virtual_machine_payload(
                 record,
                 supports_virtual_machine_type_field=supports_vm_type,
@@ -2833,22 +3008,39 @@ async def create_virtual_machines(  # noqa: C901
             ),
         )
 
-        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
         virtual_machine_id = (
             virtual_machine.get("id")
             if isinstance(virtual_machine, dict)
             else getattr(virtual_machine, "id", None)
         )
         desired_custom_fields = netbox_vm_payload.get("custom_fields")
-        await write_virtual_machine_sync_state(
+        await persist_sync_state_with_role_compensation(
             nb,
-            virtual_machine_id=virtual_machine_id,
-            custom_fields=desired_custom_fields
-            if isinstance(desired_custom_fields, dict)
-            else None,
-            overwrite_custom_fields=overwrite_vm_custom_fields,
-            proxmox_vm_name=resource.get("name"),
+            persistence=write_virtual_machine_sync_state(
+                nb,
+                virtual_machine_id=virtual_machine_id,
+                custom_fields=desired_custom_fields
+                if isinstance(desired_custom_fields, dict)
+                else None,
+                overwrite_custom_fields=overwrite_vm_custom_fields,
+                proxmox_vm_name=resource.get("name"),
+                proxmox_last_synced_role_id=(
+                    role_decision.snapshot_value if role_decision.write_snapshot else None
+                ),
+            ),
+            virtual_machine_id=(
+                int(virtual_machine_id) if virtual_machine_id is not None else None
+            ),
+            previous_role_id=(
+                _relation_id(existing_record.get("role")) if existing_record is not None else None
+            ),
+            previous_snapshot_id=snapshot_read.snapshot_id,
+            expected_snapshot_id=(
+                role_decision.snapshot_value if role_decision.write_snapshot else None
+            ),
+            role_write_applied=role_decision.write_role,
         )
+        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
 
         logger.debug("Reconciled virtual_machine=%s", virtual_machine)
         if bridge:

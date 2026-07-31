@@ -16,10 +16,14 @@ import pytest
 from proxbox_api.services.sync.role_resolution import (
     LAST_SYNCED_ROLE_CUSTOM_FIELD,
     RoleSnapshotDecision,
+    apply_role_snapshot_policy,
+    compensate_failed_role_snapshot,
     compute_role_snapshot_decision,
     extract_snapshot_id,
     resolve_default_role_id,
+    resolve_snapshot_read_from_scan,
 )
+from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan
 
 # --------------------------------------------------------------------------- #
 # Pure decision function: the nine-case matrix.
@@ -187,6 +191,97 @@ def test_extract_snapshot_id_handles_missing_or_malformed() -> None:
     assert extract_snapshot_id({"custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: "nope"}}) is None
     assert extract_snapshot_id({"custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: "42"}}) == 42
     assert extract_snapshot_id({"custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: 18}}) == 18
+
+
+def test_apply_policy_hard_fences_operator_role_from_reconcile_patch() -> None:
+    """An operator-owned role is removed from both payload writes and allowlist."""
+    payload, patchable_fields, decision = apply_role_snapshot_policy(
+        existing_record={"id": 61, "role": {"id": 42}},
+        existing_snapshot_id=11,
+        desired_payload={"name": "vm-61", "role": 20, "memory": 4096},
+        patchable_fields={"name", "role", "memory"},
+        overwrite_vm_role=False,
+    )
+
+    assert payload["role"] == 20
+    assert "role" not in patchable_fields
+    assert patchable_fields == frozenset({"name", "memory"})
+    assert not decision.write_role
+    assert not decision.write_snapshot
+
+
+def test_apply_policy_backfills_snapshot_without_role_patch() -> None:
+    """A pre-snapshot VM captures its current role without allowing a role PATCH."""
+    _payload, patchable_fields, decision = apply_role_snapshot_policy(
+        existing_record={"id": 62, "role": 42},
+        existing_snapshot_id=None,
+        desired_payload={"name": "vm-62", "role": 20},
+        patchable_fields={"name", "role"},
+        overwrite_vm_role=False,
+    )
+
+    assert "role" not in patchable_fields
+    assert decision.snapshot_value == 42
+    assert decision.write_snapshot
+
+
+def test_apply_policy_does_not_claim_ownership_after_unverified_read() -> None:
+    """Unavailable or ambiguous sidecar evidence preserves role without backfill."""
+    _payload, patchable_fields, decision = apply_role_snapshot_policy(
+        existing_record={"id": 63, "role": 42},
+        existing_snapshot_id=None,
+        desired_payload={"name": "vm-63", "role": 20},
+        patchable_fields={"name", "role"},
+        overwrite_vm_role=False,
+        snapshot_read_verified=False,
+    )
+
+    assert "role" not in patchable_fields
+    assert not decision.write_role
+    assert not decision.write_snapshot
+
+
+def test_failed_batch_scan_does_not_trust_legacy_snapshot() -> None:
+    read = resolve_snapshot_read_from_scan(
+        VMRoleSnapshotScan(values={}, read_verified=False),
+        {"id": 64, "custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: 11}},
+        legacy_custom_fields_enabled=True,
+    )
+
+    assert read.snapshot_id is None
+    assert not read.verified
+
+
+@pytest.mark.asyncio
+async def test_role_compensation_retries_until_restored_role_is_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from proxbox_api.services.sync import role_resolution
+
+    patch_attempts = 0
+    read_attempts = 0
+
+    async def _patch(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal patch_attempts
+        patch_attempts += 1
+        return {"id": 65}
+
+    async def _read(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal read_attempts
+        read_attempts += 1
+        return {"id": 65, "role": {"id": 11 if read_attempts == 2 else 20}}
+
+    monkeypatch.setattr(role_resolution, "rest_patch_async", _patch)
+    monkeypatch.setattr(role_resolution, "rest_first_async", _read)
+
+    await compensate_failed_role_snapshot(
+        object(),
+        virtual_machine_id=65,
+        previous_role_id=11,
+    )
+
+    assert patch_attempts == 2
+    assert read_attempts == 2
 
 
 # --------------------------------------------------------------------------- #

@@ -203,10 +203,15 @@ live Proxmox data on each sync, a normal re-sync re-adopts existing NetBox VMs
 even when the custom fields are already gone. Setting
 `custom_fields_enabled=true` restores the legacy behavior for a transition
 period (dual-writing custom fields and using the `cf_*` read fallback), and
-every custom-field code path then emits a deprecation warning. Role-ownership
-snapshots have no sidecar field and are only read when the flag is enabled. Full
-custom-field retirement remains a later migration item; no custom-field data is
-deleted while the flag exists.
+every custom-field code path then emits a deprecation warning. VM role ownership
+uses the typed sidecar's `proxmox_last_synced_role_id`; the deprecated same-named
+custom field is consulted only during an enabled transition. Unavailable,
+failed, or conflicting snapshot reads preserve the current role without claiming
+ownership. Required snapshot writes retry three times; after an exhausted
+response, an authoritative typed re-read accepts a confirmed commit or restores
+and verifies both the previous role and previous snapshot before the VM is
+reported failed. Full custom-field retirement remains a later migration item;
+no custom-field data is deleted while the flag exists.
 
 ### `NetBoxEndpoint`
 

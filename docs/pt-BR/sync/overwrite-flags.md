@@ -77,6 +77,34 @@ The DCIM device sync route accepts the same canonical flat query shape. For
 example, `/dcim/devices/create/stream?overwrite_device_role=false` must result
 in `role` being omitted from existing-device PATCH payloads.
 
+### Trava de snapshot da função da VM
+
+As funções de VM usam um snapshot durável de propriedade além da allowlist
+normal. `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` registra o
+ID de DeviceRole gravado pela última sincronização bem-sucedida:
+
+- função atual diferente do snapshot + `overwrite_vm_role=false`: preserva a
+  edição do operador e mantém o snapshot anterior;
+- função atual igual ao snapshot: ela continua gerenciada pela sincronização e
+  pode avançar quando o padrão configurado mudar;
+- VM existente com função e sem snapshot: preserva a função e a registra como
+  snapshot inicial, mantendo upgrades seguros;
+- leitura indisponível, falha ou conflitante do snapshot: preserva a função
+  atual sem registrar propriedade, pois a ausência não foi comprovada;
+- `overwrite_vm_role=true`: libera uma trava comprovada do operador e grava a
+  função desejada atual junto com o novo snapshot.
+
+O snapshot só é persistido depois de uma reconciliação bem-sucedida e sua
+gravação obrigatória é repetida até três vezes; se todas falharem, a VM é
+reconsulta o snapshot tipado de forma autoritativa. Um commit confirmado é
+aceito mesmo após perda da resposta; caso contrário, o backend restaura e
+confirma tanto a função anterior quanto o snapshot anterior antes de marcar a
+VM como falha. Isso impede uma falsa edição do operador na próxima execução.
+Os fluxos
+completo/em lote, individual e de adoção por sidecar usam a mesma tabela de
+decisão. No fluxo em lote, a política roda depois da fronteira Python/Rust, de
+modo que o engine escolhido não pode contorná-la.
+
 ## How it reaches the reconciler
 
 Service modules (e.g. `services/sync/storages.py`,
