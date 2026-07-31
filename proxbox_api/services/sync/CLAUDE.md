@@ -195,6 +195,26 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   Coverage: `tests/test_name_collision.py` (both rename directions, the blank
   fallback, self-collision, and a genuine collision still suffixing).
 
+- **VM roles use durable ownership evidence.** The typed VM sidecar field
+  `proxmox_last_synced_role_id` records the DeviceRole last written by a
+  successful sync. `role_resolution.compute_role_snapshot_decision()` is the
+  single truth table: missing evidence captures the current role without
+  changing it, a current role that differs from the snapshot is an operator
+  edit and is preserved when overwrite is disabled, and a role still matching
+  its snapshot may roll forward with a changed managed default. The full/bulk
+  path loads all snapshots once and applies the decision in dispatch after the
+  Python/Rust queue seam; `vm_create.py`, individual sync, and the network path
+  apply the same policy before `rest_reconcile_async`. The writer receives a
+  snapshot only after the corresponding reconcile succeeds and persists it
+  independently of the legacy custom-field flag. Unavailable, failed, or
+  conflicting reads preserve the role without claiming ownership. Required
+  snapshot writes retry three times. After an exhausted response, the shared
+  persistence guard authoritatively re-reads typed state, accepts a confirmed
+  commit, or restores and verifies both the previous role and snapshot before
+  surfacing VM failure. Thus response loss cannot become a false operator lock
+  on the next pass. Typed sidecar reads win; legacy custom-field reads are
+  transition fallback only.
+
 ## Extension Guidance
 
 - Keep sync routines idempotent where possible.

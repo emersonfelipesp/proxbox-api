@@ -227,6 +227,36 @@ async def _patch_parent_sidecar(
     return _record_to_dict(await rest_patch_async(nb, path, existing_id, payload))
 
 
+def _normalize_parent_id(*, path: str, parent_id: object, required: bool) -> int | None:
+    normalized_parent_id = _record_id(parent_id)
+    if normalized_parent_id is None and required:
+        raise ValueError(f"Cannot persist required {path} state without a parent id")
+    return normalized_parent_id
+
+
+def _handle_sidecar_write_failure(*, path: str, error: Exception, required: bool) -> None:
+    if _is_sidecar_unavailable(error):
+        _UNAVAILABLE_SIDECAR_PATHS.add(path)
+        logger.warning(
+            "Skipping Proxbox sync-state sidecar write because %s is unavailable: %s",
+            path,
+            getattr(error, "detail", str(error)),
+        )
+    else:
+        logger.warning(
+            "Proxbox sync-state sidecar write failed at %s; %s: %s",
+            path,
+            (
+                "required ownership state will be retried or surfaced as VM failure"
+                if required
+                else "optional reflection sync will continue"
+            ),
+            getattr(error, "detail", str(error)),
+        )
+    if required:
+        raise error
+
+
 async def _upsert_parent_sidecar(
     nb: object,
     *,
@@ -234,11 +264,18 @@ async def _upsert_parent_sidecar(
     parent_field: str,
     parent_id: object,
     payload: dict[str, object],
+    required: bool = False,
 ) -> dict[str, object] | None:
-    normalized_parent_id = _record_id(parent_id)
+    normalized_parent_id = _normalize_parent_id(
+        path=path,
+        parent_id=parent_id,
+        required=required,
+    )
     if normalized_parent_id is None:
         return None
     if path in _UNAVAILABLE_SIDECAR_PATHS:
+        if required:
+            raise RuntimeError(f"Required Proxbox sync-state sidecar path is unavailable: {path}")
         return None
 
     try:
@@ -289,20 +326,8 @@ async def _upsert_parent_sidecar(
                 existing=existing,
                 payload=payload,
             )
-    except Exception as exc:  # noqa: BLE001 - sidecar writes are additive/best-effort
-        if _is_sidecar_unavailable(exc):
-            _UNAVAILABLE_SIDECAR_PATHS.add(path)
-            logger.warning(
-                "Skipping Proxbox sync-state sidecar write because %s is unavailable: %s",
-                path,
-                getattr(exc, "detail", str(exc)),
-            )
-        else:
-            logger.warning(
-                "Proxbox sync-state sidecar write failed at %s; sync will continue: %s",
-                path,
-                getattr(exc, "detail", str(exc)),
-            )
+    except Exception as exc:  # noqa: BLE001 - optional sidecar writes remain best-effort
+        _handle_sidecar_write_failure(path=path, error=exc, required=required)
         return None
 
 
@@ -328,6 +353,12 @@ def vm_sidecar_payload_from_custom_fields(
         payload["proxmox_node_name"] = _text_or_blank(custom_fields.get("proxmox_node"))
     if "proxmox_cluster" in custom_fields:
         payload["proxmox_cluster_name"] = _text_or_blank(custom_fields.get("proxmox_cluster"))
+    raw_role_snapshot_id = custom_fields.get("proxmox_last_synced_role_id")
+    role_snapshot_id = (
+        None if isinstance(raw_role_snapshot_id, bool) else _record_id(raw_role_snapshot_id)
+    )
+    if role_snapshot_id is not None and role_snapshot_id > 0:
+        payload["proxmox_last_synced_role_id"] = role_snapshot_id
     return payload
 
 
@@ -338,6 +369,7 @@ async def write_virtual_machine_sync_state(
     custom_fields: Mapping[str, object] | None,
     overwrite_custom_fields: bool,
     proxmox_vm_name: object = None,
+    proxmox_last_synced_role_id: object = None,
 ) -> dict[str, object] | None:
     """Mirror VM state into the typed sidecar.
 
@@ -347,6 +379,11 @@ async def write_virtual_machine_sync_state(
     preserve an operator's NetBox-side rename, so writing it back here would
     record the NetBox name as "what Proxmox last said" and permanently cement a
     stale value as ground truth (netbox-proxbox issue #617).
+
+    ``proxmox_last_synced_role_id`` is likewise independent of
+    ``overwrite_custom_fields``: it is role-ownership evidence, not an
+    operator-managed reflection field. Callers provide it only after the
+    corresponding VM reconciliation succeeds.
     """
     should_write_custom_field_state = overwrite_custom_fields and custom_fields is not None
     payload = (
@@ -357,15 +394,108 @@ async def write_virtual_machine_sync_state(
     name = _text_or_blank(proxmox_vm_name)
     if name:
         payload["proxmox_vm_name"] = name
-    elif not should_write_custom_field_state:
-        return None
-    return await _upsert_parent_sidecar(
-        nb,
-        path=VM_SYNC_STATE_PATH,
-        parent_field="virtual_machine",
-        parent_id=virtual_machine_id,
-        payload=payload,
+    role_id = (
+        None
+        if isinstance(proxmox_last_synced_role_id, bool)
+        else _record_id(proxmox_last_synced_role_id)
     )
+    if role_id is not None and role_id > 0:
+        payload["proxmox_last_synced_role_id"] = role_id
+    if not payload:
+        return None
+    role_snapshot_required = role_id is not None
+    attempts = 3 if role_snapshot_required else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            result = await _upsert_parent_sidecar(
+                nb,
+                path=VM_SYNC_STATE_PATH,
+                parent_field="virtual_machine",
+                parent_id=virtual_machine_id,
+                payload=payload,
+                required=role_snapshot_required,
+            )
+            if result is not None or not role_snapshot_required:
+                return result
+            raise RuntimeError("Required VM role snapshot write returned no sidecar record")
+        except Exception:
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "Retrying required VM role snapshot write for virtual_machine_id=%s "
+                "after attempt %s/%s failed",
+                virtual_machine_id,
+                attempt,
+                attempts,
+            )
+    raise AssertionError("unreachable VM sync-state retry state")
+
+
+async def write_vm_role_snapshot_exact(
+    nb: object,
+    *,
+    virtual_machine_id: object,
+    snapshot_id: int | None,
+    attempts: int = 3,
+) -> None:
+    """Restore and verify an exact role snapshot, including verified absence."""
+    normalized_vm_id = _normalize_parent_id(
+        path=VM_SYNC_STATE_PATH,
+        parent_id=virtual_machine_id,
+        required=True,
+    )
+    if normalized_vm_id is None:  # pragma: no cover - required normalization raises
+        raise AssertionError("required VM id normalization returned None")
+    normalized_snapshot_id = _record_id(snapshot_id) if snapshot_id is not None else None
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        # A failed required write may have memoized the route as unavailable.
+        # Compensation must probe again instead of trusting process-local state.
+        _UNAVAILABLE_SIDECAR_PATHS.discard(VM_SYNC_STATE_PATH)
+        try:
+            clear_rest_get_cache_for_path(nb, VM_SYNC_STATE_PATH)
+        except Exception:  # noqa: BLE001 - cache clearing cannot replace verification
+            pass
+        try:
+            await _upsert_parent_sidecar(
+                nb,
+                path=VM_SYNC_STATE_PATH,
+                parent_field="virtual_machine",
+                parent_id=normalized_vm_id,
+                payload={"proxmox_last_synced_role_id": normalized_snapshot_id},
+                required=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - verify commit-before-response-loss below
+            last_error = exc
+
+        try:
+            clear_rest_get_cache_for_path(nb, VM_SYNC_STATE_PATH)
+        except Exception:  # noqa: BLE001 - cache clearing cannot replace verification
+            pass
+        from proxbox_api.services.sync.sync_state_reader import (
+            read_vm_last_synced_role,
+            reset_sidecar_reader_availability_cache,
+        )
+
+        reset_sidecar_reader_availability_cache()
+        read = await read_vm_last_synced_role(
+            nb,
+            vm_record={"id": normalized_vm_id},
+            custom_field_name="proxmox_last_synced_role_id",
+        )
+        if read.verified and read.snapshot_id == normalized_snapshot_id:
+            return
+        last_error = RuntimeError("NetBox did not confirm the compensated VM role snapshot")
+        logger.error(
+            "VM role snapshot compensation attempt %s/%s failed for virtual_machine_id=%s: %s",
+            attempt,
+            max(1, attempts),
+            normalized_vm_id,
+            last_error,
+        )
+    raise RuntimeError(
+        f"Could not restore VM {normalized_vm_id} role ownership snapshot"
+    ) from last_error
 
 
 async def write_vm_last_run_sync_state(

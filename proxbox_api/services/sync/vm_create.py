@@ -36,12 +36,19 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.role_resolution import (
+    apply_role_snapshot_policy,
+    persist_sync_state_with_role_compensation,
+    resolve_snapshot_read,
+)
 from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
+    relation_id,
+    to_mapping,
 )
 from proxbox_api.services.sync.vmid_helpers import normalize_positive_int
 
@@ -332,6 +339,28 @@ async def create_or_update_virtual_machine(
         fail_on_ambiguous=True,
     )
 
+    existing_record = (
+        to_mapping(existing_resolution.record) if existing_resolution is not None else None
+    )
+    snapshot_read = (
+        await resolve_snapshot_read(netbox_session, existing_record)
+        if existing_record is not None
+        else None
+    )
+    payload, patchable_fields, role_decision = apply_role_snapshot_policy(
+        existing_record=existing_record,
+        existing_snapshot_id=(snapshot_read.snapshot_id if snapshot_read is not None else None),
+        desired_payload=payload,
+        patchable_fields=_compute_vm_patchable_fields(
+            overwrite_flags,
+            supports_virtual_machine_type_field=supports_vm_type,
+        ),
+        overwrite_vm_role=(
+            overwrite_flags.overwrite_vm_role if overwrite_flags is not None else True
+        ),
+        snapshot_read_verified=(snapshot_read.verified if snapshot_read is not None else True),
+    )
+
     virtual_machine = await rest_reconcile_async(
         netbox_session,
         "/api/virtualization/virtual-machines/",
@@ -342,12 +371,7 @@ async def create_or_update_virtual_machine(
             context="legacy VM custom-field payload",
         ),
         schema=NetBoxVirtualMachineCreateBody,
-        patchable_fields=frozenset(
-            _compute_vm_patchable_fields(
-                overwrite_flags,
-                supports_virtual_machine_type_field=supports_vm_type,
-            )
-        ),
+        patchable_fields=patchable_fields,
         current_normalizer=lambda record: normalize_current_virtual_machine_payload(
             record,
             supports_virtual_machine_type_field=supports_vm_type,
@@ -365,13 +389,33 @@ async def create_or_update_virtual_machine(
     )
     if vm_id is not None:
         custom_fields = payload.get("custom_fields")
-        await write_virtual_machine_sync_state(
+        await persist_sync_state_with_role_compensation(
             netbox_session,
-            virtual_machine_id=vm_id,
-            custom_fields=custom_fields if isinstance(custom_fields, dict) else None,
-            overwrite_custom_fields=(
-                overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
+            persistence=write_virtual_machine_sync_state(
+                netbox_session,
+                virtual_machine_id=vm_id,
+                custom_fields=custom_fields if isinstance(custom_fields, dict) else None,
+                overwrite_custom_fields=(
+                    overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
+                ),
+                proxmox_vm_name=(
+                    proxmox_resource.get("name")
+                    if isinstance(proxmox_resource, dict)
+                    else proxmox_resource.name
+                ),
+                proxmox_last_synced_role_id=(
+                    role_decision.snapshot_value if role_decision.write_snapshot else None
+                ),
             ),
+            virtual_machine_id=int(vm_id),
+            previous_role_id=(
+                relation_id(existing_record.get("role")) if existing_record is not None else None
+            ),
+            previous_snapshot_id=(snapshot_read.snapshot_id if snapshot_read is not None else None),
+            expected_snapshot_id=(
+                role_decision.snapshot_value if role_decision.write_snapshot else None
+            ),
+            role_write_applied=role_decision.write_role,
         )
         try:
             await sync_vm_cloudinit(

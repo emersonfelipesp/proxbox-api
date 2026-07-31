@@ -74,6 +74,33 @@ The DCIM device sync route accepts the same canonical flat query shape. For
 example, `/dcim/devices/create/stream?overwrite_device_role=false` must result
 in `role` being omitted from existing-device PATCH payloads.
 
+### VM role snapshot lock
+
+VM roles use a durable ownership snapshot in addition to the ordinary
+allowlist. `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` records
+the DeviceRole ID written by the last successful sync:
+
+- current role differs from snapshot + `overwrite_vm_role=false`: preserve the
+  operator-edited role and keep the old snapshot;
+- current role equals snapshot: the role remains sync-managed and may roll
+  forward when the configured default changes;
+- existing role with no snapshot: preserve it and record it as the initial
+  snapshot, so upgrades fail safe;
+- unavailable, failed, or conflicting snapshot read: preserve the current role
+  without writing a snapshot, because absence was not verified;
+- `overwrite_vm_role=true`: release a proven operator lock and write the
+  current desired role plus its new snapshot.
+
+The snapshot is written only after successful reconciliation and is retried as
+a required ownership write. After an exhausted response, the backend re-reads
+the typed snapshot authoritatively: it accepts a confirmed commit, or restores
+and verifies both the previous role and previous snapshot before marking that
+VM failed. The pair stays aligned, so the next pass does not mistake response
+loss for an operator edit.
+Full/bulk, individual, and sidecar-adoption paths share this truth table.
+Full/bulk applies it after the Python/Rust queue seam, so the selected
+reconciliation engine cannot bypass the policy.
+
 ## How it reaches the reconciler
 
 Service modules (e.g. `services/sync/storages.py`,

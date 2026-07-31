@@ -62,15 +62,44 @@ class VMSyncStateIdentityScan:
     sidecar_read_failed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class VMRoleSnapshotRead:
+    """One role snapshot plus whether absence was positively verified."""
+
+    snapshot_id: int | None
+    verified: bool
+
+
+@dataclass(frozen=True, slots=True)
+class VMRoleSnapshotScan:
+    """Fleet role snapshots with explicit global and per-VM read uncertainty."""
+
+    values: dict[int, int]
+    unverified_vm_ids: frozenset[int] = frozenset()
+    read_verified: bool = True
+
+    def for_vm(self, vm_id: int | None) -> VMRoleSnapshotRead:
+        if vm_id is None:
+            return VMRoleSnapshotRead(snapshot_id=None, verified=False)
+        if vm_id in self.values:
+            return VMRoleSnapshotRead(snapshot_id=self.values[vm_id], verified=True)
+        return VMRoleSnapshotRead(
+            snapshot_id=None,
+            verified=self.read_verified and vm_id not in self.unverified_vm_ids,
+        )
+
+
 def reset_sidecar_reader_availability_cache() -> None:
     """Clear the current sync-run memo of unavailable optional sidecar read routes."""
     _UNAVAILABLE_READER_SIDECAR_PATHS.clear()
 
 
 def _as_positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
         parsed = int(cast("object", value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return parsed if parsed > 0 else None
 
@@ -505,6 +534,20 @@ def _collapse_vm_last_synced_name(parent_id: int, values: set[str]) -> str | Non
     return None
 
 
+def _collapse_vm_last_synced_role_id(parent_id: int, values: set[int]) -> int | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return next(iter(values))
+    logger.warning(
+        "Omitting proxmox_last_synced_role_id evidence for NetBox VM id=%s "
+        "because multiple sync-state sidecar rows disagree: %s",
+        parent_id,
+        sorted(values),
+    )
+    return None
+
+
 async def load_vm_last_synced_name(nb: object, vm_id: int) -> str | None:
     """Return one VM's last synced Proxmox name from sidecar evidence.
 
@@ -583,6 +626,52 @@ async def load_vm_last_synced_names(
     return names
 
 
+async def load_vm_last_synced_role_ids(
+    nb: object,
+    *,
+    page_size: int = 500,
+) -> dict[int, int]:
+    """Compatibility wrapper returning verified typed role snapshots only."""
+    return (await scan_vm_last_synced_role_ids(nb, page_size=page_size)).values
+
+
+async def scan_vm_last_synced_role_ids(
+    nb: object,
+    *,
+    page_size: int = 500,
+) -> VMRoleSnapshotScan:
+    """Read all typed role snapshots without confusing failures with absence."""
+    rows, read_failed = await _scan_sidecars(nb, query={}, page_size=page_size)
+    if rows is None:
+        return VMRoleSnapshotScan(values={}, read_verified=False)
+
+    values_by_parent_id: dict[int, set[int]] = {}
+    for row in rows:
+        sidecar = _record_to_dict(row)
+        if not sidecar:
+            continue
+        parent_id = _relation_id_from_field(sidecar, "virtual_machine")
+        if parent_id is None:
+            continue
+        role_id = _as_positive_int(sidecar.get("proxmox_last_synced_role_id"))
+        if role_id is not None:
+            values_by_parent_id.setdefault(parent_id, set()).add(role_id)
+
+    snapshots: dict[int, int] = {}
+    unverified_vm_ids: set[int] = set()
+    for parent_id, values in values_by_parent_id.items():
+        role_id = _collapse_vm_last_synced_role_id(parent_id, values)
+        if role_id is not None:
+            snapshots[parent_id] = role_id
+        elif values:
+            unverified_vm_ids.add(parent_id)
+    return VMRoleSnapshotScan(
+        values=snapshots,
+        unverified_vm_ids=frozenset(unverified_vm_ids),
+        read_verified=not read_failed,
+    )
+
+
 async def load_vm_sync_state_identities(
     nb: object,
     *,
@@ -637,21 +726,85 @@ async def resolve_vm_last_synced_role_id(
     vm_record: dict[str, object] | None,
     custom_field_name: str,
 ) -> int | None:
-    """Read role-ownership snapshot id from the legacy VM custom field.
+    """Compatibility wrapper returning a snapshot only when one is verified."""
+    return (
+        await read_vm_last_synced_role(
+            nb,
+            vm_record=vm_record,
+            custom_field_name=custom_field_name,
+        )
+    ).snapshot_id
 
-    The current netbox-proxbox VM sync-state sidecar contract does not carry
-    ``proxmox_last_synced_role_id`` or an equivalent role-ownership field.
-    """
-    del nb
+
+def _typed_vm_role_snapshot(
+    vm_id: int,
+    rows: list[object],
+) -> VMRoleSnapshotRead:
+    values: set[int] = set()
+    for row in rows:
+        sidecar = _record_to_dict(row)
+        if sidecar is None:
+            continue
+        if _relation_id_from_field(sidecar, "virtual_machine") != vm_id:
+            continue
+        role_id = _as_positive_int(sidecar.get("proxmox_last_synced_role_id"))
+        if role_id is not None:
+            values.add(role_id)
+    if len(values) == 1:
+        return VMRoleSnapshotRead(snapshot_id=next(iter(values)), verified=True)
+    if len(values) > 1:
+        _collapse_vm_last_synced_role_id(vm_id, values)
+        return VMRoleSnapshotRead(snapshot_id=None, verified=False)
+    return VMRoleSnapshotRead(snapshot_id=None, verified=True)
+
+
+def _legacy_vm_role_snapshot(
+    vm_record: dict[str, object] | None,
+    *,
+    custom_field_name: str,
+    typed_read: VMRoleSnapshotRead,
+) -> VMRoleSnapshotRead:
     if not custom_fields_enabled():
-        return None
+        return typed_read
     warn_legacy_custom_fields("legacy VM role-ownership custom-field read")
     if not isinstance(vm_record, dict):
-        return None
+        return typed_read
     custom_fields = vm_record.get("custom_fields")
     if not isinstance(custom_fields, dict):
-        return None
-    return _as_positive_int(custom_fields.get(custom_field_name))
+        return typed_read
+    legacy_role_id = _as_positive_int(custom_fields.get(custom_field_name))
+    if legacy_role_id is not None and typed_read.verified:
+        return VMRoleSnapshotRead(snapshot_id=legacy_role_id, verified=True)
+    return typed_read
+
+
+async def read_vm_last_synced_role(
+    nb: object,
+    *,
+    vm_record: dict[str, object] | None,
+    custom_field_name: str,
+) -> VMRoleSnapshotRead:
+    """Read a role snapshot while preserving unavailable/ambiguous outcomes."""
+    vm_id = _record_id(vm_record) if vm_record is not None else None
+    if vm_id is None:
+        typed_read = VMRoleSnapshotRead(snapshot_id=None, verified=False)
+    else:
+        rows, _read_failed = await _scan_sidecars(
+            nb,
+            query={"virtual_machine_id": vm_id, "limit": 2},
+        )
+        typed_read = (
+            VMRoleSnapshotRead(snapshot_id=None, verified=False)
+            if rows is None
+            else _typed_vm_role_snapshot(vm_id, rows)
+        )
+    if typed_read.snapshot_id is not None:
+        return typed_read
+    return _legacy_vm_role_snapshot(
+        vm_record,
+        custom_field_name=custom_field_name,
+        typed_read=typed_read,
+    )
 
 
 async def scan_vm_sidecar_orphan_candidates(

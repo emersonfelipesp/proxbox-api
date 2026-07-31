@@ -285,6 +285,23 @@ Main synchronization endpoints for virtual machines and related resources.
   `test_full_update_batch_preserves_operator_rename_when_sidecar_differs`,
   `test_full_update_batch_preserves_netbox_name_when_sidecar_name_is_blank`).
 
+- **VM role ownership is enforced on every write path.** The durable
+  `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` value is loaded
+  once for the full/bulk pass and compared with the current and desired roles
+  at `_dispatch_vm_operation_queue`. Because dispatch runs after the
+  Python/Rust reconciliation queue seam, both engines share the same policy.
+  GET operations may become a narrow role PATCH when a still-managed default
+  rolls forward; UPDATE operations have `role` removed when an operator edit is
+  locked; CREATE/adoption paths run the same decision. A missing snapshot
+  records the current role without changing it only when absence is verified;
+  unavailable, failed, or conflicting reads preserve the role without claiming
+  ownership. The sidecar snapshot is written only for successful operations,
+  retries three times, and marks the VM failed if all attempts fail. When the
+  operation changed the role, the persistence guard authoritatively re-reads the
+  typed snapshot, accepts a confirmed commit, or restores and verifies both the
+  previous role and snapshot. The next pass therefore retries only a genuinely
+  rolled-back change instead of treating response loss as an operator lock.
+
 ## Extension Guidance
 
 - Extract large helper blocks into service modules when adding new sync paths.
