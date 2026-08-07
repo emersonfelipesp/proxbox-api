@@ -129,11 +129,55 @@ Deleting the final active key is refused with `409`
 
 ## Brute-Force Protection
 
-The backend implements IP-based lockout:
+The backend stores lockout state in SQLite under a composite, secret-free
+bucket: normalized network source/trust context plus a server-keyed HMAC
+identifier. A stale key therefore cannot lock out a different valid key used
+from the same worker, reverse proxy, or client IP. Sync and async authentication
+share the same state service. Each request durably reserves credential and
+source budget before bcrypt and releases that token-scoped lease after the
+check, so concurrent requests cannot exceed the configured verification budget.
+Abandoned leases expire automatically after at least 60 seconds (or the longer
+configured lockout window), allowing crash recovery without letting a stale
+finalizer release newer work.
+A second durable source budget bounds attacks that rotate credentials; it is
+deliberately higher than the per-credential default. Row-cap cleanup considers
+only inactive, non-reserved buckets; active lockouts are never evicted, and new
+identities fail closed when no safe eviction candidate exists.
 
-- Maximum 5 failed attempts
-- 5-minute lockout duration
-- Lockout is cleared on successful authentication
+- Default threshold: 5 failed attempts (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, range 1-100)
+- Default source budget: 50 failed attempts (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, range 1-100000)
+- Default fixed window: 5 minutes (`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, range 1-86400)
+- Maximum durable bucket rows: 10000 (`PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, range 2-1000000)
+- An opaque identity key is atomically generated in the private sibling
+  `database.db.auth-lockout.key` file by default. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`
+  can supply an explicit 32-byte-or-longer value instead. Keep either source
+  stable across restarts and separate from rotatable credential encryption.
+- `PROXBOX_TRUSTED_PROXIES` explicitly controls which peer CIDRs may supply
+  `X-Forwarded-For`. No address, including localhost, is trusted implicitly.
+  Trusted proxies do not bypass authentication or lockout.
+
+The metrics endpoints expose only aggregate, label-free
+`proxbox_auth_*` counters and gauges. Logs and the recovery CLI use 12-character
+non-authenticating HMAC identifiers; raw keys and dictionary-testable hashes are never
+rendered.
+
+### Local lockout recovery
+
+Lockout administration is deliberately local and does not traverse the HTTP
+authentication middleware, so it remains usable during an HTTP lockout:
+
+```bash
+proxbox-auth-lockout --database /data/database.db list
+proxbox-auth-lockout --database /data/database.db clear --id 4a12bc34de56
+# Emergency reset of transient lockout state only:
+proxbox-auth-lockout --database /data/database.db clear --all
+```
+
+The database path is mandatory and must already contain the current lockout
+schema; the CLI never initializes or migrates a database. `list` opens SQLite in
+read-only mode. Its output contains source IP/trust context, bucket type, short
+bucket and credential identifiers, attempt count, and lock expiry; it never
+contains API-key material.
 
 ## Security Best Practices
 
@@ -166,4 +210,7 @@ Check that:
 
 ### "Too many failed authentication attempts"
 
-Wait 5 minutes for the lockout to expire, or restart the backend to reset the in-memory lockout state.
+Wait for the configured fixed window to expire, or use the local
+the explicit-database `proxbox-auth-lockout list` and `clear --id` commands.
+Lockout state and aggregate counters are durable SQLite data, so restarting the
+backend is not a recovery mechanism.

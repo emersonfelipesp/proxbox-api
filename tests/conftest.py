@@ -18,6 +18,10 @@ os.environ.setdefault("PROXBOX_RATE_LIMIT", "999999")
 # plaintext credential storage path. Production startup refuses this path
 # unless PROXBOX_ENCRYPTION_KEY is set; tests don't exercise on-disk storage.
 os.environ.setdefault("PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS", "1")
+os.environ.setdefault(
+    "PROXBOX_AUTH_LOCKOUT_HMAC_KEY",
+    "unit-test-only-auth-lockout-hmac-key-0000000000000000",
+)
 
 # Application database configuration is now resolved during lifespan startup
 # and intentionally uses deterministic user-data/container defaults. Keep the
@@ -71,6 +75,8 @@ def pytest_sessionfinish() -> None:
         "-shm",
         ".startup.lock",
         ".fresh-database-override-used",
+        ".auth-lockout.key",
+        ".auth-lockout.key.lock",
     ):
         Path(f"{_TEST_RUNTIME_DATABASE}{suffix}").unlink(missing_ok=True)
     shutil.rmtree(_TEST_RUNTIME_GENERATED_DIR, ignore_errors=True)
@@ -266,6 +272,7 @@ def db_engine(tmp_path: Path):
         f"sqlite:///{sqlite_file}",
         connect_args={"check_same_thread": False},
     )
+    database_module.configure_sqlite_engine(engine)
     SQLModel.metadata.create_all(engine)
     return engine
 

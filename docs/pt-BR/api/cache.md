@@ -97,6 +97,16 @@ proxbox_cache_hit_rate 75.0
 | `max_bytes` | gauge | Máximo de bytes permitidos |
 | `ttl_seconds` | gauge | Configuração atual de TTL |
 | `oldest_entry_age_seconds` | gauge | Idade da entrada mais antiga |
+| `proxbox_auth_failures_total` | counter | Tentativas de autenticacao rejeitadas em todos os buckets |
+| `proxbox_auth_lockouts_total` | counter | Buckets de credencial que entraram em bloqueio |
+| `proxbox_auth_source_lockouts_total` | counter | Origens normalizadas que esgotaram o orçamento agregado de falhas |
+| `proxbox_auth_recoveries_total` | counter | Buckets limpos por autenticacao valida ou administracao local |
+| `proxbox_auth_active_lockouts` | gauge | Buckets de credencial atualmente bloqueados |
+| `proxbox_auth_active_source_lockouts` | gauge | Orçamentos de origem atualmente bloqueados |
+
+As metricas de autenticacao sao agregadas e nao possuem labels de origem,
+credencial ou bucket. Isso impede que impressoes digitais de chaves e
+identidades de alta cardinalidade entrem na telemetria.
 
 ## Variáveis de Ambiente
 

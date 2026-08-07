@@ -15,14 +15,18 @@
   no precedence rule and no current-working-directory fallback.
 - ORM: SQLModel.
 - A persistent target-specific `.startup.lock` serializes the WAL probe, table
-  creation, and all migrations across workers. Failure is fatal, so the service
-  cannot accept requests against an unintended or unwritable database.
+  creation, auth-lockout schema validation, and all migrations across workers.
+  Failure is fatal, so the service cannot accept requests against an unintended
+  or unwritable database.
 - Every target is checked against legacy implicit database locations to prevent
   an empty database from reopening API-key bootstrap. The exact-value,
   one-start override is documented in the operations guide.
 
 See [Database Operations](../operations/database.md) for container and systemd
 configuration, safe migration, backup, and startup troubleshooting.
+- Credential-isolated lockouts use the versioned `auth_lockout_buckets` table.
+  The legacy IP-only `authlockout` table is left untouched for rollback; its
+  ambiguous rows are not imported into the new policy.
 
 ## NetBox Endpoint
 
@@ -227,7 +231,7 @@ See [Authentication](./authentication.md) for complete documentation on:
 
 Most runtime tunables now resolve in the order **environment variable > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. The settings cache TTL is 5 minutes, so changes made on the NetBox plugin settings page take effect on the next sync run without restarting the backend. Setting an environment variable still works as an override; leaving it unset means the plugin settings page is the authoritative source.
 
-A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
+A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` / `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`, `PROXBOX_TRUSTED_PROXIES`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
 
 ## Environment Variables
 
@@ -248,7 +252,13 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
 | `PROXBOX_RATE_LIMIT` | `300` | Maximum API requests per minute per IP address. |
-| `PROXBOX_TRUSTED_PROXIES` | (empty) | Comma-separated list of CIDRs or IP addresses for trusted reverse proxies. When a request arrives from a trusted proxy, `X-Forwarded-For` is trusted to resolve the originating client IP for rate-limiting and brute-force lockout. Without this, the peer IP is always used (prevents spoofed-header bypass). |
+| `PROXBOX_AUTH_LOCKOUT_THRESHOLD` | `5` | Failed attempts allowed per composite source/credential bucket. Valid range: 1-100; invalid values fail startup. |
+| `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD` | `50` | Failed attempts allowed across all presented credentials for one normalized source. Valid range: 1-100000. |
+| `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS` | `300` | Fixed failure/lockout window in seconds. Valid range: 1-86400; invalid values fail startup. |
+| `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS` | `10000` | Maximum total durable credential/source bucket rows. Valid range: 2-1000000; only inactive, non-reserved rows can be evicted. New identities fail closed if every candidate is active. |
+| `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` | unset | Optional explicit key for opaque lockout identities; minimum 32 bytes. When unset, proxbox-api atomically creates a private sibling key file. Keep the chosen source stable across credential-encryption-key rotation. |
+| `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE` | `<database>.auth-lockout.key` | Optional path for the auto-created/read identity key. The file must have no group/other permissions and must share durable storage with the SQLite database. |
+| `PROXBOX_TRUSTED_PROXIES` | (empty) | Comma-separated CIDRs/IPs for trusted reverse proxies. Invalid entries fail startup. Only requests from these peers may use `X-Forwarded-For`; no localhost bypass exists, and trust never bypasses authentication or lockout. |
 | `PROXBOX_FEATURES` | (empty) | Comma-separated list of optional sidecar-only feature flags: `pbs`, `ceph`, `pdm`. When set, only the listed sidecar route groups are mounted and all core Proxmox/NetBox/sync routes are skipped. Leave unset (or empty) to mount all route groups. |
 | `PROXBOX_ENSURE_NETBOX_OBJECTS` | `true` | When `false`, the NetBox bootstrap pass (custom fields, tags, etc.) is skipped at startup. Useful for read-only deployments or when NetBox is unavailable at boot. |
 | `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | unset | When set to `1`, `true`, or `yes`, remote SSH command execution is permitted inside the Cloud Image Build Pipeline (`routes/cloud/pipeline_scripts.py`). Off by default for security. Keep unset/false in staging and production until netbox-packer owns and validates its real consumer contract; the local consumer-shaped fixture is producer-owned and does not clear that rollout hold. |

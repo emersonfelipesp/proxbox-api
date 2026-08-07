@@ -19,6 +19,13 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `custom_fields.py`: canonical NetBox custom-field inventory, reconcile/cache helpers, force-reconcile support, and object-type union preservation.
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
+- `auth_lockout.py`: shared, request-independent authentication lockout state
+  service. It validates credential/source thresholds, window, row cap, and
+  trusted-proxy configuration; derives source-plus-credential buckets without
+  storing keys or dictionary-testable fingerprints; reserves verification
+  capacity before bcrypt with expiring token-scoped leases, applies fail-closed bounded atomic sync/async SQLite
+  transitions, persists aggregate label-free metrics, and provides safe local
+  inspection/clear selectors.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
 - `packer_preflight.py`: endpoint-scoped Cloud Image Pipeline readiness checks.
   It accepts one already-resolved Proxmox session, performs only GET calls for

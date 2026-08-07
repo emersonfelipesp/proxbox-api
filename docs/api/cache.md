@@ -97,6 +97,16 @@ proxbox_cache_hit_rate 75.0
 | `max_bytes` | gauge | Maximum allowed bytes |
 | `ttl_seconds` | gauge | Current TTL setting |
 | `oldest_entry_age_seconds` | gauge | Age of oldest entry |
+| `proxbox_auth_failures_total` | counter | Rejected authentication attempts across all buckets |
+| `proxbox_auth_lockouts_total` | counter | Credential buckets that entered lockout |
+| `proxbox_auth_source_lockouts_total` | counter | Normalized sources that exhausted their aggregate failure budget |
+| `proxbox_auth_recoveries_total` | counter | Buckets cleared by valid auth or local administration |
+| `proxbox_auth_active_lockouts` | gauge | Credential buckets currently locked |
+| `proxbox_auth_active_source_lockouts` | gauge | Source budgets currently locked |
+
+Authentication metrics are aggregate and intentionally have no source,
+credential, or bucket labels. This prevents API-key fingerprints and
+high-cardinality client identities from entering telemetry.
 
 ## Environment Variables
 

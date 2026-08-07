@@ -17,12 +17,12 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 
 | File | Role |
 |------|------|
-| `factory.py` | `create_app()` — assembles the full FastAPI application: registers all routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts generated Proxmox route registration during lifespan. |
-| `bootstrap.py` | Resolves the guarded SQLite target, initializes its complete probe/schema boundary under the target-specific interprocess lock, opens the default NetBox session, and records bootstrap status. Database failures are fatal while an absent NetBox endpoint remains non-fatal. |
+| `factory.py` | `create_app()` — assembles the import-safe FastAPI application: validates auth-lockout policy/trusted-proxy process configuration, registers middleware/routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts database/bootstrap, adjacent HMAC-key validation, plus generated Proxmox route registration during lifespan. |
+| `bootstrap.py` | Resolves the guarded SQLite target, initializes its complete probe/schema boundary (including auth-lockout validation) under the target-specific interprocess lock, opens the default NetBox session, and records bootstrap status. Database failures are fatal while an absent NetBox endpoint remains non-fatal. |
 | `cors.py` | Builds CORS allowed-origin lists from active NetBox endpoint records, including endpoint rows loaded after app construction. |
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
-| `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including NetBox GET and custom-field reconcile cache invalidation. |
-| `websockets.py` | WebSocket connection manager — tracks active connections and broadcasts sync progress messages. |
+| `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including durable label-free authentication lockout metrics plus NetBox GET and custom-field reconcile cache invalidation. |
+| `websockets.py` | WebSocket connection manager — uses the same normalized source/trust context and shared auth lockout service as HTTP, tracks active connections, and broadcasts sync progress messages. |
 | `full_update.py` | `POST /full-update` endpoint — orchestrates a full Proxmox-to-NetBox sync run with SSE or WebSocket streaming. Each handler registers its `operation_id` via `sync_state` so `GET /sync/active` reflects in-flight work. |
 | `sync_state.py` | Process-local registry of in-flight sync runs. Exposes `register_active_sync` (async context manager), `acquire_active_sync` / `release_active_sync` (for non-`with` call sites), and `get_active_sync` / `is_active` for the `/sync/active` probe. |
 | `root_meta.py` | Root metadata router — version, health, and standalone-mode info endpoints. |

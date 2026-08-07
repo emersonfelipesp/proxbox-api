@@ -77,7 +77,8 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_vm_sync.py` | Full VM sync workflow including coordinator and dry-run |
 | `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, retry semantics, failure isolation, and empty-queue short-circuit |
 | `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation |
-| `test_auth_lockout.py` | bcrypt API-key check, failed-attempt counting, lockout duration, and async path |
+| `test_auth_lockout.py` | Composite credential isolation, private stable identity-key bootstrap, pre-bcrypt token leases with rollover/orphan/stale-finalizer recovery, durable source budgets/counters, active-lock-preserving row caps, trusted/untrusted proxy normalization, sync/async and multiprocess atomic races, WAL/busy-timeout parity, full serialized bootstrap, rollback-compatible legacy schema, strict schema validation, and secret-safe metrics |
+| `test_auth_lockout_cli.py` | Explicit-existing-database enforcement plus read-only secret-safe inspection and recovery while the matching HTTP credential bucket is locked |
 | `test_auth_bootstrap.py` | One-shot bootstrap claim: atomic first-key registration, concurrent-claim 409, inactive-history keeps bootstrap closed, legacy backfill idempotency, final-active-key delete/deactivate guards, rotation flow |
 | `test_schema_cli.py` | `proxbox-schema` CLI subcommands (`list`, `status`, `generate`) via argparse |
 | `test_ensure_tag_duplicate_recovery.py` | `ensure_tag_async` concurrent-creation race recovery: slug/name fallback lookups, re-raise on miss, non-duplicate passthrough |
