@@ -13,7 +13,8 @@ from typing import Callable
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import Session
 
-from proxbox_api.database import ApiKey, AuthLockout, async_session_factory, engine, get_session
+from proxbox_api import database
+from proxbox_api.database import ApiKey, AuthLockout, get_session
 
 _LOCKOUT_DURATION = 300
 _MAX_FAILED_ATTEMPTS = 5
@@ -79,7 +80,7 @@ async def check_auth_header_async(api_key: str | None, client_ip: str) -> tuple[
 
     Returns (authorized, error_message) tuple.
     """
-    async with async_session_factory() as session:
+    async with database.get_async_sessionmaker()() as session:
         return await check_auth_header_with_session_async(session, api_key, client_ip)
 
 
@@ -147,7 +148,7 @@ def check_auth_header(api_key: str | None, client_ip: str) -> tuple[bool, str | 
 
     Returns (authorized, error_message) tuple.
     """
-    with Session(engine) as session:
+    with Session(database.get_engine()) as session:
         return check_auth_header_with_session(session, api_key, client_ip)
 
 

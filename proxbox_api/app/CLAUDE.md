@@ -18,8 +18,8 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | File | Role |
 |------|------|
 | `factory.py` | `create_app()` — assembles the full FastAPI application: registers all routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts generated Proxmox route registration during lifespan. |
-| `bootstrap.py` | Initializes SQLite tables, opens the default NetBox session, and records bootstrap status for health checks. Called once during lifespan startup. |
-| `cors.py` | Builds CORS allowed-origin list from active NetBox endpoint records. |
+| `bootstrap.py` | Resolves the guarded SQLite target, initializes its complete probe/schema boundary under the target-specific interprocess lock, opens the default NetBox session, and records bootstrap status. Database failures are fatal while an absent NetBox endpoint remains non-fatal. |
+| `cors.py` | Builds CORS allowed-origin lists from active NetBox endpoint records, including endpoint rows loaded after app construction. |
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
 | `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including NetBox GET and custom-field reconcile cache invalidation. |
 | `websockets.py` | WebSocket connection manager — tracks active connections and broadcasts sync progress messages. |
@@ -31,18 +31,20 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 
 ## Application Startup Sequence
 
-1. `create_app()` is called (imported by `proxbox_api.main`).
-2. Lifespan starts: `bootstrap.py` initializes the database and default NetBox session.
+1. `create_app()` is called (imported by `proxbox_api.main`) and assembles middleware, exception handlers, and routers without touching the database.
+2. Lifespan starts: `bootstrap.py` resolves one guarded absolute SQLite target; a persistent sibling lock serializes WAL/write proof, engines/tables, schema inspection, and every migration. The mandatory endpoint-table read then succeeds before optional NetBox client creation.
 3. Generated Proxmox routes are loaded and registered from `proxbox_api/generated/`.
 4. The NetBox bootstrap pass records `app.state.bootstrap_status`, which is exposed by `GET /extras/bootstrap-status`.
-5. Middleware (CORS, logging) and exception handlers are attached.
-6. All routers from `proxbox_api/routes/` are mounted.
-7. App is ready to serve.
+5. App becomes ready to serve; any database configuration/write failure prevents this transition.
+6. Lifespan shutdown disposes the sync and async engines and clears process-local database handles.
 
 ## Key Rules
 
 - Keep `factory.py` as the single composition root. Do not initialize sessions or routes elsewhere at module level.
-- `bootstrap.py` is idempotent: calling it when the database already exists is safe.
+- `bootstrap.py` is idempotent for the same configured target. A second, conflicting target in one process is an error.
+- Database target resolution and verification must remain before route/bootstrap work that can accept traffic. Never catch and downgrade `DatabaseConfigurationError` or `DatabaseStartupError`.
+- Keep probe, engine/table creation, and all migrations inside the same target-specific advisory-lock acquisition. The lock file is persistent and must not be unlinked while workers can run.
+- Never downgrade migration inspection or the required post-schema endpoint-table read to an optional NetBox connection failure.
 - WebSocket broadcasts in `websockets.py` must tolerate disconnected clients silently.
 - `PROXBOX_STRICT_STARTUP=1` turns generated-route load failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP=1` disables the default endpoint bootstrap (useful in test environments).

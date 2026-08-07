@@ -44,6 +44,20 @@ The `Dockerfile` at the repo root uses five stages:
 ## Key Notes
 
 - `supervisor/proxbox.conf` runs `uvicorn proxbox_api.main:app` — update this if the ASGI entry point changes.
+- Both runtime-base stages set the internal fallback
+  `PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db` and declare `/data` as a
+  volume. The fallback is consulted only when neither operator-facing
+  `PROXBOX_DATABASE_PATH` nor `DATABASE_URL` is set. Lifespan startup requires
+  the selected target and its parent to support SQLite WAL writes plus the
+  persistent sibling `.startup.lock`; that lock serializes probe, tables, and
+  migrations across container workers. It never creates a cwd fallback
+  database. Custom targets must be absolute and mounted writable. Raw `?`
+  delimiters in `DATABASE_URL` are rejected.
+- The fresh-database-with-legacy recovery override is intentionally
+  single-worker. Stop the normal topology and set `UVICORN_WORKERS=1` before
+  starting recovery; the app rejects the override under the normal four-worker
+  production setting. Remove the override after first-key registration, then
+  restore the normal worker count.
 - The nginx image always uses HTTPS; there is no HTTP-only nginx variant.
 - The granian image requires the TLS key in PKCS#8 format; `entrypoint-granian.sh` converts it automatically with `openssl pkcs8`.
 - For Let's Encrypt / production TLS, configure nginx externally with cert volume mounts.

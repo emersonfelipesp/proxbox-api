@@ -312,7 +312,7 @@ resolves **env var (override) → `ProxboxPluginSettings` → built-in default**
 
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
-`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_RATE_LIMIT`,
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_CORS_EXTRA_ORIGINS`. Anything that controls sync behavior, batching,
@@ -327,6 +327,27 @@ the `netbox-proxbox` side, do all five — the existing fields in
 
 See `CLAUDE.md → Environment Variables → Adding a new tunable` for the full keep-list
 and resolution-order details.
+
+## Database Startup Boundary
+
+`proxbox_api/database.py` resolves one absolute SQLite target during FastAPI
+lifespan startup. `PROXBOX_DATABASE_PATH` is canonical when explicitly
+configured; an absolute SQLite `DATABASE_URL` is compatible, but both operator
+settings must normalize to the same file
+when supplied together. Relative/in-memory targets and cwd fallback are
+forbidden, and every raw `?` delimiter in `DATABASE_URL` is rejected. Apply the
+legacy API-key-history guard to default and explicit targets; the exact-value
+`PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY=1` escape is restricted to an
+isolated, audited fresh-control-plane startup and must be removed after first-key
+registration. It is atomically consumed by a durable sibling marker before
+database writes; never delete that marker to re-arm bootstrap. Inaccessible
+legacy candidates are fatal. Recovery requires explicit `UVICORN_WORKERS=1`;
+multi-worker or unspecified recovery must fail before writes. The target's persistent sibling `.startup.lock`
+serializes WAL probe, engine/table creation, fatal schema inspection, and all
+migrations across processes; the required endpoint-table read must then pass
+before readiness. Consumers use `get_engine()` / `get_async_sessionmaker()` after
+startup; do not restore import-time engine construction, split the serialized
+startup boundary, or downgrade database configuration/startup failures.
 
 Physical-NIC MAC reflection is a native NetBox write and therefore uses its own
 plugin-only opt-in, `hardware_discovery_sync_nic_macs` (default `false`), in

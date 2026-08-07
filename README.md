@@ -243,6 +243,10 @@ Common to all images, including the experimental PyO3/Rust variants:
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Bind address for the API server. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
+| `UVICORN_WORKERS` | `1` | Worker count for the raw-image entrypoint. The emergency fresh-database override requires this to be explicitly `1`. |
+| `PROXBOX_DATABASE_PATH` | unset | Optional absolute SQLite path. Without either database variable, containers use `/data/database.db`; non-container launches use `$XDG_DATA_HOME/proxbox/database.db` or `~/.local/share/proxbox/database.db`. |
+| `DATABASE_URL` | — | Compatibility input for an absolute local SQLite URL. If the path variable is also set, both must identify the same file. |
+| `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY` | — | Emergency exact-value `1` override for one audited, explicitly single-worker startup while a legacy database remains. Set `UVICORN_WORKERS=1`; remove the override after first-key registration. A durable sibling marker prevents reuse. |
 | `PROXBOX_LOG_LEVEL` | `INFO` | Console log verbosity. Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Set to `DEBUG` for verbose tracing (also enables full `netbox_sdk.client` request tracing). The in-memory log buffer and rotating file handler are unaffected. |
 
 mkcert-specific (only for `nginx` and `granian`):
@@ -261,7 +265,14 @@ docker run -d -p 8443:8000 --name proxbox-api-tls \
 
 ### Database Persistence
 
-The SQLite database is stored at `/data/database.db` by default. The `/data` directory is declared as a Docker volume mount point, allowing you to persist the database across container restarts and image upgrades.
+The container supplies `/data/database.db` as an internal fallback without
+setting either operator-facing database variable, and `/data` is declared as a
+volume mount point. A custom `DATABASE_URL` therefore works by itself. Startup refuses relative paths,
+conflicting database settings, read-only targets, and filesystems that cannot
+perform a SQLite WAL write. It also refuses raw `?` URL delimiters and fresh
+targets that would bypass legacy API-key history. A persistent sibling
+`.startup.lock` serializes probe, schema creation, and migrations across
+workers. It never falls back to the container working directory.
 
 **Mount a volume for persistence:**
 
@@ -281,6 +292,10 @@ docker run -d -p 8000:8000 \
   emersonfelipesp/proxbox-api:latest
 ```
 
+The mounted directory must be writable by the service account. A permissions
+or read-only-mount problem stops the service before it accepts requests; inspect
+the startup log instead of expecting an empty fallback database.
+
 **Override the database path (optional):**
 
 If you prefer a custom database location, set `PROXBOX_DATABASE_PATH`:
@@ -292,6 +307,12 @@ docker run -d -p 8000:8000 \
   --name proxbox-api \
   emersonfelipesp/proxbox-api:latest
 ```
+
+Existing deployments that use SQLAlchemy URLs may instead set an absolute
+SQLite `DATABASE_URL`, for example
+`sqlite:////custom/path/database.db`. If both operator variables are explicitly set, they must
+resolve to the same file or startup fails. See [Database Operations](docs/operations/database.md)
+for systemd configuration, migration, backup, and recovery procedures.
 
 **With Docker Compose:**
 

@@ -4,9 +4,25 @@
 
 ## Database Location
 
-- Default SQLite file: `database.db` in the repository root.
+- Default SQLite file: `$XDG_DATA_HOME/proxbox/database.db` or
+  `~/.local/share/proxbox/database.db` outside containers; published images use
+  an internal `/data/database.db` fallback without setting an operator variable.
+- `PROXBOX_DATABASE_PATH` selects another absolute file path.
+- `DATABASE_URL` remains compatible with absolute `sqlite`, `sqlite+pysqlite`,
+  and `sqlite+aiosqlite` URLs. Relative/in-memory URLs and every raw `?` query
+  delimiter are refused.
+- If both variables are present, they must resolve to the same file. There is
+  no precedence rule and no current-working-directory fallback.
 - ORM: SQLModel.
-- Tables are created automatically at startup.
+- A persistent target-specific `.startup.lock` serializes the WAL probe, table
+  creation, and all migrations across workers. Failure is fatal, so the service
+  cannot accept requests against an unintended or unwritable database.
+- Every target is checked against legacy implicit database locations to prevent
+  an empty database from reopening API-key bootstrap. The exact-value,
+  one-start override is documented in the operations guide.
+
+See [Database Operations](../operations/database.md) for container and systemd
+configuration, safe migration, backup, and startup troubleshooting.
 
 ## NetBox Endpoint
 
@@ -211,12 +227,16 @@ See [Authentication](./authentication.md) for complete documentation on:
 
 Most runtime tunables now resolve in the order **environment variable > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. The settings cache TTL is 5 minutes, so changes made on the NetBox plugin settings page take effect on the next sync run without restarting the backend. Setting an environment variable still works as an override; leaving it unset means the plugin settings page is the authoritative source.
 
-A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
+A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `PROXBOX_DATABASE_PATH` | unset | Optional absolute operational SQLite path. Relative paths are refused and the service never falls back to its working directory. |
+| `DATABASE_URL` | unset | Compatibility input for an absolute local SQLite URL, such as `sqlite:////var/lib/proxbox-api/database.db`. If set with `PROXBOX_DATABASE_PATH`, both must select the same file. Raw `?` delimiters and queries are refused. |
+| `UVICORN_WORKERS` | image default `1`; production may override | Worker count used by the raw-image entrypoint. It must be explicitly `1` for the isolated fresh-database recovery override. |
+| `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY` | unset | Security-sensitive, exact-value `1` override for one audited startup of a deliberately fresh control plane while a different legacy database exists. Stop all workers, set `UVICORN_WORKERS=1`, isolate traffic, register the first API key, then remove the override and restore workers. A durable sibling marker prevents reuse. |
 | `PROXBOX_NETBOX_TIMEOUT` | `120` | NetBox API client timeout in seconds. Applied to `netbox-sdk` config and underlying requests. |
 | `PROXBOX_NETBOX_MAX_RETRIES` | `5` | Retry attempts for transient NetBox connection failures. |
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Initial retry delay in seconds for NetBox retries. |
