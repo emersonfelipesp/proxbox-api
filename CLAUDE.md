@@ -168,6 +168,7 @@ Open the nearest scoped guide for the code you are changing.
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
 - Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
 - Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and a one-shot bootstrap flow for first-time key registration. Bootstrap is consumed atomically and permanently: `ApiKey.bootstrap_first_key_async()` commits the durable `ApiKeyBootstrapClaim` singleton (`database.py`, CHECK `id = 1`) and the first key's bcrypt hash in one transaction, a lost claim race maps to a stable HTTP 409, and `bootstrap_is_claimed_async()` treats any key row — active or inactive — as consumed, so deactivating or deleting keys never reopens unauthenticated registration. Legacy databases are backfilled on startup by `_migrate_api_key_bootstrap_claim()` (idempotent `INSERT OR IGNORE ... WHERE EXISTS`). Retiring the final active key is refused: `DELETE /auth/keys/{id}` and `POST /auth/keys/{id}/deactivate` serialize through SQLite `BEGIN IMMEDIATE` and return 409 `last_active_api_key_required` when the target is the only active key. Contracts: `tests/test_auth_bootstrap.py`.
+- Database lifecycle (`proxbox_api/database.py`, `proxbox_api/app/bootstrap.py`): resolves one absolute SQLite target from `PROXBOX_DATABASE_PATH` or a compatible query-free SQLite `DATABASE_URL`, refuses ambiguity/cwd fallback/raw `?` delimiters, and fails closed when a legacy candidate cannot be verified. The auth-history guard applies to default and explicit targets. Exact `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY=1` is isolated/audited and atomically consumed by a durable sibling marker before database writes, so stale configuration cannot reauthorize bootstrap after target loss. A persistent `.startup.lock` serializes WAL/write probe, engine/table creation, fatal schema inspection, and all migrations across processes; the post-schema endpoint read is mandatory before readiness. Engines do not exist at import; consumers use typed accessors after startup. Contracts: `tests/test_database_startup.py`.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): validate payloads, normalize data, and define contract-safe choice values.
@@ -177,8 +178,8 @@ Open the nearest scoped guide for the code you are changing.
 
 ### Runtime flow
 
-1. `proxbox_api.app.factory.create_app()` initializes database state, builds the default NetBox session, and records bootstrap status.
-2. The app registers generated Proxmox proxy routes during lifespan startup and wires shared middleware, routers, and exception handlers.
+1. `proxbox_api.app.factory.create_app()` assembles middleware, routers, and exception handlers without resolving or opening the database.
+2. Lifespan startup resolves and verifies the SQLite target, builds engines/tables and the default NetBox session, then registers generated Proxmox proxy routes and records bootstrap status.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
@@ -296,7 +297,8 @@ resolves **env var (override) → `ProxboxPluginSettings` → built-in default**
 
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
-`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`,
+`PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`,
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_CORS_EXTRA_ORIGINS`, `PROXBOX_SSH_KEY_DIR`. Anything that controls sync behavior, batching,
@@ -312,7 +314,9 @@ the `netbox-proxbox` side, do all five — the existing fields in
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
-- `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Default is `/data/database.db` (a Docker volume mount point). Docker volumes should be mounted at `/data` to persist the database across container restarts and image upgrades. Production deployments can override this to `/var/lib/proxbox-api/database.db` if needed.
+- `PROXBOX_DATABASE_PATH`: optional absolute SQLite database path. Outside containers the default is `$XDG_DATA_HOME/proxbox/database.db` or `~/.local/share/proxbox/database.db`; published images provide an internal `/data/database.db` fallback without populating this operator variable, so a custom `DATABASE_URL` works alone. Production systemd deployments should set `/var/lib/proxbox-api/database.db` and grant the service account write/search permission on its parent. Relative paths are refused; there is no current-working-directory fallback. Startup requires WAL and serializes the complete schema boundary with a sibling advisory lock.
+- `DATABASE_URL`: compatibility input for an absolute local `sqlite`, `sqlite+pysqlite`, or `sqlite+aiosqlite` URL. In-memory/relative/non-SQLite URLs, URL credentials, every raw `?` delimiter/query, and conflicting dual configuration are fatal. When both database variables are set, their normalized paths must match. See `docs/operations/database.md`.
+- `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`: security-sensitive exact-value `1` override for one audited startup of a deliberately fresh target while a legacy implicit database remains. Stop all workers, set exact `UVICORN_WORKERS=1`, isolate traffic, register the first API key, preserve the path-rendered warning and durable marker, then remove the override and restore normal workers. Multi-worker/unspecified recovery is rejected before writes. Never delete the marker to re-arm bootstrap.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 300). Read at app construction.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.

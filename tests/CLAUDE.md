@@ -26,6 +26,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
+| `test_database_startup.py` | Typed SQLite path/URL resolution, raw-query truncation refusal, inaccessible/default/explicit legacy-auth guard, canonical claim validation, single-worker audited override/marker/reuse refusal, four-process override rejection and schema serialization, fatal migration/post-schema reads, WAL/write rollback, read-only failures, import safety, and lifespan contracts |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
@@ -141,6 +142,7 @@ on protected branches. The long-term target is 85%.
 - `proxmox_sdk` is the canonical mock source for Proxmox API responses.
 - Keep each test file scoped to one module or workflow; cross-cutting concerns go in `fixtures.py`.
 - The global `tests/conftest.py` sets `PROXBOX_RATE_LIMIT=999999` at module-import time so SlowAPI does not trip during the suite.
+- The global test environment selects a per-process absolute `PROXBOX_DATABASE_PATH` before importing the app and disables discovery of real host legacy candidates. Production uses a user-data default outside containers and `/data/database.db` inside them; tests must never inspect a host control-plane database. Dedicated startup tests replace the candidate provider only with synthetic temp paths.
 - Reconciliation fixtures must stay deterministic. Include `vm_type` in VM
   identity expectations so QEMU and LXC resources with the same VMID do not
   collide.

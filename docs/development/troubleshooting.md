@@ -140,13 +140,25 @@ Resolution:
 
 ## Database state concerns
 
-Note:
+Symptoms:
 
-- Current startup DB behavior creates missing tables without dropping data.
+- The process exits before `/health` becomes available.
+- Logs report a relative/conflicting database target, raw URL query delimiter,
+  legacy auth-state conflict, startup-lock failure, or WAL/write failure.
 
-If needed:
+Resolution:
 
-- Backup `database.db` before schema experiments.
+- Inspect the unit/container environment and resolve the exact absolute target;
+  the service never falls back to a cwd database.
+- Correct ownership, directory-search permission, free space, filesystem WAL
+  support, or container mount mode for that target and its `-wal`, `-shm`, and
+  persistent `.startup.lock` sidecars. Never remove a lock used by live workers.
+- Preserve the SQLite database together with any active `-wal` and `-shm`
+  files when taking a stopped-service backup.
+- Follow [Database Operations](../operations/database.md) before moving the file
+  or changing either database variable. Its isolated, auditable override is the
+  only supported way to start a deliberately fresh control plane while a legacy
+  database remains.
 
 ## SSE streaming issues
 

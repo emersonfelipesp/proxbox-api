@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,18 @@ os.environ.setdefault("PROXBOX_RATE_LIMIT", "999999")
 # unless PROXBOX_ENCRYPTION_KEY is set; tests don't exercise on-disk storage.
 os.environ.setdefault("PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS", "1")
 
+# Application database configuration is now resolved during lifespan startup
+# and intentionally uses deterministic user-data/container defaults. Keep the
+# test application's process-global engine isolated in a per-worker temp file;
+# individual route tests continue to override sessions with ``db_engine``.
+os.environ["PROXBOX_DATABASE_PATH"] = str(
+    Path(tempfile.gettempdir()) / f"proxbox-api-pytest-{os.getpid()}.db"
+)
+os.environ.pop("DATABASE_URL", None)
+os.environ["PROXBOX_GENERATED_DIR"] = str(
+    Path(tempfile.gettempdir()) / f"proxbox-api-generated-pytest-{os.getpid()}"
+)
+
 import pytest
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
@@ -24,6 +38,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from proxbox_api import database as database_module
 from proxbox_api.database import get_async_session, get_session
 from proxbox_api.main import app
 from proxbox_api.netbox_rest import _reset_netbox_globals
@@ -37,6 +52,28 @@ from proxbox_api.services.sync.sync_state_reader import (
 )
 from proxbox_api.session.netbox import get_netbox_async_session, get_netbox_session
 from proxbox_api.settings_client import invalidate_settings_cache
+
+# The developer host can have a real legacy /data/database.db. Keep the test
+# process isolated from host control-plane state; dedicated startup tests
+# replace this candidate provider with synthetic paths when exercising the
+# legacy-database guard.
+database_module._legacy_default_database_candidates = tuple
+
+_TEST_RUNTIME_DATABASE = Path(os.environ["PROXBOX_DATABASE_PATH"])
+_TEST_RUNTIME_GENERATED_DIR = Path(os.environ["PROXBOX_GENERATED_DIR"])
+
+
+def pytest_sessionfinish() -> None:
+    """Remove process-owned runtime database, sidecars, and generated cache."""
+    for suffix in (
+        "",
+        "-wal",
+        "-shm",
+        ".startup.lock",
+        ".fresh-database-override-used",
+    ):
+        Path(f"{_TEST_RUNTIME_DATABASE}{suffix}").unlink(missing_ok=True)
+    shutil.rmtree(_TEST_RUNTIME_GENERATED_DIR, ignore_errors=True)
 
 
 class FakeNetBoxSession:

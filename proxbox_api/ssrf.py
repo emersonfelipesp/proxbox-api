@@ -63,13 +63,13 @@ def get_registered_endpoints() -> tuple[set[str], set[str]]:
 
     from sqlmodel import Session, select
 
-    from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint, engine
+    from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint, get_engine
 
     ips: set[str] = set()
     domains: set[str] = set()
 
     try:
-        with Session(engine) as session:
+        with Session(get_engine()) as session:
             for endpoint in session.exec(select(ProxmoxEndpoint)).all():
                 if endpoint.ip_address:
                     ips.add(endpoint.ip_address.split("/")[0])

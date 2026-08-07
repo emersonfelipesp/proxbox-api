@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Sequence
+
+from starlette.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 
 
-def build_cors_origins(netbox_endpoints: list[object]) -> list[str]:
+def build_cors_origins(netbox_endpoints: Sequence[object]) -> list[str]:
     """Return unique allowed origins for CORSMiddleware."""
     origins: list[str] = []
     for netbox_endpoint in netbox_endpoints:
@@ -45,3 +49,39 @@ def build_cors_origins(netbox_endpoints: list[object]) -> list[str]:
             origins.append(origin)
 
     return list(dict.fromkeys(origins))
+
+
+class DatabaseAwareCORSMiddleware(CORSMiddleware):
+    """Preserve endpoint-derived origins after DB bootstrap moved to lifespan."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        endpoint_provider: Callable[[], Sequence[object]],
+        allow_origins: Sequence[str] = (),
+        allow_methods: Sequence[str] = ("GET",),
+        allow_headers: Sequence[str] = (),
+        allow_credentials: bool = False,
+        allow_origin_regex: str | None = None,
+        allow_private_network: bool = False,
+        expose_headers: Sequence[str] = (),
+        max_age: int = 600,
+    ) -> None:
+        self._endpoint_provider = endpoint_provider
+        super().__init__(
+            app,
+            allow_origins=allow_origins,
+            allow_methods=allow_methods,
+            allow_headers=allow_headers,
+            allow_credentials=allow_credentials,
+            allow_origin_regex=allow_origin_regex,
+            allow_private_network=allow_private_network,
+            expose_headers=expose_headers,
+            max_age=max_age,
+        )
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        if super().is_allowed_origin(origin):
+            return True
+        return origin in build_cors_origins(self._endpoint_provider())

@@ -103,7 +103,9 @@ HTTP_CONFLICT = 409
 HTTP_INTERNAL_ERROR = 500
 
 # File paths
-DEFAULT_DB_PATH = "/data/database.db"
+# Non-container fallback. Container images supply a separate packaged default
+# under /data without populating either operator-facing database variable.
+DEFAULT_DB_PATH = "~/.local/share/proxbox/database.db"
 DEFAULT_LOG_PATH = "/var/log/proxbox.log"
 
 # Proxmox node name validation — must start with alphanumeric, then allow dots/hyphens/underscores.

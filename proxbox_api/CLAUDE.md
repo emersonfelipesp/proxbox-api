@@ -36,9 +36,9 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 ## Runtime Boundaries
 
-- `proxbox_api.app.factory.create_app()` is the application assembly point. It initializes bootstrap state, registers middleware (including `APIKeyAuthMiddleware`), mounts root/cache/full-update/WebSocket routes, and exposes the `app` object imported by `proxbox_api.main`.
+- `proxbox_api.app.factory.create_app()` is the import-safe application assembly point. It registers middleware (including `APIKeyAuthMiddleware`), mounts root/cache/full-update/WebSocket routes, and exposes the `app` object imported by `proxbox_api.main`; database and network bootstrap occur only when its lifespan starts.
 - `auth.py` implements bcrypt-hashed API key validation, IP-based brute-force lockout, and the `check_auth_header_with_session` helper used by `APIKeyAuthMiddleware`.
-- `database.py` persists NetBox and Proxmox endpoint records, API keys, and auth lockout state in SQLite.
+- `database.py` owns the typed SQLite resolver, fail-closed legacy candidate/auth-history guard, exact/audited one-start override plus durable consumption marker, persistent startup advisory lock, fatal WAL/write probe and migration inspection, lifecycle-managed engines, and persisted endpoint/auth models. The lock covers probe, engine/table creation, and every migration across processes. Use typed accessors after lifespan startup; do not hide legacy/stat or inspection failures, accept raw `?` URL delimiters, delete override markers to re-arm bootstrap, or split the serialized boundary.
 - `session/netbox.py` and `session/proxmox.py` own client construction and dependency wiring. Route handlers should use these dependencies instead of creating clients inline.
 - `services/sync/`, `services/sync/reconciliation/`, and
   `routes/virtualization/virtual_machines/` handle the main Proxmox-to-NetBox
@@ -53,7 +53,7 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 ## Key Data Flow
 
-1. Startup bootstraps the local database and default NetBox session unless bootstrap is skipped.
+1. Lifespan startup resolves one guarded absolute SQLite target, acquires its persistent sibling lock, verifies WAL/write capability, creates tables/runs all migrations, and then bootstraps the default NetBox session unless skipped. Database verification and the complete interprocess lock boundary are never skipped.
 2. Routes resolve NetBox or Proxmox clients through dependency aliases.
 3. Service modules fetch source data, normalize it through schemas, and create or update NetBox objects.
 4. Full VM sync prepares Proxmox VM state plus a NetBox snapshot, then calls
