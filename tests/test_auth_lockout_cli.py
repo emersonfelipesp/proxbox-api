@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any, cast
 
 from sqlmodel import Session, create_engine
 
-from proxbox_api import auth
+from proxbox_api import auth, database
 from proxbox_api.auth_lockout_cli import main
-from proxbox_api.database import ApiKey, AuthLockout
+from proxbox_api.database import ApiKey, AuthLockout, AuthLockoutIdentityKeyBinding
 from proxbox_api.services.auth_lockout import (
     AuthLockoutPolicy,
     AuthLockoutService,
@@ -114,7 +115,7 @@ def test_cli_rejects_partial_lockout_schema(tmp_path, capsys) -> None:
         target.dispose()
 
     assert main(["--database", str(database_path), "list"]) == 2
-    assert "no auth_lockout_metrics table" in capsys.readouterr().err
+    assert "no auth_lockout_reservations table" in capsys.readouterr().err
 
 
 def test_cli_list_opens_explicit_database_read_only(db_engine, capsys) -> None:
@@ -125,3 +126,126 @@ def test_cli_list_opens_explicit_database_read_only(db_engine, capsys) -> None:
     assert main(["--database", str(database_path), "list"]) == 0
     assert "No authentication lockout buckets" in capsys.readouterr().out
     assert hashlib.sha256(database_path.read_bytes()).digest() == before
+
+
+def test_identity_key_rebind_requires_offline_lease_and_resets_atomically(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    database_path = tmp_path / "rebind.db"
+    current_key = tmp_path / "current.key"
+    replacement_key = tmp_path / "replacement.key"
+    current_key.write_text("current-" + "a" * 48, encoding="utf-8")
+    replacement_key.write_text("replacement-" + "b" * 48, encoding="utf-8")
+    current_key.chmod(0o600)
+    replacement_key.chmod(0o600)
+    monkeypatch.setattr(database, "_legacy_default_database_candidates", tuple)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(current_key))
+    monkeypatch.delenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY", raising=False)
+
+    database.initialize_database_and_schema()
+    identity = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.80", None, ()),
+        RAW_STALE_KEY,
+    )
+    with Session(database.get_engine()) as session:
+        AuthLockoutService.record_failure(
+            session,
+            identity,
+            AuthLockoutPolicy(threshold=2, window_seconds=60),
+            now=100.0,
+        )
+
+    command = [
+        "--database",
+        str(database_path),
+        "rebind-key",
+        "--key-file",
+        str(replacement_key),
+        "--confirm-reset-lockouts",
+    ]
+    assert main(command) == 2
+    assert "worker still holds the runtime lease" in capsys.readouterr().err
+
+    asyncio.run(database.dispose_database())
+    assert main(command) == 0
+    assert "generation 2" in capsys.readouterr().out
+
+    verification_engine = create_engine(f"sqlite:///{database_path}")
+    try:
+        with Session(verification_engine) as session:
+            assert AuthLockoutService.list_rows(session) == []
+            binding = session.get(AuthLockoutIdentityKeyBinding, 1)
+            assert binding is not None
+            assert binding.generation == 2
+    finally:
+        verification_engine.dispose()
+
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(replacement_key))
+    database.initialize_database_and_schema()
+    asyncio.run(database.dispose_database())
+
+
+def test_identity_key_rebind_recovers_missing_binding_with_opaque_state(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    database_path = tmp_path / "missing-binding.db"
+    current_key = tmp_path / "missing-binding-current.key"
+    replacement_key = tmp_path / "missing-binding-replacement.key"
+    current_key.write_text("current-" + "a" * 48, encoding="utf-8")
+    replacement_key.write_text("replacement-" + "b" * 48, encoding="utf-8")
+    current_key.chmod(0o600)
+    replacement_key.chmod(0o600)
+    monkeypatch.setattr(database, "_legacy_default_database_candidates", tuple)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(current_key))
+    monkeypatch.delenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY", raising=False)
+
+    database.initialize_database_and_schema()
+    identity = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.81", None, ()),
+        RAW_STALE_KEY,
+    )
+    with Session(database.get_engine()) as session:
+        AuthLockoutService.record_failure(
+            session,
+            identity,
+            AuthLockoutPolicy(threshold=2, window_seconds=60),
+            now=100.0,
+        )
+        binding = session.get(AuthLockoutIdentityKeyBinding, 1)
+        assert binding is not None
+        session.delete(binding)
+        session.commit()
+    asyncio.run(database.dispose_database())
+
+    command = [
+        "--database",
+        str(database_path),
+        "rebind-key",
+        "--key-file",
+        str(replacement_key),
+        "--confirm-reset-lockouts",
+    ]
+    assert main(command) == 0
+    output = capsys.readouterr().out
+    assert "generation 1" in output
+    assert "cleared 2 lockout bucket(s)" in output
+
+    verification_engine = create_engine(f"sqlite:///{database_path}")
+    try:
+        with Session(verification_engine) as session:
+            assert AuthLockoutService.list_rows(session) == []
+            binding = session.get(AuthLockoutIdentityKeyBinding, 1)
+            assert binding is not None
+            assert binding.generation == 1
+    finally:
+        verification_engine.dispose()
+
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(replacement_key))
+    database.initialize_database_and_schema()
+    asyncio.run(database.dispose_database())

@@ -30,22 +30,58 @@ process using the same target then runs this complete boundary serially:
 1. Creates only the configured parent directory when it does not exist.
 2. Rejects a non-directory parent, a non-file target, or mode-level read-only
    file/directory.
-3. Opens the selected SQLite file and requires `journal_mode=WAL`.
+3. Opens the selected SQLite file, installs `busy_timeout=5000` before WAL
+   negotiation, and requires `journal_mode=WAL`.
 4. Creates, writes, and reads a uniquely named internal probe table inside
    `BEGIN IMMEDIATE`, then rolls the transaction back.
 5. Confirms that the probe table left no schema residue.
-6. Constructs the engines, creates all declared tables, and runs every
-   idempotent migration before releasing the advisory lock.
+6. Constructs the engines, creates all declared tables, runs every idempotent
+   migration, validates the complete auth-lockout bucket/reservation/metric/
+   key-binding schema, and validates/binds the HMAC-key fingerprint.
+7. Acquires a shared `<database>.runtime.lock` lease before releasing the
+   startup lock. The process holds that lease until engine disposal.
 
 The probe commits no application row or probe table. Enabling WAL can create
 or update SQLite's normal database, `-wal`, and `-shm` files. The sibling lock
-file intentionally remains in place; do not delete or replace it while any
-worker is running. If any step fails, startup exits with an actionable error
+files intentionally remain in place; do not delete or replace them while any
+worker is running. The runtime lease lets offline identity-key recovery prove
+that every worker is stopped. If any step fails, startup exits with an actionable error
 and the API does not accept traffic.
 
 Schema inspection is part of the fatal migration boundary. An inspection error
 is never interpreted as "migration not needed," and the required post-schema
 `NetBoxEndpoint` read must succeed before the service reports ready.
+
+## Durable authentication state
+
+Authentication concurrency and failure history use separate versioned tables:
+
+- `auth_lockout_reservations` stores one durable token per admitted bcrypt
+  verification, with independent credential/source IDs and expiry. Expired
+  crash tokens no longer consume capacity, remain observable through
+  `proxbox_auth_expired_orphan_reservations`, and can be consumed exactly once by
+  a late finalizer for one hour after expiry. Older tokens are compacted into
+  `proxbox_auth_orphan_compactions_total`, bounding storage. The atomic global
+  ceiling also prevents distinct source/key pairs from bypassing bcrypt resource
+  control. A token never releases or extends another reservation.
+- `auth_lockout_buckets` stores only rejected-credential history. Its bounded
+  row budget is split into independent credential and source partitions. A full
+  failure-row partition never prevents bcrypt or acceptance of a valid unseen
+  key; rejected identities that cannot be persisted still increment aggregate
+  failure and capacity-rejection counters.
+- `auth_lockout_metrics` stores durable label-free counters. The metrics surface
+  also derives current bucket rows, unexpired in-flight reservations, and
+  expired orphan reservations without source, credential, or token labels; its
+  compaction counter preserves aggregate evidence beyond the retention horizon.
+- `auth_lockout_identity_key_binding` stores the non-secret singleton fingerprint
+  and generation. Startup pins the validated HMAC key material in process memory,
+  so deletion or replacement of the source file after readiness cannot change
+  identities in that worker.
+
+All four table schemas are created and strictly validated inside the serialized
+startup boundary. The offline identity-key rebind requires all four existing
+tables and their current columns, including the reservation schema, and never
+initializes or migrates them.
 
 ## Containers
 
@@ -56,7 +92,8 @@ PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db
 ```
 
 Mount persistent storage at `/data` and ensure the container runtime user can
-create the database plus its `-wal`, `-shm`, and `.startup.lock` sidecars:
+create the database plus its `-wal`, `-shm`, `.startup.lock`, `.runtime.lock`,
+and `.auth-lockout.key` sidecars:
 
 ```bash
 docker run -d --name proxbox-api \
@@ -104,8 +141,9 @@ Treat the SQLite file and its WAL state as one consistency boundary:
 
 1. Stop every `proxbox-api` process that uses the database.
 2. Take a recoverable backup of the current database. With the service stopped,
-   preserve the database together with any existing `-wal` and `-shm` files;
-   an online copy must instead use SQLite's backup API.
+   preserve the database together with any existing `-wal` and `-shm` files and
+   its bound `.auth-lockout.key`; an online copy must instead use SQLite's backup
+   API and must retain the exact bound identity-key material.
 3. Create the destination directory and grant it to the service account.
 4. Copy the consistent database set to the new destination and retain the
    original backup until validation is complete.
@@ -146,6 +184,38 @@ Only the exact value `1` is accepted; the setting is rejected when there is no
 legacy conflict or the target already preserves key history. The override does
 not migrate or delete legacy data.
 
+## Auth-lockout identity-key binding
+
+The first successful schema startup stores a non-secret fingerprint and
+generation singleton in SQLite. Later workers must derive the same fingerprint.
+If the configured environment key or private sibling key file differs, startup
+fails. If a bound file is missing, startup does not generate a replacement.
+If the binding row is missing while any opaque bucket or reservation remains,
+startup also fails instead of attaching those rows to a new, unreachable key
+generation. Restore the database binding and its key as one consistency unit, or
+use the explicit offline reset below.
+After validation, each worker pins the derived key in memory: deleting or
+replacing its source file while that worker runs does not alter live bucket
+identities. Restore the original key from backup whenever possible.
+
+For deliberate rotation or unrecoverable loss, stop every worker, back up the
+database and key, install a regular non-symlink replacement key file with mode
+`0600` and at least 32 bytes, then run:
+
+```bash
+proxbox-auth-lockout --database /data/database.db rebind-key \
+  --key-file /data/database.db.auth-lockout.key.new \
+  --confirm-reset-lockouts
+```
+
+The command acquires the startup lock and an exclusive runtime lease. It refuses
+to run while any backend worker holds a shared lease, validates the complete
+existing recovery schema, then atomically clears the now-incompatible opaque
+lockout buckets and every outstanding reservation before advancing the
+generation. If the binding row is missing, it creates generation 1 only after
+that reset. Configure the exact same replacement source for every worker before
+restarting; never use a rolling mixed-key deployment.
+
 ## Troubleshooting startup
 
 | Log/error meaning | Operator action |
@@ -156,6 +226,9 @@ not migrate or delete legacy data.
 | Override requires `UVICORN_WORKERS=1` | Stop all workers and run the documented isolated single-worker recovery; never launch the override with the normal multi-worker topology. |
 | Override already consumed / stale | Remove `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`; keep the durable consumption marker. Do not delete marker or target to re-open bootstrap. |
 | Startup lock cannot be acquired | Grant the service account access to the target directory and persistent sibling `.startup.lock`; do not remove a live lock file. |
+| Identity key missing / does not match database binding | Restore the bound key from backup, or stop every worker and use the explicit offline `rebind-key` reset. Never let startup generate an unrelated replacement. |
+| Identity-key binding missing while opaque state exists | Restore the binding row and its exact bound key from the same backup, or stop all workers and use `rebind-key`. Do not insert a new binding over retained buckets/reservations. |
+| Offline maintenance refused because a worker holds the runtime lease | Stop every process using the target, verify they exited, then rerun the offline command. Do not delete `.runtime.lock`. |
 | Migration inspection / required endpoint read failed | Treat the database as unhealthy; restore or repair its schema/filesystem before restarting. |
 | Parent is not a directory / target is not a file | Correct the exact configured filesystem object. |
 | Directory or file is read-only / not searchable | Correct service-account ownership, mode, ACL, or container mount mode. |

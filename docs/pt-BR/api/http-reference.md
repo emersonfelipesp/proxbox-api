@@ -10,6 +10,8 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 - `GET /version` - Versao do backend para invalidacao externa de cache.
 - `GET /cache` - Inspeciona o cache em memoria.
 - `GET /clear-cache` - Limpa caches em memoria, incluindo o cache GET do NetBox e o cache de reconcile de custom fields.
+- `GET /cache/metrics` - Snapshot JSON de metricas de cache, reconciliacao e auth-lockout agregadas, incluindo total de linhas de falha e gauges de reservas em voo/orfas.
+- `GET /cache/metrics/prometheus` - Exposicao Prometheus das mesmas familias sem labels para scrape jobs.
 
 ## Autenticacao (`/auth`)
 

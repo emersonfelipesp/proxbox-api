@@ -31,6 +31,7 @@ _LOCKOUT_DURATION = 300
 _MAX_FAILED_ATTEMPTS = 5
 
 _LOCKED_MESSAGE = "Too many failed authentication attempts. Please try again later."
+_CAPACITY_MESSAGE = "Authentication verification capacity is temporarily exhausted."
 _NO_KEYS_MESSAGE = (
     "No API key configured. Register a key via POST /auth/register-key or use an existing key."
 )
@@ -89,7 +90,7 @@ async def _get_attempt_count_async(
     return row.attempts if row else 0
 
 
-async def check_auth_header_with_session_async(
+async def check_auth_header_with_session_async(  # noqa: C901
     session: AsyncSession,
     api_key: str | None,
     client_source: AuthSourceContext | str,
@@ -114,7 +115,7 @@ async def check_auth_header_with_session_async(
                 session, identity, resolved_policy
             )
         except LockoutCapacityError:
-            return False, _LOCKED_MESSAGE
+            return False, _CAPACITY_MESSAGE
         remaining = state.remaining_attempts(resolved_policy)
         if remaining:
             return False, f"API key required. {remaining} attempts remaining."
@@ -125,19 +126,25 @@ async def check_auth_header_with_session_async(
         session, identity, resolved_policy
     )
     if reservation is None:
-        return False, _LOCKED_MESSAGE
+        if await AuthLockoutService.is_locked_async(session, identity):
+            await session.rollback()
+            return False, _LOCKED_MESSAGE
+        await session.rollback()
+        return False, _CAPACITY_MESSAGE
 
     verified = await ApiKey.verify_any_async(session, api_key)
     await session.rollback()
-    await AuthLockoutService.finalize_verification_async(
+    finalized = await AuthLockoutService.finalize_verification_async(
         session,
         identity,
         resolved_policy,
         reservation,
         succeeded=verified,
     )
+    if finalized is None:
+        return False, _CAPACITY_MESSAGE
     if not verified:
-        remaining = reservation.remaining_attempts(resolved_policy)
+        remaining = finalized.remaining_attempts(resolved_policy)
         if remaining:
             return False, f"Invalid API key. {remaining} attempts remaining."
         return False, "Invalid API key."
@@ -190,7 +197,7 @@ def _get_attempt_count(
     return row.attempts if row else 0
 
 
-def check_auth_header_with_session(
+def check_auth_header_with_session(  # noqa: C901
     session: Session,
     api_key: str | None,
     client_source: AuthSourceContext | str,
@@ -213,7 +220,7 @@ def check_auth_header_with_session(
         try:
             state = AuthLockoutService.record_failure(session, identity, resolved_policy)
         except LockoutCapacityError:
-            return False, _LOCKED_MESSAGE
+            return False, _CAPACITY_MESSAGE
         remaining = state.remaining_attempts(resolved_policy)
         if remaining:
             return False, f"API key required. {remaining} attempts remaining."
@@ -222,19 +229,25 @@ def check_auth_header_with_session(
     session.rollback()
     reservation = AuthLockoutService.reserve_verification(session, identity, resolved_policy)
     if reservation is None:
-        return False, _LOCKED_MESSAGE
+        if AuthLockoutService.is_locked(session, identity):
+            session.rollback()
+            return False, _LOCKED_MESSAGE
+        session.rollback()
+        return False, _CAPACITY_MESSAGE
 
     verified = ApiKey.verify_any(session, api_key)
     session.rollback()
-    AuthLockoutService.finalize_verification(
+    finalized = AuthLockoutService.finalize_verification(
         session,
         identity,
         resolved_policy,
         reservation,
         succeeded=verified,
     )
+    if finalized is None:
+        return False, _CAPACITY_MESSAGE
     if not verified:
-        remaining = reservation.remaining_attempts(resolved_policy)
+        remaining = finalized.remaining_attempts(resolved_policy)
         if remaining:
             return False, f"Invalid API key. {remaining} attempts remaining."
         return False, "Invalid API key."

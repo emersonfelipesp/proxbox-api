@@ -10,8 +10,8 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /version` - Backend service version for external cache invalidation.
 - `GET /cache` - Inspect the in-memory cache snapshot.
 - `GET /clear-cache` - Clear in-memory caches, including the NetBox GET cache and the custom-field reconcile cache.
-- `GET /cache/metrics` - JSON snapshot of NetBox GET cache metrics (hit ratio, entries, byte usage).
-- `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same metrics for scrape jobs.
+- `GET /cache/metrics` - JSON snapshot of cache, reconciliation, and aggregate auth-lockout metrics, including failure-row count and in-flight/orphan reservation gauges.
+- `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same label-free metric families for scrape jobs.
 
 ## Authentication (`/auth`)
 

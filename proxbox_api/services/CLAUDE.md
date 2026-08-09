@@ -20,12 +20,20 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
 - `auth_lockout.py`: shared, request-independent authentication lockout state
-  service. It validates credential/source thresholds, window, row cap, and
+  service. It validates credential/source thresholds, window, row cap, separate
+  per-bucket/global verification-concurrency capacity, and
   trusted-proxy configuration; derives source-plus-credential buckets without
-  storing keys or dictionary-testable fingerprints; reserves verification
-  capacity before bcrypt with expiring token-scoped leases, applies fail-closed bounded atomic sync/async SQLite
-  transitions, persists aggregate label-free metrics, and provides safe local
-  inspection/clear selectors.
+  storing keys or dictionary-testable fingerprints; inserts one durable
+  per-token reservation before bcrypt; and gives each row its own expiry.
+  Expired crash rows stop consuming capacity and remain eligible for exactly-once
+  late finalization for one hour; older rows compact into a durable aggregate
+  counter. Rejection converts the consumed token to
+  failure state. Credential/source failure rows use independent bounded
+  partitions, so saturation never blocks bcrypt for a valid unseen key and
+  unpersisted rejected identities remain aggregate-counted. The service persists
+  label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
+  inspection/clear selectors. Startup pins the validated HMAC generation in
+  memory; do not re-read a mutable key source on request paths.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
 - `packer_preflight.py`: endpoint-scoped Cloud Image Pipeline readiness checks.
   It accepts one already-resolved Proxmox session, performs only GET calls for

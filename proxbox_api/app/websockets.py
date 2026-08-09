@@ -23,6 +23,19 @@ websocket_router = APIRouter()
 AUTH_MESSAGE_SCHEMA = {"type": "object", "properties": {"api_key": {"type": "string"}}}
 
 
+def _parse_api_key_message(message: str) -> str | None:
+    """Return only a string API key from one JSON-object auth frame."""
+
+    try:
+        payload = json.loads(message)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    api_key = payload.get("api_key")
+    return api_key if isinstance(api_key, str) else None
+
+
 async def _do_ws_auth(
     websocket: WebSocket,
     api_key: str | None,
@@ -30,7 +43,8 @@ async def _do_ws_auth(
 ) -> bool:
     authorized, error_message = await asyncio.to_thread(check_auth_header, api_key, client_source)
     if not authorized:
-        await websocket.close(code=4001, reason=error_message or "Authentication failed")
+        close_code = 1013 if "verification capacity" in (error_message or "") else 4001
+        await websocket.close(code=close_code, reason=error_message or "Authentication failed")
         return False
     return True
 
@@ -58,12 +72,7 @@ async def base_websocket(websocket: WebSocket) -> None:
         return
 
     try:
-        try:
-            auth_msg = await websocket.receive_text()
-            auth_data = json.loads(auth_msg)
-            api_key = auth_data.get("api_key")
-        except Exception:  # noqa: BLE001
-            api_key = None
+        api_key = _parse_api_key_message(await websocket.receive_text())
 
         client_source = _get_client_source(websocket)
 
@@ -103,12 +112,7 @@ async def websocket_virtual_machines(
         return
 
     try:
-        try:
-            auth_msg = await websocket.receive_text()
-            auth_data = json.loads(auth_msg)
-            api_key = auth_data.get("api_key")
-        except Exception:  # noqa: BLE001
-            api_key = None
+        api_key = _parse_api_key_message(await websocket.receive_text())
 
         client_source = _get_client_source(websocket)
         if not await _do_ws_auth(websocket, api_key, client_source):
@@ -174,12 +178,7 @@ async def websocket_sync_commands(  # noqa: C901
         return
 
     try:
-        try:
-            auth_msg = await websocket.receive_text()
-            auth_data = json.loads(auth_msg)
-            api_key = auth_data.get("api_key")
-        except Exception:  # noqa: BLE001
-            api_key = None
+        api_key = _parse_api_key_message(await websocket.receive_text())
 
         client_source = _get_client_source(websocket)
         if not await _do_ws_auth(websocket, api_key, client_source):

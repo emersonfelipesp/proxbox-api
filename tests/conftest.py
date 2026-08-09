@@ -50,6 +50,10 @@ from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_route_cache,
     clear_generated_proxmox_routes,
 )
+from proxbox_api.services.auth_lockout import (
+    clear_runtime_auth_lockout_identity_key,
+    initialize_auth_lockout_identity_key,
+)
 from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.sync.sync_state_reader import (
     reset_sidecar_reader_availability_cache,
@@ -274,7 +278,10 @@ def db_engine(tmp_path: Path):
     )
     database_module.configure_sqlite_engine(engine)
     SQLModel.metadata.create_all(engine)
-    return engine
+    initialize_auth_lockout_identity_key(None)
+    yield engine
+    engine.dispose()
+    clear_runtime_auth_lockout_identity_key()
 
 
 @pytest.fixture

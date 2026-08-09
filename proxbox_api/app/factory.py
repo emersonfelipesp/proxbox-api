@@ -224,13 +224,19 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             )
 
         if not authorized:
-            status_code = 429 if "Too many failed" in (error_message or "") else 401
+            if "Too many failed" in (error_message or ""):
+                status_code = 429
+                retry_after = str(self.policy.window_seconds)
+            elif "verification capacity" in (error_message or ""):
+                status_code = 503
+                retry_after = "1"
+            else:
+                status_code = 401
+                retry_after = None
             return JSONResponse(
                 status_code=status_code,
                 content={"detail": error_message},
-                headers={"Retry-After": str(self.policy.window_seconds)}
-                if status_code == 429
-                else {},
+                headers={"Retry-After": retry_after} if retry_after is not None else {},
             )
 
         return await call_next(request)

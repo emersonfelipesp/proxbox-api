@@ -6,9 +6,9 @@ A API de cache fornece endpoints para monitorar e gerenciar os caches em memóri
 
 | Endpoint | Descrição |
 |----------|-----------|
-| `GET /cache` | Inspecionar todos os caches (Proxbox e NetBox GET cache) com métricas e chaves de exemplo |
-| `GET /cache/metrics` | Obter métricas do cache NetBox GET como JSON |
-| `GET /cache/metrics/prometheus` | Obter métricas do cache NetBox GET em formato Prometheus |
+| `GET /cache` | Inspecionar caches e métricas aninhadas de reconciliação/auth com chaves de exemplo |
+| `GET /cache/metrics` | Obter métricas de cache, reconciliação e autenticação agregada como JSON |
+| `GET /cache/metrics/prometheus` | Obter as mesmas famílias em formato Prometheus |
 | `GET /clear-cache` | Limpar ambos os caches Proxbox e NetBox GET |
 
 ## Esquemas de Resposta
@@ -37,13 +37,23 @@ Retorna uma visualização combinada de todos os caches:
   },
   "netbox_get_cache_sample": [
     {"api_id": 123456, "path": "/api/dcim/devices/", "query": ""}
-  ]
+  ],
+  "auth_lockout_metrics": {
+    "proxbox_auth_failures_total": 8,
+    "proxbox_auth_capacity_rejections_total": 1,
+    "proxbox_auth_orphan_compactions_total": 2,
+    "proxbox_auth_bucket_rows": 6,
+    "proxbox_auth_verifications_in_flight": 2,
+    "proxbox_auth_expired_orphan_reservations": 1
+  }
 }
 ```
 
 ### GET /cache/metrics
 
-Retorna métricas do cache NetBox GET:
+Retorna métricas achatadas de cache, reconciliação e autenticação agregada.
+Os campos de autenticação incluem contadores duráveis e gauges atuais de linhas
+de falha e reservas:
 
 ```json
 {
@@ -59,7 +69,13 @@ Retorna métricas do cache NetBox GET:
   "max_entries": 4096,
   "max_bytes": 52428800,
   "ttl_seconds": 60.0,
-  "oldest_entry_age_seconds": 45.2
+  "oldest_entry_age_seconds": 45.2,
+  "proxbox_auth_failures_total": 8,
+  "proxbox_auth_capacity_rejections_total": 1,
+  "proxbox_auth_orphan_compactions_total": 2,
+  "proxbox_auth_bucket_rows": 6,
+  "proxbox_auth_verifications_in_flight": 2,
+  "proxbox_auth_expired_orphan_reservations": 1
 }
 ```
 
@@ -77,6 +93,10 @@ proxbox_cache_misses 50
 # HELP proxbox_cache_hit_rate Cache hit rate percentage
 # TYPE proxbox_cache_hit_rate gauge
 proxbox_cache_hit_rate 75.0
+...
+# HELP proxbox_auth_verifications_in_flight Current unexpired bcrypt token leases
+# TYPE proxbox_auth_verifications_in_flight gauge
+proxbox_auth_verifications_in_flight 2
 ...
 ```
 
@@ -100,13 +120,18 @@ proxbox_cache_hit_rate 75.0
 | `proxbox_auth_failures_total` | counter | Tentativas de autenticacao rejeitadas em todos os buckets |
 | `proxbox_auth_lockouts_total` | counter | Buckets de credencial que entraram em bloqueio |
 | `proxbox_auth_source_lockouts_total` | counter | Origens normalizadas que esgotaram o orçamento agregado de falhas |
-| `proxbox_auth_recoveries_total` | counter | Buckets limpos por autenticacao valida ou administracao local |
+| `proxbox_auth_recoveries_total` | counter | Buckets limpos por operacoes explicitas de recovery local |
+| `proxbox_auth_capacity_rejections_total` | counter | Admissões recusadas por limite por bucket/global em voo mais identidades com falha que a partição limitada de credencial/origem não conseguiu persistir |
+| `proxbox_auth_orphan_compactions_total` | counter | Tokens de reserva expirados compactados depois do horizonte suportado de uma hora para finalização tardia |
 | `proxbox_auth_active_lockouts` | gauge | Buckets de credencial atualmente bloqueados |
 | `proxbox_auth_active_source_lockouts` | gauge | Orçamentos de origem atualmente bloqueados |
+| `proxbox_auth_bucket_rows` | gauge | Linhas duráveis atuais de falha de credencial/origem nas duas partições limitadas |
+| `proxbox_auth_verifications_in_flight` | gauge | Reservas por token não expiradas que consomem capacidade de concorrência bcrypt |
+| `proxbox_auth_expired_orphan_reservations` | gauge | Tokens de crash expirados mantidos dentro do horizonte suportado para finalização tardia; não consomem capacidade |
 
 As metricas de autenticacao sao agregadas e nao possuem labels de origem,
-credencial ou bucket. Isso impede que impressoes digitais de chaves e
-identidades de alta cardinalidade entrem na telemetria.
+credencial, bucket ou token de reserva. Isso impede que impressoes digitais de
+chaves e identidades de alta cardinalidade entrem na telemetria.
 
 ## Variáveis de Ambiente
 

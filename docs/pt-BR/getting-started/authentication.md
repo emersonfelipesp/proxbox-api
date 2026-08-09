@@ -134,34 +134,79 @@ Remover a última chave ativa é recusado com `409`
 
 O backend persiste o bloqueio no SQLite em um bucket composto e sem segredos:
 contexto normalizado de origem/confiança da rede mais um identificador HMAC com
-chave do servidor. Assim, uma chave obsoleta não bloqueia outra chave
-válida usada pelo mesmo worker, proxy reverso ou IP. A autenticação síncrona e
-assíncrona compartilha o mesmo serviço de estado. Cada requisição reserva os
-orçamentos de credencial e origem antes do bcrypt e libera o lease com token
-após a verificação, limitando o trabalho concorrente entre workers. Leases
-abandonados expiram após pelo menos 60 segundos (ou a janela maior configurada),
-sem permitir que um finalizador antigo libere trabalho novo. Um segundo
+chave do servidor. Atingir o limite de um bucket de credencial não bloqueia
+outra chave usada pelo mesmo worker, proxy reverso ou IP. Um limite separado e
+deliberadamente maior de abuso por origem ainda bloqueia todas as chaves daquela
+origem quando esgotado. A autenticação síncrona e assíncrona compartilha o mesmo
+serviço de estado. Antes do bcrypt, cada
+requisição insere uma linha de reserva durável independente com token
+imprevisível e expiração própria. A linha consome somente a capacidade separada
+de verificação por credencial, origem e global. Depois do bcrypt, um `DELETE` atômico
+limitado pelo token finaliza exatamente aquela linha uma vez: chave recusada
+vira estado de falha de credencial/origem na mesma transação, enquanto chave
+aceita não registra falha. Finalização duplicada não consome a reserva de outra
+requisição. Assim, tráfego válido concorrente não cria bloqueio. Capacidade
+esgotada retorna HTTP 503 com `Retry-After: 1` ou fecha o WebSocket com código
+1013, sem consumir tentativa.
+
+Um token abandonado por crash expira após pelo menos 60 segundos (ou a janela
+maior configurada). Depois de expirado, ele deixa de consumir capacidade. A
+linha permanece disponível por uma hora para finalização tardia exatamente uma
+vez e entra na métrica de reservas órfãs. Linhas mais antigas são compactadas em
+contador agregado durável para limitar o armazenamento; finalizador além desse
+horizonte documentado é ignorado. Uma reserva órfã não estende a expiração de
+outro token vivo nem libera trabalho mais novo. Um segundo
 orçamento durável por origem limita ataques que rotacionam
-credenciais; seu padrão é deliberadamente maior que o limite por credencial. Ao
-atingir o limite de linhas, somente buckets inativos e sem reserva podem ser
-removidos. Bloqueios ativos nunca são removidos, e novas identidades falham de
-modo fechado quando não existe candidato seguro.
+credenciais; seu padrão é deliberadamente maior que o limite por credencial. As
+linhas duráveis de falha são divididas em partições independentes e limitadas de
+credencial e origem. Janelas de falha expiradas são removidas, mas saturação
+nunca impede o bcrypt de uma chave válida e ainda desconhecida, porque reservas
+não dependem de linha de falha. Uma chave recusada continua negada quando uma
+partição não admite a nova identidade; a identidade não persistida entra nos
+contadores agregados de falha e capacidade de linhas, sem remover outro
+orçamento pré-bloqueio vivo.
 
 - Limite padrão: 5 falhas (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, intervalo 1-100)
 - Orçamento padrão por origem: 50 falhas (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, intervalo 1-100000)
 - Janela fixa padrão: 5 minutos (`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, intervalo 1-86400)
 - Máximo de linhas duráveis: 10000 (`PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, intervalo 2-1000000)
+- Máximo de verificações concorrentes por bucket de credencial/origem: 32
+  (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, intervalo 1-1024)
+- Máximo de verificações concorrentes entre todos os workers e identidades: 256
+  (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, intervalo 1-4096)
 - Por padrão, uma chave opaca é criada atomicamente no arquivo privado irmão
   `database.db.auth-lockout.key`. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` pode fornecer
   um valor explícito com 32 bytes ou mais. Mantenha a fonte estável entre
   reinícios e separada da chave rotacionável de criptografia.
+- O startup grava fingerprint não secreto e geração no SQLite. Depois do bind,
+  arquivo ausente/substituído ou chave de ambiente diferente é erro fatal e
+  nunca causa regeneração silenciosa. Todo worker valida o mesmo bind sob o lock
+  de startup do destino e fixa o material verificado na memória do processo.
+  Excluir ou substituir a fonte depois do startup não altera os IDs nesse worker;
+  recovery ou rotação exige o procedimento offline seguido de restart
+  controlado.
 - `PROXBOX_TRUSTED_PROXIES` define explicitamente quais CIDRs de peer podem
   fornecer `X-Forwarded-For`. Nenhum endereço, inclusive localhost, é confiável
   implicitamente. Proxies confiáveis não ignoram autenticação nem bloqueio.
 
 Os endpoints de métricas expõem somente contadores e gauges agregados, sem
-labels, com prefixo `proxbox_auth_*`. Logs e CLI usam identificadores curtos de
-12 caracteres; chaves e hashes testáveis por dicionário nunca são exibidos.
+labels, com prefixo `proxbox_auth_*`. Além dos totais de falha, bloqueio e
+recovery e dos bloqueios ativos, o serviço publica:
+
+- `proxbox_auth_capacity_rejections_total`: admissões de verificação recusadas
+  pelo limite por bucket ou global em voo mais identidades com falha cuja partição
+  limitada de linhas de credencial ou origem não conseguiu persistir;
+- `proxbox_auth_orphan_compactions_total`: reservas expiradas compactadas depois
+  do horizonte suportado de uma hora para finalização tardia;
+- `proxbox_auth_bucket_rows`: linhas duráveis atuais de falha por
+  credencial/origem;
+- `proxbox_auth_verifications_in_flight`: reservas não expiradas que consomem
+  capacidade bcrypt; e
+- `proxbox_auth_expired_orphan_reservations`: reservas expiradas de crash
+  mantidas dentro do horizonte suportado para finalização tardia.
+
+Logs e CLI usam identificadores HMAC não autenticantes de 12 caracteres;
+chaves e hashes testáveis por dicionário nunca são exibidos.
 
 ### Recuperação local de bloqueio
 
@@ -176,9 +221,37 @@ proxbox-auth-lockout --database /data/database.db clear --all
 ```
 
 O caminho é obrigatório e precisa apontar para um banco existente com o schema
-atual; a CLI nunca cria nem migra o banco. `list` abre o SQLite em modo somente
-leitura. A listagem mostra contexto de origem/confiança, tipo do bucket,
+atual completo, incluindo tabelas de reservas, métricas e bind da chave; a CLI
+valida o schema, mas nunca cria nem migra o banco. `list` abre o SQLite em modo
+somente leitura. A listagem mostra contexto de origem/confiança, tipo do bucket,
 identificadores curtos, tentativas e expiração, mas nunca material da chave API.
+
+### Recovery ou rotação offline da chave de identidade
+
+Prefira restaurar o arquivo vinculado a partir de backup. Se isso for impossível,
+uma nova geração invalida todos os IDs opacos existentes. Faça o reset explícito
+somente com todos os workers parados:
+
+1. Pare todos os workers e preserve backup recuperável do banco e da chave.
+2. Crie a chave substituta como arquivo regular, sem symlink, UTF-8, com pelo
+   menos 32 bytes e modo `0600`.
+3. Execute:
+
+   ```bash
+   proxbox-auth-lockout --database /data/database.db rebind-key \
+     --key-file /data/database.db.auth-lockout.key.new \
+     --confirm-reset-lockouts
+   ```
+
+4. Instale/configure exatamente essa fonte em todos os workers, inicie o serviço
+   e valide readiness e autenticação.
+
+O comando adquire o lock de startup e lease exclusivo de runtime. Ele recusa
+execução enquanto houver worker ativo, valida o schema existente de recovery,
+limpa atomicamente buckets incompatíveis e todas as reservas pendentes, avança
+a geração não secreta e nunca imprime a chave. Se a própria linha de bind foi
+perdida, o recovery cria a geração 1 depois de limpar todo estado opaco. Não
+substitua a chave com rollout gradual de workers.
 
 ## Melhores Práticas de Segurança
 

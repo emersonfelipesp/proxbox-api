@@ -74,6 +74,12 @@ class SQLiteDatabaseTarget:
         return self.path.with_name(f"{self.path.name}.startup.lock")
 
     @property
+    def runtime_lock_path(self) -> Path:
+        """Return the sibling lock proving that no backend worker is active."""
+
+        return self.path.with_name(f"{self.path.name}.runtime.lock")
+
+    @property
     def fresh_database_override_marker_path(self) -> Path:
         """Return the durable marker that prevents reuse of a one-start override."""
         return self.path.with_name(f"{self.path.name}.fresh-database-override-used")
@@ -110,6 +116,7 @@ async_engine: AsyncEngine | None = None
 async_session_factory: async_sessionmaker[AsyncSession] | None = None
 connect_args = {"check_same_thread": False}
 _database_runtime_lock = threading.RLock()
+_database_runtime_lease_descriptor: int | None = None
 
 
 def _absolute_database_path(raw_path: str, *, variable: str) -> Path:
@@ -546,6 +553,67 @@ def _database_startup_advisory_lock(
             os.close(descriptor)
 
 
+def _open_database_lock(path: Path) -> int:
+    """Open one private regular lock file without following symlinks."""
+
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise DatabaseStartupError(f"SQLite lock is not a regular file: {path}.")
+    return descriptor
+
+
+def _acquire_runtime_database_lease(target: SQLiteDatabaseTarget) -> None:
+    """Hold a shared lease for this process until database disposal."""
+
+    global _database_runtime_lease_descriptor
+
+    if _database_runtime_lease_descriptor is not None:
+        return
+    descriptor: int | None = None
+    try:
+        descriptor = _open_database_lock(target.runtime_lock_path)
+        fcntl.flock(descriptor, fcntl.LOCK_SH)
+    except Exception:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    _database_runtime_lease_descriptor = descriptor
+
+
+@contextmanager
+def offline_database_maintenance_lock(path: Path) -> Generator[None, None, None]:
+    """Exclude startup and every live backend worker during offline maintenance."""
+
+    target = SQLiteDatabaseTarget(
+        path=path.expanduser().resolve(),
+        source=DatabaseConfigurationSource.PROXBOX_DATABASE_PATH,
+    )
+    with _database_startup_advisory_lock(target):
+        descriptor: int | None = None
+        try:
+            descriptor = _open_database_lock(target.runtime_lock_path)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise DatabaseStartupError(
+                "Offline database maintenance was refused because a proxbox-api "
+                "worker still holds the runtime lease. Stop every worker first."
+            ) from error
+        try:
+            yield
+        finally:
+            assert descriptor is not None
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
 def _run_sqlite_write_probe(connection: sqlite3.Connection, path: Path) -> None:
     """Prove WAL mode and a rolled-back write against the main database."""
     probe_table = f"__proxbox_startup_write_probe_{uuid4().hex}"
@@ -616,7 +684,9 @@ def initialize_database(
     with _database_runtime_lock, _database_startup_advisory_lock(target):
         _consume_fresh_database_override(target)
         _audit_fresh_database_override(target)
-        return _initialize_database_target(target)
+        initialized_target = _initialize_database_target(target)
+        _acquire_runtime_database_lease(target)
+        return initialized_target
 
 
 def _initialize_database_target(target: SQLiteDatabaseTarget) -> SQLiteDatabaseTarget:
@@ -697,6 +767,7 @@ async def dispose_database() -> None:
     """Dispose process-local engines after lifespan shutdown."""
     global database_target, sqlite_file_name, sqlite_url, async_sqlite_url
     global engine, async_engine, async_session_factory
+    global _database_runtime_lease_descriptor
 
     with _database_runtime_lock:
         sync_engine = engine
@@ -708,10 +779,20 @@ async def dispose_database() -> None:
         engine = None
         async_engine = None
         async_session_factory = None
+        runtime_lease_descriptor = _database_runtime_lease_descriptor
+        _database_runtime_lease_descriptor = None
     if sync_engine is not None:
         sync_engine.dispose()
     if candidate_async_engine is not None:
         await candidate_async_engine.dispose()
+    if runtime_lease_descriptor is not None:
+        try:
+            fcntl.flock(runtime_lease_descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(runtime_lease_descriptor)
+    from proxbox_api.services.auth_lockout import clear_runtime_auth_lockout_identity_key
+
+    clear_runtime_auth_lockout_identity_key()
 
 
 def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ARG001
@@ -723,8 +804,11 @@ def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa:
     instead of failing immediately.
     """
     cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA journal_mode")
+    journal_row = cursor.fetchone()
+    if not journal_row or str(journal_row[0]).lower() != "wal":
+        cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
 
 
@@ -1144,12 +1228,22 @@ class AuthLockout(SQLModel, table=True):
     source_context: str = Field(index=True)
     credential_id: str = Field(index=True)
     attempts: int = Field(default=0)
-    in_flight: int = Field(default=0)
-    reservation_tokens: str = Field(default="")
-    reservation_expires_at: float | None = Field(default=None, index=True)
     window_started_at: float = Field(default=0)
     locked_until: float | None = Field(default=None, index=True)
     updated_at: float = Field(default_factory=time.time, index=True)
+
+
+class AuthLockoutReservation(SQLModel, table=True):
+    """One independently expiring, exactly-once authentication verification lease."""
+
+    __tablename__: ClassVar[str] = "auth_lockout_reservations"
+    __table_args__ = {"extend_existing": True}
+
+    token: str = Field(primary_key=True)
+    credential_bucket_id: str = Field(index=True)
+    source_bucket_id: str = Field(index=True)
+    expires_at: float = Field(index=True)
+    created_at: float = Field(default_factory=time.time, index=True)
 
 
 class AuthLockoutMetric(SQLModel, table=True):
@@ -1166,6 +1260,24 @@ class AuthLockoutMetric(SQLModel, table=True):
     lockouts_total: int = Field(default=0)
     source_lockouts_total: int = Field(default=0)
     recoveries_total: int = Field(default=0)
+    capacity_rejections_total: int = Field(default=0)
+    orphan_compactions_total: int = Field(default=0)
+    updated_at: float = Field(default_factory=time.time)
+
+
+class AuthLockoutIdentityKeyBinding(SQLModel, table=True):
+    """Non-secret singleton binding lockout rows to one HMAC-key generation."""
+
+    __tablename__: ClassVar[str] = "auth_lockout_identity_key_binding"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_auth_lockout_identity_key_binding_singleton"),
+        {"extend_existing": True},
+    )
+
+    id: int = Field(default=1, primary_key=True)
+    fingerprint: str = Field()
+    generation: int = Field(default=1)
+    created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
 
 
@@ -1362,7 +1474,7 @@ def _validate_auth_table_schema(connection: Connection, model: type[SQLModel]) -
             if not expected.primary_key and bool(actual["nullable"]) != bool(expected.nullable):
                 raise AuthLockoutSchemaError(f"incompatible {table_name}.{name} nullability")
 
-        if model is AuthLockoutMetric:
+        if model in (AuthLockoutMetric, AuthLockoutIdentityKeyBinding):
             checks = {
                 "".join(str(item.get("sqltext", "")).lower().split())
                 for item in inspector.get_check_constraints(table_name)
@@ -1389,9 +1501,59 @@ def _migrate_auth_lockout_schema(target_engine: Engine | None = None) -> None:
     with selected_engine.connect() as connection:
         connection.exec_driver_sql("BEGIN IMMEDIATE")
         cast(Any, AuthLockout).__table__.create(connection, checkfirst=True)
+        cast(Any, AuthLockoutReservation).__table__.create(connection, checkfirst=True)
         cast(Any, AuthLockoutMetric).__table__.create(connection, checkfirst=True)
+        cast(Any, AuthLockoutIdentityKeyBinding).__table__.create(
+            connection,
+            checkfirst=True,
+        )
         _validate_auth_table_schema(connection, AuthLockout)
+        _validate_auth_table_schema(connection, AuthLockoutReservation)
         _validate_auth_table_schema(connection, AuthLockoutMetric)
+        _validate_auth_table_schema(connection, AuthLockoutIdentityKeyBinding)
+        binding = connection.execute(
+            text(
+                "SELECT fingerprint, generation FROM auth_lockout_identity_key_binding WHERE id = 1"
+            )
+        ).fetchone()
+        if binding is None:
+            state_exists = bool(
+                connection.execute(
+                    text(
+                        "SELECT "
+                        "EXISTS(SELECT 1 FROM auth_lockout_buckets LIMIT 1) OR "
+                        "EXISTS(SELECT 1 FROM auth_lockout_reservations LIMIT 1)"
+                    )
+                ).scalar_one()
+            )
+            if state_exists:
+                raise DatabaseConfigurationError(
+                    "The authentication lockout identity-key binding is missing while "
+                    "opaque lockout state still exists. Restore the binding and bound key "
+                    "together, or perform the documented offline identity-key rebind "
+                    "procedure before startup."
+                )
+        from proxbox_api.services.auth_lockout import initialize_auth_lockout_identity_key
+
+        expected_fingerprint = str(binding.fingerprint) if binding is not None else None
+        try:
+            fingerprint = initialize_auth_lockout_identity_key(expected_fingerprint)
+        except ValueError as error:
+            raise DatabaseConfigurationError(
+                "The authentication lockout identity key does not match the database "
+                "binding. Restore the bound key or perform the documented offline "
+                "identity-key rebind procedure before startup."
+            ) from error
+        if binding is None:
+            timestamp = time.time()
+            connection.execute(
+                text(
+                    "INSERT INTO auth_lockout_identity_key_binding "
+                    "(id, fingerprint, generation, created_at, updated_at) "
+                    "VALUES (1, :fingerprint, 1, :timestamp, :timestamp)"
+                ),
+                {"fingerprint": fingerprint, "timestamp": timestamp},
+            )
         connection.commit()
 
 
@@ -1733,6 +1895,7 @@ def initialize_database_and_schema(
         _audit_fresh_database_override(target)
         initialized_target = _initialize_database_target(target)
         _create_db_and_tables_unlocked()
+        _acquire_runtime_database_lease(target)
         return initialized_target
 
 

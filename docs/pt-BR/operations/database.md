@@ -30,21 +30,60 @@ destino executam em serie esta fronteira completa:
 1. Cria somente o diretorio pai configurado quando ele nao existe.
 2. Recusa pai que nao seja diretorio, destino que nao seja arquivo ou arquivo/
    diretorio somente-leitura pelos bits de modo.
-3. Abre o SQLite selecionado e exige `journal_mode=WAL`.
+3. Abre o SQLite selecionado, instala `busy_timeout=5000` antes de negociar WAL
+   e exige `journal_mode=WAL`.
 4. Cria, escreve e le uma tabela interna com nome unico dentro de
    `BEGIN IMMEDIATE`, depois reverte a transacao.
 5. Confirma que a tabela de probe nao deixou residuo no schema.
-6. Constroi os engines, cria todas as tabelas declaradas e executa todas as
-   migrations idempotentes antes de liberar o lock.
+6. Constroi os engines, cria todas as tabelas declaradas, executa todas as
+   migrations idempotentes, valida o schema completo de buckets, reservas,
+   metricas e bind de chave do auth-lockout e valida/vincula o fingerprint da
+   chave HMAC.
+7. Adquire um lease compartilhado `<database>.runtime.lock` antes de liberar o
+   lock de startup. O processo mantem esse lease ate descartar os engines.
 
 O probe nao persiste linha da aplicacao nem tabela interna. Habilitar WAL pode
-criar ou atualizar banco, `-wal` e `-shm`. O arquivo de lock permanece de
-proposito; nao o exclua nem substitua enquanto houver worker ativo. Se qualquer
+criar ou atualizar banco, `-wal` e `-shm`. Os arquivos de lock permanecem de
+proposito; nao os exclua nem substitua enquanto houver worker ativo. O lease de
+runtime permite ao recovery offline provar que todos os workers pararam. Se qualquer
 etapa falhar, o startup termina com erro acionavel e a API nao aceita trafego.
 
 A inspecao de schema faz parte da fronteira fatal de migration. Erro de
 inspecao nunca significa "migration desnecessaria", e a leitura obrigatoria de
 `NetBoxEndpoint` apos o schema deve passar antes do servico ficar ready.
+
+## Estado duravel de autenticacao
+
+A concorrencia de autenticacao e o historico de falhas usam tabelas versionadas
+separadas:
+
+- `auth_lockout_reservations` armazena um token duravel por verificacao bcrypt
+  admitida, com IDs de credencial/origem e expiracao independentes. Tokens de
+  crash expirados deixam de consumir capacidade, continuam observaveis por
+  `proxbox_auth_expired_orphan_reservations` e podem ser consumidos exatamente
+  uma vez por finalizador tardio durante uma hora depois da expiracao. Tokens
+  mais antigos sao compactados em `proxbox_auth_orphan_compactions_total`,
+  limitando armazenamento. O teto global atomico tambem impede pares distintos
+  de origem/chave de contornar o controle de recurso bcrypt. Um token nunca
+  libera nem estende outra reserva.
+- `auth_lockout_buckets` armazena somente historico de credenciais recusadas. O
+  limite de linhas e dividido em particoes independentes de credencial e origem.
+  Particao cheia nunca impede bcrypt ou aceite de uma chave valida ainda
+  desconhecida; identidades recusadas que nao podem ser persistidas ainda
+  incrementam contadores agregados de falha e rejeicao por capacidade.
+- `auth_lockout_metrics` armazena contadores duraveis sem labels. A superficie de
+  metricas tambem deriva linhas atuais de bucket, reservas nao expiradas em voo
+  e reservas orfas expiradas, sem labels de origem, credencial ou token; o
+  contador de compactacao preserva evidencia agregada alem do horizonte.
+- `auth_lockout_identity_key_binding` armazena fingerprint nao secreto e geracao
+  singleton. O startup fixa na memoria do processo o material HMAC validado;
+  excluir ou substituir o arquivo fonte depois de readiness nao altera IDs nesse
+  worker.
+
+Os quatro schemas sao criados e validados estritamente dentro da fronteira
+serializada de startup. O rebind offline da chave exige as quatro tabelas
+existentes e suas colunas atuais, inclusive o schema de reservas, e nunca as
+inicializa nem migra.
 
 ## Containers
 
@@ -55,7 +94,8 @@ PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db
 ```
 
 Monte storage persistente em `/data` e garanta que o usuario de runtime possa
-criar o banco e os sidecars `-wal`, `-shm` e `.startup.lock`:
+criar o banco e os sidecars `-wal`, `-shm`, `.startup.lock`, `.runtime.lock` e
+`.auth-lockout.key`:
 
 ```bash
 docker run -d --name proxbox-api \
@@ -104,8 +144,9 @@ Trate o banco e o estado WAL como uma unica fronteira de consistencia:
 
 1. Pare todos os processos `proxbox-api` que usam o banco.
 2. Faca backup recuperavel do banco atual. Com o servico parado, preserve o
-   banco junto com arquivos `-wal` e `-shm` existentes; copia online deve usar a
-   API de backup do SQLite.
+   banco junto com arquivos `-wal` e `-shm` existentes e sua
+   `.auth-lockout.key` vinculada; copia online deve usar a API de backup do SQLite
+   e preservar exatamente o material vinculado da chave de identidade.
 3. Crie o diretorio de destino e conceda ownership a conta do servico.
 4. Copie o conjunto consistente ao destino e retenha o backup original ate a
    validacao terminar.
@@ -144,6 +185,38 @@ novo destino com revisao separada. Somente o valor exato `1` e aceito e a opcao
 e recusada sem conflito legado ou quando o destino ja preserva historico de
 chave. O override nao migra nem exclui dados antigos.
 
+## Bind da chave de identidade de auth-lockout
+
+O primeiro startup de schema grava no SQLite um fingerprint nao secreto e uma
+geracao singleton. Workers posteriores precisam derivar o mesmo fingerprint.
+Chave de ambiente ou arquivo privado diferente causa falha fatal. Se o arquivo
+vinculado estiver ausente, o startup nao gera substituto. Se a linha de bind
+estiver ausente enquanto algum bucket opaco ou reserva permanecer, o startup
+tambem falha em vez de associar essas linhas a uma nova geracao de chave
+inalcancavel. Restaure o bind do banco e sua chave como uma unica unidade de
+consistencia, ou use o reset offline explicito abaixo. Depois da validacao,
+cada worker fixa a chave derivada na memoria: excluir ou substituir a fonte
+enquanto o worker executa nao altera os IDs vivos. Prefira restaurar a chave
+original do backup.
+
+Para rotacao deliberada ou perda irrecuperavel, pare todos os workers, preserve
+backup do banco/chave, instale arquivo substituto regular sem symlink, modo
+`0600` e pelo menos 32 bytes, e execute:
+
+```bash
+proxbox-auth-lockout --database /data/database.db rebind-key \
+  --key-file /data/database.db.auth-lockout.key.new \
+  --confirm-reset-lockouts
+```
+
+O comando adquire o lock de startup e lease exclusivo de runtime. Ele recusa
+execucao enquanto qualquer worker mantiver lease compartilhado, valida o schema
+completo existente de recovery e entao limpa atomicamente buckets opacos
+incompativeis e todas as reservas pendentes antes de avancar a geracao. Se a linha
+de bind estiver ausente, cria a geracao 1 somente depois desse reset. Configure a
+mesma fonte substituta em todos os workers antes do restart; nunca use rollout com
+chaves misturadas.
+
 ## Troubleshooting de startup
 
 | Significado do erro | Acao do operador |
@@ -154,6 +227,9 @@ chave. O override nao migra nem exclui dados antigos.
 | Override exige `UVICORN_WORKERS=1` | Pare todos os workers e use o recovery isolado single-worker documentado; nunca use o override na topologia multi-worker normal. |
 | Override consumido / obsoleto | Remova `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY` e preserve o marcador; nao apague marcador ou destino para reabrir o bootstrap. |
 | Lock de startup nao pode ser adquirido | Conceda acesso ao diretorio e ao `.startup.lock` persistente; nao remova um lock em uso. |
+| Chave de identidade ausente / diferente do bind | Restaure a chave vinculada ou pare todos os workers e use o reset offline `rebind-key`. Nunca gere substituto silencioso. |
+| Bind da chave de identidade ausente enquanto existe estado opaco | Restaure a linha de bind e a chave exata do mesmo backup, ou pare todos os workers e use `rebind-key`. Nao insira novo bind sobre buckets/reservas retidos. |
+| Maintenance offline recusada por lease de worker | Pare todo processo que usa o destino, confirme a saida e repita. Nao exclua `.runtime.lock`. |
 | Falha na inspecao de migration / leitura obrigatoria | Trate o banco como unhealthy; restaure ou repare schema/filesystem antes do restart. |
 | Pai nao e diretorio / destino nao e arquivo | Corrija exatamente o objeto configurado. |
 | Diretorio ou arquivo read-only / sem busca | Corrija ownership, modo, ACL ou mount para a conta do servico. |

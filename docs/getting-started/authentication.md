@@ -131,35 +131,77 @@ Deleting the final active key is refused with `409`
 
 The backend stores lockout state in SQLite under a composite, secret-free
 bucket: normalized network source/trust context plus a server-keyed HMAC
-identifier. A stale key therefore cannot lock out a different valid key used
-from the same worker, reverse proxy, or client IP. Sync and async authentication
-share the same state service. Each request durably reserves credential and
-source budget before bcrypt and releases that token-scoped lease after the
-check, so concurrent requests cannot exceed the configured verification budget.
-Abandoned leases expire automatically after at least 60 seconds (or the longer
-configured lockout window), allowing crash recovery without letting a stale
-finalizer release newer work.
+identifier. Reaching one credential bucket's threshold therefore cannot lock a
+different key used from the same worker, reverse proxy, or client IP. A separate,
+deliberately higher source-abuse threshold still blocks every key from that
+source when exhausted. Sync and async authentication share the same state
+service. Before bcrypt, each request inserts an independent
+durable reservation row with an unguessable token and its own expiry. The row
+consumes the per-credential, per-source, and global verification-concurrency
+capacity. After bcrypt, an atomic token-scoped delete finalizes that exact row
+once: a rejected key converts it to credential/source failure state in the same
+transaction, while an accepted key records no failure. Duplicate finalization
+cannot consume another request's reservation. Concurrent valid traffic therefore
+cannot manufacture a lockout. Exhausted verification capacity returns HTTP 503
+with `Retry-After: 1` or WebSocket close code 1013; it does not consume a failure
+attempt.
+
+An abandoned crash token expires after at least 60 seconds (or the longer
+configured lockout window). Once expired it stops consuming concurrency
+capacity. Its row remains available for exactly-once late finalization for one
+hour after expiry and is counted by the orphan-reservation metric. Older rows are
+compacted into a durable aggregate counter, bounding storage; a finalizer beyond
+that documented horizon is ignored. One orphan cannot extend the expiry of
+another live token or release newer work.
 A second durable source budget bounds attacks that rotate credentials; it is
-deliberately higher than the per-credential default. Row-cap cleanup considers
-only inactive, non-reserved buckets; active lockouts are never evicted, and new
-identities fail closed when no safe eviction candidate exists.
+deliberately higher than the per-credential default. Durable failure rows are
+split into independently bounded credential and source partitions. Expired
+failure windows are pruned, but saturation never prevents bcrypt for a valid,
+previously unseen key because reservations do not require a failure row. A
+rejected key is still denied when either partition cannot admit its new identity;
+the unpersisted identity is included in aggregate failure and row-capacity
+counters rather than evicting another live pre-lockout budget.
 
 - Default threshold: 5 failed attempts (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, range 1-100)
 - Default source budget: 50 failed attempts (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, range 1-100000)
 - Default fixed window: 5 minutes (`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, range 1-86400)
 - Maximum durable bucket rows: 10000 (`PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, range 2-1000000)
+- Maximum concurrent verifications per credential/source bucket: 32
+  (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, range 1-1024)
+- Maximum concurrent verifications across all workers and identities: 256
+  (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, range 1-4096)
 - An opaque identity key is atomically generated in the private sibling
   `database.db.auth-lockout.key` file by default. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`
   can supply an explicit 32-byte-or-longer value instead. Keep either source
   stable across restarts and separate from rotatable credential encryption.
+- Startup records a non-secret fingerprint and generation in SQLite. Once bound,
+  a missing/replaced file or different environment key is fatal and is never
+  regenerated silently. Every worker validates the same binding under the
+  target-specific startup lock and pins the verified key material in process
+  memory. Deleting or replacing the source after startup cannot change bucket
+  identities in that worker; recovery or rotation requires the offline procedure
+  followed by a controlled restart.
 - `PROXBOX_TRUSTED_PROXIES` explicitly controls which peer CIDRs may supply
   `X-Forwarded-For`. No address, including localhost, is trusted implicitly.
   Trusted proxies do not bypass authentication or lockout.
 
-The metrics endpoints expose only aggregate, label-free
-`proxbox_auth_*` counters and gauges. Logs and the recovery CLI use 12-character
-non-authenticating HMAC identifiers; raw keys and dictionary-testable hashes are never
-rendered.
+The metrics endpoints expose only aggregate, label-free `proxbox_auth_*`
+counters and gauges. In addition to failure/lockout/recovery totals and active
+lockouts, the lockout service publishes:
+
+- `proxbox_auth_capacity_rejections_total`: verification admissions rejected by
+  a per-bucket or global in-flight limit plus failed identities whose bounded
+  credential or source row partition could not persist;
+- `proxbox_auth_orphan_compactions_total`: expired reservation rows compacted
+  after the supported one-hour late-finalization horizon;
+- `proxbox_auth_bucket_rows`: current durable credential/source failure rows;
+- `proxbox_auth_verifications_in_flight`: unexpired reservation rows currently
+  consuming bcrypt capacity; and
+- `proxbox_auth_expired_orphan_reservations`: expired crash-token rows retained
+  within the supported late-finalization horizon.
+
+Logs and the recovery CLI use 12-character non-authenticating HMAC identifiers;
+raw keys and dictionary-testable hashes are never rendered.
 
 ### Local lockout recovery
 
@@ -173,11 +215,40 @@ proxbox-auth-lockout --database /data/database.db clear --id 4a12bc34de56
 proxbox-auth-lockout --database /data/database.db clear --all
 ```
 
-The database path is mandatory and must already contain the current lockout
-schema; the CLI never initializes or migrates a database. `list` opens SQLite in
-read-only mode. Its output contains source IP/trust context, bucket type, short
-bucket and credential identifiers, attempt count, and lock expiry; it never
-contains API-key material.
+The database path is mandatory and must already contain the complete current
+lockout schema, including reservation, metric, and key-binding tables; the CLI
+validates that schema but never initializes or migrates a database. `list` opens
+SQLite in read-only mode. Its output contains source IP/trust context, bucket
+type, short bucket and credential identifiers, attempt count, and lock expiry;
+it never contains API-key material.
+
+### Offline identity-key recovery or rotation
+
+Prefer restoring the bound key file from backup. If that is impossible, a new
+key generation necessarily invalidates all existing opaque bucket IDs. Perform
+this explicit reset only while every worker is stopped:
+
+1. Stop every proxbox-api worker and preserve a recoverable database/key backup.
+2. Create the replacement key as a regular, non-symlink UTF-8 file containing
+   at least 32 bytes and mode `0600`.
+3. Run:
+
+   ```bash
+   proxbox-auth-lockout --database /data/database.db rebind-key \
+     --key-file /data/database.db.auth-lockout.key.new \
+     --confirm-reset-lockouts
+   ```
+
+4. Configure/install that exact key source for every worker, start the service,
+   and verify readiness plus authentication.
+
+The command takes the database startup lock and an exclusive runtime lease. It
+refuses to run while any worker is active, validates the existing recovery
+schema, atomically clears incompatible lockout buckets and all outstanding
+reservation rows, advances the non-secret generation, and never prints key
+material. If the binding row itself was lost, recovery creates generation 1
+after clearing all opaque state. Do not replace the bound file and roll workers
+gradually.
 
 ## Security Best Practices
 

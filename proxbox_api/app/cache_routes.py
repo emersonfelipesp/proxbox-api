@@ -6,8 +6,8 @@ from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
 from sqlmodel import Session
 
+from proxbox_api import database
 from proxbox_api.cache import global_cache
-from proxbox_api.database import engine
 from proxbox_api.netbox_rest import (
     _netbox_get_cache,
     clear_rest_get_cache,
@@ -31,7 +31,7 @@ cache_router = APIRouter()
 async def get_cache() -> dict:
     netbox_metrics = get_cache_metrics()
     reconciliation_metrics = get_reconciliation_metrics()
-    with Session(engine) as session:
+    with Session(database.get_engine()) as session:
         auth_metrics = get_auth_lockout_metrics(session)
     sample_keys = [
         {"api_id": key[0], "path": key[1], "query": key[2]}
@@ -48,14 +48,14 @@ async def get_cache() -> dict:
 
 @cache_router.get("/cache/metrics")
 async def get_cache_metrics_json() -> dict:
-    with Session(engine) as session:
+    with Session(database.get_engine()) as session:
         auth_metrics = get_auth_lockout_metrics(session)
     return {**get_cache_metrics(), **get_reconciliation_metrics(), **auth_metrics}
 
 
 @cache_router.get("/cache/metrics/prometheus")
 async def get_cache_metrics_prometheus() -> PlainTextResponse:
-    with Session(engine) as session:
+    with Session(database.get_engine()) as session:
         auth_metrics = get_auth_lockout_prometheus_metrics(session)
     return PlainTextResponse(
         content=(
