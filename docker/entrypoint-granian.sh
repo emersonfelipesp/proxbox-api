@@ -64,6 +64,8 @@ HOST=$(printf '%s' "${PROXBOX_BIND_HOST:-0.0.0.0}" \
         -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 [ -z "$HOST" ] && HOST=0.0.0.0
 
+# Granian leaves forwarded-header scope rewriting opt-in. Do not wrap this app:
+# PROXBOX_TRUSTED_PROXIES is enforced inside the ASGI middleware stack.
 exec /app/.venv/bin/granian \
   --interface asgi \
   --host "$HOST" \

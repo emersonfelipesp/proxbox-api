@@ -148,7 +148,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             del self._requests[ip]
 
     def _get_client_ip(self, request: Request) -> str:
-        return resolve_client_ip(request)
+        return resolve_client_source(request).canonical
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -242,7 +242,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def _get_client_ip(self, request: Request) -> str:
-        return resolve_client_ip(request)
+        return resolve_client_source(request).canonical
 
 
 # Legacy module-level placeholders (some tooling may read these names).

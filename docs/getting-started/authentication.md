@@ -148,12 +148,12 @@ attempt.
 
 Rejected verifications for the same composite credential that were all admitted
 before an earlier member of that cohort completed are still counted in the
-aggregate failure metric, but only the first completion advances the durable
-credential and source failure buckets. This causal coalescing works across
-workers and prevents dashboard fan-out from immediately re-arming an expired
-lockout. A later request admitted after that transition counts normally, and
-different credential identities still advance the shared source-abuse budget
-independently.
+aggregate failure metric. Only the first completion advances the credential
+bucket, but **every** consumed rejection advances the shared source-abuse
+budget. This causal coalescing works across workers and prevents a normal stale
+key burst from immediately re-arming an expired credential lockout, while the
+source threshold still places a hard bound on attacker bcrypt work. A later
+request admitted after that transition counts normally.
 
 An abandoned crash token expires after at least 60 seconds (or the longer
 configured lockout window). Once expired it stops consuming concurrency
@@ -164,16 +164,27 @@ finalization paths both enforce this horizon, so a finalizer beyond it is ignore
 even when no newer request has run compaction. One orphan cannot extend the
 expiry of another live token or release newer work.
 A second durable source budget bounds attacks that rotate credentials; it is
-deliberately higher than the per-credential default. Durable failure rows are
-split into independently bounded credential and source partitions. Expired
-failure windows are pruned. Each distinct identity in a retained reservation
-also commits its future partition slot, so concurrent unseen identities cannot
-overbook the failure-row budget before bcrypt completes. When a partition is
-full, admission first evicts its stalest expired row only if no pending
-reservation references that row. If the identity is still unseen and every row
-remains live or reserved, authentication fails closed before bcrypt with the
-capacity response; aggregate capacity counters retain evidence without evicting
-a live pre-lockout budget.
+deliberately higher than the per-credential default. Missing-key requests
+advance only that source budget and never allocate credential-partition rows.
+IPv6 sources are grouped by `/64` for lockout and rate-limit accounting, while
+IPv4 remains per address. Durable failure rows are split into independently
+bounded credential and source partitions, and one source can commit at most its
+source-threshold number of distinct credential identities. Expired failure
+windows are pruned. Active reservations commit future partition slots, so
+concurrent unseen identities cannot overbook the failure-row budget before
+bcrypt completes.
+
+When a partition is full, admission first evicts its stalest expired row only
+if no pending reservation references that row. A single globally bounded
+verification lane remains available for an unseen credential when no safe
+durable failure slot exists. Successful credentials therefore remain usable
+after unauthenticated row saturation; a rejected lane request is still charged
+to every durable budget that can be represented. The lane permits only one
+active request globally and one per source, is released or expires like every
+other reservation, and does not bypass an existing credential/source lockout or
+the normal per-source concurrency limit. Other capacity pressure fails closed
+with the capacity response, and aggregate counters retain evidence without
+evicting a live pre-lockout budget.
 
 - Default threshold: 5 failed attempts (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, range 1-100)
 - Default source budget: 50 failed attempts (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, range 1-100000)
@@ -198,7 +209,12 @@ a live pre-lockout budget.
   followed by a controlled restart.
 - `PROXBOX_TRUSTED_PROXIES` explicitly controls which peer CIDRs may supply
   `X-Forwarded-For`. No address, including localhost, is trusted implicitly.
-  Trusted proxies do not bypass authentication or lockout.
+  Trusted proxies do not bypass authentication or lockout. Uvicorn must run
+  with proxy-header processing disabled (`--no-proxy-headers`); the shipped raw
+  and nginx-backed entrypoints already enforce this so the application receives
+  the real transport peer before applying this allowlist. Granian does not
+  rewrite forwarded headers unless an application wrapper is explicitly added;
+  the shipped Granian entrypoint does not add one.
 
 The metrics endpoints expose only aggregate, label-free `proxbox_auth_*`
 counters and gauges. In addition to failure/lockout/recovery totals and active
@@ -232,10 +248,12 @@ proxbox-auth-lockout --database /data/database.db clear --all
 
 The database path is mandatory and must already contain the complete current
 lockout schema, including reservation, metric, and key-binding tables; the CLI
-validates that schema but never initializes or migrates a database. `list` opens
-SQLite in read-only mode. Its output contains source IP/trust context, bucket
-type, short bucket and credential identifiers, attempt count, and lock expiry;
-it never contains API-key material.
+uses the same exact column, type, primary-key, nullability, and singleton-CHECK
+validator as startup, but never initializes or migrates a database. Validation
+runs under the offline maintenance lock before `rebind-key` can delete or update
+anything. `list` opens SQLite in read-only mode. Its output contains source
+IP/trust context, bucket type, short bucket and credential identifiers, attempt
+count, and lock expiry; it never contains API-key material.
 
 ### Offline identity-key recovery or rotation
 

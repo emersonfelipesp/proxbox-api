@@ -1489,6 +1489,15 @@ def _validate_auth_table_schema(connection: Connection, model: type[SQLModel]) -
         ) from error
 
 
+def validate_auth_lockout_schema(connection: Connection) -> None:
+    """Validate every current lockout table exactly without creating or migrating it."""
+
+    _validate_auth_table_schema(connection, AuthLockout)
+    _validate_auth_table_schema(connection, AuthLockoutReservation)
+    _validate_auth_table_schema(connection, AuthLockoutMetric)
+    _validate_auth_table_schema(connection, AuthLockoutIdentityKeyBinding)
+
+
 def _migrate_auth_lockout_schema(target_engine: Engine | None = None) -> None:
     """Create and validate versioned auth tables under one reserved transaction.
 
@@ -1507,10 +1516,7 @@ def _migrate_auth_lockout_schema(target_engine: Engine | None = None) -> None:
             connection,
             checkfirst=True,
         )
-        _validate_auth_table_schema(connection, AuthLockout)
-        _validate_auth_table_schema(connection, AuthLockoutReservation)
-        _validate_auth_table_schema(connection, AuthLockoutMetric)
-        _validate_auth_table_schema(connection, AuthLockoutIdentityKeyBinding)
+        validate_auth_lockout_schema(connection)
         binding = connection.execute(
             text(
                 "SELECT fingerprint, generation FROM auth_lockout_identity_key_binding WHERE id = 1"

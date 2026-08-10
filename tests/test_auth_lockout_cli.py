@@ -7,11 +7,19 @@ import hashlib
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+from sqlalchemy import text
 from sqlmodel import Session, create_engine
 
 from proxbox_api import auth, database
 from proxbox_api.auth_lockout_cli import main
-from proxbox_api.database import ApiKey, AuthLockout, AuthLockoutIdentityKeyBinding
+from proxbox_api.database import (
+    ApiKey,
+    AuthLockout,
+    AuthLockoutIdentityKeyBinding,
+    AuthLockoutMetric,
+    AuthLockoutReservation,
+)
 from proxbox_api.services.auth_lockout import (
     AuthLockoutPolicy,
     AuthLockoutService,
@@ -249,3 +257,126 @@ def test_identity_key_rebind_recovers_missing_binding_with_opaque_state(
     monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(replacement_key))
     database.initialize_database_and_schema()
     asyncio.run(database.dispose_database())
+
+
+@pytest.mark.parametrize(
+    ("malformed_table", "malformed_ddl", "expected_error"),
+    [
+        (
+            "auth_lockout_buckets",
+            "CREATE TABLE auth_lockout_buckets ("
+            "bucket_id VARCHAR NOT NULL, bucket_type VARCHAR NOT NULL, "
+            "source_context VARCHAR NOT NULL, credential_id VARCHAR NOT NULL, "
+            "attempts INTEGER NOT NULL, window_started_at FLOAT NOT NULL, "
+            "locked_until FLOAT, updated_at FLOAT NOT NULL)",
+            "primary key",
+        ),
+        (
+            "auth_lockout_reservations",
+            "CREATE TABLE auth_lockout_reservations ("
+            "token VARCHAR PRIMARY KEY, credential_bucket_id VARCHAR NOT NULL, "
+            "source_bucket_id VARCHAR NOT NULL, expires_at VARCHAR NOT NULL, "
+            "created_at FLOAT NOT NULL)",
+            "expires_at type",
+        ),
+        (
+            "auth_lockout_identity_key_binding",
+            "CREATE TABLE auth_lockout_identity_key_binding ("
+            "id INTEGER PRIMARY KEY, fingerprint VARCHAR NOT NULL, "
+            "generation INTEGER NOT NULL, created_at FLOAT NOT NULL, updated_at FLOAT NOT NULL)",
+            "singleton constraint",
+        ),
+    ],
+)
+def test_rebind_rejects_malformed_exact_schema_before_any_mutation(
+    tmp_path,
+    capsys,
+    malformed_table: str,
+    malformed_ddl: str,
+    expected_error: str,
+) -> None:
+    database_path = tmp_path / f"malformed-{malformed_table}.db"
+    replacement_key = tmp_path / f"replacement-{malformed_table}.key"
+    replacement_key.write_text("replacement-" + "z" * 48, encoding="utf-8")
+    replacement_key.chmod(0o600)
+    target = create_engine(f"sqlite:///{database_path}")
+    models = (
+        AuthLockout,
+        AuthLockoutReservation,
+        AuthLockoutMetric,
+        AuthLockoutIdentityKeyBinding,
+    )
+    try:
+        for model in models:
+            cast(Any, model).__table__.create(target)
+        with target.begin() as connection:
+            connection.execute(text(f"DROP TABLE {malformed_table}"))
+            connection.execute(text(malformed_ddl))
+            connection.execute(
+                text(
+                    "INSERT INTO auth_lockout_buckets "
+                    "(bucket_id, bucket_type, source_context, credential_id, attempts, "
+                    "window_started_at, locked_until, updated_at) "
+                    "VALUES ('bucket-evidence', 'credential', 'direct|192.0.2.20', "
+                    "'credential', 3, 100.0, 200.0, 101.0)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO auth_lockout_reservations "
+                    "(token, credential_bucket_id, source_bucket_id, expires_at, created_at) "
+                    "VALUES ('reservation-evidence', 'bucket-evidence', "
+                    "'source-evidence', 200.0, 100.0)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO auth_lockout_metrics "
+                    "(id, failures_total, lockouts_total, source_lockouts_total, "
+                    "recoveries_total, capacity_rejections_total, orphan_compactions_total, "
+                    "updated_at) VALUES (1, 5, 2, 1, 0, 3, 4, 100.0)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO auth_lockout_identity_key_binding "
+                    "(id, fingerprint, generation, created_at, updated_at) "
+                    "VALUES (1, 'original-fingerprint', 7, 100.0, 100.0)"
+                )
+            )
+
+        select_statements = {
+            "auth_lockout_buckets": text("SELECT * FROM auth_lockout_buckets ORDER BY rowid"),
+            "auth_lockout_reservations": text(
+                "SELECT * FROM auth_lockout_reservations ORDER BY rowid"
+            ),
+            "auth_lockout_metrics": text("SELECT * FROM auth_lockout_metrics ORDER BY rowid"),
+            "auth_lockout_identity_key_binding": text(
+                "SELECT * FROM auth_lockout_identity_key_binding ORDER BY rowid"
+            ),
+        }
+
+        def snapshot() -> dict[str, list[tuple[Any, ...]]]:
+            with target.connect() as connection:
+                return {
+                    table: [tuple(row) for row in connection.execute(statement)]
+                    for table, statement in select_statements.items()
+                }
+
+        before = snapshot()
+        result = main(
+            [
+                "--database",
+                str(database_path),
+                "rebind-key",
+                "--key-file",
+                str(replacement_key),
+                "--confirm-reset-lockouts",
+            ],
+            target_engine=target,
+        )
+        assert result == 2
+        assert expected_error in capsys.readouterr().err
+        assert snapshot() == before
+    finally:
+        target.dispose()

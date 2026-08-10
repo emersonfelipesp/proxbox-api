@@ -41,8 +41,16 @@ O nginx encerra HTTPS usando certificados [mkcert](https://github.com/FiloSottil
 ```bash
 docker pull emersonfelipesp/proxbox-api:latest-nginx
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
+
+Esse valor de ambiente e a unica politica de confianca que permite a aplicacao
+usar `X-Forwarded-For` do nginx para rate limit e bloqueio por cliente. Defina-o
+somente quando a porta Uvicorn em loopback nao puder ser acessada por processos
+locais nao confiaveis; caso contrario, omita-o e as requisicoes serao agrupadas
+conservadoramente pelo peer de transporte nginx. O proprio Uvicorn nunca
+reescreve o peer no escopo.
 
 URL do servico:
 
@@ -103,6 +111,7 @@ Comuns a todas as imagens, incluindo as variantes experimentais PyO3/Rust:
 |----------|--------|-----------|
 | `PORT` | `8000` | Porta em que o servidor escuta |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Endereco ao qual o servidor faz bind. Use `::` para dual-stack IPv4 + IPv6. Respeitado pelas imagens `raw` e `granian`; a imagem `nginx` escuta em ambas as pilhas incondicionalmente. |
+| `PROXBOX_TRUSTED_PROXIES` | — | CIDRs no nivel da aplicacao autorizados a fornecer `X-Forwarded-For`. O preprocessamento do Uvicorn fica desabilitado. Na imagem nginx, use `127.0.0.1` somente quando a porta Uvicorn em loopback estiver protegida de callers locais nao confiaveis. |
 
 Especificas do mkcert (apenas para as imagens `nginx` e `granian`):
 
@@ -117,6 +126,7 @@ Exemplo com SANs extras:
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
+  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
@@ -130,6 +140,7 @@ nenhuma flag especial.
 
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   -v ./certs:/certs:ro \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
@@ -151,6 +162,8 @@ services:
     restart: unless-stopped
     ports:
       - "8443:8000"
+    environment:
+      PROXBOX_TRUSTED_PROXIES: 127.0.0.1
     volumes:
       - ./certs:/certs:ro
 ```
@@ -245,7 +258,7 @@ Habilite primeiro o compare mode pela pagina `/plugins/proxbox/settings/` do
 NetBox ou use a variavel de ambiente para um processo avulso:
 
 ```bash
-PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app
+PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app --no-proxy-headers
 ```
 
 O padrao de producao continua sendo Python. Para rollback imediato, volte
@@ -255,7 +268,7 @@ se um override de ambiente foi usado.
 Inicie o servidor apos instalar:
 
 ```bash
-python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 ## Opcao 3: Codigo-fonte local
@@ -288,13 +301,13 @@ uv pip install -e proxbox-reconcile-rs
 Execute a API:
 
 ```bash
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+uv run fastapi run proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 Alternativa com uvicorn:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000 --reload
 ```
 
 O comando `fastapi run` nao expoe opcoes de TLS; para HTTPS no proprio processo use **uvicorn** com `--ssl-certfile` / `--ssl-keyfile`, ou **nginx/Caddy** na frente (recomendado para certificados reais).
@@ -308,7 +321,7 @@ Para HTTPS confiavel somente na sua propria maquina:
 ```bash
 mkcert -install
 mkcert proxbox.backend.local localhost 127.0.0.1 ::1
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000 --reload \
   --ssl-keyfile=./proxbox.backend.local+3-key.pem \
   --ssl-certfile=./proxbox.backend.local+3.pem
 ```
@@ -320,7 +333,7 @@ Ajuste os nomes dos arquivos conforme a saida do `mkcert`.
 **Recomendado:** terminar TLS no **nginx** ou **Caddy** e manter a API em HTTP em `127.0.0.1:8000`:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000
 ```
 
 Configure o proxy com `fullchain.pem` e `privkey.pem` (Let's Encrypt em `/etc/letsencrypt/live/<dominio>/`) e cabecalhos `X-Forwarded-Proto` (e afins). Exemplo completo de bloco `server` do nginx no **README** do repositorio.
@@ -328,7 +341,7 @@ Configure o proxy com `fullchain.pem` e `privkey.pem` (Let's Encrypt em `/etc/le
 **Uvicorn com TLS direto** (implantacoes menores): use a **cadeia completa** em `--ssl-certfile` e a chave em `--ssl-keyfile`:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8443 \
   --ssl-certfile=/etc/letsencrypt/live/api.exemplo.com/fullchain.pem \
   --ssl-keyfile=/etc/letsencrypt/live/api.exemplo.com/privkey.pem
 ```

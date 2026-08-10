@@ -252,6 +252,92 @@ def test_no_keys_configured_does_not_create_lockout_bucket(db_session: Session) 
     assert AuthLockoutService.list_rows(db_session) == []
 
 
+def test_missing_header_saturation_cannot_block_valid_credentials(
+    db_session: Session,
+    stored_key: str,
+    monkeypatch,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=1_000,
+        window_seconds=60,
+        max_buckets=2,
+    )
+    monkeypatch.setattr(
+        ApiKey,
+        "verify_any",
+        staticmethod(lambda session, provided_key: provided_key == stored_key),
+    )
+
+    for index in range(8):
+        authorized, _ = auth.check_auth_header_with_session(
+            db_session,
+            None,
+            f"192.0.2.{index + 1}",
+            policy,
+        )
+        assert authorized is False
+
+    rows = AuthLockoutService.list_rows(db_session)
+    assert len(rows) == 1
+    assert {row.bucket_type for row in rows} == {"source"}
+
+    authorized, message = auth.check_auth_header_with_session(
+        db_session,
+        stored_key,
+        "198.51.100.20",
+        policy,
+    )
+    assert authorized is True
+    assert message is None
+
+
+def test_rotating_ipv6_saturation_is_prefix_bounded_and_keeps_valid_lane(
+    db_session: Session,
+    stored_key: str,
+    monkeypatch,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=1_000,
+        window_seconds=60,
+        max_buckets=4,
+        max_in_flight=16,
+    )
+    verification_calls = 0
+
+    def verify_any(session: Session, provided_key: str) -> bool:  # noqa: ARG001
+        nonlocal verification_calls
+        verification_calls += 1
+        return provided_key == stored_key
+
+    monkeypatch.setattr(ApiKey, "verify_any", staticmethod(verify_any))
+    for index in range(8):
+        authorized, _ = auth.check_auth_header_with_session(
+            db_session,
+            f"rotating-ipv6-key-{index}",
+            f"2001:db8:290:1::{index + 1}",
+            policy,
+        )
+        assert authorized is False
+
+    rows = AuthLockoutService.list_rows(db_session)
+    assert sum(row.bucket_type == "credential" for row in rows) == 2
+    source_rows = [row for row in rows if row.bucket_type == "source"]
+    assert len(source_rows) == 1
+    assert source_rows[0].source_context == "direct|2001:db8:290:1::/64"
+
+    authorized, message = auth.check_auth_header_with_session(
+        db_session,
+        stored_key,
+        "2001:db8:290:2::1",
+        policy,
+    )
+    assert authorized is True
+    assert message is None
+    assert verification_calls == 9
+
+
 def test_same_ip_stale_key_cannot_lock_out_valid_key(
     db_session: Session,
     stored_key: str,
@@ -497,7 +583,7 @@ def test_http_valid_burst_above_failure_threshold_never_returns_lockout(
     application = FastAPI()
 
     @application.get("/protected")
-    def protected() -> dict[str, bool]:
+    async def protected() -> dict[str, bool]:
         return {"ok": True}
 
     application.add_middleware(APIKeyAuthMiddleware, policy=policy)
@@ -744,9 +830,50 @@ def test_concurrent_failure_cohort_does_not_immediately_rearm_expired_lockout(
     row = AuthLockoutService.get(db_session, identity)
     source_row = AuthLockoutService.get_source(db_session, identity)
     assert row is not None and row.attempts == 1 and row.locked_until is None
-    assert source_row is not None and source_row.attempts == 1
+    assert source_row is not None and source_row.attempts == 8
     assert not AuthLockoutService.is_locked(db_session, identity, now=161.0)
     assert get_auth_lockout_metrics(db_session, now=161.0)["proxbox_auth_failures_total"] == 10
+
+
+def test_threshold_many_failure_cohort_completions_enforce_source_lockout(
+    db_session: Session,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=2,
+        source_threshold=4,
+        window_seconds=60,
+        max_in_flight=8,
+    )
+    identity = build_lockout_identity(
+        resolve_auth_source_context(CLIENT_IP, None, ()),
+        STALE_KEY,
+    )
+    reservations = [
+        AuthLockoutService.reserve_verification(db_session, identity, policy, now=100.0)
+        for _ in range(policy.source_threshold)
+    ]
+    assert all(reservation is not None for reservation in reservations)
+
+    for reservation in reservations:
+        assert reservation is not None
+        assert (
+            AuthLockoutService.finalize_verification(
+                db_session,
+                identity,
+                policy,
+                reservation,
+                succeeded=False,
+                now=101.0,
+            )
+            is not None
+        )
+
+    credential = AuthLockoutService.get(db_session, identity)
+    source = AuthLockoutService.get_source(db_session, identity)
+    assert credential is not None and credential.attempts == 1
+    assert source is not None and source.attempts == policy.source_threshold
+    assert source.locked_until == 161.0
+    assert AuthLockoutService.is_locked(db_session, identity, now=101.0)
 
 
 async def test_async_failure_cohort_uses_the_same_single_transition(db_engine) -> None:
@@ -796,7 +923,7 @@ async def test_async_failure_cohort_uses_the_same_single_transition(db_engine) -
             row = await AuthLockoutService.get_async(session, identity)
             source_row = await AuthLockoutService.get_source_async(session, identity)
             assert row is not None and row.attempts == 1 and row.locked_until is None
-            assert source_row is not None and source_row.attempts == 1
+            assert source_row is not None and source_row.attempts == 8
     finally:
         await target.dispose()
 
@@ -845,7 +972,7 @@ def test_multiprocess_finalizers_consume_a_reservation_exactly_once(db_engine) -
         verified.dispose()
 
 
-def test_multiprocess_failure_cohort_counts_one_state_transition(db_engine) -> None:
+def test_multiprocess_failure_cohort_counts_every_source_transition(db_engine) -> None:
     policy = AuthLockoutPolicy(threshold=100, source_threshold=100, max_in_flight=8)
     identity = build_lockout_identity(
         resolve_auth_source_context(CLIENT_IP, None, ()),
@@ -880,7 +1007,7 @@ def test_multiprocess_failure_cohort_counts_one_state_transition(db_engine) -> N
             row = AuthLockoutService.get(session, identity)
             source_row = AuthLockoutService.get_source(session, identity)
             assert row is not None and row.attempts == 1
-            assert source_row is not None and source_row.attempts == 1
+            assert source_row is not None and source_row.attempts == 4
             assert get_auth_lockout_metrics(session, now=101.0)["proxbox_auth_failures_total"] == 4
     finally:
         verified.dispose()
@@ -991,7 +1118,7 @@ def test_global_verification_capacity_bounds_distinct_identities(db_session: Ses
     )
 
 
-def test_pending_distinct_identities_reserve_failure_partition_capacity(
+def test_saturated_failure_partitions_keep_one_bounded_verification_lane(
     db_session: Session,
 ) -> None:
     policy = AuthLockoutPolicy(
@@ -1006,20 +1133,44 @@ def test_pending_distinct_identities_reserve_failure_partition_capacity(
             resolve_auth_source_context(f"10.0.2.{index}", None, ()),
             f"pending-distinct-key-{index}",
         )
-        for index in range(1, 4)
+        for index in range(1, 5)
     ]
 
     first = AuthLockoutService.reserve_verification(db_session, identities[0], policy, now=100.0)
     second = AuthLockoutService.reserve_verification(db_session, identities[1], policy, now=100.0)
     third = AuthLockoutService.reserve_verification(db_session, identities[2], policy, now=100.0)
+    fourth = AuthLockoutService.reserve_verification(db_session, identities[3], policy, now=100.0)
 
     assert first is not None
     assert second is not None
-    assert third is None
+    assert third is not None
+    assert third.reservation_token is not None
+    assert third.reservation_token.startswith("lane-")
+    assert fourth is None
     assert AuthLockoutService.list_rows(db_session) == []
     assert (
         get_auth_lockout_metrics(db_session, now=100.0)["proxbox_auth_capacity_rejections_total"]
         == 1
+    )
+    assert (
+        AuthLockoutService.finalize_verification(
+            db_session,
+            identities[2],
+            policy,
+            third,
+            succeeded=True,
+            now=100.5,
+        )
+        is not None
+    )
+    assert (
+        AuthLockoutService.reserve_verification(
+            db_session,
+            identities[3],
+            policy,
+            now=100.6,
+        )
+        is not None
     )
     for identity, reservation in zip(identities[:2], (first, second)):
         assert (
@@ -1034,6 +1185,39 @@ def test_pending_distinct_identities_reserve_failure_partition_capacity(
             is not None
         )
     assert len(AuthLockoutService.list_rows(db_session)) == policy.max_buckets
+
+
+def test_one_source_has_bounded_distinct_credential_commitments(
+    db_session: Session,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=3,
+        max_buckets=20,
+        max_in_flight=10,
+        max_global_in_flight=10,
+    )
+    source = resolve_auth_source_context("192.0.2.90", None, ())
+    identities = [
+        build_lockout_identity(source, f"source-cardinality-key-{index}") for index in range(5)
+    ]
+
+    reservations = [
+        AuthLockoutService.reserve_verification(db_session, identity, policy, now=100.0)
+        for identity in identities
+    ]
+
+    assert all(reservation is not None for reservation in reservations[:4])
+    assert all(
+        reservation is not None
+        and reservation.reservation_token is not None
+        and not reservation.reservation_token.startswith("lane-")
+        for reservation in reservations[: policy.source_threshold]
+    )
+    lane = reservations[policy.source_threshold]
+    assert lane is not None
+    assert lane.reservation_token is not None and lane.reservation_token.startswith("lane-")
+    assert reservations[-1] is None
 
 
 def test_global_verification_capacity_is_atomic_across_processes(db_engine) -> None:
@@ -1125,7 +1309,7 @@ def test_finalizer_itself_enforces_late_recovery_horizon(db_session: Session) ->
     )
 
 
-def test_missing_and_presented_credentials_have_distinct_buckets(
+def test_missing_credentials_use_only_the_presented_key_credential_bucket(
     db_session: Session,
     stored_key: str,
 ) -> None:
@@ -1136,9 +1320,10 @@ def test_missing_and_presented_credentials_have_distinct_buckets(
     rows = AuthLockoutService.list_rows(db_session)
     credential_rows = [row for row in rows if row.bucket_type == "credential"]
     source_rows = [row for row in rows if row.bucket_type == "source"]
-    assert len(credential_rows) == 2
+    assert len(credential_rows) == 1
     assert len(source_rows) == 1
-    assert len({row.bucket_id for row in rows}) == 3
+    assert source_rows[0].attempts == 2
+    assert len({row.bucket_id for row in rows}) == 2
     assert all(stored_key not in repr(row) for row in rows)
     assert all(STALE_KEY not in repr(row) for row in rows)
 
@@ -1280,7 +1465,7 @@ def test_rotating_invalid_keys_block_bcrypt_for_valid_key(
     assert message is not None and "Too many failed" in message
 
 
-def test_partitioned_row_cap_denies_unseen_identity_before_bcrypt(
+def test_partitioned_row_cap_preserves_valid_verification_lane(
     db_session: Session,
     stored_key: str,
     monkeypatch,
@@ -1330,60 +1515,9 @@ def test_partitioned_row_cap_denies_unseen_identity_before_bcrypt(
         "10.0.0.11",
         policy,
     )
-    assert authorized is False
-    assert message is not None and "capacity is temporarily exhausted" in message
-    assert verification_calls == 0
-
-
-async def test_async_partitioned_row_cap_denies_unseen_identity(
-    db_engine,
-) -> None:
-    policy = AuthLockoutPolicy(
-        threshold=100,
-        source_threshold=100,
-        window_seconds=60,
-        max_buckets=2,
-    )
-    first = build_lockout_identity(
-        resolve_auth_source_context("10.0.0.14", None, ()),
-        "first-async-invalid-key",
-    )
-    saturated = build_lockout_identity(
-        resolve_auth_source_context("10.0.0.15", None, ()),
-        "second-async-invalid-key",
-    )
-    db_engine.dispose()
-    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    target = create_async_engine(async_url, connect_args={"check_same_thread": False})
-    configure_sqlite_engine(target.sync_engine)
-    sessions = async_sessionmaker(target, class_=AsyncSession, expire_on_commit=False)
-    timestamp = time.time()
-    try:
-        async with sessions() as session:
-            await AuthLockoutService.record_failure_async(
-                session,
-                first,
-                policy,
-                now=timestamp,
-            )
-            dropped = await AuthLockoutService.record_failure_async(
-                session,
-                saturated,
-                policy,
-                now=timestamp,
-            )
-            assert dropped.is_locked(timestamp)
-            assert (
-                await AuthLockoutService.reserve_verification_async(
-                    session,
-                    saturated,
-                    policy,
-                    now=timestamp,
-                )
-                is None
-            )
-    finally:
-        await target.dispose()
+    assert authorized is True
+    assert message is None
+    assert verification_calls == 1
 
 
 def test_partition_capacity_evicts_only_stalest_safely_expired_rows(
@@ -1779,6 +1913,114 @@ def test_forwarded_source_requires_explicit_trusted_cidr() -> None:
     assert loopback_default.trust_context == "direct"
     assert malformed.source_ip == "10.0.0.2"
     assert malformed.trust_context == "trusted-peer-invalid-forwarding"
+
+
+def test_full_asgi_stack_ignores_spoofed_forwarding_from_loopback(monkeypatch) -> None:
+    import socket
+
+    from fastapi import FastAPI
+    from httpx import Client
+    from uvicorn import Config, Server
+
+    from proxbox_api.app import factory
+    from proxbox_api.database import get_session
+
+    monkeypatch.setattr(factory, "_TRUSTED_PROXIES", ())
+    raw_entrypoint = (Path(__file__).resolve().parents[1] / "docker/entrypoint-raw.sh").read_text(
+        encoding="utf-8"
+    )
+    policy = AuthLockoutPolicy(threshold=2, source_threshold=100, max_buckets=20)
+    seen_bucket_ids: list[str] = []
+    seen_source_contexts: list[str] = []
+
+    def capture_identity(session, api_key, client_source, resolved_policy):  # noqa: ANN001, ARG001
+        identity = build_lockout_identity(client_source, api_key)
+        seen_bucket_ids.append(identity.bucket_id)
+        seen_source_contexts.append(identity.source_context)
+        return False, "Invalid API key"
+
+    monkeypatch.setattr(factory, "check_auth_header_with_session", capture_identity)
+    inner_application = FastAPI()
+
+    @inner_application.get("/protected")
+    async def protected() -> dict[str, bool]:
+        return {"ok": True}
+
+    inner_application.add_middleware(factory.APIKeyAuthMiddleware, policy=policy)
+
+    def override_get_session():
+        yield object()
+
+    inner_application.dependency_overrides[get_session] = override_get_session
+    try:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    except PermissionError:
+        pytest.skip("runtime sandbox does not permit loopback sockets")
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(128)
+    port = int(listener.getsockname()[1])
+    server = Server(
+        Config(
+            inner_application,
+            host="127.0.0.1",
+            port=port,
+            log_level="critical",
+            proxy_headers="--no-proxy-headers" not in raw_entrypoint,
+        )
+    )
+    server_thread = threading.Thread(
+        target=server.run,
+        kwargs={"sockets": [listener]},
+        daemon=True,
+    )
+    server_thread.start()
+    try:
+        deadline = time.monotonic() + 5
+        while not server.started and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started
+        with Client(base_url=f"http://127.0.0.1:{port}") as client:
+            responses = [
+                client.get(
+                    "/protected",
+                    headers={
+                        "X-Proxbox-API-Key": STALE_KEY,
+                        "X-Forwarded-For": spoofed_source,
+                    },
+                )
+                for spoofed_source in ("198.51.100.10", "203.0.113.77")
+            ]
+    finally:
+        server.should_exit = True
+        server_thread.join(timeout=5)
+        listener.close()
+    assert not server_thread.is_alive()
+
+    expected = build_lockout_identity(
+        resolve_auth_source_context("127.0.0.1", None, ()),
+        STALE_KEY,
+    )
+    spoofed = build_lockout_identity(
+        resolve_auth_source_context("198.51.100.10", None, ()),
+        STALE_KEY,
+    )
+    assert [response.status_code for response in responses] == [401, 401]
+    assert seen_bucket_ids == [expected.bucket_id, expected.bucket_id]
+    assert spoofed.bucket_id not in seen_bucket_ids
+    assert seen_source_contexts == ["direct|127.0.0.1", "direct|127.0.0.1"]
+
+
+def test_shipped_server_entrypoints_preserve_transport_peer() -> None:
+    repository = Path(__file__).resolve().parents[1]
+    raw_entrypoint = (repository / "docker/entrypoint-raw.sh").read_text(encoding="utf-8")
+    supervisor = (repository / "docker/supervisor/proxbox.conf").read_text(encoding="utf-8")
+    granian_entrypoint = (repository / "docker/entrypoint-granian.sh").read_text(encoding="utf-8")
+
+    assert "--no-proxy-headers" in raw_entrypoint
+    assert "--no-proxy-headers" in supervisor
+    assert "--proxy-headers" not in supervisor
+    assert "wrap_asgi_with_proxy_headers" not in granian_entrypoint
 
 
 def test_trusted_cidr_parser_rejects_partial_or_empty_configuration() -> None:

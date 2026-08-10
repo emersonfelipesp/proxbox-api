@@ -192,8 +192,15 @@ the bundled mkcert cert) **Verify SSL** ✗ on the FastAPI endpoint —
 ```bash
 docker pull emersonfelipesp/proxbox-api:latest-nginx
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
+  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
+
+`PROXBOX_TRUSTED_PROXIES` is the single policy that permits the application to
+use nginx's forwarded client address for rate limits and lockouts. Trust
+`127.0.0.1` only when untrusted local processes cannot reach the bundled
+Uvicorn port; otherwise omit it and requests are grouped under nginx's transport
+peer. Uvicorn proxy-header rewriting is disabled in every shipped image.
 
 Build from source:
 
@@ -243,6 +250,7 @@ Common to all images, including the experimental PyO3/Rust variants:
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Bind address for the API server. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
+| `PROXBOX_TRUSTED_PROXIES` | unset | Application-level CIDRs allowed to supply `X-Forwarded-For`; Uvicorn preprocessing is disabled. For the bundled nginx image, use `127.0.0.1` only when its loopback Uvicorn port is protected from untrusted local callers. |
 | `UVICORN_WORKERS` | `1` | Worker count for the raw-image entrypoint. The emergency fresh-database override requires this to be explicitly `1`. |
 | `PROXBOX_DATABASE_PATH` | unset | Optional absolute SQLite path. Without either database variable, containers use `/data/database.db`; non-container launches use `$XDG_DATA_HOME/proxbox/database.db` or `~/.local/share/proxbox/database.db`. |
 | `DATABASE_URL` | — | Compatibility input for an absolute local SQLite URL. If the path variable is also set, both must identify the same file. |
@@ -260,6 +268,7 @@ mkcert-specific (only for `nginx` and `granian`):
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
+  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
@@ -373,7 +382,7 @@ uv add proxbox-api
 Start the server after installing:
 
 ```bash
-python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 ## Using git repository
@@ -403,7 +412,7 @@ uv sync
 From the repository root:
 
 ```
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+uv run fastapi run proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 - `--host 0.0.0.0` will make the app available on all host network interfaces, which my not be recommended.
@@ -431,7 +440,7 @@ export PROXBOX_NETBOX_GET_CACHE_MAX_BYTES=104857600  # 100MB
 # Enable debug logging
 export PROXBOX_DEBUG_CACHE=1
 
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+uv run fastapi run proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 Cache metrics are available at `GET /cache` and `GET /cache/metrics/prometheus`.
@@ -447,7 +456,7 @@ export PROXBOX_BACKUP_BATCH_SIZE=5
 # Delay between batches in milliseconds (default 200ms)
 export PROXBOX_BACKUP_BATCH_DELAY_MS=200
 
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+uv run fastapi run proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 **Why adjust these?**
@@ -506,13 +515,13 @@ size, and PgBouncer sample configuration.
 
 ```
 pip install -e .
-fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+fastapi run proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 Or with uvicorn:
 
 ```
-uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 ## HTTPS without Docker
@@ -529,7 +538,7 @@ mkcert proxbox.backend.local localhost 127.0.0.1 ::1
 From the repository root (adjust paths to the files mkcert printed):
 
 ```
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000 --reload \
   --ssl-keyfile=./proxbox.backend.local+3-key.pem \
   --ssl-certfile=./proxbox.backend.local+3.pem
 ```
@@ -538,6 +547,7 @@ uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
 
 ```
 /opt/netbox/venv/bin/uvicorn netbox-proxbox.proxbox_api.proxbox_api.main:app \
+  --no-proxy-headers \
   --host 127.0.0.1 --port 8000 --app-dir /opt/netbox/netbox \
   --ssl-keyfile=/path/to/localhost+2-key.pem \
   --ssl-certfile=/path/to/localhost+2.pem
@@ -559,7 +569,7 @@ Use **Let’s Encrypt**, a **corporate CA**, or any PEM **full chain + private k
 Run the API on HTTP bound to loopback only, proxy from 443:
 
 ```
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000
 ```
 
 Example **nginx** `server` block (replace domain and paths):
@@ -602,7 +612,7 @@ Reload nginx after editing. Point NetBox’s FastAPI endpoint at `https://api.ex
 **3. Alternative: uvicorn serves TLS directly**
 
 ```
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8443 \
   --ssl-certfile=/etc/letsencrypt/live/api.example.com/fullchain.pem \
   --ssl-keyfile=/etc/letsencrypt/live/api.example.com/privkey.pem
 ```

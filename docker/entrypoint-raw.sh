@@ -18,4 +18,5 @@ HOST=$(printf '%s' "${PROXBOX_BIND_HOST:-0.0.0.0}" \
 exec uvicorn proxbox_api.main:app \
   --host "$HOST" \
   --port "${PORT:-8000}" \
+  --no-proxy-headers \
   --workers "${UVICORN_WORKERS:-1}"

@@ -111,7 +111,7 @@ async def check_auth_header_with_session_async(  # noqa: C901
     if not api_key:
         await session.rollback()
         try:
-            state = await AuthLockoutService.record_failure_async(
+            state = await AuthLockoutService.record_missing_credential_failure_async(
                 session, identity, resolved_policy
             )
         except LockoutCapacityError:
@@ -218,7 +218,11 @@ def check_auth_header_with_session(  # noqa: C901
     if not api_key:
         session.rollback()
         try:
-            state = AuthLockoutService.record_failure(session, identity, resolved_policy)
+            state = AuthLockoutService.record_missing_credential_failure(
+                session,
+                identity,
+                resolved_policy,
+            )
         except LockoutCapacityError:
             return False, _CAPACITY_MESSAGE
         remaining = state.remaining_attempts(resolved_policy)

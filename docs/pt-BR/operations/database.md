@@ -65,17 +65,18 @@ separadas:
   mais antigos sao compactados em `proxbox_auth_orphan_compactions_total`,
   limitando armazenamento; tanto admissao quanto finalizacao aplicam esse
   horizonte. Verificacoes recusadas sobrepostas da mesma credencial composta
-  avancam o estado de falha uma vez, enquanto cada recusa permanece visivel no
-  contador agregado. O teto global atomico tambem impede pares distintos de
+  avancam o estado da credencial uma vez, enquanto cada recusa consumida avanca
+  o estado de abuso por origem e permanece visivel no contador agregado. O teto
+  global atomico tambem impede pares distintos de
   origem/chave de contornar o controle de recurso bcrypt. Um token nunca libera
   nem estende outra reserva.
-- `auth_lockout_buckets` armazena somente historico de credenciais recusadas. O
-  limite de linhas e dividido em particoes independentes de credencial e origem.
-  A particao conta um compromisso de linha futura para cada identidade distinta
-  nas reservas retidas. Uma particao cheia remove sua linha expirada mais antiga
-  somente quando nenhuma reserva pendente a referencia. Sem uma vaga segura,
-  uma identidade desconhecida e negada antes do bcrypt e incrementa o contador
-  agregado de rejeicao por capacidade.
+- `auth_lockout_buckets` armazena historico recusado de credencial/origem.
+  Trafego sem chave cria somente linha de origem; origens IPv6 sao agregadas em
+  `/64`. O limite e dividido em particoes de credencial e origem, com os
+  compromissos distintos por origem limitados pelo threshold da origem. Reservas
+  ativas comprometem vagas futuras. Uma particao cheia remove sua linha expirada
+  segura mais antiga, enquanto uma via serializada globalmente e por origem
+  preserva a admissao de chaves validas apos saturacao nao autenticada.
 - `auth_lockout_metrics` armazena contadores duraveis sem labels. A superficie de
   metricas tambem deriva linhas atuais de bucket, reservas nao expiradas em voo
   e reservas orfas expiradas, sem labels de origem, credencial ou token; o
@@ -130,7 +131,7 @@ Group=proxbox-api
 StateDirectory=proxbox-api
 StateDirectoryMode=0750
 Environment=PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db
-ExecStart=/opt/proxbox-api/.venv/bin/uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000
+ExecStart=/opt/proxbox-api/.venv/bin/uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000
 ```
 
 Apos alterar a unit, execute `systemctl daemon-reload` e reinicie o servico. A

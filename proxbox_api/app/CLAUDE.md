@@ -41,6 +41,9 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 ## Key Rules
 
 - Keep `factory.py` as the single composition root. Do not initialize sessions or routes elsewhere at module level.
+- Preserve the transport peer in the ASGI scope: Uvicorn/FastAPI entrypoints
+  must disable their proxy-header rewriting. `factory.py` alone applies the
+  validated `PROXBOX_TRUSTED_PROXIES` policy before lockout and rate limiting.
 - `bootstrap.py` is idempotent for the same configured target. A second, conflicting target in one process is an error.
 - Database target resolution and verification must remain before route/bootstrap work that can accept traffic. Never catch and downgrade `DatabaseConfigurationError` or `DatabaseStartupError`.
 - Keep probe, engine/table creation, and all migrations inside the same target-specific advisory-lock acquisition. The lock file is persistent and must not be unlinked while workers can run.

@@ -21,9 +21,11 @@ from proxbox_api.database import (
     AuthLockoutIdentityKeyBinding,
     AuthLockoutMetric,
     AuthLockoutReservation,
+    AuthLockoutSchemaError,
     DatabaseStartupError,
     configure_sqlite_engine,
     offline_database_maintenance_lock,
+    validate_auth_lockout_schema,
 )
 from proxbox_api.services.auth_lockout import (
     AuthLockoutService,
@@ -131,13 +133,11 @@ def _require_lockout_schema(target_engine: Engine) -> None:
         table = model.__tablename__
         if not inspector.has_table(table):
             raise LockoutDatabaseError(f"database has no {table} table")
-        expected = {column.name for column in cast(Any, model).__table__.columns}
-        actual = {column["name"] for column in inspector.get_columns(table)}
-        missing = sorted(expected - actual)
-        if missing:
-            raise LockoutDatabaseError(
-                f"database has an incompatible {table} schema; missing: {', '.join(missing)}"
-            )
+    try:
+        with target_engine.connect() as connection:
+            validate_auth_lockout_schema(connection)
+    except AuthLockoutSchemaError as error:
+        raise LockoutDatabaseError(str(error)) from error
 
 
 def _replacement_key_fingerprint(path: Path) -> str:
