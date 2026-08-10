@@ -10,13 +10,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from proxbox_api import auth
 from proxbox_api.database import (
     ApiKey,
+    ApiKeyActiveLimitError,
     ApiKeyBootstrapClaim,
     ApiKeyBootstrapConflict,
     _migrate_api_key_bootstrap_claim,
 )
 from proxbox_api.routes import auth as auth_routes
+from proxbox_api.services.auth_lockout import AuthLockoutPolicy
 
 _FIRST_KEY = "first-bootstrap-key-aaaaaaaaaaaaaaaaaaaaaaaa"
 _SECOND_KEY = "second-bootstrap-key-bbbbbbbbbbbbbbbbbbbbbbb"
@@ -136,6 +139,56 @@ def test_final_active_key_cannot_be_deactivated_or_deleted(
     assert key.is_active is True
 
 
+def test_create_and_reactivate_reject_active_key_cap_crossing(
+    auth_test_client,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROXBOX_AUTH_MAX_ACTIVE_KEYS", "2")
+
+    final_permitted = auth_test_client.post("/auth/keys")
+    assert final_permitted.status_code == 201
+    final_permitted_body = final_permitted.json()
+    authorized, message = auth.check_auth_header_with_session(
+        db_session,
+        final_permitted_body["raw_key"],
+        "192.0.2.45",
+        AuthLockoutPolicy(max_active_keys=2),
+    )
+    assert authorized is True
+    assert message is None
+
+    active = db_session.exec(
+        select(ApiKey).where(ApiKey.is_active == True).order_by(ApiKey.id)  # noqa: E712
+    ).all()
+    inactive = ApiKey(
+        label="inactive-cap-test",
+        key_hash=active[0].key_hash,
+        is_active=False,
+    )
+    db_session.add(inactive)
+    db_session.commit()
+    db_session.refresh(inactive)
+
+    rejected_create = auth_test_client.post("/auth/keys")
+    rejected_reactivation = auth_test_client.post(f"/auth/keys/{inactive.id}/activate")
+
+    for response in (rejected_create, rejected_reactivation):
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "active_api_key_limit_reached"
+        assert "2" in detail["message"]
+        assert "deactivate" in detail["message"].lower()
+    assert (
+        len(
+            db_session.exec(select(ApiKey).where(ApiKey.is_active == True)).all()  # noqa: E712
+        )
+        == 2
+    )
+    db_session.refresh(inactive)
+    assert inactive.is_active is False
+
+
 @pytest.mark.asyncio
 async def test_concurrent_deactivation_preserves_one_active_key(db_engine) -> None:
     with Session(db_engine) as session:
@@ -163,6 +216,38 @@ async def test_concurrent_deactivation_preserves_one_active_key(db_engine) -> No
                 await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
             ).all()
             assert len(active) == 1
+    finally:
+        await async_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_key_creation_cannot_cross_active_cap(db_engine) -> None:
+    with Session(db_engine) as session:
+        ApiKey.store_key(session, _FIRST_KEY, label="first")
+
+    async_engine, factory = _async_factory(db_engine)
+
+    async def create(candidate: str) -> str:
+        async with factory() as session:
+            try:
+                await ApiKey.store_key_async(
+                    session,
+                    candidate,
+                    label="concurrent",
+                    max_active_keys=2,
+                )
+            except ApiKeyActiveLimitError:
+                return "conflict"
+            return "created"
+
+    try:
+        results = await asyncio.gather(create(_SECOND_KEY), create(f"{_SECOND_KEY}-other"))
+        assert sorted(results) == ["conflict", "created"]
+        async with factory() as session:
+            active = (
+                await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
+            ).all()
+            assert len(active) == 2
     finally:
         await async_engine.dispose()
 

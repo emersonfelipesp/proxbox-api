@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+
 # This image has one internal proxy hop: nginx always reaches Uvicorn through
 # 127.0.0.1:8001. Keep that transport peer in the application allowlist so
 # X-Forwarded-For is resolved into per-client rate-limit and lockout buckets.
@@ -12,10 +16,6 @@ case ",${PROXBOX_TRUSTED_PROXIES:-}," in
   *) PROXBOX_TRUSTED_PROXIES="127.0.0.1/32,${PROXBOX_TRUSTED_PROXIES}" ;;
 esac
 export PROXBOX_TRUSTED_PROXIES
-
-if [ "$#" -gt 0 ]; then
-  exec "$@"
-fi
 
 CERT_DIR="${MKCERT_CERT_DIR:-/certs}"
 

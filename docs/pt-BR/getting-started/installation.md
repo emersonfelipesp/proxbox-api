@@ -44,12 +44,14 @@ docker run -d -p 8443:8000 --name proxbox-api-nginx \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
-O entrypoint nginx de proposito unico sempre adiciona `127.0.0.1/32` no inicio
-da politica de confianca da aplicacao. Assim, seu listener Uvicorn somente em
-loopback e confiavel por padrao, e o `X-Forwarded-For` do nginx cria buckets
-independentes de rate limit e bloqueio por cliente. O proprio Uvicorn nunca
-reescreve o peer no escopo. Valores adicionais em `PROXBOX_TRUSTED_PROXIES` sao
-aditivos e devem identificar somente proxies upstream realmente confiaveis.
+Quando o entrypoint nginx inicia a topologia supervisor/nginx distribuida, ele
+adiciona `127.0.0.1/32` no inicio da politica de confianca da aplicacao. Assim,
+seu listener Uvicorn somente em loopback e confiavel, e o `X-Forwarded-For` do
+nginx cria buckets independentes de rate limit e bloqueio por cliente. O proprio
+Uvicorn nunca reescreve o peer no escopo. Valores adicionais em
+`PROXBOX_TRUSTED_PROXIES` sao aditivos e devem identificar somente proxies
+upstream realmente confiaveis. Um comando customizado pula a topologia
+distribuida e nao adiciona confianca em loopback; valor ausente permanece vazio.
 
 URL do servico:
 
@@ -137,7 +139,7 @@ Comuns a todas as imagens, incluindo as variantes experimentais PyO3/Rust:
 |----------|--------|-----------|
 | `PORT` | `8000` | Porta em que o servidor escuta |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Endereco ao qual o servidor faz bind. Use `::` para dual-stack IPv4 + IPv6. Respeitado pelas imagens `raw` e `granian`; a imagem `nginx` escuta em ambas as pilhas incondicionalmente. |
-| `PROXBOX_TRUSTED_PROXIES` | vazio em raw/Granian; nginx adiciona `127.0.0.1/32` | CIDRs no nivel da aplicacao autorizados a fornecer `X-Forwarded-For`. O preprocessamento do Uvicorn fica desabilitado. A imagem nginx distribuida protege e confia em seu hop Uvicorn loopback; proxies externos devem ser listados explicitamente e ser os unicos callers capazes de alcancar a porta da aplicacao. |
+| `PROXBOX_TRUSTED_PROXIES` | vazio em raw/Granian/comandos customizados; a topologia nginx distribuida adiciona `127.0.0.1/32` | CIDRs no nivel da aplicacao autorizados a fornecer `X-Forwarded-For`. O preprocessamento do Uvicorn fica desabilitado. Supervisor/nginx protege e confia no hop Uvicorn loopback; comando customizado nao recebe confianca implicita. Proxies externos devem ser listados explicitamente e ser os unicos callers capazes de alcancar a porta da aplicacao. |
 
 Especificas do mkcert (apenas para as imagens `nginx` e `granian`):
 

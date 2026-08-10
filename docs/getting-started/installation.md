@@ -44,12 +44,14 @@ docker run -d -p 8443:8000 --name proxbox-api-nginx \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
-The single-purpose nginx entrypoint always prepends `127.0.0.1/32` to the
-application trust policy. Its loopback-only Uvicorn listener is therefore
-trusted by default, and nginx's `X-Forwarded-For` value provides independent
-per-client rate-limit and lockout buckets. Uvicorn itself never rewrites the
-peer scope. Additional values in `PROXBOX_TRUSTED_PROXIES` are additive and
-should name only upstream proxies that are actually trusted.
+When the nginx entrypoint launches its bundled supervisor/nginx topology, it
+prepends `127.0.0.1/32` to the application trust policy. Its loopback-only
+Uvicorn listener is therefore trusted, and nginx's `X-Forwarded-For` value
+provides independent per-client rate-limit and lockout buckets. Uvicorn itself
+never rewrites the peer scope. Additional values in
+`PROXBOX_TRUSTED_PROXIES` are additive and should name only upstream proxies
+that are actually trusted. Supplying a custom container command skips the
+bundled topology and does not add loopback trust; an unset value remains empty.
 
 Service URL:
 
@@ -139,7 +141,7 @@ Common to all images, including the experimental PyO3/Rust variants:
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Address the server binds to. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
-| `PROXBOX_TRUSTED_PROXIES` | empty for raw/Granian; nginx prepends `127.0.0.1/32` | Application-level CIDRs allowed to supply `X-Forwarded-For`. Uvicorn preprocessing is disabled. The bundled nginx image protects and trusts its loopback Uvicorn hop; external proxies must be listed explicitly and must be the only callers able to reach the application port. |
+| `PROXBOX_TRUSTED_PROXIES` | empty for raw/Granian/custom commands; bundled nginx topology prepends `127.0.0.1/32` | Application-level CIDRs allowed to supply `X-Forwarded-For`. Uvicorn preprocessing is disabled. Bundled supervisor/nginx protects and trusts its loopback Uvicorn hop; a custom command gets no implicit trust. External proxies must be listed explicitly and must be the only callers able to reach the application port. |
 
 mkcert-specific (only for the `nginx` and `granian` images):
 

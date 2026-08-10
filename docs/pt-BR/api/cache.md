@@ -122,12 +122,12 @@ proxbox_auth_verifications_in_flight 2
 | `proxbox_auth_source_lockouts_total` | counter | Origens normalizadas que esgotaram o orçamento agregado de falhas |
 | `proxbox_auth_recoveries_total` | counter | Buckets limpos por operacoes explicitas de recovery local |
 | `proxbox_auth_capacity_rejections_total` | counter | Admissões recusadas por limite por bucket/global em voo mais identidades com falha que a partição limitada de credencial/origem não conseguiu persistir |
-| `proxbox_auth_orphan_compactions_total` | counter | Tokens de reserva expirados compactados depois do horizonte suportado de uma hora para finalização tardia |
+| `proxbox_auth_orphan_compactions_total` | counter | Tokens de reserva expirados compactados depois do horizonte suportado de limpeza de uma hora |
 | `proxbox_auth_active_lockouts` | gauge | Buckets de credencial atualmente bloqueados |
 | `proxbox_auth_active_source_lockouts` | gauge | Orçamentos de origem atualmente bloqueados |
 | `proxbox_auth_bucket_rows` | gauge | Linhas duráveis atuais de falha de credencial/origem nas duas partições limitadas |
 | `proxbox_auth_verifications_in_flight` | gauge | Reservas por token não expiradas que consomem capacidade de concorrência bcrypt |
-| `proxbox_auth_expired_orphan_reservations` | gauge | Tokens de crash expirados mantidos dentro do horizonte suportado para finalização tardia; não consomem capacidade |
+| `proxbox_auth_expired_orphan_reservations` | gauge | Tokens de crash expirados mantidos dentro do horizonte suportado de limpeza; não consomem capacidade nem permitem contabilidade depois do deadline terminal |
 
 As metricas de autenticacao sao agregadas e nao possuem labels de origem,
 credencial, bucket ou token de reserva. Isso impede que impressoes digitais de

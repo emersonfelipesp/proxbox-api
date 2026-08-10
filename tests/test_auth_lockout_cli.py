@@ -276,7 +276,7 @@ def test_identity_key_rebind_recovers_missing_binding_with_opaque_state(
             "CREATE TABLE auth_lockout_reservations ("
             "token VARCHAR PRIMARY KEY, credential_bucket_id VARCHAR NOT NULL, "
             "source_bucket_id VARCHAR NOT NULL, expires_at VARCHAR NOT NULL, "
-            "created_at FLOAT NOT NULL)",
+            "deadline_at FLOAT NOT NULL, created_at FLOAT NOT NULL)",
             "expires_at type",
         ),
         (
@@ -324,9 +324,10 @@ def test_rebind_rejects_malformed_exact_schema_before_any_mutation(
             connection.execute(
                 text(
                     "INSERT INTO auth_lockout_reservations "
-                    "(token, credential_bucket_id, source_bucket_id, expires_at, created_at) "
+                    "(token, credential_bucket_id, source_bucket_id, expires_at, "
+                    "deadline_at, created_at) "
                     "VALUES ('reservation-evidence', 'bucket-evidence', "
-                    "'source-evidence', 200.0, 100.0)"
+                    "'source-evidence', 200.0, 280.0, 100.0)"
                 )
             )
             connection.execute(

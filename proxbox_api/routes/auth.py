@@ -17,9 +17,11 @@ from sqlmodel import select
 
 from proxbox_api.database import (
     ApiKey,
+    ApiKeyActiveLimitError,
     ApiKeyBootstrapConflict,
     AsyncDatabaseSessionDep,
 )
+from proxbox_api.services.auth_lockout import AuthLockoutPolicy
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -99,6 +101,20 @@ def _last_active_key_error() -> HTTPException:
     )
 
 
+def _active_key_limit_error(limit: int) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "active_api_key_limit_reached",
+            "message": (
+                f"The configured active API-key limit is {limit}. Deactivate an active key "
+                "with POST /auth/keys/{id}/deactivate before creating or reactivating "
+                "another key."
+            ),
+        },
+    )
+
+
 async def _begin_serialized_key_write(session: AsyncDatabaseSessionDep) -> None:
     """Serialize active-key retirement across all SQLite worker processes."""
 
@@ -155,7 +171,16 @@ async def create_key(session: AsyncDatabaseSessionDep):
     The key is stored hashed - this is the only time the raw key is visible.
     """
     raw_key = secrets.token_urlsafe(48)
-    obj = await ApiKey.store_key_async(session, raw_key, label="")
+    active_key_limit = AuthLockoutPolicy.from_env().max_active_keys
+    try:
+        obj = await ApiKey.store_key_async(
+            session,
+            raw_key,
+            label="",
+            max_active_keys=active_key_limit,
+        )
+    except ApiKeyActiveLimitError:
+        raise _active_key_limit_error(active_key_limit) from None
 
     return CreateKeyResponse(
         id=obj.id,
@@ -206,9 +231,15 @@ async def deactivate_key(key_id: int, session: AsyncDatabaseSessionDep):
 @router.post("/keys/{key_id}/activate", response_model=ApiKeyResponse)
 async def activate_key(key_id: int, session: AsyncDatabaseSessionDep):
     """Re-activate a deactivated API key."""
+    active_key_limit = AuthLockoutPolicy.from_env().max_active_keys
+    await _begin_serialized_key_write(session)
     key = await session.get(ApiKey, key_id)
     if not key:
+        await session.rollback()
         raise HTTPException(status_code=404, detail="API key not found.")
+    if not key.is_active and await _active_key_count(session) >= active_key_limit:
+        await session.rollback()
+        raise _active_key_limit_error(active_key_limit)
     key.is_active = True
     session.add(key)
     await session.commit()

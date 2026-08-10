@@ -58,14 +58,20 @@ A concorrencia de autenticacao e o historico de falhas usam tabelas versionadas
 separadas:
 
 - `auth_lockout_reservations` armazena um token duravel por verificacao bcrypt
-  admitida, com IDs de credencial/origem e lease renovavel pelo owner. Um
-  verificador vivo renova seu token; 60 segundos depois que a renovacao para,
-  um token de crash expira e deixa de consumir capacidade. Tokens expirados continuam observaveis por
-  `proxbox_auth_expired_orphan_reservations` e podem ser consumidos exatamente
-  uma vez por finalizador tardio durante uma hora depois da expiracao. Tokens
+  admitida, com IDs de credencial/origem, lease renovavel pelo owner e
+  `deadline_at` absoluto. Um verificador vivo renova seu token somente ate esse
+  deadline; 60 segundos depois que a renovacao para, ou no deadline apesar dos
+  heartbeats, o token deixa de consumir capacidade. Tokens expirados continuam observaveis por
+  `proxbox_auth_expired_orphan_reservations` durante um horizonte de limpeza de
+  uma hora. Um finalizador tardio pode atualizar a contabilidade exatamente uma
+  vez somente antes do deadline absoluto; resultados posteriores são consumidos
+  e descartados. Tokens
   mais antigos sao compactados em `proxbox_auth_orphan_compactions_total`,
   limitando armazenamento; tanto admissao quanto finalizacao aplicam esse
-  horizonte. Verificacoes recusadas sobrepostas da mesma credencial composta
+  horizonte. Resultados que chegam no ou depois do deadline absoluto sao
+  consumidos e descartados sem alterar a contabilidade de bloqueio. A thread
+  Python nao pode ser interrompida e pode manter custo residual de CPU ate o
+  bcrypt retornar. Verificacoes recusadas sobrepostas da mesma credencial composta
   avancam o estado da credencial uma vez, enquanto cada recusa consumida avanca
   o estado de abuso por origem e permanece visivel no contador agregado. O teto
   global atomico tambem impede pares distintos de
@@ -237,6 +243,7 @@ chaves misturadas.
 | Chave de identidade ausente / diferente do bind | Restaure a chave vinculada ou pare todos os workers e use o reset offline `rebind-key`. Nunca gere substituto silencioso. |
 | Bind da chave de identidade ausente enquanto existe estado opaco | Restaure a linha de bind e a chave exata do mesmo backup, ou pare todos os workers e use `rebind-key`. Nao insira novo bind sobre buckets/reservas retidos. |
 | Maintenance offline recusada por lease de worker | Pare todo processo que usa o destino, confirme a saida e repita. Nao exclua `.runtime.lock`. |
+| Total de chaves API ativas excede `PROXBOX_AUTH_MAX_ACTIVE_KEYS` | O startup continua disponivel e registra o total. Autentique com uma das chaves mais antigas dentro do bound e desative as excedentes. Se nenhuma estiver disponivel, aumente o teto temporariamente, reinicie, remova o excesso e restaure-o. Novas criacoes/reativacoes nao aumentam o excesso. |
 | Falha na inspecao de migration / leitura obrigatoria | Trate o banco como unhealthy; restaure ou repare schema/filesystem antes do restart. |
 | Pai nao e diretorio / destino nao e arquivo | Corrija exatamente o objeto configurado. |
 | Diretorio ou arquivo read-only / sem busca | Corrija ownership, modo, ACL ou mount para a conta do servico. |

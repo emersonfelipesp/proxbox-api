@@ -97,6 +97,11 @@ curl -X POST http://localhost:8800/auth/keys \
 
 The `raw_key` is only returned once — store it securely.
 
+Creation is serialized with active-key reactivation and returns `409`
+(`active_api_key_limit_reached`) when it would exceed
+`PROXBOX_AUTH_MAX_ACTIVE_KEYS`. Deactivate an active key before creating
+another.
+
 ### Deactivate a Key
 
 ```bash
@@ -115,6 +120,9 @@ curl -X POST http://localhost:8800/auth/keys/1/activate \
   -H "X-Proxbox-API-Key: your-key"
 # {"id": 1, "label": "bootstrap-key", "is_active": true, "created_at": 1712345678.123}
 ```
+
+Reactivation returns `409` (`active_api_key_limit_reached`) when it would cross
+the configured active-key cap.
 
 ### Delete a Key
 
@@ -137,10 +145,11 @@ deliberately higher source-abuse threshold still blocks every key from that
 source when exhausted. Sync and async authentication share the same state
 service. Before bcrypt, each request inserts an independent
 durable reservation row with an unguessable owner token and a renewable
-60-second lease. While bcrypt is running, an owner heartbeat extends that exact
-token; the row therefore continues to consume per-credential, per-source, and
-global verification capacity even when verification lasts longer than one
-lease. After bcrypt, an atomic token-scoped delete finalizes that exact row
+60-second lease plus a persisted absolute deadline. While bcrypt is running, an
+owner heartbeat extends that exact token only up to the deadline; the row
+therefore continues to consume per-credential, per-source, and global
+verification capacity through ordinary scheduler delays but can never retain a
+slot forever. After bcrypt, an atomic token-scoped delete finalizes that exact row
 once: a rejected key converts it to credential/source failure state in the same
 transaction, while an accepted key records no failure. Duplicate finalization
 cannot consume another request's reservation. Concurrent valid traffic therefore
@@ -158,13 +167,23 @@ source threshold still places a hard bound on attacker bcrypt work. A later
 request admitted after that transition counts normally.
 
 An abandoned crash token expires 60 seconds after its owner stops renewing it.
-Only then does it stop consuming concurrency capacity. Its row remains available
-for exactly-once late finalization for one hour after expiry and is counted by
-the orphan-reservation metric. Older rows are
+Only then does it stop consuming concurrency capacity. Its row remains observable
+for a one-hour cleanup horizon and is counted by the orphan-reservation metric.
+A late finalizer can update accounting exactly once only before the absolute
+deadline described below; later results are consumed and discarded. Older rows are
 compacted into a durable aggregate counter, bounding storage; reservation and
 finalization paths both enforce this horizon, so a finalizer beyond it is ignored
 even when no newer request has run compaction. One orphan cannot extend the
 expiry of another live token or release newer work.
+
+Every reservation also has an absolute lifetime of 180 seconds by default
+(`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`). At that deadline the slot is
+reclaimable regardless of heartbeats, and a result arriving later is discarded
+without recording success or failure. Python cannot preempt the bcrypt worker
+thread itself, so a timed-out verifier can retain residual CPU cost until that
+call returns; the durable admission and lockout accounting are nevertheless
+bounded.
+
 A second durable source budget bounds attacks that rotate credentials; it is
 deliberately higher than the per-credential default. Missing-key requests
 advance only that source budget and never allocate credential-partition rows.
@@ -190,11 +209,15 @@ durable lockouts remain authoritative.
   (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, range 1-1024)
 - Maximum concurrent verifications across all workers and identities: 256
   (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, range 1-4096)
+- Absolute lifetime of one admitted verifier: 180 seconds
+  (`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, range 0.1-3600)
 - Maximum active API-key hashes examined by one request: 32
-  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, range 1-1024). If the database contains more
-  active keys than this bound, authentication fails closed with the temporary
-  capacity response before bcrypt runs. Temporarily raise the bound, retire
-  excess keys, and then restore the intended value.
+  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, range 1-1024). Authenticated create and
+  reactivate operations cannot cross this ceiling. If a legacy database already
+  exceeds it, startup logs explicit recovery guidance and authentication scans
+  only the oldest bounded set. Use one of those keys to deactivate excess rows;
+  if none is available, temporarily raise the bound, restart, retire excess
+  keys, and restore the intended value.
 - An opaque identity key is atomically generated in the private sibling
   `database.db.auth-lockout.key` file by default. Creation flushes and fsyncs a
   same-directory temporary file, replaces the final path, and fsyncs the parent
@@ -215,8 +238,10 @@ durable lockouts remain authoritative.
   with proxy-header processing disabled (`--no-proxy-headers`); the shipped raw
   and nginx-backed entrypoints already enforce this so the application receives
   the real transport peer before applying this allowlist. The single-purpose
-  nginx image always prepends `127.0.0.1/32` to this setting because its internal
-  nginx hop is the only process that can reach loopback Uvicorn. Raw/Granian
+  nginx image prepends `127.0.0.1/32` only when it launches its bundled
+  nginx/supervisor topology, because its internal nginx hop is the only process
+  that can reach loopback Uvicorn. A custom command in that image retains the
+  empty default. Raw/Granian
   deployments behind an external reverse proxy must explicitly list the exact
   proxy peer CIDRs and keep the application port inaccessible to untrusted
   callers. Granian does not
@@ -231,12 +256,13 @@ lockouts, the lockout service publishes:
   a per-bucket or global in-flight limit plus failed identities whose bounded
   credential or source row partition could not persist;
 - `proxbox_auth_orphan_compactions_total`: expired reservation rows compacted
-  after the supported one-hour late-finalization horizon;
+  after the supported one-hour cleanup horizon;
 - `proxbox_auth_bucket_rows`: current durable credential/source failure rows;
 - `proxbox_auth_verifications_in_flight`: unexpired reservation rows currently
   consuming bcrypt capacity; and
 - `proxbox_auth_expired_orphan_reservations`: expired crash-token rows retained
-  within the supported late-finalization horizon.
+  within the supported cleanup horizon. They do not permit accounting changes
+  after their terminal deadline.
 
 Logs and the recovery CLI use 12-character non-authenticating HMAC identifiers;
 raw keys and dictionary-testable hashes are never rendered.

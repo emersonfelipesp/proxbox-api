@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import sqlite3
 import stat
+import subprocess
 import threading
 import time
 from collections.abc import Generator
@@ -30,6 +31,7 @@ from proxbox_api.database import (
     AuthLockoutReservation,
     AuthLockoutSchemaError,
     DatabaseConfigurationError,
+    _migrate_auth_lockout_reservation_deadline,
     _migrate_auth_lockout_schema,
     configure_sqlite_engine,
 )
@@ -252,7 +254,7 @@ def test_no_keys_configured_does_not_create_lockout_bucket(db_session: Session) 
     assert AuthLockoutService.list_rows(db_session) == []
 
 
-def test_active_key_scan_limit_rejects_before_bcrypt_and_releases_reservation(
+def test_active_key_scan_limit_authenticates_oldest_key_with_bounded_bcrypt_work(
     db_session: Session,
     stored_key: str,
     monkeypatch,
@@ -262,10 +264,14 @@ def test_active_key_scan_limit_rejects_before_bcrypt_and_releases_reservation(
     ApiKey.store_key(db_session, "second-active-key-cccccccccccccccccccccccc", label="second")
     db_session.rollback()
 
-    def unexpected_bcrypt(*args, **kwargs):  # noqa: ANN002, ANN003
-        raise AssertionError("bcrypt must not run above the configured active-key bound")
+    real_checkpw = database_module.bcrypt.checkpw
+    checked_hashes: list[bytes] = []
 
-    monkeypatch.setattr(database_module.bcrypt, "checkpw", unexpected_bcrypt)
+    def bounded_bcrypt(provided: bytes, stored_hash: bytes) -> bool:
+        checked_hashes.append(stored_hash)
+        return real_checkpw(provided, stored_hash)
+
+    monkeypatch.setattr(database_module.bcrypt, "checkpw", bounded_bcrypt)
     policy = AuthLockoutPolicy(max_active_keys=1)
 
     authorized, message = auth.check_auth_header_with_session(
@@ -275,8 +281,9 @@ def test_active_key_scan_limit_rejects_before_bcrypt_and_releases_reservation(
         policy,
     )
 
-    assert authorized is False
-    assert message is not None and "verification capacity" in message
+    assert authorized is True
+    assert message is None
+    assert len(checked_hashes) == 1
     assert get_auth_lockout_metrics(db_session)["proxbox_auth_verifications_in_flight"] == 0
     assert AuthLockoutService.list_rows(db_session) == []
 
@@ -632,6 +639,79 @@ def test_live_verifier_heartbeat_holds_global_slot_beyond_lease(
 
     with Session(db_engine) as session:
         assert get_auth_lockout_metrics(session)["proxbox_auth_verifications_in_flight"] == 0
+
+
+def test_wedged_verifier_is_reclaimed_at_deadline_and_late_result_is_discarded(
+    db_engine,
+    stored_key: str,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(lockout_module, "_RESERVATION_LEASE_SECONDS", 0.06)
+    policy = AuthLockoutPolicy(
+        threshold=1,
+        source_threshold=2,
+        window_seconds=60,
+        max_in_flight=1,
+        max_global_in_flight=1,
+        verification_max_seconds=0.2,
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def wedged_invalid_verification(
+        session: Session,
+        provided_key: str,
+        *,
+        max_active_keys: int,
+    ) -> bool:  # noqa: ARG001
+        entered.set()
+        assert release.wait(timeout=5)
+        return False
+
+    monkeypatch.setattr(ApiKey, "verify_any", staticmethod(wedged_invalid_verification))
+
+    def authenticate() -> tuple[bool, str | None]:
+        with Session(db_engine) as session:
+            return auth.check_auth_header_with_session(
+                session,
+                stored_key,
+                "198.51.100.40",
+                policy,
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        wedged = executor.submit(authenticate)
+        assert entered.wait(timeout=5)
+        time.sleep(0.3)
+        assert wedged.done() is False
+
+        replacement_identity = build_lockout_identity(
+            resolve_auth_source_context("198.51.100.41", None, ()),
+            stored_key,
+        )
+        with Session(db_engine) as session:
+            replacement = AuthLockoutService.reserve_verification(
+                session,
+                replacement_identity,
+                policy,
+            )
+            assert replacement is not None
+            assert AuthLockoutService.cancel_verification(
+                session,
+                replacement_identity,
+                replacement,
+            )
+
+        release.set()
+        authorized, message = wedged.result(timeout=5)
+
+    assert authorized is False
+    assert message is not None and "verification capacity" in message
+    with Session(db_engine) as session:
+        assert AuthLockoutService.list_rows(session) == []
+        metrics = get_auth_lockout_metrics(session)
+        assert metrics["proxbox_auth_failures_total"] == 0
+        assert metrics["proxbox_auth_verifications_in_flight"] == 0
 
 
 def test_more_than_failure_threshold_concurrent_valid_requests_never_lock(
@@ -1587,6 +1667,11 @@ def test_policy_loads_active_key_verification_bound() -> None:
     assert AuthLockoutPolicy.from_env({"PROXBOX_AUTH_MAX_ACTIVE_KEYS": "7"}).max_active_keys == 7
 
 
+def test_policy_loads_terminal_verification_lifetime() -> None:
+    policy = AuthLockoutPolicy.from_env({"PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS": "240"})
+    assert policy.verification_max_seconds == 240
+
+
 @pytest.mark.parametrize(
     "values",
     [
@@ -1606,6 +1691,9 @@ def test_policy_loads_active_key_verification_bound() -> None:
         {"PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT": "4097"},
         {"PROXBOX_AUTH_MAX_ACTIVE_KEYS": "0"},
         {"PROXBOX_AUTH_MAX_ACTIVE_KEYS": "1025"},
+        {"PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS": "0"},
+        {"PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS": "3601"},
+        {"PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS": "forever"},
     ],
 )
 def test_policy_rejects_invalid_configuration(values: dict[str, str]) -> None:
@@ -2326,7 +2414,7 @@ def test_full_asgi_stack_ignores_spoofed_forwarding_from_loopback(monkeypatch) -
     assert seen_source_contexts == ["direct|127.0.0.1", "direct|127.0.0.1"]
 
 
-def test_shipped_server_entrypoints_preserve_transport_peer() -> None:
+def test_shipped_server_entrypoints_preserve_transport_peer(tmp_path: Path) -> None:
     repository = Path(__file__).resolve().parents[1]
     raw_entrypoint = (repository / "docker/entrypoint-raw.sh").read_text(encoding="utf-8")
     nginx_entrypoint = (repository / "docker/entrypoint-nginx.sh").read_text(encoding="utf-8")
@@ -2339,6 +2427,42 @@ def test_shipped_server_entrypoints_preserve_transport_peer() -> None:
     assert 'PROXBOX_TRUSTED_PROXIES="127.0.0.1/32"' in nginx_entrypoint
     assert 'PROXBOX_TRUSTED_PROXIES="127.0.0.1/32,${PROXBOX_TRUSTED_PROXIES}"' in (nginx_entrypoint)
     assert "wrap_asgi_with_proxy_headers" not in granian_entrypoint
+
+    environment = os.environ.copy()
+    environment.pop("PROXBOX_TRUSTED_PROXIES", None)
+    custom = subprocess.run(
+        ["/bin/sh", str(repository / "docker/entrypoint-nginx.sh"), "env"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=10,
+    )
+    assert not any(
+        line.startswith("PROXBOX_TRUSTED_PROXIES=") for line in custom.stdout.splitlines()
+    )
+
+    bundled_environment = environment | {"MKCERT_CERT_DIR": str(tmp_path / "certs")}
+    bundled = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                "entrypoint=$1; set --; "
+                "mkcert() { printf '%s' \"$PROXBOX_TRUSTED_PROXIES\"; return 42; }; "
+                '. "$entrypoint"'
+            ),
+            "sh",
+            str(repository / "docker/entrypoint-nginx.sh"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=bundled_environment,
+        timeout=10,
+    )
+    assert bundled.returncode == 42
+    assert bundled.stdout == "127.0.0.1/32"
 
 
 def test_trusted_cidr_parser_rejects_partial_or_empty_configuration() -> None:
@@ -2710,6 +2834,33 @@ def test_lockout_migration_rejects_malformed_primary_key(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="primary key"):
         _migrate_auth_lockout_schema(target_engine)
+
+
+def test_lockout_migration_adds_terminal_deadline_to_exact_previous_schema(tmp_path) -> None:
+    target_engine = create_engine(f"sqlite:///{tmp_path / 'legacy-reservations.db'}")
+    with target_engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE auth_lockout_reservations ("
+                "token VARCHAR NOT NULL PRIMARY KEY, "
+                "credential_bucket_id VARCHAR NOT NULL, "
+                "source_bucket_id VARCHAR NOT NULL, expires_at FLOAT NOT NULL, "
+                "created_at FLOAT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO auth_lockout_reservations "
+                "(token, credential_bucket_id, source_bucket_id, expires_at, created_at) "
+                "VALUES ('legacy-token', 'credential', 'source', 160.0, 100.0)"
+            )
+        )
+        _migrate_auth_lockout_reservation_deadline(connection)
+
+    with Session(target_engine) as session:
+        migrated = session.get(AuthLockoutReservation, "legacy-token")
+        assert migrated is not None
+        assert migrated.deadline_at == 280.0
 
 
 def test_lockout_migration_rejects_partial_metrics_schema(tmp_path) -> None:

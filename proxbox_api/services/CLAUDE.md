@@ -24,19 +24,25 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   per-bucket/global verification-concurrency capacity, and
   trusted-proxy configuration; derives source-plus-credential buckets without
   storing keys or dictionary-testable fingerprints; inserts one durable
-  per-token reservation before bcrypt; and gives each row its own expiry.
-  Expired crash rows stop consuming capacity and remain eligible for exactly-once
-  late finalization for one hour; admission and finalization both compact older
+  per-token reservation before bcrypt; and gives each row a renewable expiry
+  capped by a persisted absolute deadline.
+  Expired crash rows stop consuming capacity and remain observable for one hour;
+  a result can update accounting exactly once only before its terminal deadline,
+  and later results are discarded. Admission and finalization both compact older
   rows into a durable aggregate counter. Rejection converts the consumed token
   to failure state. Same-credential cohort completions coalesce the credential
   transition, but every consumed rejection advances source-abuse accounting.
   Missing-key requests allocate no credential row and IPv6 sources aggregate at
   `/64`. Credential/source failure rows use independent bounded partitions.
   Failure-row saturation never controls admission: all requests remain inside
-  the same per-source/global verification pool. A saturated partition first
+  the same per-source/global verification pool. Once a reservation deadline
+  passes, capacity is reclaimable and a late bcrypt result is discarded without
+  changing lockout state; the non-preemptible worker thread may retain residual
+  CPU cost until bcrypt returns. A saturated partition first
   evicts its stalest safe expired row; an unpersistable rejection fails closed
   and advances bounded aggregate accounting. Reservation owners renew a fixed
-  lease while bcrypt is live, and each request has a bounded active-key scan. The service persists
+  lease while bcrypt is live but never beyond the terminal lifetime, and each
+  request has a bounded active-key scan. The service persists
   label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
   inspection/clear selectors. Startup pins the validated HMAC generation in
   memory; do not re-read a mutable key source on request paths.

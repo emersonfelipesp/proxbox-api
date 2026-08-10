@@ -20,7 +20,7 @@ from uuid import uuid4
 
 import bcrypt
 from fastapi import Depends
-from sqlalchemy import JSON, CheckConstraint, Column, event, inspect, text
+from sqlalchemy import JSON, CheckConstraint, Column, event, func, inspect, text
 from sqlalchemy.engine import URL, Connection, Engine, make_url
 from sqlalchemy.exc import ArgumentError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -1243,6 +1243,7 @@ class AuthLockoutReservation(SQLModel, table=True):
     credential_bucket_id: str = Field(index=True)
     source_bucket_id: str = Field(index=True)
     expires_at: float = Field(index=True)
+    deadline_at: float = Field(index=True)
     created_at: float = Field(default_factory=time.time, index=True)
 
 
@@ -1289,8 +1290,12 @@ class ApiKeyBootstrapConflict(RuntimeError):
     """A first-key bootstrap lost the durable database claim."""
 
 
-class ApiKeyVerificationLimitError(RuntimeError):
-    """The active key set exceeds the bounded per-request bcrypt scan."""
+class ApiKeyActiveLimitError(RuntimeError):
+    """Creating or reactivating a key would exceed the configured active cap."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        super().__init__(f"active API key limit reached: {limit}")
 
 
 class ApiKeyBootstrapClaim(SQLModel, table=True):
@@ -1353,10 +1358,24 @@ class ApiKey(SQLModel, table=True):
         return obj
 
     @staticmethod
-    async def store_key_async(session: AsyncSession, raw_key: str, label: str = "") -> "ApiKey":
+    async def store_key_async(
+        session: AsyncSession,
+        raw_key: str,
+        label: str = "",
+        *,
+        max_active_keys: int | None = None,
+    ) -> "ApiKey":
         key_hash = (
             await asyncio.to_thread(bcrypt.hashpw, raw_key.encode(), bcrypt.gensalt(rounds=12))
         ).decode()
+        if max_active_keys is not None:
+            await session.exec(text("BEGIN IMMEDIATE"))
+            active_count = await session.exec(
+                select(func.count(ApiKey.id)).where(ApiKey.is_active == True)  # noqa: E712
+            )
+            if int(active_count.one()) >= max_active_keys:
+                await session.rollback()
+                raise ApiKeyActiveLimitError(max_active_keys)
         obj = ApiKey(label=label, key_hash=key_hash)
         session.add(obj)
         await session.commit()
@@ -1407,13 +1426,9 @@ class ApiKey(SQLModel, table=True):
                 select(ApiKey)
                 .where(ApiKey.is_active == True)  # noqa: E712
                 .order_by(ApiKey.id)
-                .limit(max_active_keys + 1)
+                .limit(max_active_keys)
             ).all()
         )
-        if len(rows) > max_active_keys:
-            raise ApiKeyVerificationLimitError(
-                "active API key count exceeds PROXBOX_AUTH_MAX_ACTIVE_KEYS"
-            )
         for row in rows:
             try:
                 if bcrypt.checkpw(provided_key.encode(), row.key_hash.encode()):
@@ -1433,13 +1448,9 @@ class ApiKey(SQLModel, table=True):
             select(ApiKey)
             .where(ApiKey.is_active == True)  # noqa: E712
             .order_by(ApiKey.id)
-            .limit(max_active_keys + 1)
+            .limit(max_active_keys)
         )
         rows = list(result.all())
-        if len(rows) > max_active_keys:
-            raise ApiKeyVerificationLimitError(
-                "active API key count exceeds PROXBOX_AUTH_MAX_ACTIVE_KEYS"
-            )
         provided = provided_key.encode()
         for row in rows:
             try:
@@ -1525,6 +1536,59 @@ def _validate_auth_table_schema(connection: Connection, model: type[SQLModel]) -
         ) from error
 
 
+def _migrate_auth_lockout_reservation_deadline_unchecked(connection: Connection) -> None:
+    """Add terminal deadlines only to the exact previous reservation schema."""
+
+    model_table = cast(Any, AuthLockoutReservation).__table__
+    table_name = model_table.name
+    inspector = inspect(connection)
+    actual_columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+    if "deadline_at" in actual_columns:
+        return
+
+    expected_columns = {
+        column.name: column for column in model_table.columns if column.name != "deadline_at"
+    }
+    if set(actual_columns) != set(expected_columns):
+        raise AuthLockoutSchemaError(f"incompatible {table_name} columns")
+    actual_pk = tuple(inspector.get_pk_constraint(table_name).get("constrained_columns") or ())
+    expected_pk = tuple(column.name for column in model_table.primary_key.columns)
+    if actual_pk != expected_pk:
+        raise AuthLockoutSchemaError(f"incompatible {table_name} primary key")
+    for name, expected in expected_columns.items():
+        actual = actual_columns[name]
+        expected_affinity = expected.type._type_affinity.__name__
+        actual_affinity = cast(Any, actual["type"])._type_affinity.__name__
+        if expected_affinity != actual_affinity:
+            raise AuthLockoutSchemaError(f"incompatible {table_name}.{name} type")
+        if not expected.primary_key and bool(actual["nullable"]) != bool(expected.nullable):
+            raise AuthLockoutSchemaError(f"incompatible {table_name}.{name} nullability")
+
+    from proxbox_api.services.auth_lockout import default_verification_max_seconds
+
+    connection.exec_driver_sql(
+        f"ALTER TABLE {table_name} ADD COLUMN deadline_at FLOAT NOT NULL DEFAULT 0"
+    )
+    connection.execute(
+        text(
+            f"UPDATE {table_name} SET deadline_at = created_at + :default_verification_max_seconds"
+        ),
+        {"default_verification_max_seconds": default_verification_max_seconds()},
+    )
+
+
+def _migrate_auth_lockout_reservation_deadline(connection: Connection) -> None:
+    table_name = AuthLockoutReservation.__tablename__
+    try:
+        _migrate_auth_lockout_reservation_deadline_unchecked(connection)
+    except AuthLockoutSchemaError:
+        raise
+    except Exception as error:  # noqa: BLE001
+        raise DatabaseStartupError(
+            f"Failed to inspect SQLite schema for required migration table {table_name}."
+        ) from error
+
+
 def validate_auth_lockout_schema(connection: Connection) -> None:
     """Validate every current lockout table exactly without creating or migrating it."""
 
@@ -1552,6 +1616,7 @@ def _migrate_auth_lockout_schema(target_engine: Engine | None = None) -> None:
             connection,
             checkfirst=True,
         )
+        _migrate_auth_lockout_reservation_deadline(connection)
         validate_auth_lockout_schema(connection)
         binding = connection.execute(
             text(
@@ -1927,6 +1992,39 @@ def _create_db_and_tables_unlocked() -> None:
     _migrate_ceph_external_cluster_columns()
 
 
+def _warn_if_active_api_key_limit_exceeded(
+    target_engine: Engine,
+    environ: Mapping[str, str] | None,
+) -> None:
+    """Keep recovery authentication available while surfacing an unsafe legacy count."""
+
+    from proxbox_api.services.auth_lockout import AuthLockoutPolicy
+
+    limit = AuthLockoutPolicy.from_env(environ).max_active_keys
+    with Session(target_engine) as session:
+        result = session.exec(
+            select(func.count(ApiKey.id)).where(ApiKey.is_active == True)  # noqa: E712
+        )
+        active_count = int(result.one())
+    if active_count <= limit:
+        return
+    logger.error(
+        "Active API key count %s exceeds PROXBOX_AUTH_MAX_ACTIVE_KEYS=%s. "
+        "Authentication remains available through a bounded scan of the oldest %s "
+        "active keys. Authenticate with one of those keys and call "
+        "POST /auth/keys/{id}/deactivate until the count is within the cap. If none "
+        "of the bounded keys is available, temporarily raise PROXBOX_AUTH_MAX_ACTIVE_KEYS, "
+        "restart, deactivate excess keys, then restore the intended cap.",
+        active_count,
+        limit,
+        limit,
+        extra={
+            "active_api_key_count": active_count,
+            "active_api_key_limit": limit,
+        },
+    )
+
+
 def initialize_database_and_schema(
     environ: Mapping[str, str] | None = None,
 ) -> SQLiteDatabaseTarget:
@@ -1937,6 +2035,7 @@ def initialize_database_and_schema(
         _audit_fresh_database_override(target)
         initialized_target = _initialize_database_target(target)
         _create_db_and_tables_unlocked()
+        _warn_if_active_api_key_limit_exceeded(get_engine(), environ)
         _acquire_runtime_database_lease(target)
         return initialized_target
 

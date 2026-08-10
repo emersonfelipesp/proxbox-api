@@ -34,6 +34,7 @@ _DEFAULT_MAX_BUCKETS = 10_000
 _DEFAULT_MAX_IN_FLIGHT = 32
 _DEFAULT_MAX_GLOBAL_IN_FLIGHT = 256
 _DEFAULT_MAX_ACTIVE_KEYS = 32
+_DEFAULT_VERIFICATION_MAX_SECONDS = 180.0
 _MIN_THRESHOLD = 1
 _MAX_THRESHOLD = 100
 _MIN_WINDOW_SECONDS = 1
@@ -48,6 +49,8 @@ _MIN_MAX_GLOBAL_IN_FLIGHT = 1
 _MAX_MAX_GLOBAL_IN_FLIGHT = 4_096
 _MIN_MAX_ACTIVE_KEYS = 1
 _MAX_MAX_ACTIVE_KEYS = 1_024
+_MIN_VERIFICATION_MAX_SECONDS = 0.1
+_MAX_VERIFICATION_MAX_SECONDS = 3_600.0
 _SAFE_IDENTIFIER_LENGTH = 12
 _MIN_CLEAR_PREFIX_LENGTH = 8
 _CREDENTIAL_BUCKET = "credential"
@@ -87,6 +90,7 @@ class AuthLockoutPolicy:
     max_in_flight: int = _DEFAULT_MAX_IN_FLIGHT
     max_global_in_flight: int = _DEFAULT_MAX_GLOBAL_IN_FLIGHT
     max_active_keys: int = _DEFAULT_MAX_ACTIVE_KEYS
+    verification_max_seconds: float = _DEFAULT_VERIFICATION_MAX_SECONDS
 
     def __post_init__(self) -> None:
         if not _MIN_THRESHOLD <= self.threshold <= _MAX_THRESHOLD:
@@ -123,6 +127,16 @@ class AuthLockoutPolicy:
             raise LockoutConfigurationError(
                 "active API keys per verification must be between "
                 f"{_MIN_MAX_ACTIVE_KEYS} and {_MAX_MAX_ACTIVE_KEYS}"
+            )
+        if not (
+            _MIN_VERIFICATION_MAX_SECONDS
+            <= self.verification_max_seconds
+            <= _MAX_VERIFICATION_MAX_SECONDS
+        ):
+            raise LockoutConfigurationError(
+                "verification maximum lifetime must be between "
+                f"{_MIN_VERIFICATION_MAX_SECONDS:g} and "
+                f"{_MAX_VERIFICATION_MAX_SECONDS:g} seconds"
             )
 
     @classmethod
@@ -165,6 +179,11 @@ class AuthLockoutPolicy:
             "PROXBOX_AUTH_MAX_ACTIVE_KEYS",
             _DEFAULT_MAX_ACTIVE_KEYS,
         )
+        verification_max_seconds = _parse_env_float(
+            values,
+            "PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS",
+            _DEFAULT_VERIFICATION_MAX_SECONDS,
+        )
         return cls(
             threshold=threshold,
             window_seconds=window_seconds,
@@ -173,6 +192,7 @@ class AuthLockoutPolicy:
             max_in_flight=max_in_flight,
             max_global_in_flight=max_global_in_flight,
             max_active_keys=max_active_keys,
+            verification_max_seconds=verification_max_seconds,
         )
 
 
@@ -271,6 +291,16 @@ def _parse_env_int(values: Mapping[str, str], name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise LockoutConfigurationError(f"{name} must be an integer") from exc
+
+
+def _parse_env_float(values: Mapping[str, str], name: str, default: float) -> float:
+    raw = values.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise LockoutConfigurationError(f"{name} must be a number") from exc
 
 
 def parse_trusted_proxy_cidrs(raw: str) -> tuple[IPNetwork, ...]:
@@ -656,6 +686,7 @@ def _reserve_verification_statement(
     max_in_flight: int,
     max_global_in_flight: int,
     lease_seconds: float,
+    max_lifetime_seconds: float,
     reservation_token: str,
     now: float,
 ):
@@ -669,6 +700,7 @@ def _reserve_verification_statement(
         .where(
             reservations.credential_bucket_id == credential_bucket_id,
             reservations.expires_at > now,
+            reservations.deadline_at > now,
         )
         .scalar_subquery()
     )
@@ -678,13 +710,17 @@ def _reserve_verification_statement(
         .where(
             reservations.source_bucket_id == source_bucket_id,
             reservations.expires_at > now,
+            reservations.deadline_at > now,
         )
         .scalar_subquery()
     )
     active_global = (
         select(func.count())
         .select_from(_reservation_table)
-        .where(reservations.expires_at > now)
+        .where(
+            reservations.expires_at > now,
+            reservations.deadline_at > now,
+        )
         .scalar_subquery()
     )
     active_locks = (
@@ -702,11 +738,13 @@ def _reserve_verification_statement(
         active_global < max_global_in_flight,
         active_locks == 0,
     )
+    deadline_at = now + max_lifetime_seconds
     values = sa_select(
         literal(reservation_token),
         literal(credential_bucket_id),
         literal(source_bucket_id),
-        literal(now + lease_seconds),
+        literal(min(now + lease_seconds, deadline_at)),
+        literal(deadline_at),
         literal(now),
     ).where(*admission_conditions)
     return (
@@ -717,6 +755,7 @@ def _reserve_verification_statement(
                 reservations.credential_bucket_id,
                 reservations.source_bucket_id,
                 reservations.expires_at,
+                reservations.deadline_at,
                 reservations.created_at,
             ),
             values,
@@ -737,6 +776,10 @@ def _renew_reservation_statement(
     """Extend one live owner token without reviving an already expired lease."""
 
     columns = _reservation_table.c
+    renewed_expiry = case(
+        (columns.deadline_at < now + lease_seconds, columns.deadline_at),
+        else_=now + lease_seconds,
+    )
     return (
         update(_reservation_table)
         .where(
@@ -744,8 +787,9 @@ def _renew_reservation_statement(
             columns.credential_bucket_id == credential_bucket_id,
             columns.source_bucket_id == source_bucket_id,
             columns.expires_at > now,
+            columns.deadline_at > now,
         )
-        .values(expires_at=now + lease_seconds)
+        .values(expires_at=renewed_expiry)
         .returning(columns.token)
     )
 
@@ -754,6 +798,12 @@ def reservation_lease_seconds() -> float:
     """Return the renewable owner-lease duration used by verification workers."""
 
     return _RESERVATION_LEASE_SECONDS
+
+
+def default_verification_max_seconds() -> float:
+    """Return the migration-safe default terminal lifetime for one verifier."""
+
+    return _DEFAULT_VERIFICATION_MAX_SECONDS
 
 
 def reservation_heartbeat_interval() -> float:
@@ -776,17 +826,22 @@ def _consume_reservation_statement(
             columns.credential_bucket_id == credential_bucket_id,
             columns.source_bucket_id == source_bucket_id,
         )
-        .returning(columns.token, columns.created_at)
+        .returning(columns.token, columns.created_at, columns.deadline_at)
     )
 
 
 def _compact_expired_reservations_statement(now: float):
-    """Delete tokens beyond the supported late-finalization horizon."""
+    """Delete tokens beyond the supported post-expiry cleanup horizon."""
 
     columns = _reservation_table.c
     return (
         delete(_reservation_table)
-        .where(columns.expires_at <= now - _RESERVATION_FINALIZATION_GRACE_SECONDS)
+        .where(
+            or_(
+                columns.expires_at <= now - _RESERVATION_FINALIZATION_GRACE_SECONDS,
+                columns.deadline_at <= now - _RESERVATION_FINALIZATION_GRACE_SECONDS,
+            )
+        )
         .returning(columns.token)
     )
 
@@ -1050,6 +1105,7 @@ class AuthLockoutService:
                     max_in_flight=policy.max_in_flight,
                     max_global_in_flight=policy.max_global_in_flight,
                     lease_seconds=reservation_lease_seconds(),
+                    max_lifetime_seconds=policy.verification_max_seconds,
                     reservation_token=reservation_token,
                     now=timestamp,
                 ),
@@ -1115,6 +1171,7 @@ class AuthLockoutService:
                         max_in_flight=policy.max_in_flight,
                         max_global_in_flight=policy.max_global_in_flight,
                         lease_seconds=reservation_lease_seconds(),
+                        max_lifetime_seconds=policy.verification_max_seconds,
                         reservation_token=reservation_token,
                         now=timestamp,
                     ),
@@ -1297,6 +1354,9 @@ class AuthLockoutService:
         if consumed is None:
             session.commit()
             return None
+        if timestamp >= float(consumed[2]):
+            session.commit()
+            return None
         if succeeded:
             session.commit()
             empty_state = LockoutState(0, timestamp, None, timestamp)
@@ -1372,6 +1432,9 @@ class AuthLockoutService:
             )
         ).first()
         if consumed is None:
+            await session.commit()
+            return None
+        if timestamp >= float(consumed[2]):
             await session.commit()
             return None
         if succeeded:
@@ -2045,12 +2108,20 @@ def get_auth_lockout_metrics(session: Session, now: float | None = None) -> dict
     active_verifications = session.exec(
         select(func.count())
         .select_from(_reservation_table)
-        .where(_reservation_table.c.expires_at > timestamp)
+        .where(
+            _reservation_table.c.expires_at > timestamp,
+            _reservation_table.c.deadline_at > timestamp,
+        )
     ).one()
     expired_orphans = session.exec(
         select(func.count())
         .select_from(_reservation_table)
-        .where(_reservation_table.c.expires_at <= timestamp)
+        .where(
+            or_(
+                _reservation_table.c.expires_at <= timestamp,
+                _reservation_table.c.deadline_at <= timestamp,
+            )
+        )
     ).one()
     counters = session.get(AuthLockoutMetric, 1)
     return {
@@ -2092,7 +2163,7 @@ def get_auth_lockout_prometheus_metrics(session: Session, now: float | None = No
         "# HELP proxbox_auth_capacity_rejections_total Verification admissions or failure-row writes rejected by bounded capacity",
         "# TYPE proxbox_auth_capacity_rejections_total counter",
         f"proxbox_auth_capacity_rejections_total {metrics['proxbox_auth_capacity_rejections_total']}",
-        "# HELP proxbox_auth_orphan_compactions_total Expired reservation tokens compacted after the supported finalization horizon",
+        "# HELP proxbox_auth_orphan_compactions_total Expired reservation tokens compacted after the supported cleanup horizon",
         "# TYPE proxbox_auth_orphan_compactions_total counter",
         f"proxbox_auth_orphan_compactions_total {metrics['proxbox_auth_orphan_compactions_total']}",
         "# HELP proxbox_auth_active_lockouts Current locked credential buckets",
@@ -2107,7 +2178,7 @@ def get_auth_lockout_prometheus_metrics(session: Session, now: float | None = No
         "# HELP proxbox_auth_verifications_in_flight Current unexpired bcrypt token leases",
         "# TYPE proxbox_auth_verifications_in_flight gauge",
         f"proxbox_auth_verifications_in_flight {metrics['proxbox_auth_verifications_in_flight']}",
-        "# HELP proxbox_auth_expired_orphan_reservations Expired crash-recovery tokens retained within the late-finalization horizon",
+        "# HELP proxbox_auth_expired_orphan_reservations Expired crash-recovery tokens retained within the cleanup horizon",
         "# TYPE proxbox_auth_expired_orphan_reservations gauge",
         f"proxbox_auth_expired_orphan_reservations {metrics['proxbox_auth_expired_orphan_reservations']}",
     ]

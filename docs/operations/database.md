@@ -58,12 +58,17 @@ Authentication concurrency and failure history use separate versioned tables:
 
 - `auth_lockout_reservations` stores one durable token per admitted bcrypt
   verification, with independent credential/source IDs and a renewable owner
-  lease. A live verifier renews its token; 60 seconds after renewal stops, a
-  crash token expires and no longer consumes capacity. Expired tokens remain observable through
-  `proxbox_auth_expired_orphan_reservations`, and can be consumed exactly once by
-  a late finalizer for one hour after expiry. Older tokens are compacted into
+  lease plus an absolute `deadline_at`. A live verifier renews its token only
+  up to that deadline; 60 seconds after renewal stops, or at the deadline
+  regardless of heartbeats, the token no longer consumes capacity. Expired tokens remain observable through
+  `proxbox_auth_expired_orphan_reservations` for a one-hour cleanup horizon. A
+  late finalizer can update accounting exactly once only before the absolute
+  deadline; later results are consumed and discarded. Older tokens are compacted into
   `proxbox_auth_orphan_compactions_total`, bounding storage; both admission and
-  finalization enforce that horizon. Overlapping rejected verifications for the
+  finalization enforce that horizon. Results arriving at or after the absolute
+  deadline are consumed and discarded without mutating lockout accounting. The
+  underlying Python worker thread is not preemptible and may retain residual CPU
+  cost until bcrypt returns. Overlapping rejected verifications for the
   same composite credential advance credential failure state once, while every
   consumed rejection advances source-abuse state and remains visible in the
   aggregate failure counter. The atomic global ceiling also prevents distinct
@@ -235,6 +240,7 @@ restarting; never use a rolling mixed-key deployment.
 | Identity key missing / does not match database binding | Restore the bound key from backup, or stop every worker and use the explicit offline `rebind-key` reset. Never let startup generate an unrelated replacement. |
 | Identity-key binding missing while opaque state exists | Restore the binding row and its exact bound key from the same backup, or stop all workers and use `rebind-key`. Do not insert a new binding over retained buckets/reservations. |
 | Offline maintenance refused because a worker holds the runtime lease | Stop every process using the target, verify they exited, then rerun the offline command. Do not delete `.runtime.lock`. |
+| Active API-key count exceeds `PROXBOX_AUTH_MAX_ACTIVE_KEYS` | Startup remains available and logs the count. Authenticate with one of the oldest bounded keys and deactivate excess rows. If none is available, temporarily raise the cap, restart, retire excess keys, then restore it. New create/reactivate calls cannot increase the overage. |
 | Migration inspection / required endpoint read failed | Treat the database as unhealthy; restore or repair its schema/filesystem before restarting. |
 | Parent is not a directory / target is not a file | Correct the exact configured filesystem object. |
 | Directory or file is read-only / not searchable | Correct service-account ownership, mode, ACL, or container mount mode. |

@@ -17,7 +17,7 @@ from sqlmodel import Session
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api import database
-from proxbox_api.database import ApiKey, ApiKeyVerificationLimitError, get_session
+from proxbox_api.database import ApiKey, get_session
 from proxbox_api.logger import logger
 from proxbox_api.services.auth_lockout import (
     AuthLockoutPolicy,
@@ -230,10 +230,6 @@ async def check_auth_header_with_session_async(  # noqa: C901
                 api_key,
                 max_active_keys=resolved_policy.max_active_keys,
             )
-    except ApiKeyVerificationLimitError:
-        await session.rollback()
-        await AuthLockoutService.cancel_verification_async(session, identity, reservation)
-        return False, _CAPACITY_MESSAGE
     except BaseException:
         await session.rollback()
         await AuthLockoutService.cancel_verification_async(session, identity, reservation)
@@ -351,10 +347,6 @@ def check_auth_header_with_session(  # noqa: C901
                 api_key,
                 max_active_keys=resolved_policy.max_active_keys,
             )
-    except ApiKeyVerificationLimitError:
-        session.rollback()
-        AuthLockoutService.cancel_verification(session, identity, reservation)
-        return False, _CAPACITY_MESSAGE
     except BaseException:
         session.rollback()
         AuthLockoutService.cancel_verification(session, identity, reservation)

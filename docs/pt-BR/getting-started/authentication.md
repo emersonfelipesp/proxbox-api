@@ -100,6 +100,10 @@ curl -X POST http://localhost:8800/auth/keys \
 
 A `raw_key` é retornada apenas uma vez — armazene-a com segurança.
 
+A criação é serializada com a reativação de chaves ativas e retorna `409`
+(`active_api_key_limit_reached`) quando ultrapassaria
+`PROXBOX_AUTH_MAX_ACTIVE_KEYS`. Desative uma chave ativa antes de criar outra.
+
 ### Desativar uma Chave
 
 ```bash
@@ -118,6 +122,9 @@ curl -X POST http://localhost:8800/auth/keys/1/activate \
   -H "X-Proxbox-API-Key: sua-chave"
 # {"id": 1, "label": "chave-bootstrap", "is_active": true, "created_at": 1712345678.123}
 ```
+
+A reativação retorna `409` (`active_api_key_limit_reached`) quando ultrapassaria
+o teto configurado de chaves ativas.
 
 ### Deletar uma Chave
 
@@ -140,8 +147,10 @@ deliberadamente maior de abuso por origem ainda bloqueia todas as chaves daquela
 origem quando esgotado. A autenticação síncrona e assíncrona compartilha o mesmo
 serviço de estado. Antes do bcrypt, cada
 requisição insere uma linha de reserva durável independente com token
-imprevisível e expiração própria. A linha consome somente a capacidade separada
-de verificação por credencial, origem e global. Depois do bcrypt, um `DELETE` atômico
+imprevisível, lease renovável de 60 segundos e deadline absoluto persistido.
+Enquanto o bcrypt executa, o owner renova somente até esse deadline; atrasos
+normais continuam protegidos, mas a linha nunca pode reter capacidade para
+sempre. Depois do bcrypt, um `DELETE` atômico
 limitado pelo token finaliza exatamente aquela linha uma vez: chave recusada
 vira estado de falha de credencial/origem na mesma transação, enquanto chave
 aceita não registra falha. Finalização duplicada não consome a reserva de outra
@@ -160,12 +169,24 @@ bcrypt de um atacante. Uma requisição posterior conta normalmente.
 
 Um token abandonado por crash expira 60 segundos depois que seu owner para de
 renová-lo. Somente então ele deixa de consumir capacidade. A linha permanece
-disponível por uma hora para finalização tardia exatamente uma
-vez e entra na métrica de reservas órfãs. Linhas mais antigas são compactadas em
+observável por um horizonte de limpeza de uma hora e entra na métrica de
+reservas órfãs. Um finalizador tardio pode atualizar a contabilidade exatamente
+uma vez somente antes do deadline absoluto descrito abaixo; resultados posteriores
+são consumidos e descartados. Linhas mais antigas são compactadas em
 contador agregado durável para limitar o armazenamento; os caminhos de reserva
 e finalização impõem esse horizonte, portanto um finalizador posterior é ignorado
 mesmo sem uma requisição mais nova para executar a compactação. Uma reserva órfã
-não estende a expiração de outro token vivo nem libera trabalho mais novo. Um segundo
+não estende a expiração de outro token vivo nem libera trabalho mais novo.
+
+Cada reserva também tem lifetime absoluto padrão de 180 segundos
+(`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`). Nesse deadline o slot pode
+ser reutilizado independentemente de heartbeats, e um resultado posterior é
+descartado sem registrar sucesso ou falha. Python não consegue interromper a
+thread bcrypt; portanto, um verificador expirado ainda pode consumir CPU até a
+chamada retornar, embora a admissão durável e a contabilidade de bloqueio
+permaneçam limitadas.
+
+Um segundo
 orçamento durável por origem limita ataques que rotacionam credenciais; seu
 padrão é deliberadamente maior que o limite por credencial. Requisições sem
 chave avançam somente esse orçamento por origem e nunca alocam linha na partição
@@ -193,11 +214,15 @@ continuam autoritativos.
   (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, intervalo 1-1024)
 - Máximo de verificações concorrentes entre todos os workers e identidades: 256
   (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, intervalo 1-4096)
+- Lifetime absoluto de uma verificação admitida: 180 segundos
+  (`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, intervalo 0.1-3600)
 - Máximo de hashes de chaves de API ativas examinados por uma requisição: 32
-  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, intervalo 1-1024). Se o banco contiver mais
-  chaves ativas que esse limite, a autenticação falha fechada com a resposta
-  temporária de capacidade antes do bcrypt. Aumente temporariamente o limite,
-  desative as chaves excedentes e restaure o valor desejado.
+  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, intervalo 1-1024). Criação e reativação
+  autenticadas não podem ultrapassar esse teto. Se um banco legado já exceder o
+  limite, o startup registra orientação explícita de recovery e a autenticação
+  examina somente o conjunto limitado de chaves ativas mais antigas. Use uma
+  delas para desativar as excedentes; se nenhuma estiver disponível, aumente
+  temporariamente o limite, reinicie, remova o excesso e restaure o valor.
 - Por padrão, uma chave opaca é criada atomicamente no arquivo privado irmão
   `database.db.auth-lockout.key`. A criação descarrega e sincroniza um arquivo
   temporário no mesmo diretório, substitui o caminho final e sincroniza o
@@ -218,9 +243,10 @@ continuam autoritativos.
   Uvicorn deve executar com processamento de proxy headers desabilitado
   (`--no-proxy-headers`); os entrypoints raw e com nginx já impõem isso para que
   a aplicação receba o peer de transporte real antes da allowlist. A imagem
-  nginx de propósito único sempre adiciona `127.0.0.1/32` no início dessa
-  configuração, pois seu nginx interno é o único processo que alcança o Uvicorn
-  em loopback. Deployments raw/Granian atrás de proxy reverso externo devem
+  nginx de propósito único adiciona `127.0.0.1/32` somente ao iniciar a
+  topologia nginx/supervisor distribuída, pois seu nginx interno é o único
+  processo que alcança o Uvicorn em loopback. Um comando customizado nessa
+  imagem mantém o padrão vazio. Deployments raw/Granian atrás de proxy reverso externo devem
   listar explicitamente os CIDRs exatos dos peers proxy e impedir acesso não
   confiável à porta da aplicação. O Granian só
   reescreve headers encaminhados com wrapper explícito, que o entrypoint
@@ -234,13 +260,14 @@ recovery e dos bloqueios ativos, o serviço publica:
   pelo limite por bucket ou global em voo mais identidades com falha cuja partição
   limitada de linhas de credencial ou origem não conseguiu persistir;
 - `proxbox_auth_orphan_compactions_total`: reservas expiradas compactadas depois
-  do horizonte suportado de uma hora para finalização tardia;
+  do horizonte suportado de limpeza de uma hora;
 - `proxbox_auth_bucket_rows`: linhas duráveis atuais de falha por
   credencial/origem;
 - `proxbox_auth_verifications_in_flight`: reservas não expiradas que consomem
   capacidade bcrypt; e
 - `proxbox_auth_expired_orphan_reservations`: reservas expiradas de crash
-  mantidas dentro do horizonte suportado para finalização tardia.
+  mantidas dentro do horizonte suportado de limpeza. Elas não permitem mudanças
+  de contabilidade depois do deadline terminal.
 
 Logs e CLI usam identificadores HMAC não autenticantes de 12 caracteres;
 chaves e hashes testáveis por dicionário nunca são exibidos.
