@@ -45,6 +45,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_packer_execution_binding.py` | Keyed endpoint/recipe bindings and oracle canaries, signed-plan tamper/drift/expiry rejection, retained recovery blockers, expired/concurrent leases, authoritative post-preflight endpoint refresh, cancel/completion CAS, repeated-cancellation journal durability, final artifact verification, minimal session authority, and a producer-owned consumer-shaped fixture that does not claim downstream validation |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
+| `test_role_resolution.py` | VM default-role hierarchy, durable role-snapshot truth table, and verified compensation retries |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
@@ -69,13 +70,15 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_sync_active.py` | `GET /sync/active` soft probe + `sync_state` registry lifecycle (issue #71) |
 | `test_sync_error_handling.py` | `@with_retry` decorator and domain error wrapping |
 | `test_sync_overwrite_flags.py` | Behavior of `SyncOverwriteFlags` propagation through the sync pipeline |
+| `test_sync_state_reader.py` | Typed sidecar-first VM identity/name/role reads and legacy fallback contracts |
+| `test_sync_state_writer.py` | Typed sidecar writes, including best-effort reflection fields and required/retried post-success role ownership evidence with exact snapshot compensation |
 | `test_task_history_sync.py` | Task history sync workflow |
 | `test_virtual_disks_sync.py` | Virtual disk sync workflow |
 | `test_vm_backup_volids.py` | VM backup volume ID parsing and normalization |
 | `test_vm_network.py` | VM network interface mapping and IP address handling |
 | `test_netbox_version.py` | `detect_netbox_version` caching, `parse_netbox_version` parsing, `ensure_vm_type` version-gate and pre-resolved `netbox_version` short-circuit |
 | `test_vm_sync.py` | Full VM sync workflow including coordinator and dry-run |
-| `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, retry semantics, failure isolation, and empty-queue short-circuit |
+| `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, role/snapshot rollback, commit-before-response-loss recovery, retry semantics, failure isolation, and empty-queue short-circuit |
 | `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation |
 | `test_auth_lockout.py` | Composite credential isolation plus shared source-abuse limits, database-bound and process-pinned identity-key generations/loss/skew/post-start-mutation contracts, atomic key-file publish fault injection, renewable per-token owner leases capped by persisted terminal deadlines, wedged-verifier reclamation and late-result discard, exactly-once duplicate/late-finalizer recovery within the supported horizon, finalizer-driven orphan compaction, credential-cohort coalescing with per-rejection source charging, missing-header and rotating-identity saturation with fair valid admission, bounded active-key recovery scans, unified per-bucket/global admission limits, typed WebSocket auth frames, sync/async/HTTP/WebSocket valid bursts above failure thresholds, durable source budgets/counters, safe expired-row eviction, real ASGI/Uvicorn middleware-stack proxy spoofing and trusted-forwarding partitioning, shell-level nginx bundled/custom-command trust defaults, sync/async and multiprocess atomic races, busy-timeout-before-WAL sync/async contention, full serialized bootstrap, rollback-compatible legacy schema, strict bucket/reservation/metric/key-binding validation, and label-free capacity/row/in-flight/orphan/compaction metrics |
 | `test_auth_lockout_cli.py` | Explicit-existing-database enforcement, exact startup-equivalent recovery-schema validation (including destructive-rebind no-mutation cases for malformed PK/type/CHECK definitions), read-only secret-safe inspection/recovery while HTTP is locked, and offline runtime-lease-enforced identity-key rebind that atomically clears buckets/reservations and advances or safely recreates the generation |

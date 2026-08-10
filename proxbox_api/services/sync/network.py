@@ -197,7 +197,7 @@ async def sync_node_interface_and_ip(
             "device": device.get("id", 0),
             "name": interface_name,
             "status": "active",
-            "type": NetBoxInterfaceType.from_proxmox(iface_type),
+            "type": NetBoxInterfaceType.from_proxmox(iface_type).value,
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id is not None else None,
             "tags": tag_refs,

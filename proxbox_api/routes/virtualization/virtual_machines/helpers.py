@@ -13,6 +13,16 @@ def resolve_vm_sync_concurrency() -> int:
     )
 
 
+def resolve_vm_config_fetch_timeout_seconds() -> int:
+    """Wall-clock deadline for one VM-config request during a full sync."""
+    return get_int(
+        settings_key="vm_config_fetch_timeout_seconds",
+        env="PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS",
+        default=30,
+        minimum=1,
+    )
+
+
 def resolve_netbox_write_concurrency() -> int:
     """Max concurrency for NetBox API write operations (creates/updates)."""
     return get_int(

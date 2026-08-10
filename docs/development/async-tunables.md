@@ -40,6 +40,7 @@ the plugin settings page in NetBox and the new value will take effect within
 | Env Var | Plugin Settings Key | Default | Min | Description |
 |---|---|---|---|---|
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 | 1 | Max concurrent Proxmox VM config fetches in the VM and virtual-disk sync phases |
+| `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` | — | 30 | 1 | Wall-clock seconds allowed for one full-sync VM config fetch before that VM is isolated as failed |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | 1 | Max concurrent NetBox API write-heavy per-VM sync tasks (VMs and virtual disks) |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 | 1 | Max concurrent Proxmox API reads for interfaces |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 | 1 | VMs per interface-sync batch (prevents NetBox overload) |

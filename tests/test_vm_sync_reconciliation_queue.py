@@ -10,6 +10,8 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.services import custom_fields as custom_fields_service
+from proxbox_api.services.sync import role_resolution
+from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan
 
 
 @pytest.fixture(autouse=True)
@@ -291,12 +293,20 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
         sync_vm._NetBoxVMOperation(
             method="GET",
             prepared=prepared_get,
-            existing_record={"id": 4202, "custom_fields": {"proxmox_vm_id": 202}},
+            existing_record={
+                "id": 4202,
+                "role": {"id": 20},
+                "custom_fields": {"proxmox_vm_id": 202},
+            },
         ),
         sync_vm._NetBoxVMOperation(
             method="UPDATE",
             prepared=prepared_update,
-            existing_record={"id": 4203, "custom_fields": {"proxmox_vm_id": 203}},
+            existing_record={
+                "id": 4203,
+                "role": {"id": 20},
+                "custom_fields": {"proxmox_vm_id": 203},
+            },
             patch_payload={"memory": 4096},
         ),
     ]
@@ -309,6 +319,276 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
+
+
+@pytest.mark.asyncio
+async def test_dispatch_vm_role_snapshot_policy_preserves_operator_edit_and_backfills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patches: dict[int, dict[str, object]] = {}
+
+    async def _fake_role_snapshots(*_args, **_kwargs) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(
+            values={7101: 11, 7103: 20},
+            unverified_vm_ids=frozenset({7104}),
+        )
+
+    async def _fake_patch(_nb, _path, record_id, payload):
+        patches[record_id] = dict(payload)
+        return {"id": record_id, **payload}
+
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_snapshots)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
+
+    operator_edit = _prepared_vm(cluster_name="cluster-a", vmid=701, memory=4096)
+    missing_snapshot = _prepared_vm(cluster_name="cluster-a", vmid=702, memory=2048)
+    managed_roll_forward = _prepared_vm(cluster_name="cluster-a", vmid=703, memory=2048)
+    managed_roll_forward.desired_payload["role"] = 30
+    unverified_snapshot = _prepared_vm(cluster_name="cluster-a", vmid=704, memory=2048)
+    unverified_snapshot.desired_payload["role"] = 30
+
+    queue = [
+        sync_vm._NetBoxVMOperation(
+            method="UPDATE",
+            prepared=operator_edit,
+            existing_record={"id": 7101, "role": {"id": 42}},
+            patch_payload={"memory": 4096, "role": 20},
+        ),
+        sync_vm._NetBoxVMOperation(
+            method="GET",
+            prepared=missing_snapshot,
+            existing_record={"id": 7102, "role": {"id": 42}},
+        ),
+        sync_vm._NetBoxVMOperation(
+            method="GET",
+            prepared=managed_roll_forward,
+            existing_record={"id": 7103, "role": {"id": 20}},
+        ),
+        sync_vm._NetBoxVMOperation(
+            method="GET",
+            prepared=unverified_snapshot,
+            existing_record={"id": 7104, "role": {"id": 20}},
+        ),
+    ]
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        queue,
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=False,
+    )
+
+    assert failed_keys == set()
+    assert patches == {
+        7101: {"memory": 4096},
+        7103: {"role": 30},
+    }
+    assert resolved[("cluster-a", 702, "qemu")]["role"] == {"id": 42}
+    assert queue[0].role_snapshot_id_to_write is None
+    assert queue[1].role_snapshot_id_to_write == 42
+    assert queue[2].role_snapshot_id_to_write == 30
+    assert queue[3].role_snapshot_id_to_write is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_failure_rollback_allows_next_sync_to_retry_role_roll_forward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed ownership write cannot turn the just-written role into an operator lock."""
+    current = {"id": 7150, "role": {"id": 11}}
+    current_snapshot_id = 11
+    role_patches: list[int | None] = []
+
+    async def _fake_role_snapshots(*_args: object, **_kwargs: object) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={7150: 11})
+
+    async def _fake_patch(
+        _nb: object,
+        _path: str,
+        _record_id: int,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        role_id = payload.get("role")
+        role_patches.append(role_id if isinstance(role_id, int) else None)
+        current["role"] = {"id": role_id} if role_id is not None else None
+        return dict(current)
+
+    async def _fake_read(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return dict(current)
+
+    async def _fake_snapshot_read(*_args: object, **_kwargs: object):
+        return role_resolution.VMRoleSnapshotRead(
+            snapshot_id=current_snapshot_id,
+            verified=True,
+        )
+
+    async def _fake_snapshot_restore(
+        *_args: object,
+        snapshot_id: int | None,
+        **_kwargs: object,
+    ) -> None:
+        nonlocal current_snapshot_id
+        current_snapshot_id = snapshot_id
+
+    async def _failed_snapshot_write() -> None:
+        raise RuntimeError("sidecar unavailable")
+
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_snapshots)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
+    monkeypatch.setattr(role_resolution, "rest_patch_async", _fake_patch)
+    monkeypatch.setattr(role_resolution, "rest_first_async", _fake_read)
+    monkeypatch.setattr(role_resolution, "read_vm_last_synced_role", _fake_snapshot_read)
+    monkeypatch.setattr(role_resolution, "write_vm_role_snapshot_exact", _fake_snapshot_restore)
+
+    first = sync_vm._NetBoxVMOperation(
+        method="GET",
+        prepared=_prepared_vm(cluster_name="cluster-a", vmid=750, memory=2048),
+        existing_record=dict(current),
+    )
+    _resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        [first],
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=False,
+    )
+
+    assert failed_keys == set()
+    assert current["role"] == {"id": 20}
+    assert first.role_previous_id == 11
+    assert first.role_snapshot_id_to_write == 20
+    assert first.role_write_applied
+
+    with pytest.raises(RuntimeError, match="sidecar unavailable"):
+        await role_resolution.persist_sync_state_with_role_compensation(
+            object(),
+            persistence=_failed_snapshot_write(),
+            virtual_machine_id=7150,
+            previous_role_id=first.role_previous_id,
+            previous_snapshot_id=first.role_snapshot_previous_id,
+            expected_snapshot_id=first.role_snapshot_id_to_write,
+            role_write_applied=first.role_write_applied,
+        )
+
+    assert current["role"] == {"id": 11}
+    assert current_snapshot_id == 11
+
+    second = sync_vm._NetBoxVMOperation(
+        method="GET",
+        prepared=_prepared_vm(cluster_name="cluster-a", vmid=750, memory=2048),
+        existing_record=dict(current),
+    )
+    _resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        [second],
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=False,
+    )
+
+    assert failed_keys == set()
+    assert current["role"] == {"id": 20}
+    assert second.role_snapshot_id_to_write == 20
+    assert second.role_write_applied
+    assert role_patches == [20, 11, 20]
+
+
+@pytest.mark.asyncio
+async def test_commit_then_error_confirmation_avoids_rollback_and_false_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost response after snapshot commit is authoritatively accepted as success."""
+    current = {"id": 7151, "role": {"id": 11}}
+    current_snapshot_id = 11
+    role_patches: list[int | None] = []
+    snapshot_restore_calls = 0
+
+    async def _fake_role_snapshots(*_args: object, **_kwargs: object) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={7151: current_snapshot_id})
+
+    async def _fake_patch(
+        _nb: object,
+        _path: str,
+        _record_id: int,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        role_id = payload.get("role")
+        role_patches.append(role_id if isinstance(role_id, int) else None)
+        current["role"] = {"id": role_id} if role_id is not None else None
+        return dict(current)
+
+    async def _snapshot_read(*_args: object, **_kwargs: object):
+        return role_resolution.VMRoleSnapshotRead(
+            snapshot_id=current_snapshot_id,
+            verified=True,
+        )
+
+    async def _unexpected_snapshot_restore(*_args: object, **_kwargs: object) -> None:
+        nonlocal snapshot_restore_calls
+        snapshot_restore_calls += 1
+
+    async def _commit_then_error() -> None:
+        nonlocal current_snapshot_id
+        current_snapshot_id = 20
+        raise RuntimeError("response lost after commit")
+
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_snapshots)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
+    monkeypatch.setattr(role_resolution, "read_vm_last_synced_role", _snapshot_read)
+    monkeypatch.setattr(
+        role_resolution,
+        "write_vm_role_snapshot_exact",
+        _unexpected_snapshot_restore,
+    )
+
+    first = sync_vm._NetBoxVMOperation(
+        method="GET",
+        prepared=_prepared_vm(cluster_name="cluster-a", vmid=751, memory=2048),
+        existing_record=dict(current),
+    )
+    _resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        [first],
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=False,
+    )
+
+    assert failed_keys == set()
+    assert current["role"] == {"id": 20}
+    assert first.role_snapshot_previous_id == 11
+
+    await role_resolution.persist_sync_state_with_role_compensation(
+        object(),
+        persistence=_commit_then_error(),
+        virtual_machine_id=7151,
+        previous_role_id=first.role_previous_id,
+        previous_snapshot_id=first.role_snapshot_previous_id,
+        expected_snapshot_id=first.role_snapshot_id_to_write,
+        role_write_applied=first.role_write_applied,
+    )
+
+    assert current_snapshot_id == 20
+    assert snapshot_restore_calls == 0
+
+    second = sync_vm._NetBoxVMOperation(
+        method="GET",
+        prepared=_prepared_vm(cluster_name="cluster-a", vmid=751, memory=2048),
+        existing_record=dict(current),
+    )
+    _resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        [second],
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=False,
+    )
+
+    assert failed_keys == set()
+    assert not second.role_write_applied
+    assert second.role_snapshot_id_to_write is None
+    assert role_patches == [20]
 
 
 @pytest.mark.asyncio
@@ -329,7 +609,7 @@ async def test_dispatch_create_re_adopts_sidecar_vm_when_custom_fields_absent(mo
                     "status": "active",
                     "cluster": {"id": 1},
                     "device": {"id": 10},
-                    "role": {"id": 20},
+                    "role": {"id": 42},
                     "vcpus": 2,
                     "memory": 1024,
                     "disk": 30,
@@ -343,23 +623,77 @@ async def test_dispatch_create_re_adopts_sidecar_vm_when_custom_fields_absent(mo
         )()
 
     async def _fake_reconcile(*_args, **kwargs):
+        assert "role" not in kwargs["patchable_fields"]
         calls.append(kwargs["existing_record"]["id"])
         return {"id": kwargs["existing_record"]["id"], **kwargs["payload"]}
+
+    async def _fake_role_snapshots(*_args, **_kwargs) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={6101: 11})
 
     monkeypatch.setattr(sync_vm, "rest_create_async", _unexpected_create)
     monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolver)
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_snapshots)
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
 
     prepared = _prepared_vm(cluster_name="cluster-a", vmid=301, memory=2048)
     queue = [sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared)]
 
-    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        queue,
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=False,
+    )
 
     assert failed_keys == set()
     assert calls == [6101]
     assert resolved[("cluster-a", 301, "qemu")]["id"] == 6101
     assert resolved[("cluster-a", 301, "qemu")]["memory"] == 2048
+    assert queue[0].role_snapshot_id_to_write is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_conflict_preserves_operator_role(monkeypatch):
+    async def _no_sidecar_resolution(*_args, **_kwargs):
+        return None
+
+    async def _conflicting_create(*_args, **_kwargs):
+        raise ProxboxException(message="duplicate VM")
+
+    async def _legacy_existing(*_args, **_kwargs):
+        return {"id": 6105, "role": {"id": 42}, "custom_fields": {}}
+
+    async def _unexpected_patch(*_args, **_kwargs):
+        raise AssertionError("operator-owned role must not be patched")
+
+    async def _fake_role_scan(*_args, **_kwargs) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={6105: 11})
+
+    monkeypatch.setattr(
+        sync_vm,
+        "resolve_virtual_machine_by_sync_state",
+        _no_sidecar_resolution,
+    )
+    monkeypatch.setattr(sync_vm, "rest_create_async", _conflicting_create)
+    monkeypatch.setattr(sync_vm, "rest_first_async", _legacy_existing)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _unexpected_patch)
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_scan)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
+
+    prepared = _prepared_vm(cluster_name="cluster-a", vmid=305, memory=2048)
+    queue = [sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared)]
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
+        object(),
+        queue,
+        overwrite_vm_role=False,
+        custom_fields_enabled_flag=True,
+    )
+
+    assert failed_keys == set()
+    assert resolved[("cluster-a", 305, "qemu")]["role"] == {"id": 42}
+    assert queue[0].role_snapshot_id_to_write is None
 
 
 @pytest.mark.asyncio
@@ -494,6 +828,7 @@ async def test_dispatch_vm_operation_queue_retries_disk_aggregate_validation(mon
             prepared=prepared_update,
             existing_record={
                 "id": 4204,
+                "role": {"id": 20},
                 "custom_fields": {"proxmox_vm_id": 204},
                 "disk": 2256,
             },
@@ -524,12 +859,20 @@ async def test_dispatch_vm_operation_queue_keeps_same_vmid_types_separate(monkey
         sync_vm._NetBoxVMOperation(
             method="GET",
             prepared=prepared_qemu,
-            existing_record={"id": 5300, "custom_fields": {"proxmox_vm_id": 300}},
+            existing_record={
+                "id": 5300,
+                "role": {"id": 20},
+                "custom_fields": {"proxmox_vm_id": 300},
+            },
         ),
         sync_vm._NetBoxVMOperation(
             method="GET",
             prepared=prepared_lxc,
-            existing_record={"id": 6300, "custom_fields": {"proxmox_vm_id": 300}},
+            existing_record={
+                "id": 6300,
+                "role": {"id": 20},
+                "custom_fields": {"proxmox_vm_id": 300},
+            },
         ),
     ]
 

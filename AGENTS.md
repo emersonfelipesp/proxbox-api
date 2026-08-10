@@ -140,9 +140,20 @@ disable sidecar writes when the flag is off. Sync reads resolve via
 `proxbox_api/services/sync/sync_state_reader.py`: sidecar-only by default, with
 the legacy `cf_*` fallback (VM identity lookup, orphan-sweep last-run checks)
 running only when `custom_fields_enabled=true`, which also emits a deprecation
-warning. Role-ownership snapshots have no sidecar field and are read only when
-the flag is enabled. Complete custom-field retirement is a separate follow-up; do
-not delete custom-field data while the flag exists.
+warning. Role ownership uses the typed VM-sidecar
+`proxmox_last_synced_role_id` field first. Full sync loads these snapshots once
+and applies the decision after the Python/Rust queue seam; individual and
+adoption paths use the same truth table. Persist ownership evidence only after
+a successful reconcile and independently of the legacy custom-field flag.
+Unavailable, failed, or conflicting reads preserve the role without claiming
+ownership. Required ownership writes retry three times. After an exhausted
+response, the backend authoritatively re-reads the typed snapshot, accepts a
+confirmed commit, or restores and verifies both the previous role and snapshot
+before surfacing VM failure. This prevents response loss from creating a false
+operator lock on the next pass. The
+same-named custom field is a transition fallback only when the flag is enabled.
+Complete custom-field retirement is a separate follow-up; do not delete
+custom-field data while the flag exists.
 
 ## CI/CD Workflows
 

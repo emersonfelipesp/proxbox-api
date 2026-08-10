@@ -208,6 +208,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Cloud Image consumer rollout hold**: the checked-in netbox-packer-shaped fixture is producer-owned compatibility intent, not downstream validation. Keep `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` unset/false in staging and production until netbox-packer lands and validates its own consumer contract; planning and GET-only preflight remain available.
 - **Transport access method** (`ProxmoxEndpoint.access_methods`, enum `proxbox_api/enum/proxmox.py::ProxmoxAccessMethod`): per-endpoint axis orthogonal to `allow_writes`. `api` (default, new endpoints) = Read+Write over API only; `api_ssh` = API + SSH. SSH-only is unrepresentable (two-value enum; create/update reject any other value with 422). Existing rows are backfilled to `api_ssh` on upgrade (non-breaking). Gates proxbox-api's own SQLite-id SSH paths (Cloud Image Build Pipeline, Azure VHD import) via `routes/proxmox/access_gate.py`. The value is pushed from the NetBox plugin and accepted on `POST/PUT /proxmox/endpoints`.
 - **Extras custom fields** (`routes/extras/`, `/extras/*`): legacy Proxbox reflection custom fields are deprecated and gated by `custom_fields_enabled` (default `false`), so typed `Proxbox*SyncState` sidecars are the standard source of truth. `POST /extras/custom-fields/reconcile` and legacy `GET /extras/extras/custom-fields/create` are no-ops unless the flag is enabled; when enabled, they reconcile from the canonical inventory in `services/custom_fields.py`, bypass the process-local cache, and emit deprecation warnings. `GET /extras/bootstrap-status` exposes startup bootstrap warnings.
+- **VM role ownership invariant**: `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` is the durable DeviceRole ownership snapshot. A verified-missing snapshot preserves and captures an existing role; an unavailable, failed, or conflicting read preserves the role without claiming ownership; a current role that differs from its snapshot is an operator edit and remains untouched when `overwrite_vm_role=false`; a still-managed role may roll forward with a changed default. Full/bulk dispatch applies this after the Python/Rust queue seam, and individual/adoption paths use the same truth table. Persist snapshots only after successful VM reconciliation and retry required writes three times. After an exhausted response, authoritatively re-read the typed snapshot: accept a confirmed commit, otherwise restore and verify both the previous role and previous snapshot before surfacing VM failure. This prevents response loss from inventing an operator lock. Use the deprecated same-named custom field only as an enabled transition fallback.
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
 - **Optional sidecars** (conditionally mounted): `/pbs/*`, `/ceph/*`, `/pdm/*` when the corresponding `proxmox-sdk` extras are installed and `PROXBOX_FEATURES` includes them.
 
@@ -232,6 +233,10 @@ repository under `/opt/nmulticloud/deploy`:
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
 - Runtime secrets: `/etc/nms/proxbox-api-production.env`
 - SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
+- SQLite schema bootstrap is process-safe: all Uvicorn workers serialize
+  `create_all()` plus legacy column migrations through the adjacent
+  `database.db.bootstrap.lock` advisory lock. The lock file carries no state and
+  is kernel-released on worker exit; it must share the SQLite filesystem.
 - Staging compose project: `nmc-proxbox-api-staging`
 - Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
 - Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`

@@ -2,10 +2,105 @@
 
 from __future__ import annotations
 
+import multiprocessing
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
 from sqlalchemy import inspect, text
 from sqlmodel import create_engine
 
 from proxbox_api import database
+
+
+def _hold_database_bootstrap_lock(
+    lock_path: str,
+    acquired: Any,
+    release: Any,
+) -> None:
+    with database._database_bootstrap_lock(Path(lock_path)):
+        acquired.set()
+        release.wait(timeout=5)
+
+
+def _stop_process(process: Any) -> None:
+    process.join(timeout=2)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=2)
+
+
+def test_database_bootstrap_lock_serializes_worker_processes(tmp_path):
+    context = multiprocessing.get_context("fork")
+    lock_path = str(tmp_path / "database.db.bootstrap.lock")
+    first_acquired = context.Event()
+    first_release = context.Event()
+    second_acquired = context.Event()
+    second_release = context.Event()
+    first = context.Process(
+        target=_hold_database_bootstrap_lock,
+        args=(lock_path, first_acquired, first_release),
+    )
+    second = context.Process(
+        target=_hold_database_bootstrap_lock,
+        args=(lock_path, second_acquired, second_release),
+    )
+
+    try:
+        first.start()
+        assert first_acquired.wait(timeout=2)
+
+        second.start()
+        assert not second_acquired.wait(timeout=0.25)
+
+        first_release.set()
+        assert second_acquired.wait(timeout=2)
+    finally:
+        first_release.set()
+        second_release.set()
+        _stop_process(first)
+        _stop_process(second)
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+
+
+def test_database_bootstrap_lock_releases_after_exception(tmp_path):
+    lock_path = tmp_path / "database.db.bootstrap.lock"
+    with pytest.raises(RuntimeError, match="bootstrap failed"):
+        with database._database_bootstrap_lock(lock_path):
+            raise RuntimeError("bootstrap failed")
+
+    context = multiprocessing.get_context("fork")
+    acquired = context.Event()
+    release = context.Event()
+    process = context.Process(
+        target=_hold_database_bootstrap_lock,
+        args=(str(lock_path), acquired, release),
+    )
+    try:
+        process.start()
+        assert acquired.wait(timeout=2)
+    finally:
+        release.set()
+        _stop_process(process)
+
+    assert process.exitcode == 0
+
+
+def test_database_bootstrap_lock_is_skipped_for_non_sqlite_engine(tmp_path, monkeypatch):
+    lock_path = tmp_path / "database.db.bootstrap.lock"
+    monkeypatch.setattr(
+        database,
+        "engine",
+        SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+    )
+
+    with database._database_bootstrap_lock(lock_path):
+        pass
+
+    assert not lock_path.exists()
 
 
 def _make_legacy_endpoint_table(engine, table: str) -> None:

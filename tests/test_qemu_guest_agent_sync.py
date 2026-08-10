@@ -16,6 +16,7 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
 from proxbox_api.schemas.sync import SyncBehaviorFlags
 from proxbox_api.services.proxmox_helpers import GuestAgentFetchResult
 from proxbox_api.services.sync import sync_state_reader
+from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan
 
 
 @pytest.fixture(autouse=True)
@@ -155,6 +156,9 @@ def _install_common_sync_patches(  # noqa: C901
     async def _fake_task_history(**_kwargs):
         return {"count": 1, "created": 0, "skipped": 0}
 
+    async def _fake_write_vm_sync_state(*_args, **_kwargs):
+        return {"id": 955}
+
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
         _fake_get_vm_config,
@@ -219,6 +223,10 @@ def _install_common_sync_patches(  # noqa: C901
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
         _fake_task_history,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.write_virtual_machine_sync_state",
+        _fake_write_vm_sync_state,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.network.rest_reconcile_async",
@@ -339,6 +347,37 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
         (1102, "issue-519-run"),
         (1103, "issue-519-run"),
     ]
+
+
+def test_network_sync_scans_role_snapshots_once_for_multiple_vms(monkeypatch):
+    data = _vm_sync_inputs({"agent": 0})
+    base_resource = data["cluster_resources"][0]["lab"][0]
+    data["cluster_resources"][0]["lab"] = [
+        {**base_resource, "name": f"vm{i}", "vmid": 200 + i} for i in range(3)
+    ]
+    _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=[])
+    scan_calls: list[object] = []
+
+    async def _fake_role_scan(nb: object) -> VMRoleSnapshotScan:
+        scan_calls.append(nb)
+        return VMRoleSnapshotScan(values={})
+
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_scan)
+
+    result = asyncio.run(
+        create_virtual_machines(
+            netbox_session=data["netbox_session"],
+            pxs=data["pxs"],
+            cluster_status=data["cluster_status"],
+            cluster_resources=data["cluster_resources"],
+            custom_fields=data["custom_fields"],
+            tag=data["tag"],
+            sync_vm_network=True,
+        )
+    )
+
+    assert len(result) == 3
+    assert len(scan_calls) == 1
 
 
 def test_vm_sync_prefers_guest_agent_ip(monkeypatch):

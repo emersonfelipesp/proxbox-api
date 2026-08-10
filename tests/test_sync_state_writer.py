@@ -4,6 +4,7 @@ import pytest
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import RestRecord
+from proxbox_api.proxmox_to_netbox.models import ProxmoxVmResourceInput
 from proxbox_api.services.sync import sync_state_writer as writer
 from proxbox_api.services.sync.vm_create import create_or_update_virtual_machine
 
@@ -214,6 +215,98 @@ async def test_vm_sidecar_writes_proxmox_name_when_custom_field_gate_is_closed(
         "virtual_machine": {"id": 123},
         "proxmox_vm_name": "web-renamed",
     }
+
+
+@pytest.mark.asyncio
+async def test_vm_sidecar_writes_role_snapshot_when_custom_field_gate_is_closed(
+    recorder: _Recorder,
+) -> None:
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=123,
+        custom_fields=None,
+        overwrite_custom_fields=False,
+        proxmox_last_synced_role_id=31,
+    )
+
+    assert recorder.calls[-1] == {
+        "method": "POST",
+        "path": writer.VM_SYNC_STATE_PATH,
+        "payload": {
+            "virtual_machine": {"id": 123},
+            "proxmox_last_synced_role_id": 31,
+        },
+        "lookup": {"virtual_machine_id": 123},
+    }
+
+
+@pytest.mark.asyncio
+async def test_required_role_snapshot_retries_and_surfaces_failure(
+    recorder: _Recorder,
+) -> None:
+    recorder.create_error = ProxboxException(
+        message="NetBox REST request failed",
+        detail="temporary sidecar failure",
+        http_status_code=503,
+    )
+
+    with pytest.raises(ProxboxException, match="NetBox REST request failed"):
+        await writer.write_virtual_machine_sync_state(
+            object(),
+            virtual_machine_id=123,
+            custom_fields=None,
+            overwrite_custom_fields=False,
+            proxmox_last_synced_role_id=31,
+        )
+
+    assert [call["method"] for call in recorder.calls] == [
+        "GET",
+        "POST",
+        "GET",
+        "POST",
+        "GET",
+        "POST",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_snapshot_id", [11, None])
+async def test_exact_role_snapshot_restore_accepts_commit_before_response_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    previous_snapshot_id: int | None,
+) -> None:
+    from proxbox_api.services.sync import sync_state_reader
+
+    current_snapshot_id = 20
+    write_calls = 0
+
+    async def _commit_then_error(*_args: object, **kwargs: object) -> None:
+        nonlocal current_snapshot_id, write_calls
+        write_calls += 1
+        payload = kwargs["payload"]
+        assert isinstance(payload, dict)
+        value = payload["proxmox_last_synced_role_id"]
+        current_snapshot_id = value if isinstance(value, int) else None
+        raise RuntimeError("response lost after exact snapshot commit")
+
+    async def _read(*_args: object, **_kwargs: object):
+        return sync_state_reader.VMRoleSnapshotRead(
+            snapshot_id=current_snapshot_id,
+            verified=True,
+        )
+
+    monkeypatch.setattr(writer, "_upsert_parent_sidecar", _commit_then_error)
+    monkeypatch.setattr(sync_state_reader, "read_vm_last_synced_role", _read)
+
+    await writer.write_vm_role_snapshot_exact(
+        object(),
+        virtual_machine_id=123,
+        snapshot_id=previous_snapshot_id,
+        attempts=1,
+    )
+
+    assert write_calls == 1
+    assert current_snapshot_id == previous_snapshot_id
 
 
 @pytest.mark.asyncio
@@ -468,7 +561,7 @@ async def test_sidecar_writer_isolates_patch_failure(
 
 
 @pytest.mark.asyncio
-async def test_create_or_update_vm_writes_sidecar_from_live_payload_without_record_custom_fields(
+async def test_create_or_update_vm_accepts_typed_resource_and_writes_live_sidecar_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -504,16 +597,18 @@ async def test_create_or_update_vm_writes_sidecar_from_live_payload_without_reco
 
     await create_or_update_virtual_machine(
         netbox_session=object(),
-        proxmox_resource={
-            "vmid": 101,
-            "name": "vm-101",
-            "node": "pve-a",
-            "type": "qemu",
-            "status": "running",
-            "maxcpu": 2,
-            "maxmem": 2_147_483_648,
-            "maxdisk": 10_737_418_240,
-        },
+        proxmox_resource=ProxmoxVmResourceInput.model_validate(
+            {
+                "vmid": 101,
+                "name": "vm-101",
+                "node": "pve-a",
+                "type": "qemu",
+                "status": "running",
+                "maxcpu": 2,
+                "maxmem": 2_147_483_648,
+                "maxdisk": 10_737_418_240,
+            }
+        ),
         proxmox_config={"onboot": 1, "agent": 1},
         cluster_id=11,
         device_id=22,

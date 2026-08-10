@@ -57,4 +57,6 @@ endpoint's record(s).
 
 - Keep API wrappers resilient to upstream Proxmox errors and convert them to `ProxboxException`.
 - Prefer schema-backed responses for stable client behavior.
+- Preserve native scalar types from Proxmox config responses. In particular,
+  `allow-ksm` is boolean; route response models must not narrow it to a string.
 - Keep runtime route registration and code generation responsibilities separated.
