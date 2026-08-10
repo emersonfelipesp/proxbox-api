@@ -58,8 +58,9 @@ A concorrencia de autenticacao e o historico de falhas usam tabelas versionadas
 separadas:
 
 - `auth_lockout_reservations` armazena um token duravel por verificacao bcrypt
-  admitida, com IDs de credencial/origem e expiracao independentes. Tokens de
-  crash expirados deixam de consumir capacidade, continuam observaveis por
+  admitida, com IDs de credencial/origem e lease renovavel pelo owner. Um
+  verificador vivo renova seu token; 60 segundos depois que a renovacao para,
+  um token de crash expira e deixa de consumir capacidade. Tokens expirados continuam observaveis por
   `proxbox_auth_expired_orphan_reservations` e podem ser consumidos exatamente
   uma vez por finalizador tardio durante uma hora depois da expiracao. Tokens
   mais antigos sao compactados em `proxbox_auth_orphan_compactions_total`,
@@ -72,11 +73,11 @@ separadas:
   nem estende outra reserva.
 - `auth_lockout_buckets` armazena historico recusado de credencial/origem.
   Trafego sem chave cria somente linha de origem; origens IPv6 sao agregadas em
-  `/64`. O limite e dividido em particoes de credencial e origem, com os
-  compromissos distintos por origem limitados pelo threshold da origem. Reservas
-  ativas comprometem vagas futuras. Uma particao cheia remove sua linha expirada
-  segura mais antiga, enquanto uma via serializada globalmente e por origem
-  preserva a admissao de chaves validas apos saturacao nao autenticada.
+  `/64`. O limite e dividido em particoes de credencial e origem. A admissao
+  permanece no pool normal por origem/global mesmo quando nao ha linha de falha
+  disponivel. Uma particao cheia remove sua linha expirada segura mais antiga;
+  uma rejeicao que nao pode ser persistida falha fechada e avanca metricas
+  agregadas limitadas.
 - `auth_lockout_metrics` armazena contadores duraveis sem labels. A superficie de
   metricas tambem deriva linhas atuais de bucket, reservas nao expiradas em voo
   e reservas orfas expiradas, sem labels de origem, credencial ou token; o

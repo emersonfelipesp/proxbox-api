@@ -41,19 +41,46 @@ nginx terminates HTTPS using auto-generated [mkcert](https://github.com/FiloSott
 ```bash
 docker pull emersonfelipesp/proxbox-api:latest-nginx
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
-  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
-The environment value is the single trust policy that lets the application use
-nginx's `X-Forwarded-For` value for per-client rate limits and lockouts. Set it
-only when the bundled loopback Uvicorn port is unreachable by untrusted local
-processes; otherwise omit it and requests are conservatively grouped under the
-nginx transport peer. Uvicorn itself never rewrites the peer scope.
+The single-purpose nginx entrypoint always prepends `127.0.0.1/32` to the
+application trust policy. Its loopback-only Uvicorn listener is therefore
+trusted by default, and nginx's `X-Forwarded-For` value provides independent
+per-client rate-limit and lockout buckets. Uvicorn itself never rewrites the
+peer scope. Additional values in `PROXBOX_TRUSTED_PROXIES` are additive and
+should name only upstream proxies that are actually trusted.
 
 Service URL:
 
 - <https://127.0.0.1:8443> (self-signed, trusted on the container host)
+
+#### External reverse proxy
+
+The raw and Granian images intentionally trust no proxy by default. Put the
+application on a private network, set `PROXBOX_TRUSTED_PROXIES` to the exact
+proxy network or peer address, and do not publish the application port:
+
+```bash
+docker network create --subnet 172.30.0.0/24 proxbox-private
+docker run -d --name proxbox-api --network proxbox-private \
+  -e PROXBOX_TRUSTED_PROXIES=172.30.0.0/24 \
+  emersonfelipesp/proxbox-api:latest
+```
+
+The external nginx location must preserve the chain:
+
+```nginx
+location / {
+    proxy_pass http://proxbox-api:8000;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Use a non-conflicting private subnet appropriate to the deployment. Never trust
+a public/client address range, and never expose the application port around the
+trusted proxy. The shipped Uvicorn entrypoint keeps `--no-proxy-headers` so the
+application validates the transport peer before accepting the header.
 
 #### Connecting netbox-proxbox to the nginx image
 
@@ -112,7 +139,7 @@ Common to all images, including the experimental PyO3/Rust variants:
 |----------|---------|-------------|
 | `PORT` | `8000` | Port the server listens on |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Address the server binds to. Set to `::` for IPv4 + IPv6 dual-stack. Honored by the `raw` and `granian` images; the `nginx` image listens on both stacks unconditionally. |
-| `PROXBOX_TRUSTED_PROXIES` | — | Application-level CIDRs allowed to supply `X-Forwarded-For`. Uvicorn preprocessing is disabled. For the bundled nginx image, use `127.0.0.1` only when its loopback Uvicorn port is protected from untrusted local callers. |
+| `PROXBOX_TRUSTED_PROXIES` | empty for raw/Granian; nginx prepends `127.0.0.1/32` | Application-level CIDRs allowed to supply `X-Forwarded-For`. Uvicorn preprocessing is disabled. The bundled nginx image protects and trusts its loopback Uvicorn hop; external proxies must be listed explicitly and must be the only callers able to reach the application port. |
 
 mkcert-specific (only for the `nginx` and `granian` images):
 
@@ -127,7 +154,6 @@ Example with extra SANs:
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
-  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
@@ -141,7 +167,6 @@ any special flags.
 
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
-  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   -v ./certs:/certs:ro \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
@@ -163,8 +188,6 @@ services:
     restart: unless-stopped
     ports:
       - "8443:8000"
-    environment:
-      PROXBOX_TRUSTED_PROXIES: 127.0.0.1
     volumes:
       - ./certs:/certs:ro
 ```

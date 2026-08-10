@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from collections.abc import AsyncIterator, Iterator
 from contextlib import (
     AbstractAsyncContextManager,
     AbstractContextManager,
@@ -14,14 +17,17 @@ from sqlmodel import Session
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api import database
-from proxbox_api.database import ApiKey, get_session
+from proxbox_api.database import ApiKey, ApiKeyVerificationLimitError, get_session
+from proxbox_api.logger import logger
 from proxbox_api.services.auth_lockout import (
     AuthLockoutPolicy,
     AuthLockoutService,
     AuthSourceContext,
+    FailureResult,
     LockoutCapacityError,
     LockoutIdentity,
     build_lockout_identity,
+    reservation_heartbeat_interval,
     resolve_auth_source_context,
 )
 
@@ -49,6 +55,91 @@ def _identity(source: AuthSourceContext | str, api_key: str | None) -> LockoutId
 
 def _policy(policy: AuthLockoutPolicy | None) -> AuthLockoutPolicy:
     return policy or AuthLockoutPolicy.from_env()
+
+
+@contextmanager
+def _verification_lease_heartbeat(
+    session: Session,
+    identity: LockoutIdentity,
+    reservation: FailureResult,
+) -> Iterator[None]:
+    """Renew a sync verification lease from an owner-only background session."""
+
+    stop = threading.Event()
+    interval = reservation_heartbeat_interval()
+    bind = session.get_bind()
+
+    def heartbeat() -> None:
+        while not stop.wait(interval):
+            try:
+                with Session(bind=bind) as heartbeat_session:
+                    if not AuthLockoutService.renew_verification(
+                        heartbeat_session,
+                        identity,
+                        reservation,
+                    ):
+                        return
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "Authentication verification lease heartbeat failed",
+                    extra={"error_type": type(error).__name__},
+                )
+
+    worker = threading.Thread(
+        target=heartbeat,
+        name="proxbox-auth-lease-heartbeat",
+        daemon=True,
+    )
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join(timeout=min(5.0, max(1.0, interval)))
+
+
+@asynccontextmanager
+async def _verification_lease_heartbeat_async(
+    session: AsyncSession,
+    identity: LockoutIdentity,
+    reservation: FailureResult,
+) -> AsyncIterator[None]:
+    """Renew an async verification lease from an owner-only background session."""
+
+    stop = asyncio.Event()
+    interval = reservation_heartbeat_interval()
+    bind = session.bind
+    if bind is None:
+        raise RuntimeError("authentication session has no database bind")
+
+    async def heartbeat() -> None:
+        while True:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                pass
+            try:
+                async with AsyncSession(bind=bind, expire_on_commit=False) as heartbeat_session:
+                    if not await AuthLockoutService.renew_verification_async(
+                        heartbeat_session,
+                        identity,
+                        reservation,
+                    ):
+                        return
+            except Exception as error:  # noqa: BLE001
+                logger.warning(
+                    "Authentication verification lease heartbeat failed",
+                    extra={"error_type": type(error).__name__},
+                )
+
+    task = asyncio.create_task(heartbeat(), name="proxbox-auth-lease-heartbeat")
+    try:
+        yield
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def is_locked_out_async(
@@ -132,7 +223,21 @@ async def check_auth_header_with_session_async(  # noqa: C901
         await session.rollback()
         return False, _CAPACITY_MESSAGE
 
-    verified = await ApiKey.verify_any_async(session, api_key)
+    try:
+        async with _verification_lease_heartbeat_async(session, identity, reservation):
+            verified = await ApiKey.verify_any_async(
+                session,
+                api_key,
+                max_active_keys=resolved_policy.max_active_keys,
+            )
+    except ApiKeyVerificationLimitError:
+        await session.rollback()
+        await AuthLockoutService.cancel_verification_async(session, identity, reservation)
+        return False, _CAPACITY_MESSAGE
+    except BaseException:
+        await session.rollback()
+        await AuthLockoutService.cancel_verification_async(session, identity, reservation)
+        raise
     await session.rollback()
     finalized = await AuthLockoutService.finalize_verification_async(
         session,
@@ -239,7 +344,21 @@ def check_auth_header_with_session(  # noqa: C901
         session.rollback()
         return False, _CAPACITY_MESSAGE
 
-    verified = ApiKey.verify_any(session, api_key)
+    try:
+        with _verification_lease_heartbeat(session, identity, reservation):
+            verified = ApiKey.verify_any(
+                session,
+                api_key,
+                max_active_keys=resolved_policy.max_active_keys,
+            )
+    except ApiKeyVerificationLimitError:
+        session.rollback()
+        AuthLockoutService.cancel_verification(session, identity, reservation)
+        return False, _CAPACITY_MESSAGE
+    except BaseException:
+        session.rollback()
+        AuthLockoutService.cancel_verification(session, identity, reservation)
+        raise
     session.rollback()
     finalized = AuthLockoutService.finalize_verification(
         session,

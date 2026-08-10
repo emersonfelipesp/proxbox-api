@@ -41,20 +41,46 @@ O nginx encerra HTTPS usando certificados [mkcert](https://github.com/FiloSottil
 ```bash
 docker pull emersonfelipesp/proxbox-api:latest-nginx
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
-  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
-Esse valor de ambiente e a unica politica de confianca que permite a aplicacao
-usar `X-Forwarded-For` do nginx para rate limit e bloqueio por cliente. Defina-o
-somente quando a porta Uvicorn em loopback nao puder ser acessada por processos
-locais nao confiaveis; caso contrario, omita-o e as requisicoes serao agrupadas
-conservadoramente pelo peer de transporte nginx. O proprio Uvicorn nunca
-reescreve o peer no escopo.
+O entrypoint nginx de proposito unico sempre adiciona `127.0.0.1/32` no inicio
+da politica de confianca da aplicacao. Assim, seu listener Uvicorn somente em
+loopback e confiavel por padrao, e o `X-Forwarded-For` do nginx cria buckets
+independentes de rate limit e bloqueio por cliente. O proprio Uvicorn nunca
+reescreve o peer no escopo. Valores adicionais em `PROXBOX_TRUSTED_PROXIES` sao
+aditivos e devem identificar somente proxies upstream realmente confiaveis.
 
 URL do servico:
 
 - <https://127.0.0.1:8443> (autoassinado, confiavel no host do container)
+
+#### Proxy reverso externo
+
+As imagens raw e Granian nao confiam em nenhum proxy por padrao. Coloque a
+aplicacao em rede privada, configure `PROXBOX_TRUSTED_PROXIES` com a rede ou o
+endereco exato do proxy e nao publique a porta da aplicacao:
+
+```bash
+docker network create --subnet 172.30.0.0/24 proxbox-private
+docker run -d --name proxbox-api --network proxbox-private \
+  -e PROXBOX_TRUSTED_PROXIES=172.30.0.0/24 \
+  emersonfelipesp/proxbox-api:latest
+```
+
+O location do nginx externo deve preservar a cadeia:
+
+```nginx
+location / {
+    proxy_pass http://proxbox-api:8000;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Use uma sub-rede privada sem conflito, adequada ao deployment. Nunca confie em
+uma faixa publica/de clientes e nunca exponha a porta da aplicacao fora do proxy
+confiavel. O entrypoint Uvicorn distribuido mantem `--no-proxy-headers` para que
+a aplicacao valide o peer de transporte antes de aceitar o header.
 
 #### Conectando netbox-proxbox a imagem nginx
 
@@ -111,7 +137,7 @@ Comuns a todas as imagens, incluindo as variantes experimentais PyO3/Rust:
 |----------|--------|-----------|
 | `PORT` | `8000` | Porta em que o servidor escuta |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Endereco ao qual o servidor faz bind. Use `::` para dual-stack IPv4 + IPv6. Respeitado pelas imagens `raw` e `granian`; a imagem `nginx` escuta em ambas as pilhas incondicionalmente. |
-| `PROXBOX_TRUSTED_PROXIES` | — | CIDRs no nivel da aplicacao autorizados a fornecer `X-Forwarded-For`. O preprocessamento do Uvicorn fica desabilitado. Na imagem nginx, use `127.0.0.1` somente quando a porta Uvicorn em loopback estiver protegida de callers locais nao confiaveis. |
+| `PROXBOX_TRUSTED_PROXIES` | vazio em raw/Granian; nginx adiciona `127.0.0.1/32` | CIDRs no nivel da aplicacao autorizados a fornecer `X-Forwarded-For`. O preprocessamento do Uvicorn fica desabilitado. A imagem nginx distribuida protege e confia em seu hop Uvicorn loopback; proxies externos devem ser listados explicitamente e ser os unicos callers capazes de alcancar a porta da aplicacao. |
 
 Especificas do mkcert (apenas para as imagens `nginx` e `granian`):
 
@@ -126,7 +152,6 @@ Exemplo com SANs extras:
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-tls \
   -e MKCERT_EXTRA_NAMES='myhost.local,192.168.1.10' \
-  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
@@ -140,7 +165,6 @@ nenhuma flag especial.
 
 ```bash
 docker run -d -p 8443:8000 --name proxbox-api-nginx \
-  -e PROXBOX_TRUSTED_PROXIES=127.0.0.1 \
   -v ./certs:/certs:ro \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
@@ -162,8 +186,6 @@ services:
     restart: unless-stopped
     ports:
       - "8443:8000"
-    environment:
-      PROXBOX_TRUSTED_PROXIES: 127.0.0.1
     volumes:
       - ./certs:/certs:ro
 ```

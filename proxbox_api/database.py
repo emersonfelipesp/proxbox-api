@@ -1289,6 +1289,10 @@ class ApiKeyBootstrapConflict(RuntimeError):
     """A first-key bootstrap lost the durable database claim."""
 
 
+class ApiKeyVerificationLimitError(RuntimeError):
+    """The active key set exceeds the bounded per-request bcrypt scan."""
+
+
 class ApiKeyBootstrapClaim(SQLModel, table=True):
     """Permanent singleton proving that public key bootstrap was consumed."""
 
@@ -1392,8 +1396,25 @@ class ApiKey(SQLModel, table=True):
         return obj
 
     @staticmethod
-    def verify_any(session: Session, provided_key: str) -> bool:
-        for row in session.exec(select(ApiKey).where(ApiKey.is_active == True)):  # noqa: E712
+    def verify_any(
+        session: Session,
+        provided_key: str,
+        *,
+        max_active_keys: int,
+    ) -> bool:
+        rows = list(
+            session.exec(
+                select(ApiKey)
+                .where(ApiKey.is_active == True)  # noqa: E712
+                .order_by(ApiKey.id)
+                .limit(max_active_keys + 1)
+            ).all()
+        )
+        if len(rows) > max_active_keys:
+            raise ApiKeyVerificationLimitError(
+                "active API key count exceeds PROXBOX_AUTH_MAX_ACTIVE_KEYS"
+            )
+        for row in rows:
             try:
                 if bcrypt.checkpw(provided_key.encode(), row.key_hash.encode()):
                     return True
@@ -1402,10 +1423,25 @@ class ApiKey(SQLModel, table=True):
         return False
 
     @staticmethod
-    async def verify_any_async(session: AsyncSession, provided_key: str) -> bool:
-        result = await session.exec(select(ApiKey).where(ApiKey.is_active == True))  # noqa: E712
+    async def verify_any_async(
+        session: AsyncSession,
+        provided_key: str,
+        *,
+        max_active_keys: int,
+    ) -> bool:
+        result = await session.exec(
+            select(ApiKey)
+            .where(ApiKey.is_active == True)  # noqa: E712
+            .order_by(ApiKey.id)
+            .limit(max_active_keys + 1)
+        )
+        rows = list(result.all())
+        if len(rows) > max_active_keys:
+            raise ApiKeyVerificationLimitError(
+                "active API key count exceeds PROXBOX_AUTH_MAX_ACTIVE_KEYS"
+            )
         provided = provided_key.encode()
-        for row in result:
+        for row in rows:
             try:
                 if await asyncio.to_thread(bcrypt.checkpw, provided, row.key_hash.encode()):
                     return True

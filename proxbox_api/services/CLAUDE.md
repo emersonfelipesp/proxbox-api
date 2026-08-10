@@ -30,13 +30,13 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   rows into a durable aggregate counter. Rejection converts the consumed token
   to failure state. Same-credential cohort completions coalesce the credential
   transition, but every consumed rejection advances source-abuse accounting.
-  Missing-key requests allocate no credential row, IPv6 sources aggregate at
-  `/64`, and each source has bounded distinct credential commitments.
-  Credential/source failure rows use independent bounded partitions, and active
-  reservations commit future slots. A saturated partition first evicts its
-  stalest safe expired row; one globally serialized, per-source verification
-  lane preserves valid-key admission when unauthenticated identities fill the
-  partitions. The service persists
+  Missing-key requests allocate no credential row and IPv6 sources aggregate at
+  `/64`. Credential/source failure rows use independent bounded partitions.
+  Failure-row saturation never controls admission: all requests remain inside
+  the same per-source/global verification pool. A saturated partition first
+  evicts its stalest safe expired row; an unpersistable rejection fails closed
+  and advances bounded aggregate accounting. Reservation owners renew a fixed
+  lease while bcrypt is live, and each request has a bounded active-key scan. The service persists
   label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
   inspection/clear selectors. Startup pins the validated HMAC generation in
   memory; do not re-read a mutable key source on request paths.

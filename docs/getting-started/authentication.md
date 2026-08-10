@@ -136,9 +136,11 @@ different key used from the same worker, reverse proxy, or client IP. A separate
 deliberately higher source-abuse threshold still blocks every key from that
 source when exhausted. Sync and async authentication share the same state
 service. Before bcrypt, each request inserts an independent
-durable reservation row with an unguessable token and its own expiry. The row
-consumes the per-credential, per-source, and global verification-concurrency
-capacity. After bcrypt, an atomic token-scoped delete finalizes that exact row
+durable reservation row with an unguessable owner token and a renewable
+60-second lease. While bcrypt is running, an owner heartbeat extends that exact
+token; the row therefore continues to consume per-credential, per-source, and
+global verification capacity even when verification lasts longer than one
+lease. After bcrypt, an atomic token-scoped delete finalizes that exact row
 once: a rejected key converts it to credential/source failure state in the same
 transaction, while an accepted key records no failure. Duplicate finalization
 cannot consume another request's reservation. Concurrent valid traffic therefore
@@ -155,10 +157,10 @@ key burst from immediately re-arming an expired credential lockout, while the
 source threshold still places a hard bound on attacker bcrypt work. A later
 request admitted after that transition counts normally.
 
-An abandoned crash token expires after at least 60 seconds (or the longer
-configured lockout window). Once expired it stops consuming concurrency
-capacity. Its row remains available for exactly-once late finalization for one
-hour after expiry and is counted by the orphan-reservation metric. Older rows are
+An abandoned crash token expires 60 seconds after its owner stops renewing it.
+Only then does it stop consuming concurrency capacity. Its row remains available
+for exactly-once late finalization for one hour after expiry and is counted by
+the orphan-reservation metric. Older rows are
 compacted into a durable aggregate counter, bounding storage; reservation and
 finalization paths both enforce this horizon, so a finalizer beyond it is ignored
 even when no newer request has run compaction. One orphan cannot extend the
@@ -168,23 +170,17 @@ deliberately higher than the per-credential default. Missing-key requests
 advance only that source budget and never allocate credential-partition rows.
 IPv6 sources are grouped by `/64` for lockout and rate-limit accounting, while
 IPv4 remains per address. Durable failure rows are split into independently
-bounded credential and source partitions, and one source can commit at most its
-source-threshold number of distinct credential identities. Expired failure
-windows are pruned. Active reservations commit future partition slots, so
-concurrent unseen identities cannot overbook the failure-row budget before
-bcrypt completes.
+bounded credential and source partitions. Expired failure windows are pruned.
 
 When a partition is full, admission first evicts its stalest expired row only
-if no pending reservation references that row. A single globally bounded
-verification lane remains available for an unseen credential when no safe
-durable failure slot exists. Successful credentials therefore remain usable
-after unauthenticated row saturation; a rejected lane request is still charged
-to every durable budget that can be represented. The lane permits only one
-active request globally and one per source, is released or expires like every
-other reservation, and does not bypass an existing credential/source lockout or
-the normal per-source concurrency limit. Other capacity pressure fails closed
-with the capacity response, and aggregate counters retain evidence without
-evicting a live pre-lockout budget.
+if no pending reservation references that row. Failure-row saturation does not
+create a separate first-come verification lane: unseen sources participate in
+the same atomic per-source and global pool as every other request, so row
+pressure cannot add work above the declared global cap or monopolize a single
+fallback token. A rejected verification that cannot obtain a durable bucket
+returns a fail-closed result for that request and increments bounded aggregate,
+label-free accounting without evicting a live pre-lockout budget. Existing
+durable lockouts remain authoritative.
 
 - Default threshold: 5 failed attempts (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, range 1-100)
 - Default source budget: 50 failed attempts (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, range 1-100000)
@@ -194,6 +190,11 @@ evicting a live pre-lockout budget.
   (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, range 1-1024)
 - Maximum concurrent verifications across all workers and identities: 256
   (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, range 1-4096)
+- Maximum active API-key hashes examined by one request: 32
+  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, range 1-1024). If the database contains more
+  active keys than this bound, authentication fails closed with the temporary
+  capacity response before bcrypt runs. Temporarily raise the bound, retire
+  excess keys, and then restore the intended value.
 - An opaque identity key is atomically generated in the private sibling
   `database.db.auth-lockout.key` file by default. Creation flushes and fsyncs a
   same-directory temporary file, replaces the final path, and fsyncs the parent
@@ -208,11 +209,17 @@ evicting a live pre-lockout budget.
   identities in that worker; recovery or rotation requires the offline procedure
   followed by a controlled restart.
 - `PROXBOX_TRUSTED_PROXIES` explicitly controls which peer CIDRs may supply
-  `X-Forwarded-For`. No address, including localhost, is trusted implicitly.
-  Trusted proxies do not bypass authentication or lockout. Uvicorn must run
+  `X-Forwarded-For`. Outside the bundled nginx image, no address, including
+  localhost, is trusted implicitly. Trusted proxies do not bypass authentication
+  or lockout. Uvicorn must run
   with proxy-header processing disabled (`--no-proxy-headers`); the shipped raw
   and nginx-backed entrypoints already enforce this so the application receives
-  the real transport peer before applying this allowlist. Granian does not
+  the real transport peer before applying this allowlist. The single-purpose
+  nginx image always prepends `127.0.0.1/32` to this setting because its internal
+  nginx hop is the only process that can reach loopback Uvicorn. Raw/Granian
+  deployments behind an external reverse proxy must explicitly list the exact
+  proxy peer CIDRs and keep the application port inaccessible to untrusted
+  callers. Granian does not
   rewrite forwarded headers unless an application wrapper is explicitly added;
   the shipped Granian entrypoint does not add one.
 

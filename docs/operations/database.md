@@ -57,8 +57,9 @@ is never interpreted as "migration not needed," and the required post-schema
 Authentication concurrency and failure history use separate versioned tables:
 
 - `auth_lockout_reservations` stores one durable token per admitted bcrypt
-  verification, with independent credential/source IDs and expiry. Expired
-  crash tokens no longer consume capacity, remain observable through
+  verification, with independent credential/source IDs and a renewable owner
+  lease. A live verifier renews its token; 60 seconds after renewal stops, a
+  crash token expires and no longer consumes capacity. Expired tokens remain observable through
   `proxbox_auth_expired_orphan_reservations`, and can be consumed exactly once by
   a late finalizer for one hour after expiry. Older tokens are compacted into
   `proxbox_auth_orphan_compactions_total`, bounding storage; both admission and
@@ -70,11 +71,10 @@ Authentication concurrency and failure history use separate versioned tables:
   A token never releases or extends another reservation.
 - `auth_lockout_buckets` stores rejected credential/source history. Missing-key
   traffic creates only a source row; IPv6 sources aggregate at `/64`. Its
-  bounded row budget is split into credential and source partitions, with
-  per-source distinct credential commitments capped by the source threshold.
-  Active reservations commit future slots. A full partition evicts its stalest
-  safe expired row, while one globally serialized, per-source verification lane
-  preserves valid-key admission after unauthenticated row saturation.
+  bounded row budget is split into credential and source partitions. Admission
+  remains in the normal per-source/global pool even when no failure row is
+  available. A full partition evicts its stalest safe expired row; an
+  unpersistable rejection fails closed and advances bounded aggregate metrics.
 - `auth_lockout_metrics` stores durable label-free counters. The metrics surface
   also derives current bucket rows, unexpired in-flight reservations, and
   expired orphan reservations without source, credential, or token labels; its

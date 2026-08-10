@@ -46,6 +46,10 @@ The `Dockerfile` at the repo root uses five stages:
 - Raw and nginx-backed Uvicorn launch with `--no-proxy-headers`; Granian has no
   forwarded-header wrapper. Preserve this so the application receives the real
   transport peer and applies `PROXBOX_TRUSTED_PROXIES` itself.
+- The single-purpose nginx entrypoint always prepends `127.0.0.1/32` to
+  `PROXBOX_TRUSTED_PROXIES`; its protected loopback Uvicorn hop must remain the
+  only application peer inside that image. Raw/Granian deployments default to
+  no trusted proxies and must list external proxy peers explicitly.
 - `supervisor/proxbox.conf` runs `uvicorn proxbox_api.main:app` — update this if the ASGI entry point changes.
 - Both runtime-base stages set the internal fallback
   `PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db` and declare `/data` as a

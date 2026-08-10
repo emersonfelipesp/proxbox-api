@@ -158,9 +158,9 @@ normal de chave desatualizada reative imediatamente um bloqueio expirado da
 credencial, enquanto o limite por origem mantém um limite rígido para o trabalho
 bcrypt de um atacante. Uma requisição posterior conta normalmente.
 
-Um token abandonado por crash expira após pelo menos 60 segundos (ou a janela
-maior configurada). Depois de expirado, ele deixa de consumir capacidade. A
-linha permanece disponível por uma hora para finalização tardia exatamente uma
+Um token abandonado por crash expira 60 segundos depois que seu owner para de
+renová-lo. Somente então ele deixa de consumir capacidade. A linha permanece
+disponível por uma hora para finalização tardia exatamente uma
 vez e entra na métrica de reservas órfãs. Linhas mais antigas são compactadas em
 contador agregado durável para limitar o armazenamento; os caminhos de reserva
 e finalização impõem esse horizonte, portanto um finalizador posterior é ignorado
@@ -171,20 +171,19 @@ padrão é deliberadamente maior que o limite por credencial. Requisições sem
 chave avançam somente esse orçamento por origem e nunca alocam linha na partição
 de credenciais. Origens IPv6 são agrupadas por `/64` para bloqueio e rate limit;
 IPv4 continua por endereço. As linhas duráveis de falha são divididas em
-partições independentes e limitadas de credencial e origem, e uma origem pode
-comprometer no máximo o número de identidades distintas definido por seu limite
-de origem. Janelas expiradas são removidas. Reservas ativas comprometem vagas
-futuras e impedem excesso concorrente antes do fim do bcrypt.
+partições independentes e limitadas de credencial e origem. Janelas expiradas
+são removidas.
 
 Quando uma partição fica cheia, a admissão remove primeiro sua linha expirada
-mais antiga somente se nenhuma reserva pendente a referencia. Uma única via de
-verificação, limitada globalmente, continua disponível para credencial
-desconhecida quando não há vaga durável segura. Credenciais válidas continuam
-usáveis após saturação não autenticada; uma rejeição nessa via ainda é cobrada
-em todo orçamento durável representável. A via permite somente uma requisição
-ativa globalmente e uma por origem, é liberada ou expira como qualquer reserva e
-não ignora bloqueio existente nem o limite concorrente normal por origem. Outra
-pressão de capacidade falha fechada e preserva os orçamentos vivos.
+mais antiga somente se nenhuma reserva pendente a referencia. A saturação das
+linhas de falha não cria uma via de verificação separada por ordem de chegada:
+origens novas participam do mesmo pool atômico por origem e global de todas as
+outras requisições. Assim, a pressão de linhas não adiciona trabalho acima do
+limite global declarado nem permite monopolizar um único token de fallback. Uma
+verificação recusada que não consegue obter um bucket durável falha fechada
+nessa requisição e incrementa uma contabilidade agregada, limitada e sem labels,
+sem remover um orçamento vivo anterior ao bloqueio. Bloqueios duráveis existentes
+continuam autoritativos.
 
 - Limite padrão: 5 falhas (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, intervalo 1-100)
 - Orçamento padrão por origem: 50 falhas (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, intervalo 1-100000)
@@ -194,6 +193,11 @@ pressão de capacidade falha fechada e preserva os orçamentos vivos.
   (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, intervalo 1-1024)
 - Máximo de verificações concorrentes entre todos os workers e identidades: 256
   (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, intervalo 1-4096)
+- Máximo de hashes de chaves de API ativas examinados por uma requisição: 32
+  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, intervalo 1-1024). Se o banco contiver mais
+  chaves ativas que esse limite, a autenticação falha fechada com a resposta
+  temporária de capacidade antes do bcrypt. Aumente temporariamente o limite,
+  desative as chaves excedentes e restaure o valor desejado.
 - Por padrão, uma chave opaca é criada atomicamente no arquivo privado irmão
   `database.db.auth-lockout.key`. A criação descarrega e sincroniza um arquivo
   temporário no mesmo diretório, substitui o caminho final e sincroniza o
@@ -208,11 +212,17 @@ pressão de capacidade falha fechada e preserva os orçamentos vivos.
   recovery ou rotação exige o procedimento offline seguido de restart
   controlado.
 - `PROXBOX_TRUSTED_PROXIES` define explicitamente quais CIDRs de peer podem
-  fornecer `X-Forwarded-For`. Nenhum endereço, inclusive localhost, é confiável
-  implicitamente. Proxies confiáveis não ignoram autenticação nem bloqueio. O
+  fornecer `X-Forwarded-For`. Fora da imagem nginx distribuída, nenhum endereço,
+  inclusive localhost, é confiável implicitamente. Proxies confiáveis não
+  ignoram autenticação nem bloqueio. O
   Uvicorn deve executar com processamento de proxy headers desabilitado
   (`--no-proxy-headers`); os entrypoints raw e com nginx já impõem isso para que
-  a aplicação receba o peer de transporte real antes da allowlist. O Granian só
+  a aplicação receba o peer de transporte real antes da allowlist. A imagem
+  nginx de propósito único sempre adiciona `127.0.0.1/32` no início dessa
+  configuração, pois seu nginx interno é o único processo que alcança o Uvicorn
+  em loopback. Deployments raw/Granian atrás de proxy reverso externo devem
+  listar explicitamente os CIDRs exatos dos peers proxy e impedir acesso não
+  confiável à porta da aplicação. O Granian só
   reescreve headers encaminhados com wrapper explícito, que o entrypoint
   distribuído não adiciona.
 
