@@ -46,7 +46,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
   inspection/clear selectors. Startup pins the validated HMAC generation in
   memory; do not re-read a mutable key source on request paths.
-- `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models.
+- `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models. VM config validation uses copy-on-write normalization for blank optional booleans and for integer/float values returned for optional string fields (including aliases), while preserving booleans and required string fields; this keeps QEMU values such as numeric `memory` compatible with the generated response contracts without changing upstream payloads.
 - `packer_preflight.py`: endpoint-scoped Cloud Image Pipeline readiness checks.
   It accepts one already-resolved Proxmox session, performs only GET calls for
   node status, provider-derived storage capabilities, and VMID availability,
