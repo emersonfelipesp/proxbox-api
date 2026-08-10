@@ -61,14 +61,19 @@ Authentication concurrency and failure history use separate versioned tables:
   crash tokens no longer consume capacity, remain observable through
   `proxbox_auth_expired_orphan_reservations`, and can be consumed exactly once by
   a late finalizer for one hour after expiry. Older tokens are compacted into
-  `proxbox_auth_orphan_compactions_total`, bounding storage. The atomic global
-  ceiling also prevents distinct source/key pairs from bypassing bcrypt resource
-  control. A token never releases or extends another reservation.
+  `proxbox_auth_orphan_compactions_total`, bounding storage; both admission and
+  finalization enforce that horizon. Overlapping rejected verifications for the
+  same composite credential advance failure state once while every rejection
+  remains visible in the aggregate failure counter. The atomic global ceiling
+  also prevents distinct source/key pairs from bypassing bcrypt resource control.
+  A token never releases or extends another reservation.
 - `auth_lockout_buckets` stores only rejected-credential history. Its bounded
   row budget is split into independent credential and source partitions. A full
-  failure-row partition never prevents bcrypt or acceptance of a valid unseen
-  key; rejected identities that cannot be persisted still increment aggregate
-  failure and capacity-rejection counters.
+  partition counts one future row commitment for each distinct identity in
+  retained reservations, then evicts its stalest expired row only when no
+  pending reservation references it. If no safe row is available, an unseen
+  identity is denied before bcrypt and increments the aggregate
+  capacity-rejection counter.
 - `auth_lockout_metrics` stores durable label-free counters. The metrics surface
   also derives current bucket rows, unexpired in-flight reservations, and
   expired orphan reservations without source, credential, or token labels; its

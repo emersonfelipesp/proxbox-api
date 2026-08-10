@@ -149,22 +149,35 @@ requisição. Assim, tráfego válido concorrente não cria bloqueio. Capacidade
 esgotada retorna HTTP 503 com `Retry-After: 1` ou fecha o WebSocket com código
 1013, sem consumir tentativa.
 
+Verificações recusadas da mesma credencial composta que foram admitidas antes
+da conclusão de um membro anterior do mesmo grupo continuam entrando na métrica
+agregada de falhas, mas somente a primeira conclusão avança os buckets duráveis
+de credencial e origem. Essa coalescência causal funciona entre workers e impede
+que fan-out do dashboard reative imediatamente um bloqueio expirado. Uma
+requisição posterior, admitida depois da transição, conta normalmente; identidades
+de credencial diferentes ainda avançam independentemente o orçamento compartilhado
+de abuso por origem.
+
 Um token abandonado por crash expira após pelo menos 60 segundos (ou a janela
 maior configurada). Depois de expirado, ele deixa de consumir capacidade. A
 linha permanece disponível por uma hora para finalização tardia exatamente uma
 vez e entra na métrica de reservas órfãs. Linhas mais antigas são compactadas em
-contador agregado durável para limitar o armazenamento; finalizador além desse
-horizonte documentado é ignorado. Uma reserva órfã não estende a expiração de
-outro token vivo nem libera trabalho mais novo. Um segundo
+contador agregado durável para limitar o armazenamento; os caminhos de reserva
+e finalização impõem esse horizonte, portanto um finalizador posterior é ignorado
+mesmo sem uma requisição mais nova para executar a compactação. Uma reserva órfã
+não estende a expiração de outro token vivo nem libera trabalho mais novo. Um segundo
 orçamento durável por origem limita ataques que rotacionam
 credenciais; seu padrão é deliberadamente maior que o limite por credencial. As
 linhas duráveis de falha são divididas em partições independentes e limitadas de
-credencial e origem. Janelas de falha expiradas são removidas, mas saturação
-nunca impede o bcrypt de uma chave válida e ainda desconhecida, porque reservas
-não dependem de linha de falha. Uma chave recusada continua negada quando uma
-partição não admite a nova identidade; a identidade não persistida entra nos
-contadores agregados de falha e capacidade de linhas, sem remover outro
-orçamento pré-bloqueio vivo.
+credencial e origem. Janelas de falha expiradas são removidas. Quando uma
+Cada identidade distinta em uma reserva retida também compromete sua futura vaga
+na partição, impedindo que identidades desconhecidas concorrentes excedam o
+orçamento de linhas antes do fim do bcrypt. Quando uma partição fica cheia, a
+admissão remove primeiro sua linha expirada mais antiga somente se nenhuma
+reserva pendente a referencia. Se a identidade continua desconhecida e todas as
+linhas permanecem vivas ou reservadas, a autenticação falha fechada antes do
+bcrypt com a resposta de capacidade, sem remover outro orçamento pré-bloqueio
+vivo.
 
 - Limite padrão: 5 falhas (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, intervalo 1-100)
 - Orçamento padrão por origem: 50 falhas (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, intervalo 1-100000)
@@ -175,7 +188,9 @@ orçamento pré-bloqueio vivo.
 - Máximo de verificações concorrentes entre todos os workers e identidades: 256
   (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, intervalo 1-4096)
 - Por padrão, uma chave opaca é criada atomicamente no arquivo privado irmão
-  `database.db.auth-lockout.key`. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` pode fornecer
+  `database.db.auth-lockout.key`. A criação descarrega e sincroniza um arquivo
+  temporário no mesmo diretório, substitui o caminho final e sincroniza o
+  diretório pai antes de continuar o startup. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` pode fornecer
   um valor explícito com 32 bytes ou mais. Mantenha a fonte estável entre
   reinícios e separada da chave rotacionável de criptografia.
 - O startup grava fingerprint não secreto e geração no SQLite. Depois do bind,

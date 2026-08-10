@@ -146,21 +146,34 @@ cannot manufacture a lockout. Exhausted verification capacity returns HTTP 503
 with `Retry-After: 1` or WebSocket close code 1013; it does not consume a failure
 attempt.
 
+Rejected verifications for the same composite credential that were all admitted
+before an earlier member of that cohort completed are still counted in the
+aggregate failure metric, but only the first completion advances the durable
+credential and source failure buckets. This causal coalescing works across
+workers and prevents dashboard fan-out from immediately re-arming an expired
+lockout. A later request admitted after that transition counts normally, and
+different credential identities still advance the shared source-abuse budget
+independently.
+
 An abandoned crash token expires after at least 60 seconds (or the longer
 configured lockout window). Once expired it stops consuming concurrency
 capacity. Its row remains available for exactly-once late finalization for one
 hour after expiry and is counted by the orphan-reservation metric. Older rows are
-compacted into a durable aggregate counter, bounding storage; a finalizer beyond
-that documented horizon is ignored. One orphan cannot extend the expiry of
-another live token or release newer work.
+compacted into a durable aggregate counter, bounding storage; reservation and
+finalization paths both enforce this horizon, so a finalizer beyond it is ignored
+even when no newer request has run compaction. One orphan cannot extend the
+expiry of another live token or release newer work.
 A second durable source budget bounds attacks that rotate credentials; it is
 deliberately higher than the per-credential default. Durable failure rows are
 split into independently bounded credential and source partitions. Expired
-failure windows are pruned, but saturation never prevents bcrypt for a valid,
-previously unseen key because reservations do not require a failure row. A
-rejected key is still denied when either partition cannot admit its new identity;
-the unpersisted identity is included in aggregate failure and row-capacity
-counters rather than evicting another live pre-lockout budget.
+failure windows are pruned. Each distinct identity in a retained reservation
+also commits its future partition slot, so concurrent unseen identities cannot
+overbook the failure-row budget before bcrypt completes. When a partition is
+full, admission first evicts its stalest expired row only if no pending
+reservation references that row. If the identity is still unseen and every row
+remains live or reserved, authentication fails closed before bcrypt with the
+capacity response; aggregate capacity counters retain evidence without evicting
+a live pre-lockout budget.
 
 - Default threshold: 5 failed attempts (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, range 1-100)
 - Default source budget: 50 failed attempts (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, range 1-100000)
@@ -171,7 +184,9 @@ counters rather than evicting another live pre-lockout budget.
 - Maximum concurrent verifications across all workers and identities: 256
   (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, range 1-4096)
 - An opaque identity key is atomically generated in the private sibling
-  `database.db.auth-lockout.key` file by default. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`
+  `database.db.auth-lockout.key` file by default. Creation flushes and fsyncs a
+  same-directory temporary file, replaces the final path, and fsyncs the parent
+  directory before startup continues. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`
   can supply an explicit 32-byte-or-longer value instead. Keep either source
   stable across restarts and separate from rotatable credential encryption.
 - Startup records a non-secret fingerprint and generation in SQLite. Once bound,

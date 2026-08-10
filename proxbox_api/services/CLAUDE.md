@@ -26,11 +26,15 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   storing keys or dictionary-testable fingerprints; inserts one durable
   per-token reservation before bcrypt; and gives each row its own expiry.
   Expired crash rows stop consuming capacity and remain eligible for exactly-once
-  late finalization for one hour; older rows compact into a durable aggregate
-  counter. Rejection converts the consumed token to
-  failure state. Credential/source failure rows use independent bounded
-  partitions, so saturation never blocks bcrypt for a valid unseen key and
-  unpersisted rejected identities remain aggregate-counted. The service persists
+  late finalization for one hour; admission and finalization both compact older
+  rows into a durable aggregate counter. Rejection converts the consumed token
+  to failure state, while rejected reservations for the same credential that
+  overlap an earlier transition coalesce into one credential/source state
+  advance. Credential/source failure rows use independent bounded partitions,
+  and retained reservations commit one future slot per distinct identity. A
+  saturated partition first evicts its stalest expired row with no pending
+  reservation, then denies an unseen identity before bcrypt when no safe slot
+  exists. The service persists
   label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
   inspection/clear selectors. Startup pins the validated HMAC generation in
   memory; do not re-read a mutable key source on request paths.

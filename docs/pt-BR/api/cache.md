@@ -117,7 +117,7 @@ proxbox_auth_verifications_in_flight 2
 | `max_bytes` | gauge | Máximo de bytes permitidos |
 | `ttl_seconds` | gauge | Configuração atual de TTL |
 | `oldest_entry_age_seconds` | gauge | Idade da entrada mais antiga |
-| `proxbox_auth_failures_total` | counter | Tentativas de autenticacao rejeitadas em todos os buckets |
+| `proxbox_auth_failures_total` | counter | Tentativas de autenticacao rejeitadas em todos os buckets, incluindo membros de um grupo concorrente coalescido |
 | `proxbox_auth_lockouts_total` | counter | Buckets de credencial que entraram em bloqueio |
 | `proxbox_auth_source_lockouts_total` | counter | Origens normalizadas que esgotaram o orçamento agregado de falhas |
 | `proxbox_auth_recoveries_total` | counter | Buckets limpos por operacoes explicitas de recovery local |

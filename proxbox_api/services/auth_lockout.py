@@ -334,16 +334,31 @@ def _read_identity_key_file(*, allow_create: bool) -> str:  # noqa: C901
                 raise LockoutConfigurationError(
                     f"{_IDENTITY_KEY_FILE_ENV} is missing for an already-bound database: {key_path}"
                 ) from None
+            temporary_path = key_path.with_name(f".{key_path.name}.{secrets.token_hex(16)}.tmp")
             create_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
             if hasattr(os, "O_NOFOLLOW"):
                 create_flags |= os.O_NOFOLLOW
-            created = os.open(key_path, create_flags, 0o600)
+            created: int | None = os.open(temporary_path, create_flags, 0o600)
             try:
-                os.write(created, secrets.token_urlsafe(48).encode("utf-8"))
-                os.fsync(created)
+                try:
+                    key_file = os.fdopen(created, "wb")
+                except BaseException:
+                    os.close(created)
+                    raise
+                created = None
+                with key_file:
+                    key_file.write(secrets.token_urlsafe(48).encode("utf-8"))
+                    key_file.flush()
+                    os.fsync(key_file.fileno())
+                os.replace(temporary_path, key_path)
+                _fsync_directory(key_path.parent)
             finally:
-                os.close(created)
-            _fsync_directory(key_path.parent)
+                if created is not None:
+                    os.close(created)
+                try:
+                    temporary_path.unlink()
+                except FileNotFoundError:
+                    pass
             descriptor = _open_private_regular_file(key_path)
         try:
             material = os.read(descriptor, 4097)
@@ -610,6 +625,8 @@ def _reserve_verification_statement(
     *,
     credential_bucket_id: str,
     source_bucket_id: str,
+    credential_quota: int,
+    source_quota: int,
     max_in_flight: int,
     max_global_in_flight: int,
     lease_seconds: int,
@@ -644,6 +661,36 @@ def _reserve_verification_statement(
         .where(reservations.expires_at > now)
         .scalar_subquery()
     )
+    credential_commitments = (
+        sa_select(buckets.bucket_id.label("bucket_id"))
+        .where(buckets.bucket_type == _CREDENTIAL_BUCKET)
+        .union(sa_select(reservations.credential_bucket_id.label("bucket_id")))
+        .subquery()
+    )
+    source_commitments = (
+        sa_select(buckets.bucket_id.label("bucket_id"))
+        .where(buckets.bucket_type == _SOURCE_BUCKET)
+        .union(sa_select(reservations.source_bucket_id.label("bucket_id")))
+        .subquery()
+    )
+    credential_commitment_count = (
+        sa_select(func.count()).select_from(credential_commitments).scalar_subquery()
+    )
+    source_commitment_count = (
+        sa_select(func.count()).select_from(source_commitments).scalar_subquery()
+    )
+    credential_commitment_exists = (
+        sa_select(func.count())
+        .select_from(credential_commitments)
+        .where(credential_commitments.c.bucket_id == credential_bucket_id)
+        .scalar_subquery()
+    )
+    source_commitment_exists = (
+        sa_select(func.count())
+        .select_from(source_commitments)
+        .where(source_commitments.c.bucket_id == source_bucket_id)
+        .scalar_subquery()
+    )
     active_locks = (
         select(func.count())
         .select_from(_lockout_table)
@@ -664,6 +711,11 @@ def _reserve_verification_statement(
         active_source < max_in_flight,
         active_global < max_global_in_flight,
         active_locks == 0,
+        or_(
+            credential_commitment_exists > 0,
+            credential_commitment_count < credential_quota,
+        ),
+        or_(source_commitment_exists > 0, source_commitment_count < source_quota),
     )
     return (
         sqlite_insert(_reservation_table)
@@ -696,7 +748,7 @@ def _consume_reservation_statement(
             columns.credential_bucket_id == credential_bucket_id,
             columns.source_bucket_id == source_bucket_id,
         )
-        .returning(columns.token)
+        .returning(columns.token, columns.created_at)
     )
 
 
@@ -711,12 +763,51 @@ def _compact_expired_reservations_statement(now: float):
     )
 
 
+def _reservation_reference_exists(bucket_id: Any):
+    reservations = _reservation_table.c
+    return (
+        sa_select(literal(1))
+        .select_from(_reservation_table)
+        .where(
+            or_(
+                reservations.credential_bucket_id == bucket_id,
+                reservations.source_bucket_id == bucket_id,
+            )
+        )
+        .exists()
+    )
+
+
 def _prune_expired_statement(policy: AuthLockoutPolicy, now: float):
     """Bound transient bucket growth using the configured inactivity window."""
 
     return delete(_lockout_table).where(
         _lockout_table.c.updated_at < now - policy.window_seconds,
+        ~_reservation_reference_exists(_lockout_table.c.bucket_id),
     )
+
+
+def _evict_stalest_expired_bucket_statement(
+    bucket_type: str,
+    policy: AuthLockoutPolicy,
+    now: float,
+):
+    """Evict one expired unreserved row without weakening a live failure budget."""
+
+    buckets = _lockout_table.c
+    candidate = (
+        select(buckets.bucket_id)
+        .where(
+            buckets.bucket_type == bucket_type,
+            buckets.window_started_at + policy.window_seconds <= now,
+            or_(buckets.locked_until.is_(None), buckets.locked_until <= now),
+            ~_reservation_reference_exists(buckets.bucket_id),
+        )
+        .order_by(buckets.updated_at.asc(), buckets.bucket_id.asc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    return delete(_lockout_table).where(buckets.bucket_id == candidate).returning(buckets.bucket_id)
 
 
 def _record_metrics_statement(
@@ -766,6 +857,15 @@ def _state_from_row(row: Sequence[Any]) -> LockoutState:
         window_started_at=float(window_started_at),
         locked_until=float(locked_until) if locked_until is not None else None,
         updated_at=float(updated_at),
+    )
+
+
+def _state_from_bucket(row: AuthLockout) -> LockoutState:
+    return LockoutState(
+        attempts=row.attempts,
+        window_started_at=row.window_started_at,
+        locked_until=row.locked_until,
+        updated_at=row.updated_at,
     )
 
 
@@ -823,6 +923,85 @@ class AuthLockoutService:
         )
 
     @staticmethod
+    def _compact_reservations_in_transaction(session: Session, now: float) -> int:
+        compacted = session.exec(cast(Any, _compact_expired_reservations_statement(now))).all()
+        if compacted:
+            session.exec(
+                cast(
+                    Any,
+                    _record_metrics_statement(
+                        now=now,
+                        orphan_compaction=len(compacted),
+                    ),
+                )
+            )
+        return len(compacted)
+
+    @staticmethod
+    async def _compact_reservations_in_transaction_async(
+        session: AsyncSession,
+        now: float,
+    ) -> int:
+        compacted = (
+            await session.exec(cast(Any, _compact_expired_reservations_statement(now)))
+        ).all()
+        if compacted:
+            await session.exec(
+                cast(
+                    Any,
+                    _record_metrics_statement(
+                        now=now,
+                        orphan_compaction=len(compacted),
+                    ),
+                )
+            )
+        return len(compacted)
+
+    @staticmethod
+    def _coalesced_failure_result(
+        session: Session,
+        identity: LockoutIdentity,
+        reservation_started_at: float,
+    ) -> FailureResult | None:
+        """Reuse a failure transition completed after this verification started."""
+
+        credential = AuthLockoutService.get(session, identity)
+        if credential is None or credential.updated_at <= reservation_started_at:
+            return None
+        source = AuthLockoutService.get_source(session, identity)
+        source_state = (
+            _state_from_bucket(source)
+            if source is not None
+            else LockoutState(0, reservation_started_at, None, reservation_started_at)
+        )
+        return FailureResult(
+            credential=_state_from_bucket(credential),
+            source=source_state,
+        )
+
+    @staticmethod
+    async def _coalesced_failure_result_async(
+        session: AsyncSession,
+        identity: LockoutIdentity,
+        reservation_started_at: float,
+    ) -> FailureResult | None:
+        """Async counterpart to :meth:`_coalesced_failure_result`."""
+
+        credential = await AuthLockoutService.get_async(session, identity)
+        if credential is None or credential.updated_at <= reservation_started_at:
+            return None
+        source = await AuthLockoutService.get_source_async(session, identity)
+        source_state = (
+            _state_from_bucket(source)
+            if source is not None
+            else LockoutState(0, reservation_started_at, None, reservation_started_at)
+        )
+        return FailureResult(
+            credential=_state_from_bucket(credential),
+            source=source_state,
+        )
+
+    @staticmethod
     def reserve_verification(
         session: Session,
         identity: LockoutIdentity,
@@ -834,25 +1013,16 @@ class AuthLockoutService:
         timestamp = time.time() if now is None else now
         reservation_token = secrets.token_hex(16)
         lease_seconds = max(policy.window_seconds, _MIN_RESERVATION_LEASE_SECONDS)
-        compacted = session.exec(
-            cast(Any, _compact_expired_reservations_statement(timestamp))
-        ).all()
-        if compacted:
-            session.exec(
-                cast(
-                    Any,
-                    _record_metrics_statement(
-                        now=timestamp,
-                        orphan_compaction=len(compacted),
-                    ),
-                )
-            )
+        AuthLockoutService._compact_reservations_in_transaction(session, timestamp)
+        credential_quota, source_quota = AuthLockoutService._partition_quotas(policy)
         admitted = session.exec(
             cast(
                 Any,
                 _reserve_verification_statement(
                     credential_bucket_id=identity.bucket_id,
                     source_bucket_id=identity.source_bucket_id,
+                    credential_quota=credential_quota,
+                    source_quota=source_quota,
                     max_in_flight=policy.max_in_flight,
                     max_global_in_flight=policy.max_global_in_flight,
                     lease_seconds=lease_seconds,
@@ -861,6 +1031,40 @@ class AuthLockoutService:
                 ),
             )
         ).first()
+        if admitted is None:
+            credential_capacity = AuthLockoutService._ensure_bucket_capacity_in_transaction(
+                session,
+                bucket_id=identity.bucket_id,
+                bucket_type=_CREDENTIAL_BUCKET,
+                policy=policy,
+                quota=credential_quota,
+                now=timestamp,
+            )
+            source_capacity = AuthLockoutService._ensure_bucket_capacity_in_transaction(
+                session,
+                bucket_id=identity.source_bucket_id,
+                bucket_type=_SOURCE_BUCKET,
+                policy=policy,
+                quota=source_quota,
+                now=timestamp,
+            )
+            if credential_capacity and source_capacity:
+                admitted = session.exec(
+                    cast(
+                        Any,
+                        _reserve_verification_statement(
+                            credential_bucket_id=identity.bucket_id,
+                            source_bucket_id=identity.source_bucket_id,
+                            credential_quota=credential_quota,
+                            source_quota=source_quota,
+                            max_in_flight=policy.max_in_flight,
+                            max_global_in_flight=policy.max_global_in_flight,
+                            lease_seconds=lease_seconds,
+                            reservation_token=reservation_token,
+                            now=timestamp,
+                        ),
+                    )
+                ).first()
         if admitted is None:
             if not AuthLockoutService.is_locked(session, identity, timestamp):
                 session.exec(
@@ -894,19 +1098,8 @@ class AuthLockoutService:
         timestamp = time.time() if now is None else now
         reservation_token = secrets.token_hex(16)
         lease_seconds = max(policy.window_seconds, _MIN_RESERVATION_LEASE_SECONDS)
-        compacted = (
-            await session.exec(cast(Any, _compact_expired_reservations_statement(timestamp)))
-        ).all()
-        if compacted:
-            await session.exec(
-                cast(
-                    Any,
-                    _record_metrics_statement(
-                        now=timestamp,
-                        orphan_compaction=len(compacted),
-                    ),
-                )
-            )
+        await AuthLockoutService._compact_reservations_in_transaction_async(session, timestamp)
+        credential_quota, source_quota = AuthLockoutService._partition_quotas(policy)
         admitted = (
             await session.exec(
                 cast(
@@ -914,6 +1107,8 @@ class AuthLockoutService:
                     _reserve_verification_statement(
                         credential_bucket_id=identity.bucket_id,
                         source_bucket_id=identity.source_bucket_id,
+                        credential_quota=credential_quota,
+                        source_quota=source_quota,
                         max_in_flight=policy.max_in_flight,
                         max_global_in_flight=policy.max_global_in_flight,
                         lease_seconds=lease_seconds,
@@ -923,6 +1118,44 @@ class AuthLockoutService:
                 )
             )
         ).first()
+        if admitted is None:
+            credential_capacity = (
+                await AuthLockoutService._ensure_bucket_capacity_in_transaction_async(
+                    session,
+                    bucket_id=identity.bucket_id,
+                    bucket_type=_CREDENTIAL_BUCKET,
+                    policy=policy,
+                    quota=credential_quota,
+                    now=timestamp,
+                )
+            )
+            source_capacity = await AuthLockoutService._ensure_bucket_capacity_in_transaction_async(
+                session,
+                bucket_id=identity.source_bucket_id,
+                bucket_type=_SOURCE_BUCKET,
+                policy=policy,
+                quota=source_quota,
+                now=timestamp,
+            )
+            if credential_capacity and source_capacity:
+                admitted = (
+                    await session.exec(
+                        cast(
+                            Any,
+                            _reserve_verification_statement(
+                                credential_bucket_id=identity.bucket_id,
+                                source_bucket_id=identity.source_bucket_id,
+                                credential_quota=credential_quota,
+                                source_quota=source_quota,
+                                max_in_flight=policy.max_in_flight,
+                                max_global_in_flight=policy.max_global_in_flight,
+                                lease_seconds=lease_seconds,
+                                reservation_token=reservation_token,
+                                now=timestamp,
+                            ),
+                        )
+                    )
+                ).first()
         if admitted is None:
             if not await AuthLockoutService.is_locked_async(session, identity, timestamp):
                 await session.exec(
@@ -960,6 +1193,7 @@ class AuthLockoutService:
         reservation_token = reservation.reservation_token
         if reservation_token is None:
             raise ValueError("verification reservation has no token")
+        AuthLockoutService._compact_reservations_in_transaction(session, timestamp)
         consumed = session.exec(
             cast(
                 Any,
@@ -971,12 +1205,22 @@ class AuthLockoutService:
             )
         ).first()
         if consumed is None:
-            session.rollback()
+            session.commit()
             return None
         if succeeded:
             session.commit()
             empty_state = LockoutState(0, timestamp, None, timestamp)
             return FailureResult(credential=empty_state, source=empty_state)
+        reservation_started_at = float(consumed[1])
+        coalesced = AuthLockoutService._coalesced_failure_result(
+            session,
+            identity,
+            reservation_started_at,
+        )
+        if coalesced is not None:
+            session.exec(cast(Any, _record_metrics_statement(now=timestamp, failure=1)))
+            session.commit()
+            return coalesced
         result, credential_persisted, source_persisted = (
             AuthLockoutService._record_failure_in_transaction(
                 session,
@@ -1011,6 +1255,7 @@ class AuthLockoutService:
         reservation_token = reservation.reservation_token
         if reservation_token is None:
             raise ValueError("verification reservation has no token")
+        await AuthLockoutService._compact_reservations_in_transaction_async(session, timestamp)
         consumed = (
             await session.exec(
                 cast(
@@ -1024,12 +1269,22 @@ class AuthLockoutService:
             )
         ).first()
         if consumed is None:
-            await session.rollback()
+            await session.commit()
             return None
         if succeeded:
             await session.commit()
             empty_state = LockoutState(0, timestamp, None, timestamp)
             return FailureResult(credential=empty_state, source=empty_state)
+        reservation_started_at = float(consumed[1])
+        coalesced = await AuthLockoutService._coalesced_failure_result_async(
+            session,
+            identity,
+            reservation_started_at,
+        )
+        if coalesced is not None:
+            await session.exec(cast(Any, _record_metrics_statement(now=timestamp, failure=1)))
+            await session.commit()
+            return coalesced
         (
             result,
             credential_persisted,
@@ -1113,15 +1368,85 @@ class AuthLockoutService:
         return credential_quota, source_quota
 
     @staticmethod
-    def _transient_failure_state(threshold: int, window_seconds: int, now: float) -> LockoutState:
-        """Represent a rejected attempt when its partition is saturated."""
+    def _capacity_lockout_state(threshold: int, window_seconds: int, now: float) -> LockoutState:
+        """Fail closed when no durable row can represent a new failure identity."""
 
         return LockoutState(
-            attempts=1,
+            attempts=threshold,
             window_started_at=now,
-            locked_until=now + window_seconds if threshold == 1 else None,
+            locked_until=now + window_seconds,
             updated_at=now,
         )
+
+    @staticmethod
+    def _ensure_bucket_capacity_in_transaction(
+        session: Session,
+        *,
+        bucket_id: str,
+        bucket_type: str,
+        policy: AuthLockoutPolicy,
+        quota: int,
+        now: float,
+    ) -> bool:
+        partition_rows = session.exec(
+            select(func.count())
+            .select_from(_lockout_table)
+            .where(_lockout_table.c.bucket_type == bucket_type)
+        ).one()
+        if int(partition_rows) < quota:
+            return True
+        exists = session.exec(
+            select(func.count())
+            .select_from(_lockout_table)
+            .where(_lockout_table.c.bucket_id == bucket_id)
+        ).one()
+        if exists:
+            return True
+        evicted = session.exec(
+            cast(
+                Any,
+                _evict_stalest_expired_bucket_statement(bucket_type, policy, now),
+            )
+        ).first()
+        return evicted is not None
+
+    @staticmethod
+    async def _ensure_bucket_capacity_in_transaction_async(
+        session: AsyncSession,
+        *,
+        bucket_id: str,
+        bucket_type: str,
+        policy: AuthLockoutPolicy,
+        quota: int,
+        now: float,
+    ) -> bool:
+        partition_rows = (
+            await session.exec(
+                select(func.count())
+                .select_from(_lockout_table)
+                .where(_lockout_table.c.bucket_type == bucket_type)
+            )
+        ).one()
+        if int(partition_rows) < quota:
+            return True
+        exists = (
+            await session.exec(
+                select(func.count())
+                .select_from(_lockout_table)
+                .where(_lockout_table.c.bucket_id == bucket_id)
+            )
+        ).one()
+        if exists:
+            return True
+        evicted = (
+            await session.exec(
+                cast(
+                    Any,
+                    _evict_stalest_expired_bucket_statement(bucket_type, policy, now),
+                )
+            )
+        ).first()
+        return evicted is not None
 
     @staticmethod
     def _record_bucket_in_transaction(
@@ -1136,26 +1461,22 @@ class AuthLockoutService:
         quota: int,
         now: float,
     ) -> tuple[LockoutState, bool]:
-        exists = session.exec(
-            select(func.count())
-            .select_from(_lockout_table)
-            .where(_lockout_table.c.bucket_id == bucket_id)
-        ).one()
-        if not exists:
-            partition_rows = session.exec(
-                select(func.count())
-                .select_from(_lockout_table)
-                .where(_lockout_table.c.bucket_type == bucket_type)
-            ).one()
-            if int(partition_rows) >= quota:
-                return (
-                    AuthLockoutService._transient_failure_state(
-                        threshold,
-                        policy.window_seconds,
-                        now,
-                    ),
-                    False,
-                )
+        if not AuthLockoutService._ensure_bucket_capacity_in_transaction(
+            session,
+            bucket_id=bucket_id,
+            bucket_type=bucket_type,
+            policy=policy,
+            quota=quota,
+            now=now,
+        ):
+            return (
+                AuthLockoutService._capacity_lockout_state(
+                    threshold,
+                    policy.window_seconds,
+                    now,
+                ),
+                False,
+            )
         row = session.exec(
             cast(
                 Any,
@@ -1186,30 +1507,22 @@ class AuthLockoutService:
         quota: int,
         now: float,
     ) -> tuple[LockoutState, bool]:
-        exists = (
-            await session.exec(
-                select(func.count())
-                .select_from(_lockout_table)
-                .where(_lockout_table.c.bucket_id == bucket_id)
+        if not await AuthLockoutService._ensure_bucket_capacity_in_transaction_async(
+            session,
+            bucket_id=bucket_id,
+            bucket_type=bucket_type,
+            policy=policy,
+            quota=quota,
+            now=now,
+        ):
+            return (
+                AuthLockoutService._capacity_lockout_state(
+                    threshold,
+                    policy.window_seconds,
+                    now,
+                ),
+                False,
             )
-        ).one()
-        if not exists:
-            partition_rows = (
-                await session.exec(
-                    select(func.count())
-                    .select_from(_lockout_table)
-                    .where(_lockout_table.c.bucket_type == bucket_type)
-                )
-            ).one()
-            if int(partition_rows) >= quota:
-                return (
-                    AuthLockoutService._transient_failure_state(
-                        threshold,
-                        policy.window_seconds,
-                        now,
-                    ),
-                    False,
-                )
         row = (
             await session.exec(
                 cast(
@@ -1521,7 +1834,7 @@ def get_auth_lockout_prometheus_metrics(session: Session, now: float | None = No
         "# HELP proxbox_auth_recoveries_total Total lockout buckets cleared",
         "# TYPE proxbox_auth_recoveries_total counter",
         f"proxbox_auth_recoveries_total {metrics['proxbox_auth_recoveries_total']}",
-        "# HELP proxbox_auth_capacity_rejections_total Verification admissions rejected or failed identities dropped by bounded capacity",
+        "# HELP proxbox_auth_capacity_rejections_total Verification admissions or failure-row writes rejected by bounded capacity",
         "# TYPE proxbox_auth_capacity_rejections_total counter",
         f"proxbox_auth_capacity_rejections_total {metrics['proxbox_auth_capacity_rejections_total']}",
         "# HELP proxbox_auth_orphan_compactions_total Expired reservation tokens compacted after the supported finalization horizon",

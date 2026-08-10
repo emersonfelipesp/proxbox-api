@@ -63,14 +63,19 @@ separadas:
   `proxbox_auth_expired_orphan_reservations` e podem ser consumidos exatamente
   uma vez por finalizador tardio durante uma hora depois da expiracao. Tokens
   mais antigos sao compactados em `proxbox_auth_orphan_compactions_total`,
-  limitando armazenamento. O teto global atomico tambem impede pares distintos
-  de origem/chave de contornar o controle de recurso bcrypt. Um token nunca
-  libera nem estende outra reserva.
+  limitando armazenamento; tanto admissao quanto finalizacao aplicam esse
+  horizonte. Verificacoes recusadas sobrepostas da mesma credencial composta
+  avancam o estado de falha uma vez, enquanto cada recusa permanece visivel no
+  contador agregado. O teto global atomico tambem impede pares distintos de
+  origem/chave de contornar o controle de recurso bcrypt. Um token nunca libera
+  nem estende outra reserva.
 - `auth_lockout_buckets` armazena somente historico de credenciais recusadas. O
   limite de linhas e dividido em particoes independentes de credencial e origem.
-  Particao cheia nunca impede bcrypt ou aceite de uma chave valida ainda
-  desconhecida; identidades recusadas que nao podem ser persistidas ainda
-  incrementam contadores agregados de falha e rejeicao por capacidade.
+  A particao conta um compromisso de linha futura para cada identidade distinta
+  nas reservas retidas. Uma particao cheia remove sua linha expirada mais antiga
+  somente quando nenhuma reserva pendente a referencia. Sem uma vaga segura,
+  uma identidade desconhecida e negada antes do bcrypt e incrementa o contador
+  agregado de rejeicao por capacidade.
 - `auth_lockout_metrics` armazena contadores duraveis sem labels. A superficie de
   metricas tambem deriva linhas atuais de bucket, reservas nao expiradas em voo
   e reservas orfas expiradas, sem labels de origem, credencial ou token; o

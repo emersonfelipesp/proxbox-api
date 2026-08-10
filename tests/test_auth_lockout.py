@@ -7,6 +7,7 @@ import hashlib
 import multiprocessing
 import os
 import sqlite3
+import stat
 import threading
 import time
 from collections.abc import Generator
@@ -361,8 +362,18 @@ def test_concurrent_requests_reserve_budget_before_bcrypt(
         results = [future.result(timeout=5) for future in futures]
 
     assert verification_calls == 1
-    assert sum("verification capacity" in (message or "") for _, message in results) == 7
-    assert all("Too many failed" not in (message or "") for _, message in results)
+    capacity_rejections = sum("verification capacity" in (message or "") for _, message in results)
+    lockout_rejections = sum("Too many failed" in (message or "") for _, message in results)
+    assert capacity_rejections >= 1
+    assert capacity_rejections + lockout_rejections == 7
+    assert all(authorized is False for authorized, _ in results)
+    with Session(db_engine) as session:
+        identity = build_lockout_identity(
+            resolve_auth_source_context(CLIENT_IP, None, ()),
+            stored_key,
+        )
+        row = AuthLockoutService.get(session, identity)
+        assert row is not None and row.attempts == 1
 
 
 def test_more_than_failure_threshold_concurrent_valid_requests_never_lock(
@@ -696,6 +707,100 @@ def test_duplicate_finalizer_cannot_consume_a_newer_token(db_session: Session) -
     assert row is not None and row.attempts == 1
 
 
+def test_concurrent_failure_cohort_does_not_immediately_rearm_expired_lockout(
+    db_session: Session,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=2,
+        source_threshold=10,
+        window_seconds=60,
+        max_in_flight=16,
+    )
+    identity = build_lockout_identity(
+        resolve_auth_source_context(CLIENT_IP, None, ()),
+        STALE_KEY,
+    )
+    AuthLockoutService.record_failure(db_session, identity, policy, now=100.0)
+    AuthLockoutService.record_failure(db_session, identity, policy, now=101.0)
+    assert AuthLockoutService.is_locked(db_session, identity, now=159.9)
+
+    reservations = [
+        AuthLockoutService.reserve_verification(db_session, identity, policy, now=160.0)
+        for _ in range(8)
+    ]
+    assert all(reservation is not None for reservation in reservations)
+    for reservation in reservations:
+        assert reservation is not None
+        result = AuthLockoutService.finalize_verification(
+            db_session,
+            identity,
+            policy,
+            reservation,
+            succeeded=False,
+            now=161.0,
+        )
+        assert result is not None
+
+    row = AuthLockoutService.get(db_session, identity)
+    source_row = AuthLockoutService.get_source(db_session, identity)
+    assert row is not None and row.attempts == 1 and row.locked_until is None
+    assert source_row is not None and source_row.attempts == 1
+    assert not AuthLockoutService.is_locked(db_session, identity, now=161.0)
+    assert get_auth_lockout_metrics(db_session, now=161.0)["proxbox_auth_failures_total"] == 10
+
+
+async def test_async_failure_cohort_uses_the_same_single_transition(db_engine) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=2,
+        source_threshold=10,
+        window_seconds=60,
+        max_in_flight=16,
+    )
+    identity = build_lockout_identity(
+        resolve_auth_source_context(CLIENT_IP, None, ()),
+        STALE_KEY,
+    )
+    db_engine.dispose()
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    target = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    configure_sqlite_engine(target.sync_engine)
+    sessions = async_sessionmaker(target, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with sessions() as session:
+            await AuthLockoutService.record_failure_async(session, identity, policy, now=100.0)
+            await AuthLockoutService.record_failure_async(session, identity, policy, now=101.0)
+            reservations = [
+                await AuthLockoutService.reserve_verification_async(
+                    session,
+                    identity,
+                    policy,
+                    now=160.0,
+                )
+                for _ in range(8)
+            ]
+            assert all(reservation is not None for reservation in reservations)
+            for reservation in reservations:
+                assert reservation is not None
+                assert (
+                    await AuthLockoutService.finalize_verification_async(
+                        session,
+                        identity,
+                        policy,
+                        reservation,
+                        succeeded=False,
+                        now=161.0,
+                    )
+                    is not None
+                )
+
+            row = await AuthLockoutService.get_async(session, identity)
+            source_row = await AuthLockoutService.get_source_async(session, identity)
+            assert row is not None and row.attempts == 1 and row.locked_until is None
+            assert source_row is not None and source_row.attempts == 1
+    finally:
+        await target.dispose()
+
+
 def test_multiprocess_finalizers_consume_a_reservation_exactly_once(db_engine) -> None:
     policy = AuthLockoutPolicy(threshold=100, source_threshold=100)
     identity = build_lockout_identity(
@@ -736,6 +841,47 @@ def test_multiprocess_finalizers_consume_a_reservation_exactly_once(db_engine) -
             metrics = get_auth_lockout_metrics(session, now=101.0)
             assert metrics["proxbox_auth_failures_total"] == 1
             assert metrics["proxbox_auth_verifications_in_flight"] == 0
+    finally:
+        verified.dispose()
+
+
+def test_multiprocess_failure_cohort_counts_one_state_transition(db_engine) -> None:
+    policy = AuthLockoutPolicy(threshold=100, source_threshold=100, max_in_flight=8)
+    identity = build_lockout_identity(
+        resolve_auth_source_context(CLIENT_IP, None, ()),
+        STALE_KEY,
+    )
+    with Session(db_engine) as session:
+        reservations = [
+            AuthLockoutService.reserve_verification(session, identity, policy, now=100.0)
+            for _ in range(4)
+        ]
+        assert all(reservation is not None for reservation in reservations)
+
+    database_path = str(db_engine.url.database)
+    db_engine.dispose()
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=4, mp_context=context) as executor:
+        futures = [
+            executor.submit(
+                _finalize_reservation_in_process,
+                database_path,
+                STALE_KEY,
+                reservation.reservation_token,
+            )
+            for reservation in reservations
+            if reservation is not None
+        ]
+        assert [future.result(timeout=30) for future in futures] == [True] * 4
+
+    verified = create_engine(f"sqlite:///{database_path}")
+    try:
+        with Session(verified) as session:
+            row = AuthLockoutService.get(session, identity)
+            source_row = AuthLockoutService.get_source(session, identity)
+            assert row is not None and row.attempts == 1
+            assert source_row is not None and source_row.attempts == 1
+            assert get_auth_lockout_metrics(session, now=101.0)["proxbox_auth_failures_total"] == 4
     finally:
         verified.dispose()
 
@@ -788,9 +934,13 @@ def test_individual_orphan_expiry_does_not_extend_or_lose_late_failure(
             succeeded=False,
             now=220.1,
         )
-        assert live_result is not None and live_result.credential.attempts == 2
+        assert live_result is not None and live_result.credential.attempts == 1
         row = AuthLockoutService.get(restarted_session, identity)
-        assert row is not None and row.attempts == 2
+        assert row is not None and row.attempts == 1
+        assert (
+            get_auth_lockout_metrics(restarted_session, now=220.1)["proxbox_auth_failures_total"]
+            == 2
+        )
         assert (
             restarted_session.get(AuthLockoutReservation, recovered.reservation_token) is not None
         )
@@ -839,6 +989,51 @@ def test_global_verification_capacity_bounds_distinct_identities(db_session: Ses
         AuthLockoutService.reserve_verification(db_session, identities[2], policy, now=101.0)
         is not None
     )
+
+
+def test_pending_distinct_identities_reserve_failure_partition_capacity(
+    db_session: Session,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=100,
+        max_buckets=4,
+        max_in_flight=10,
+        max_global_in_flight=10,
+    )
+    identities = [
+        build_lockout_identity(
+            resolve_auth_source_context(f"10.0.2.{index}", None, ()),
+            f"pending-distinct-key-{index}",
+        )
+        for index in range(1, 4)
+    ]
+
+    first = AuthLockoutService.reserve_verification(db_session, identities[0], policy, now=100.0)
+    second = AuthLockoutService.reserve_verification(db_session, identities[1], policy, now=100.0)
+    third = AuthLockoutService.reserve_verification(db_session, identities[2], policy, now=100.0)
+
+    assert first is not None
+    assert second is not None
+    assert third is None
+    assert AuthLockoutService.list_rows(db_session) == []
+    assert (
+        get_auth_lockout_metrics(db_session, now=100.0)["proxbox_auth_capacity_rejections_total"]
+        == 1
+    )
+    for identity, reservation in zip(identities[:2], (first, second)):
+        assert (
+            AuthLockoutService.finalize_verification(
+                db_session,
+                identity,
+                policy,
+                reservation,
+                succeeded=False,
+                now=101.0,
+            )
+            is not None
+        )
+    assert len(AuthLockoutService.list_rows(db_session)) == policy.max_buckets
 
 
 def test_global_verification_capacity_is_atomic_across_processes(db_engine) -> None:
@@ -899,6 +1094,34 @@ def test_reservations_beyond_finalization_horizon_are_compacted(
             now=4_000.1,
         )
         is None
+    )
+
+
+def test_finalizer_itself_enforces_late_recovery_horizon(db_session: Session) -> None:
+    policy = AuthLockoutPolicy(threshold=100, source_threshold=100)
+    identity = build_lockout_identity(
+        resolve_auth_source_context(CLIENT_IP, None, ()),
+        STALE_KEY,
+    )
+    abandoned = AuthLockoutService.reserve_verification(db_session, identity, policy, now=100.0)
+    assert abandoned is not None
+
+    assert (
+        AuthLockoutService.finalize_verification(
+            db_session,
+            identity,
+            policy,
+            abandoned,
+            succeeded=False,
+            now=4_001.0,
+        )
+        is None
+    )
+    assert db_session.get(AuthLockoutReservation, abandoned.reservation_token) is None
+    assert AuthLockoutService.list_rows(db_session) == []
+    assert (
+        get_auth_lockout_metrics(db_session, now=4_001.0)["proxbox_auth_orphan_compactions_total"]
+        == 1
     )
 
 
@@ -1057,9 +1280,10 @@ def test_rotating_invalid_keys_block_bcrypt_for_valid_key(
     assert message is not None and "Too many failed" in message
 
 
-def test_partitioned_row_cap_preserves_valid_authentication_and_counts_saturation(
+def test_partitioned_row_cap_denies_unseen_identity_before_bcrypt(
     db_session: Session,
     stored_key: str,
+    monkeypatch,
 ) -> None:
     policy = AuthLockoutPolicy(
         threshold=100,
@@ -1075,27 +1299,177 @@ def test_partitioned_row_cap_preserves_valid_authentication_and_counts_saturatio
         resolve_auth_source_context("10.0.0.11", None, ()),
         "second-invalid-key",
     )
-    AuthLockoutService.record_failure(db_session, first, policy, now=100.0)
-    dropped = AuthLockoutService.record_failure(db_session, saturated, policy, now=100.0)
+    timestamp = time.time()
+    AuthLockoutService.record_failure(db_session, first, policy, now=timestamp)
+    dropped = AuthLockoutService.record_failure(db_session, saturated, policy, now=timestamp)
 
     rows = AuthLockoutService.list_rows(db_session)
     assert len(rows) == policy.max_buckets
-    assert dropped.credential.attempts == 1
+    assert dropped.credential.attempts == policy.threshold
+    assert dropped.is_locked(timestamp)
     assert AuthLockoutService.get(db_session, saturated) is None
     assert AuthLockoutService.get_source(db_session, saturated) is None
     assert (
-        get_auth_lockout_metrics(db_session, now=100.0)["proxbox_auth_capacity_rejections_total"]
+        get_auth_lockout_metrics(db_session, now=timestamp)[
+            "proxbox_auth_capacity_rejections_total"
+        ]
         == 1
     )
 
+    verification_calls = 0
+
+    def verify_any(session: Session, provided_key: str) -> bool:  # noqa: ARG001
+        nonlocal verification_calls
+        verification_calls += 1
+        return provided_key == stored_key
+
+    monkeypatch.setattr(ApiKey, "verify_any", staticmethod(verify_any))
     authorized, message = auth.check_auth_header_with_session(
         db_session,
         stored_key,
         "10.0.0.11",
         policy,
     )
-    assert authorized is True
-    assert message is None
+    assert authorized is False
+    assert message is not None and "capacity is temporarily exhausted" in message
+    assert verification_calls == 0
+
+
+async def test_async_partitioned_row_cap_denies_unseen_identity(
+    db_engine,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=100,
+        window_seconds=60,
+        max_buckets=2,
+    )
+    first = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.14", None, ()),
+        "first-async-invalid-key",
+    )
+    saturated = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.15", None, ()),
+        "second-async-invalid-key",
+    )
+    db_engine.dispose()
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    target = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    configure_sqlite_engine(target.sync_engine)
+    sessions = async_sessionmaker(target, class_=AsyncSession, expire_on_commit=False)
+    timestamp = time.time()
+    try:
+        async with sessions() as session:
+            await AuthLockoutService.record_failure_async(
+                session,
+                first,
+                policy,
+                now=timestamp,
+            )
+            dropped = await AuthLockoutService.record_failure_async(
+                session,
+                saturated,
+                policy,
+                now=timestamp,
+            )
+            assert dropped.is_locked(timestamp)
+            assert (
+                await AuthLockoutService.reserve_verification_async(
+                    session,
+                    saturated,
+                    policy,
+                    now=timestamp,
+                )
+                is None
+            )
+    finally:
+        await target.dispose()
+
+
+def test_partition_capacity_evicts_only_stalest_safely_expired_rows(
+    db_session: Session,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=100,
+        window_seconds=60,
+        max_buckets=6,
+    )
+    reserved_expired = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.20", None, ()),
+        "reserved-expired-invalid-key",
+    )
+    evictable_expired = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.21", None, ()),
+        "evictable-expired-invalid-key",
+    )
+    live = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.22", None, ()),
+        "live-invalid-key",
+    )
+    unseen = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.23", None, ()),
+        "unseen-invalid-key",
+    )
+    AuthLockoutService.record_failure(db_session, reserved_expired, policy, now=100.0)
+    pending = AuthLockoutService.reserve_verification(
+        db_session,
+        reserved_expired,
+        policy,
+        now=100.1,
+    )
+    assert pending is not None
+    AuthLockoutService.record_failure(db_session, evictable_expired, policy, now=110.0)
+    AuthLockoutService.record_failure(db_session, live, policy, now=150.0)
+
+    reservation = AuthLockoutService.reserve_verification(
+        db_session,
+        unseen,
+        policy,
+        now=170.0,
+    )
+
+    assert reservation is not None
+    assert AuthLockoutService.get(db_session, reserved_expired) is not None
+    assert AuthLockoutService.get_source(db_session, reserved_expired) is not None
+    assert db_session.get(AuthLockoutReservation, pending.reservation_token) is not None
+    assert AuthLockoutService.get(db_session, evictable_expired) is None
+    assert AuthLockoutService.get_source(db_session, evictable_expired) is None
+    assert AuthLockoutService.get(db_session, live) is not None
+    assert AuthLockoutService.get_source(db_session, live) is not None
+
+
+def test_failure_pruning_preserves_expired_rows_with_pending_finalizer(
+    db_session: Session,
+) -> None:
+    policy = AuthLockoutPolicy(
+        threshold=100,
+        source_threshold=100,
+        window_seconds=60,
+        max_buckets=4,
+    )
+    pending_identity = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.30", None, ()),
+        "pending-invalid-key",
+    )
+    new_identity = build_lockout_identity(
+        resolve_auth_source_context("10.0.0.31", None, ()),
+        "new-invalid-key",
+    )
+    AuthLockoutService.record_failure(db_session, pending_identity, policy, now=100.0)
+    pending = AuthLockoutService.reserve_verification(
+        db_session,
+        pending_identity,
+        policy,
+        now=100.1,
+    )
+    assert pending is not None
+
+    AuthLockoutService.record_failure(db_session, new_identity, policy, now=170.0)
+
+    assert AuthLockoutService.get(db_session, pending_identity) is not None
+    assert AuthLockoutService.get_source(db_session, pending_identity) is not None
+    assert db_session.get(AuthLockoutReservation, pending.reservation_token) is not None
 
 
 def test_bucket_cap_preserves_other_source_at_threshold_minus_one(
@@ -1192,6 +1566,50 @@ def test_identity_key_file_is_created_private_and_stable(tmp_path, monkeypatch) 
             STALE_KEY,
         )
         assert first == second
+    finally:
+        lockout_module.clear_runtime_auth_lockout_identity_key()
+
+
+def test_identity_key_file_is_not_published_when_file_fsync_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    key_path = tmp_path / "lockout-identity.key"
+    real_fsync = os.fsync
+
+    def fail_regular_file_fsync(descriptor: int) -> None:
+        if stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("injected key fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.delenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY", raising=False)
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(key_path))
+    monkeypatch.setattr(lockout_module.os, "fsync", fail_regular_file_fsync)
+    lockout_module.clear_runtime_auth_lockout_identity_key()
+    try:
+        with pytest.raises(LockoutConfigurationError, match="unable to read"):
+            lockout_module.initialize_auth_lockout_identity_key(None)
+        assert not key_path.exists()
+        assert list(tmp_path.glob(f".{key_path.name}.*.tmp")) == []
+    finally:
+        lockout_module.clear_runtime_auth_lockout_identity_key()
+
+
+def test_identity_key_file_is_not_published_when_replace_fails(tmp_path, monkeypatch) -> None:
+    key_path = tmp_path / "lockout-identity.key"
+
+    def fail_replace(source: str | Path, destination: str | Path) -> None:  # noqa: ARG001
+        raise OSError("injected key replace failure")
+
+    monkeypatch.delenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY", raising=False)
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE", str(key_path))
+    monkeypatch.setattr(lockout_module.os, "replace", fail_replace)
+    lockout_module.clear_runtime_auth_lockout_identity_key()
+    try:
+        with pytest.raises(LockoutConfigurationError, match="unable to read"):
+            lockout_module.initialize_auth_lockout_identity_key(None)
+        assert not key_path.exists()
+        assert list(tmp_path.glob(f".{key_path.name}.*.tmp")) == []
     finally:
         lockout_module.clear_runtime_auth_lockout_identity_key()
 
