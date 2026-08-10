@@ -19,6 +19,33 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `custom_fields.py`: canonical NetBox custom-field inventory, reconcile/cache helpers, force-reconcile support, and object-type union preservation.
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
+- `auth_lockout.py`: shared, request-independent authentication lockout state
+  service. It validates credential/source thresholds, window, row cap, separate
+  per-bucket/global verification-concurrency capacity, and
+  trusted-proxy configuration; derives source-plus-credential buckets without
+  storing keys or dictionary-testable fingerprints; inserts one durable
+  per-token reservation before bcrypt; and gives each row a renewable expiry
+  capped by a persisted absolute deadline.
+  Expired crash rows stop consuming capacity and remain observable for one hour;
+  a result can update accounting exactly once only before its terminal deadline,
+  and later results are discarded. Admission and finalization both compact older
+  rows into a durable aggregate counter. Rejection converts the consumed token
+  to failure state. Same-credential cohort completions coalesce the credential
+  transition, but every consumed rejection advances source-abuse accounting.
+  Missing-key requests allocate no credential row and IPv6 sources aggregate at
+  `/64`. Credential/source failure rows use independent bounded partitions.
+  Failure-row saturation never controls admission: all requests remain inside
+  the same per-source/global verification pool. Once a reservation deadline
+  passes, capacity is reclaimable and a late bcrypt result is discarded without
+  changing lockout state; the non-preemptible worker thread may retain residual
+  CPU cost until bcrypt returns. A saturated partition first
+  evicts its stalest safe expired row; an unpersistable rejection fails closed
+  and advances bounded aggregate accounting. Reservation owners renew a fixed
+  lease while bcrypt is live but never beyond the terminal lifetime, and each
+  request has a bounded active-key scan. The service persists
+  label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
+  inspection/clear selectors. Startup pins the validated HMAC generation in
+  memory; do not re-read a mutable key source on request paths.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration and validated against generated models. VM config validation uses copy-on-write normalization for blank optional booleans and for integer/float values returned for optional string fields (including aliases), while preserving booleans and required string fields; this keeps QEMU values such as numeric `memory` compatible with the generated response contracts without changing upstream payloads.
 - `packer_preflight.py`: endpoint-scoped Cloud Image Pipeline readiness checks.
   It accepts one already-resolved Proxmox session, performs only GET calls for
@@ -28,6 +55,16 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   It preserves valid-empty versus malformed collection semantics so malformed
   payloads fail closed, and it requires affirmative storage health state. It
   must remain usable when endpoint writes are disabled.
+- `hardware_discovery.py`: opt-in SSH node hardware discovery
+  (`dmidecode`/`ip`/`ethtool` allowlist). `reflect_to_netbox()` writes
+  chassis/NIC custom fields and, via `_reflect_nic_mac()`, the physical-NIC MAC
+  as a native `dcim.MACAddress` plus `primary_mac_address`. It reuses
+  `sync/mac_address.py::reconcile_mac_for_interface` so physical and
+  bridge/bond MACs are stored identically and receive the same Proxbox tag.
+  The native MAC write requires both
+  `hardware_discovery_enabled` and the separate default-off
+  `hardware_discovery_sync_nic_macs` UI setting. A missing setting is false; a
+  MAC failure warns and never aborts the run.
 - `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue

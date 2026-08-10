@@ -5,15 +5,21 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
 from proxbox_api.constants import DEFAULT_LOG_PATH
-from proxbox_api.database import NetBoxEndpoint, create_db_and_tables, get_session
+from proxbox_api.database import (
+    DatabaseConfigurationError,
+    DatabaseStartupError,
+    NetBoxEndpoint,
+    get_session,
+    initialize_database_and_schema,
+)
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import configure_file_logging_path, logger
 from proxbox_api.netbox_compat import NetBoxBase
-from proxbox_api.session.netbox import get_netbox_session
+from proxbox_api.session.netbox import netbox_api_from_endpoint
 from proxbox_api.settings_client import get_settings
 
 if TYPE_CHECKING:
@@ -62,49 +68,74 @@ def init_database_and_netbox() -> None:
     NetBoxBase.nb = None
 
     try:
-        create_db_and_tables()
+        target = initialize_database_and_schema()
         database_session = next(get_session())
+        logger.info(
+            "SQLite database startup verification passed",
+            extra={
+                "database_path": str(target.path),
+                "configuration_source": target.source,
+                "startup_lock_path": str(target.startup_lock_path),
+            },
+        )
+    except (DatabaseConfigurationError, DatabaseStartupError) as error:
+        last_init_error = str(error)
+        logger.error("bootstrap: fatal database configuration or verification error: %s", error)
+        raise
+    except (OSError, SQLAlchemyError) as error:
+        startup_error = DatabaseStartupError(
+            "Configured SQLite database failed schema initialization. "
+            "Check database ownership, permissions, available space, and integrity."
+        )
+        last_init_error = str(startup_error)
+        logger.exception("bootstrap: fatal database schema initialization error")
+        raise startup_error from error
+
+    try:
+        netbox_endpoints = list(
+            database_session.exec(select(NetBoxEndpoint).order_by(NetBoxEndpoint.id)).all()
+        )
+    except Exception as error:  # noqa: BLE001
+        startup_error = DatabaseStartupError(
+            "Configured SQLite database failed the required post-schema endpoint read. "
+            "Check database integrity, ownership, available space, and migration logs."
+        )
+        last_init_error = str(startup_error)
+        logger.exception("bootstrap: fatal database endpoint-table read failure")
+        raise startup_error from error
+    finally:
+        database_session.close()
+        database_session = None
+
+    try:
         skip_netbox = os.environ.get("PROXBOX_SKIP_NETBOX_BOOTSTRAP", "").strip().lower() in (
             "1",
             "true",
             "yes",
         )
+        enabled_endpoints = [endpoint for endpoint in netbox_endpoints if endpoint.enabled]
         if skip_netbox:
-            netbox_session = None
-            NetBoxBase.nb = None
-            init_ok = True
             logger.info(
                 "Skipping NetBox API bootstrap (PROXBOX_SKIP_NETBOX_BOOTSTRAP); "
                 "no default NetBox client until an endpoint is configured"
             )
-        else:
-            netbox_session = get_netbox_session(database_session=database_session)
+        elif enabled_endpoints:
+            netbox_session = netbox_api_from_endpoint(enabled_endpoints[0])
             NetBoxBase.nb = netbox_session
-            init_ok = True
+        else:
+            last_init_error = "No enabled NetBox endpoint found"
+            logger.warning("bootstrap: NetBox is not connected — %s", last_init_error)
+        init_ok = True
     except ProxboxException as error:
         last_init_error = str(error)
         logger.warning("bootstrap: NetBox is not connected — %s", error)
         netbox_session = None
         NetBoxBase.nb = None
-        init_ok = True  # DB is healthy; missing NetBox endpoint is an expected state
+        init_ok = True  # Required database reads passed; NetBox configuration is optional.
     except Exception as error:  # noqa: BLE001
         last_init_error = str(error)
-        logger.exception("bootstrap: Database or NetBox client bootstrap failed")
+        logger.exception("bootstrap: NetBox client bootstrap failed")
         netbox_session = None
         NetBoxBase.nb = None
-
-    if database_session:
-        try:
-            netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
-        except OperationalError:
-            try:
-                create_db_and_tables()
-                netbox_endpoints = database_session.exec(select(NetBoxEndpoint)).all()
-            except Exception as error:  # noqa: BLE001
-                logger.exception("Failed to load NetBox endpoint rows after schema retry")
-                netbox_endpoints = []
-                last_init_error = last_init_error or str(error)
-        finally:
-            database_session.close()
 
     _configure_backend_file_logging()

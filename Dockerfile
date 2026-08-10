@@ -42,6 +42,7 @@ WORKDIR /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PORT=8000 \
+    PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db \
     PYTHONUNBUFFERED=1
 
 COPY --from=builder /app/.venv /app/.venv
@@ -62,6 +63,7 @@ WORKDIR /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PORT=8000 \
+    PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db \
     PYTHONUNBUFFERED=1 \
     PROXBOX_RECONCILIATION_ENGINE=rust
 

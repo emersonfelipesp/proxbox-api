@@ -48,6 +48,7 @@ class ProxboxSettingsDict(TypedDict):
     default_role_qemu_id: NotRequired[int | None]
     default_role_lxc_id: NotRequired[int | None]
     hardware_discovery_enabled: NotRequired[bool]
+    hardware_discovery_sync_nic_macs: NotRequired[bool]
     cloud_network_lock_enabled: NotRequired[bool]
     cloud_customer_prefix_id: NotRequired[int | None]
     cloud_customer_bridge: NotRequired[str]

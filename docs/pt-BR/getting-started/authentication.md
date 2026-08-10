@@ -100,6 +100,10 @@ curl -X POST http://localhost:8800/auth/keys \
 
 A `raw_key` é retornada apenas uma vez — armazene-a com segurança.
 
+A criação é serializada com a reativação de chaves ativas e retorna `409`
+(`active_api_key_limit_reached`) quando ultrapassaria
+`PROXBOX_AUTH_MAX_ACTIVE_KEYS`. Desative uma chave ativa antes de criar outra.
+
 ### Desativar uma Chave
 
 ```bash
@@ -119,6 +123,9 @@ curl -X POST http://localhost:8800/auth/keys/1/activate \
 # {"id": 1, "label": "chave-bootstrap", "is_active": true, "created_at": 1712345678.123}
 ```
 
+A reativação retorna `409` (`active_api_key_limit_reached`) quando ultrapassaria
+o teto configurado de chaves ativas.
+
 ### Deletar uma Chave
 
 ```bash
@@ -132,11 +139,186 @@ Remover a última chave ativa é recusado com `409`
 
 ## Proteção Contra Brute-Force
 
-O backend implementa bloqueio por IP:
+O backend persiste o bloqueio no SQLite em um bucket composto e sem segredos:
+contexto normalizado de origem/confiança da rede mais um identificador HMAC com
+chave do servidor. Atingir o limite de um bucket de credencial não bloqueia
+outra chave usada pelo mesmo worker, proxy reverso ou IP. Um limite separado e
+deliberadamente maior de abuso por origem ainda bloqueia todas as chaves daquela
+origem quando esgotado. A autenticação síncrona e assíncrona compartilha o mesmo
+serviço de estado. Antes do bcrypt, cada
+requisição insere uma linha de reserva durável independente com token
+imprevisível, lease renovável de 60 segundos e deadline absoluto persistido.
+Enquanto o bcrypt executa, o owner renova somente até esse deadline; atrasos
+normais continuam protegidos, mas a linha nunca pode reter capacidade para
+sempre. Depois do bcrypt, um `DELETE` atômico
+limitado pelo token finaliza exatamente aquela linha uma vez: chave recusada
+vira estado de falha de credencial/origem na mesma transação, enquanto chave
+aceita não registra falha. Finalização duplicada não consome a reserva de outra
+requisição. Assim, tráfego válido concorrente não cria bloqueio. Capacidade
+esgotada retorna HTTP 503 com `Retry-After: 1` ou fecha o WebSocket com código
+1013, sem consumir tentativa.
 
-- Máximo de 5 tentativas falhas
-- Duração do bloqueio: 5 minutos
-- O bloqueio é limpo após autenticação bem-sucedida
+Verificações recusadas da mesma credencial composta que foram admitidas antes
+da conclusão de um membro anterior do mesmo grupo continuam entrando na métrica
+agregada de falhas. Somente a primeira conclusão avança o bucket da credencial,
+mas **toda** rejeição consumida avança o orçamento compartilhado de abuso por
+origem. Essa coalescência causal funciona entre workers e impede que um burst
+normal de chave desatualizada reative imediatamente um bloqueio expirado da
+credencial, enquanto o limite por origem mantém um limite rígido para o trabalho
+bcrypt de um atacante. Uma requisição posterior conta normalmente.
+
+Um token abandonado por crash expira 60 segundos depois que seu owner para de
+renová-lo. Somente então ele deixa de consumir capacidade. A linha permanece
+observável por um horizonte de limpeza de uma hora e entra na métrica de
+reservas órfãs. Um finalizador tardio pode atualizar a contabilidade exatamente
+uma vez somente antes do deadline absoluto descrito abaixo; resultados posteriores
+são consumidos e descartados. Linhas mais antigas são compactadas em
+contador agregado durável para limitar o armazenamento; os caminhos de reserva
+e finalização impõem esse horizonte, portanto um finalizador posterior é ignorado
+mesmo sem uma requisição mais nova para executar a compactação. Uma reserva órfã
+não estende a expiração de outro token vivo nem libera trabalho mais novo.
+
+Cada reserva também tem lifetime absoluto padrão de 180 segundos
+(`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`). Nesse deadline o slot pode
+ser reutilizado independentemente de heartbeats, e um resultado posterior é
+descartado sem registrar sucesso ou falha. Python não consegue interromper a
+thread bcrypt; portanto, um verificador expirado ainda pode consumir CPU até a
+chamada retornar, embora a admissão durável e a contabilidade de bloqueio
+permaneçam limitadas.
+
+Um segundo
+orçamento durável por origem limita ataques que rotacionam credenciais; seu
+padrão é deliberadamente maior que o limite por credencial. Requisições sem
+chave avançam somente esse orçamento por origem e nunca alocam linha na partição
+de credenciais. Origens IPv6 são agrupadas por `/64` para bloqueio e rate limit;
+IPv4 continua por endereço. As linhas duráveis de falha são divididas em
+partições independentes e limitadas de credencial e origem. Janelas expiradas
+são removidas.
+
+Quando uma partição fica cheia, a admissão remove primeiro sua linha expirada
+mais antiga somente se nenhuma reserva pendente a referencia. A saturação das
+linhas de falha não cria uma via de verificação separada por ordem de chegada:
+origens novas participam do mesmo pool atômico por origem e global de todas as
+outras requisições. Assim, a pressão de linhas não adiciona trabalho acima do
+limite global declarado nem permite monopolizar um único token de fallback. Uma
+verificação recusada que não consegue obter um bucket durável falha fechada
+nessa requisição e incrementa uma contabilidade agregada, limitada e sem labels,
+sem remover um orçamento vivo anterior ao bloqueio. Bloqueios duráveis existentes
+continuam autoritativos.
+
+- Limite padrão: 5 falhas (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, intervalo 1-100)
+- Orçamento padrão por origem: 50 falhas (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, intervalo 1-100000)
+- Janela fixa padrão: 5 minutos (`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, intervalo 1-86400)
+- Máximo de linhas duráveis: 10000 (`PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, intervalo 2-1000000)
+- Máximo de verificações concorrentes por bucket de credencial/origem: 32
+  (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, intervalo 1-1024)
+- Máximo de verificações concorrentes entre todos os workers e identidades: 256
+  (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, intervalo 1-4096)
+- Lifetime absoluto de uma verificação admitida: 180 segundos
+  (`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, intervalo 0.1-3600)
+- Máximo de hashes de chaves de API ativas examinados por uma requisição: 32
+  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, intervalo 1-1024). Criação e reativação
+  autenticadas não podem ultrapassar esse teto. Se um banco legado já exceder o
+  limite, o startup registra orientação explícita de recovery e a autenticação
+  examina somente o conjunto limitado de chaves ativas mais antigas. Use uma
+  delas para desativar as excedentes; se nenhuma estiver disponível, aumente
+  temporariamente o limite, reinicie, remova o excesso e restaure o valor.
+- Por padrão, uma chave opaca é criada atomicamente no arquivo privado irmão
+  `database.db.auth-lockout.key`. A criação descarrega e sincroniza um arquivo
+  temporário no mesmo diretório, substitui o caminho final e sincroniza o
+  diretório pai antes de continuar o startup. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` pode fornecer
+  um valor explícito com 32 bytes ou mais. Mantenha a fonte estável entre
+  reinícios e separada da chave rotacionável de criptografia.
+- O startup grava fingerprint não secreto e geração no SQLite. Depois do bind,
+  arquivo ausente/substituído ou chave de ambiente diferente é erro fatal e
+  nunca causa regeneração silenciosa. Todo worker valida o mesmo bind sob o lock
+  de startup do destino e fixa o material verificado na memória do processo.
+  Excluir ou substituir a fonte depois do startup não altera os IDs nesse worker;
+  recovery ou rotação exige o procedimento offline seguido de restart
+  controlado.
+- `PROXBOX_TRUSTED_PROXIES` define explicitamente quais CIDRs de peer podem
+  fornecer `X-Forwarded-For`. Fora da imagem nginx distribuída, nenhum endereço,
+  inclusive localhost, é confiável implicitamente. Proxies confiáveis não
+  ignoram autenticação nem bloqueio. O
+  Uvicorn deve executar com processamento de proxy headers desabilitado
+  (`--no-proxy-headers`); os entrypoints raw e com nginx já impõem isso para que
+  a aplicação receba o peer de transporte real antes da allowlist. A imagem
+  nginx de propósito único adiciona `127.0.0.1/32` somente ao iniciar a
+  topologia nginx/supervisor distribuída, pois seu nginx interno é o único
+  processo que alcança o Uvicorn em loopback. Um comando customizado nessa
+  imagem mantém o padrão vazio. Deployments raw/Granian atrás de proxy reverso externo devem
+  listar explicitamente os CIDRs exatos dos peers proxy e impedir acesso não
+  confiável à porta da aplicação. O Granian só
+  reescreve headers encaminhados com wrapper explícito, que o entrypoint
+  distribuído não adiciona.
+
+Os endpoints de métricas expõem somente contadores e gauges agregados, sem
+labels, com prefixo `proxbox_auth_*`. Além dos totais de falha, bloqueio e
+recovery e dos bloqueios ativos, o serviço publica:
+
+- `proxbox_auth_capacity_rejections_total`: admissões de verificação recusadas
+  pelo limite por bucket ou global em voo mais identidades com falha cuja partição
+  limitada de linhas de credencial ou origem não conseguiu persistir;
+- `proxbox_auth_orphan_compactions_total`: reservas expiradas compactadas depois
+  do horizonte suportado de limpeza de uma hora;
+- `proxbox_auth_bucket_rows`: linhas duráveis atuais de falha por
+  credencial/origem;
+- `proxbox_auth_verifications_in_flight`: reservas não expiradas que consomem
+  capacidade bcrypt; e
+- `proxbox_auth_expired_orphan_reservations`: reservas expiradas de crash
+  mantidas dentro do horizonte suportado de limpeza. Elas não permitem mudanças
+  de contabilidade depois do deadline terminal.
+
+Logs e CLI usam identificadores HMAC não autenticantes de 12 caracteres;
+chaves e hashes testáveis por dicionário nunca são exibidos.
+
+### Recuperação local de bloqueio
+
+A administração é local e não passa pelo middleware HTTP, portanto continua
+disponível durante um bloqueio:
+
+```bash
+proxbox-auth-lockout --database /data/database.db list
+proxbox-auth-lockout --database /data/database.db clear --id 4a12bc34de56
+# Reset emergencial somente do estado transitório de bloqueio:
+proxbox-auth-lockout --database /data/database.db clear --all
+```
+
+O caminho é obrigatório e precisa apontar para um banco existente com o schema
+atual completo, incluindo tabelas de reservas, métricas e bind da chave; a CLI
+usa o mesmo validador exato de colunas, tipos, chaves primárias, nullability e
+CHECK singleton do startup, mas nunca cria nem migra o banco. A validação ocorre
+sob o lock de manutenção offline antes de `rebind-key` excluir ou atualizar
+qualquer dado. `list` abre o SQLite em modo somente leitura. A listagem mostra
+contexto de origem/confiança, tipo do bucket, identificadores curtos, tentativas
+e expiração, mas nunca material da chave API.
+
+### Recovery ou rotação offline da chave de identidade
+
+Prefira restaurar o arquivo vinculado a partir de backup. Se isso for impossível,
+uma nova geração invalida todos os IDs opacos existentes. Faça o reset explícito
+somente com todos os workers parados:
+
+1. Pare todos os workers e preserve backup recuperável do banco e da chave.
+2. Crie a chave substituta como arquivo regular, sem symlink, UTF-8, com pelo
+   menos 32 bytes e modo `0600`.
+3. Execute:
+
+   ```bash
+   proxbox-auth-lockout --database /data/database.db rebind-key \
+     --key-file /data/database.db.auth-lockout.key.new \
+     --confirm-reset-lockouts
+   ```
+
+4. Instale/configure exatamente essa fonte em todos os workers, inicie o serviço
+   e valide readiness e autenticação.
+
+O comando adquire o lock de startup e lease exclusivo de runtime. Ele recusa
+execução enquanto houver worker ativo, valida o schema existente de recovery,
+limpa atomicamente buckets incompatíveis e todas as reservas pendentes, avança
+a geração não secreta e nunca imprime a chave. Se a própria linha de bind foi
+perdida, o recovery cria a geração 1 depois de limpar todo estado opaco. Não
+substitua a chave com rollout gradual de workers.
 
 ## Melhores Práticas de Segurança
 
@@ -170,4 +352,7 @@ Verifique se:
 
 ### "Too many failed authentication attempts"
 
-Aguarde 5 minutos para o bloqueio expirar, ou reinicie o backend para resetar o estado de bloqueio em memória.
+Aguarde a janela fixa configurada expirar ou use os comandos locais com banco
+explícito `proxbox-auth-lockout --database <caminho> list` e `clear --id`. O estado
+e os contadores agregados ficam no SQLite; reiniciar o
+backend não é um mecanismo de recuperação.

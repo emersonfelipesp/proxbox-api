@@ -167,7 +167,8 @@ Open the nearest scoped guide for the code you are changing.
 
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
 - Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
-- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and a one-shot bootstrap flow for first-time key registration. Bootstrap is consumed atomically and permanently: `ApiKey.bootstrap_first_key_async()` commits the durable `ApiKeyBootstrapClaim` singleton (`database.py`, CHECK `id = 1`) and the first key's bcrypt hash in one transaction, a lost claim race maps to a stable HTTP 409, and `bootstrap_is_claimed_async()` treats any key row — active or inactive — as consumed, so deactivating or deleting keys never reopens unauthenticated registration. Legacy databases are backfilled on startup by `_migrate_api_key_bootstrap_claim()` (idempotent `INSERT OR IGNORE ... WHERE EXISTS`). Retiring the final active key is refused: `DELETE /auth/keys/{id}` and `POST /auth/keys/{id}/deactivate` serialize through SQLite `BEGIN IMMEDIATE` and return 409 `last_active_api_key_required` when the target is the only active key. Contracts: `tests/test_auth_bootstrap.py`.
+- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/services/auth_lockout.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` enforcement via `APIKeyAuthMiddleware`, and one shared sync/async brute-force state service. Lockout buckets combine normalized source/trust context with a server-keyed HMAC identifier, so reaching one credential threshold does not lock peer keys and persisted identifiers are not offline guessing oracles; exhausting the deliberately higher shared source threshold still blocks every key from that source. IPv4 sources remain exact while IPv6 lockout/rate-limit accounting is normalized to `/64`. Every pre-bcrypt admission has its own durable reservation token, renewable owner lease, and persisted absolute deadline. Live sync and async verifiers heartbeat only until that deadline; afterward capacity is reclaimable and the late bcrypt result is discarded without mutating lockout accounting, although the non-preemptible worker thread may continue consuming CPU until bcrypt returns. Expired crash rows remain observable for a one-hour cleanup horizon; a late finalizer can change accounting exactly once only before the absolute deadline, after which it merely consumes and discards the row. A rejected bcrypt atomically consumes that token; overlapping rejected reservations for the same credential coalesce into one credential transition, but every rejection advances source-abuse state and remains visible in aggregate metrics. Valid traffic records no failure. Missing-key traffic advances only source abuse and never allocates credential-partition rows. Durable failure rows are split into bounded credential/source partitions. Failure-row saturation never controls admission: all requests compete fairly inside the same per-source/global verification pool, with no separate attacker-claimable lane. Before bcrypt, a saturated partition evicts its stalest safe expired row; an unpersistable rejection fails closed and advances bounded aggregate accounting. Authenticated create/reactivate writes serialize and refuse to cross `PROXBOX_AUTH_MAX_ACTIVE_KEYS`; verification examines only the oldest configured number of active hashes. Startup logs recovery guidance for a legacy over-limit database instead of disabling every key. The non-secret `AuthLockoutIdentityKeyBinding` singleton binds the database to one HMAC-key generation; startup validates and pins the key material in memory, so missing/mismatched material fails startup and post-start source mutation cannot change live identities. Offline `proxbox-auth-lockout rebind-key` is the only reset/rebind path and is excluded from every live worker by the runtime lease; under that lock it reuses startup's exact column/type/PK/nullability/singleton-CHECK schema validator before mutation. SQLite `ON CONFLICT` transitions and aggregate counters are atomic and durable across workers/restarts. Sync and async production connections install a 5-second busy timeout before WAL negotiation. `PROXBOX_TRUSTED_PROXIES` is an explicit, validated CIDR list; raw/Granian and custom-command launches trust no caller by default, while only the bundled nginx/supervisor topology prepends its protected `127.0.0.1/32` Uvicorn hop. Every Uvicorn/FastAPI entrypoint disables server-level proxy-header rewriting so this application policy sees the transport peer first. Aggregate label-free capacity/row/in-flight/orphan/compaction metrics are appended to `/cache/metrics*`, and `proxbox-auth-lockout --database <existing-db>` provides local secret-safe inspection/clear while HTTP is locked. The versioned schemas leave legacy `authlockout` intact for rollback and are covered by the database lifecycle's single target-specific startup lock. The one-shot bootstrap flow is consumed atomically and permanently: `ApiKey.bootstrap_first_key_async()` commits the durable `ApiKeyBootstrapClaim` singleton (`database.py`, CHECK `id = 1`) and the first key's bcrypt hash in one transaction, a lost claim race maps to a stable HTTP 409, and `bootstrap_is_claimed_async()` treats any key row — active or inactive — as consumed, so deactivating or deleting keys never reopens unauthenticated registration. Legacy databases are backfilled on startup by `_migrate_api_key_bootstrap_claim()` (idempotent `INSERT OR IGNORE ... WHERE EXISTS`). Retiring the final active key is refused: `DELETE /auth/keys/{id}` and `POST /auth/keys/{id}/deactivate` serialize through SQLite `BEGIN IMMEDIATE` and return 409 `last_active_api_key_required` when the target is the only active key. Contracts: `tests/test_auth_lockout.py`, `tests/test_auth_lockout_cli.py`, and `tests/test_auth_bootstrap.py`.
+- Database lifecycle (`proxbox_api/database.py`, `proxbox_api/app/bootstrap.py`): resolves one absolute SQLite target from `PROXBOX_DATABASE_PATH` or a compatible query-free SQLite `DATABASE_URL`, refuses ambiguity/cwd fallback/raw `?` delimiters, and fails closed when a legacy candidate cannot be verified. The auth-history guard applies to default and explicit targets. Exact `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY=1` is isolated/audited and atomically consumed by a durable sibling marker before database writes, so stale configuration cannot reauthorize bootstrap after target loss. A persistent `.startup.lock` serializes busy-timeout-first WAL/write probe, engine/table creation, complete auth-lockout bucket/reservation/metric/key-binding validation, fatal schema inspection, and all migrations across processes; each ready process then holds a shared `.runtime.lock` lease until engine disposal so exclusive offline recovery cannot overlap request handling. The post-schema endpoint read is mandatory before readiness. Engines do not exist at import; consumers use typed accessors after startup. Contracts: `tests/test_database_startup.py` and `tests/test_auth_lockout.py`.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): validate payloads, normalize data, and define contract-safe choice values.
@@ -177,8 +178,8 @@ Open the nearest scoped guide for the code you are changing.
 
 ### Runtime flow
 
-1. `proxbox_api.app.factory.create_app()` initializes database state, builds the default NetBox session, and records bootstrap status.
-2. The app registers generated Proxmox proxy routes during lifespan startup and wires shared middleware, routers, and exception handlers.
+1. `proxbox_api.app.factory.create_app()` assembles middleware, routers, and exception handlers without resolving or opening the database.
+2. Lifespan startup resolves and verifies the SQLite target, builds engines/tables and the default NetBox session, then registers generated Proxmox proxy routes and records bootstrap status.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
@@ -232,10 +233,12 @@ repository under `/opt/nmulticloud/deploy`:
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
 - Runtime secrets: `/etc/nms/proxbox-api-production.env`
 - SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
-- SQLite schema bootstrap is process-safe: all Uvicorn workers serialize
-  `create_all()` plus legacy column migrations through the adjacent
-  `database.db.bootstrap.lock` advisory lock. The lock file carries no state and
-  is kernel-released on worker exit; it must share the SQLite filesystem.
+- SQLite schema bootstrap is process-safe: all Uvicorn workers serialize the
+  WAL/write probe, `create_all()`, auth-lockout validation, and every migration
+  through the adjacent `database.db.startup.lock` advisory lock (each ready
+  worker then holds a shared `database.db.runtime.lock` lease). The lock files
+  carry no state and are kernel-released on worker exit; they must share the
+  SQLite filesystem.
 - Staging compose project: `nmc-proxbox-api-staging`
 - Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
 - Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`
@@ -274,10 +277,11 @@ while the Docker container is healthy on port `18800`.
 ## Entry Points
 
 - ASGI app: `proxbox_api.main:app`
-- Typical server command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000`
+- Typical server command: `uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000`
 - Docker entrypoint: the `Dockerfile` uses the same app module path.
 - CLI: `proxbox-proxmox-codegen` (`proxbox_api.proxmox_codegen.cli:main`) — Proxmox crawler/generator pipeline.
 - CLI: `proxbox-schema` (`proxbox_api.schema_cli:main`) — list, status, and generate NetBox-versioned schema artifacts.
+- CLI: `proxbox-auth-lockout` (`proxbox_api.auth_lockout_cli:main`) — local secret-safe lockout inspection and recovery that does not traverse HTTP auth.
 - Smoke tests live under `tests/` (for example `tests/test_main_smoke.py` and `tests/test_endpoint_crud.py`)
 
 ## Dependencies
@@ -301,7 +305,15 @@ resolves **env var (override) → `ProxboxPluginSettings` → built-in default**
 
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
-`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`,
+`PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`,
+`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`,
+`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`,
+`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`,
+`PROXBOX_AUTH_MAX_ACTIVE_KEYS`,
+`PROXBOX_AUTH_LOCKOUT_HMAC_KEY`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`,
+`PROXBOX_TRUSTED_PROXIES`,
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_CORS_EXTRA_ORIGINS`, `PROXBOX_SSH_KEY_DIR`. Anything that controls sync behavior, batching,
@@ -317,8 +329,21 @@ the `netbox-proxbox` side, do all five — the existing fields in
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
-- `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Default is `/data/database.db` (a Docker volume mount point). Docker volumes should be mounted at `/data` to persist the database across container restarts and image upgrades. Production deployments can override this to `/var/lib/proxbox-api/database.db` if needed.
+- `PROXBOX_DATABASE_PATH`: optional absolute SQLite database path. Outside containers the default is `$XDG_DATA_HOME/proxbox/database.db` or `~/.local/share/proxbox/database.db`; published images provide an internal `/data/database.db` fallback without populating this operator variable, so a custom `DATABASE_URL` works alone. Production systemd deployments should set `/var/lib/proxbox-api/database.db` and grant the service account write/search permission on its parent. Relative paths are refused; there is no current-working-directory fallback. Startup requires WAL and serializes the complete schema boundary with a sibling advisory lock.
+- `DATABASE_URL`: compatibility input for an absolute local `sqlite`, `sqlite+pysqlite`, or `sqlite+aiosqlite` URL. In-memory/relative/non-SQLite URLs, URL credentials, every raw `?` delimiter/query, and conflicting dual configuration are fatal. When both database variables are set, their normalized paths must match. See `docs/operations/database.md`.
+- `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`: security-sensitive exact-value `1` override for one audited startup of a deliberately fresh target while a legacy implicit database remains. Stop all workers, set exact `UVICORN_WORKERS=1`, isolate traffic, register the first API key, preserve the path-rendered warning and durable marker, then remove the override and restore normal workers. Multi-worker/unspecified recovery is rejected before writes. Never delete the marker to re-arm bootstrap.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 300). Read at app construction.
+- `PROXBOX_AUTH_LOCKOUT_THRESHOLD`: failed attempts per composite source/credential bucket (default 5, validated range 1-100). Read before NetBox bootstrap.
+- `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`: failed attempts across rotating credentials for one normalized source (default 50, validated range 1-100000). Read before NetBox bootstrap.
+- `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`: fixed lockout window (default 300 seconds, validated range 1-86400). Read before NetBox bootstrap.
+- `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`: maximum durable failure rows (default 10000, validated range 2-1000000), split into independent credential/source partitions. Missing-key failures allocate only source rows. Admission always uses the normal per-source/global verification pool and does not depend on a free failure row. At saturation, the stalest safe expired row is evicted first; an unpersistable rejection fails closed and advances bounded aggregate accounting.
+- `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`: separate per-bucket bcrypt verification concurrency (default 32, validated range 1-1024). Exhaustion is transient capacity pressure, never a failed attempt or lockout.
+- `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`: shared global bcrypt verification concurrency across all workers/identities (default 256, validated range 1-4096). It prevents high-cardinality source/key pairs from bypassing resource control.
+- `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`: absolute lifetime of one admitted bcrypt verifier (default 180 seconds, validated range 0.1-3600). Heartbeats cap `expires_at` at the persisted deadline. Capacity is reclaimable at the deadline and any later result is discarded without changing lockout state; Python threads cannot preempt the underlying bcrypt call, so residual CPU work may continue until it returns.
+- `PROXBOX_AUTH_MAX_ACTIVE_KEYS`: maximum active API-key hashes examined by one request (default 32, validated range 1-1024). Authenticated create/reactivate calls return `409 active_api_key_limit_reached` rather than crossing it. A legacy over-limit database logs recovery guidance and scans only the oldest bounded set; use one of those keys to deactivate excess rows, or temporarily raise the bound and restart if none is available.
+- `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`: optional explicit secret (minimum 32 bytes) used for opaque lockout identities. When absent, proxbox-api atomically creates a private sibling key file so clean environments still start safely.
+- `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`: optional identity-key path; defaults beside the SQLite database as `<database>.auth-lockout.key`. It must share durable storage with the database and have no group/other permissions. The database binds its non-secret fingerprint and startup pins the verified material in memory; loss/replacement is fatal on restart and post-start file mutation does not change live identities. Use the documented offline `rebind-key` procedure for deliberate recovery.
+- `PROXBOX_TRUSTED_PROXIES`: comma-separated explicit proxy CIDRs allowed to supply `X-Forwarded-For`. Empty trusts no caller in raw/Granian deployments or when the nginx image is launched with a custom command; invalid entries fail startup. Only the bundled nginx/supervisor topology prepends its protected `127.0.0.1/32` Uvicorn hop. External proxy deployments must list exact proxy peer CIDRs and keep the application port private. Uvicorn/FastAPI entrypoints must use `--no-proxy-headers` so the application resolves trust from the real transport peer.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
@@ -357,6 +382,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 | n/a | `custom_fields_enabled` | false (deprecated legacy reflection custom fields; sidecars are standard. No env override.) |
+| n/a | `hardware_discovery_sync_nic_macs` | false (plugin-only; requires `hardware_discovery_enabled=true`; missing/older plugin field is false.) |
 
 ### Task-history sync ownership
 

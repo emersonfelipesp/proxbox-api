@@ -27,7 +27,7 @@ docs/
 ├── api/                        # HTTP and WebSocket API reference
 │   ├── http-reference.md
 │   ├── websocket-reference.md
-│   ├── cache.md
+│   ├── cache.md                # Cache/reconcile plus aggregate auth capacity/row/reservation metrics
 │   └── cluster-ha.md
 ├── sync/                       # Sync workflow documentation
 │   ├── workflows.md
@@ -36,6 +36,7 @@ docs/
 │   ├── overwrite-flags.md
 │   └── scheduler-container.md
 ├── operations/                 # Operational guides
+│   ├── database.md             # SQLite target/auth guard, startup/runtime locks, key binding, migration, recovery
 │   ├── custom-fields.md        # Custom-field reconcile and recovery procedure
 │   ├── firecracker.md          # Firecracker host-agent provisioning
 │   └── hardware-discovery.md   # Hardware discovery and DCIM sync
@@ -66,6 +67,9 @@ uv run mkdocs build
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
 - API reference in `docs/api/` should match the actual route signatures in `proxbox_api/routes/`.
+- Auth-lockout documentation must distinguish bcrypt reservation-capacity 503s
+  from bounded failure-row partition saturation. Keep the English and pt-BR
+  cache metrics tables aligned with `get_auth_lockout_metrics()`.
 - VM interface sync docs must describe `vm_interface_sync_strategy` with
   `guest_os_model` as the default and `legacy_rename` as deprecated
   compatibility mode. Public VM interface stream routes are owned by

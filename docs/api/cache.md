@@ -6,9 +6,9 @@ The cache API provides endpoints for monitoring and managing the in-memory cache
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /cache` | Inspect all caches (Proxbox and NetBox GET cache) with metrics and sample keys |
-| `GET /cache/metrics` | Get NetBox GET cache metrics as JSON |
-| `GET /cache/metrics/prometheus` | Get NetBox GET cache metrics in Prometheus exposition format |
+| `GET /cache` | Inspect caches and nested reconciliation/auth metrics with sample cache keys |
+| `GET /cache/metrics` | Get cache, reconciliation, and aggregate authentication metrics as JSON |
+| `GET /cache/metrics/prometheus` | Get the same metric families in Prometheus exposition format |
 | `GET /clear-cache` | Clear both Proxbox and NetBox GET caches |
 
 ## Response Schemas
@@ -37,13 +37,23 @@ Returns a combined view of all caches:
   },
   "netbox_get_cache_sample": [
     {"api_id": 123456, "path": "/api/dcim/devices/", "query": ""}
-  ]
+  ],
+  "auth_lockout_metrics": {
+    "proxbox_auth_failures_total": 8,
+    "proxbox_auth_capacity_rejections_total": 1,
+    "proxbox_auth_orphan_compactions_total": 2,
+    "proxbox_auth_bucket_rows": 6,
+    "proxbox_auth_verifications_in_flight": 2,
+    "proxbox_auth_expired_orphan_reservations": 1
+  }
 }
 ```
 
 ### GET /cache/metrics
 
-Returns NetBox GET cache metrics:
+Returns flattened cache, reconciliation, and aggregate authentication metrics.
+The authentication fields include durable counters plus current failure-row and
+reservation gauges:
 
 ```json
 {
@@ -59,7 +69,13 @@ Returns NetBox GET cache metrics:
   "max_entries": 4096,
   "max_bytes": 52428800,
   "ttl_seconds": 60.0,
-  "oldest_entry_age_seconds": 45.2
+  "oldest_entry_age_seconds": 45.2,
+  "proxbox_auth_failures_total": 8,
+  "proxbox_auth_capacity_rejections_total": 1,
+  "proxbox_auth_orphan_compactions_total": 2,
+  "proxbox_auth_bucket_rows": 6,
+  "proxbox_auth_verifications_in_flight": 2,
+  "proxbox_auth_expired_orphan_reservations": 1
 }
 ```
 
@@ -77,6 +93,10 @@ proxbox_cache_misses 50
 # HELP proxbox_cache_hit_rate Cache hit rate percentage
 # TYPE proxbox_cache_hit_rate gauge
 proxbox_cache_hit_rate 75.0
+...
+# HELP proxbox_auth_verifications_in_flight Current unexpired bcrypt token leases
+# TYPE proxbox_auth_verifications_in_flight gauge
+proxbox_auth_verifications_in_flight 2
 ...
 ```
 
@@ -97,6 +117,21 @@ proxbox_cache_hit_rate 75.0
 | `max_bytes` | gauge | Maximum allowed bytes |
 | `ttl_seconds` | gauge | Current TTL setting |
 | `oldest_entry_age_seconds` | gauge | Age of oldest entry |
+| `proxbox_auth_failures_total` | counter | Rejected authentication attempts across all buckets, including members of a coalesced concurrent cohort |
+| `proxbox_auth_lockouts_total` | counter | Credential buckets that entered lockout |
+| `proxbox_auth_source_lockouts_total` | counter | Normalized sources that exhausted their aggregate failure budget |
+| `proxbox_auth_recoveries_total` | counter | Buckets cleared through explicit local recovery operations |
+| `proxbox_auth_capacity_rejections_total` | counter | Verification admissions rejected by a per-bucket/global in-flight limit plus failed identities whose bounded credential/source row partition could not persist |
+| `proxbox_auth_orphan_compactions_total` | counter | Expired reservation tokens compacted after the supported one-hour cleanup horizon |
+| `proxbox_auth_active_lockouts` | gauge | Credential buckets currently locked |
+| `proxbox_auth_active_source_lockouts` | gauge | Source budgets currently locked |
+| `proxbox_auth_bucket_rows` | gauge | Current durable credential/source failure rows across both bounded partitions |
+| `proxbox_auth_verifications_in_flight` | gauge | Unexpired per-token reservations currently consuming bcrypt concurrency capacity |
+| `proxbox_auth_expired_orphan_reservations` | gauge | Expired crash-token rows retained within the supported cleanup horizon; they do not consume capacity or permit accounting after the terminal deadline |
+
+Authentication metrics are aggregate and intentionally have no source,
+credential, bucket, or reservation-token labels. This prevents API-key
+fingerprints and high-cardinality client identities from entering telemetry.
 
 ## Environment Variables
 

@@ -26,6 +26,7 @@ proxmox-sdk (biblioteca — dona de todas as primitivas SSH + parsers)
 
 netbox-proxbox (plugin NetBox)
   ├── ProxboxPluginSettings.hardware_discovery_enabled
+  ├── ProxboxPluginSettings.hardware_discovery_sync_nic_macs
   └── modelo NodeSSHCredential + endpoint REST
         /api/plugins/proxbox/ssh-credentials/by-node/{node_id}/credentials/
 ```
@@ -39,6 +40,9 @@ pacote e falha se encontrar qualquer import de `paramiko`, `asyncssh`,
 
 1. No NetBox → Plugins → Proxbox → Settings, ative
    **Hardware discovery enabled**.
+   Para gravar registros MAC nativos das NICs físicas, ative também
+   **Sync physical NIC MAC addresses** no mesmo cartão. Essa segunda opção é
+   independente e desativada por padrão.
 2. Para cada nó, crie uma `NodeSSHCredential` (NetBox → Plugins → Proxbox →
    SSH Credentials). Configure:
    - username
@@ -104,6 +108,33 @@ inventario:
 As escritas passam pelo PATCH com drift-detect existente
 (`netbox_rest.rest_patch_async`), então um segundo sync consecutivo bem-sucedido
 não gera nenhum `extras.ObjectChange` para esses campos.
+
+## Endereços MAC de NICs físicas
+
+A descoberta é o único caminho capaz de preencher o MAC de uma NIC **física**.
+O `/nodes/{node}/network` expõe a opção `hwaddress` apenas para bridges e bonds,
+portanto o `sync_node_network()` (somente API) deixa interfaces como `eno1` sem
+MAC. Quando uma execução de descoberta obtém `NicFacts.mac_address` (via
+`ethtool`/`ip`, ambos já na allowlist de comandos SSH), o `reflect_to_netbox()`
+reconcilia o valor pelo mesmo helper
+`services/sync/mac_address.py::reconcile_mac_for_interface` usado pelo caminho
+de node-network para MACs de bridge/bond — de modo que ambos produzem linhas
+`dcim.MACAddress` idênticas e definem `primary_mac_address`.
+
+Este é um campo **nativo** do NetBox, não um custom field, portanto não é
+afetado pelo gate `custom_fields_enabled`. Uma falha de MAC é registrada como
+warning e nunca aborta a execução da descoberta.
+
+A gravação de MAC exige duas opções explícitas na UI do NetBox:
+`hardware_discovery_enabled=true` **e**
+`hardware_discovery_sync_nic_macs=true`. Ambas têm padrão `false`, e a ausência
+da configuração de MAC em uma versão anterior do netbox-proxbox é tratada como
+`false`. Isso mantém upgrades sem novas gravações para operadores que já tinham
+ativado a descoberta apenas para chassis ou link. `access_methods=api_ssh` e uma
+`NodeSSHCredential` completa com fingerprint de host fixado continuam
+obrigatórios. O node-network sync permanece somente API e não abre sockets SSH.
+As linhas MAC criadas ou reconciliadas para NICs físicas recebem a mesma tag
+Proxbox usada nas linhas MAC de bridges e bonds.
 
 ## Fronteira de segurança
 

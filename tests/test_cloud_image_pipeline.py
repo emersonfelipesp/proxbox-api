@@ -1160,7 +1160,9 @@ async def test_execute_route_requires_authentication_before_subprocess(
 
 
 @pytest.mark.asyncio
-async def test_request_validation_response_never_reflects_secret_input() -> None:
+async def test_request_validation_response_never_reflects_secret_input(
+    client_with_fake_netbox,
+) -> None:
     userdata_secret = "PACKER-USERDATA-PASSWORD-SECRET"
     signed_url_secret = "PACKER-SIGNED-URL-SECRET"
 

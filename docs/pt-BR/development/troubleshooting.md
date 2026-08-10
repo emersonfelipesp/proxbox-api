@@ -86,13 +86,25 @@ Resolucao:
 
 ## Estado do banco
 
-Nota:
+Sintomas:
 
-- O startup atual cria tabelas ausentes sem apagar dados existentes.
+- O processo termina antes de `/health` ficar disponivel.
+- Os logs informam destino relativo/conflitante, delimitador de query na URL,
+  conflito com auth legado, falha no lock ou na verificacao de WAL/escrita.
 
-Se necessario:
+Resolucao:
 
-- Faca backup de `database.db` antes de experimentos com schema.
+- Inspecione o ambiente da unit/container e resolva o destino absoluto exato; o
+  servico nunca usa um banco no diretorio corrente como fallback.
+- Corrija ownership, permissao de busca, espaco livre, suporte WAL ou modo do
+  mount para o destino e sidecars `-wal`, `-shm` e `.startup.lock`. Nunca remova
+  um lock usado por workers ativos.
+- Preserve o banco junto com arquivos `-wal` e `-shm` ativos em um backup com o
+  servico parado.
+- Siga [Operacoes do banco de dados](../operations/database.md) antes de mover o
+  arquivo ou alterar qualquer variavel de banco. O override isolado e auditado
+  desse guia e a unica forma suportada de iniciar um control plane novo enquanto
+  outro banco legado permanece.
 
 ## Problemas com SSE
 

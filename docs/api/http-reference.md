@@ -10,8 +10,8 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /version` - Backend service version for external cache invalidation.
 - `GET /cache` - Inspect the in-memory cache snapshot.
 - `GET /clear-cache` - Clear in-memory caches, including the NetBox GET cache and the custom-field reconcile cache.
-- `GET /cache/metrics` - JSON snapshot of NetBox GET cache metrics (hit ratio, entries, byte usage).
-- `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same metrics for scrape jobs.
+- `GET /cache/metrics` - JSON snapshot of cache, reconciliation, and aggregate auth-lockout metrics, including failure-row count and in-flight/orphan reservation gauges.
+- `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same label-free metric families for scrape jobs.
 
 ## Authentication (`/auth`)
 
@@ -19,10 +19,10 @@ All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. 
 
 - `GET /auth/bootstrap-status` - Check whether first-time key registration is still needed. Auth-exempt. `needs_bootstrap` is `false` once the durable bootstrap claim exists or any key row (active or inactive) exists.
 - `POST /auth/register-key` - Register the first API key. Auth-exempt; the durable singleton bootstrap claim and the bcrypt hash are committed in one transaction, so bootstrap can be consumed exactly once per database. Any later call — including after every key is deleted or deactivated — returns `409 Conflict`.
-- `POST /auth/keys` - Create a new API key. Returns the raw key value once; store it securely.
+- `POST /auth/keys` - Create a new API key. Returns the raw key value once; store it securely. Returns `409` (`active_api_key_limit_reached`) if activation would exceed `PROXBOX_AUTH_MAX_ACTIVE_KEYS`.
 - `GET /auth/keys` - List all API keys. Key values are redacted (only metadata is returned).
 - `DELETE /auth/keys/{key_id}` - Delete an API key by ID. Refuses to delete the final active key with `409` (`last_active_api_key_required`); create and verify a replacement first.
-- `POST /auth/keys/{key_id}/activate` - Re-activate a previously deactivated key.
+- `POST /auth/keys/{key_id}/activate` - Re-activate a previously deactivated key. Returns `409` (`active_api_key_limit_reached`) if activation would exceed the configured cap.
 - `POST /auth/keys/{key_id}/deactivate` - Deactivate an active key without deleting it. Refuses to deactivate the final active key with `409` (`last_active_api_key_required`).
 
 ## Admin

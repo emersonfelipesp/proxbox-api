@@ -820,6 +820,30 @@ jobs:
           echo "NETBOX_TOKEN_ID=$TOKEN_ID" >> "$GITHUB_ENV"
           echo "NETBOX_API_TOKEN=$TOKEN_VALUE" >> "$GITHUB_ENV"
 
+          # The E2E VM fixtures intentionally exercise the deprecated custom-field
+          # compatibility path. Production remains default-off; opt in only for
+          # this isolated NetBox instance through the canonical plugin setting.
+          SETTINGS_JSON=$(curl -kfsS \
+            -H "Authorization: Token ${TOKEN_VALUE}" \
+            "${{ matrix.netbox_public_url }}/api/plugins/proxbox/settings/")
+          export SETTINGS_JSON
+          SETTINGS_ID=$(python3 - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["SETTINGS_JSON"])
+          rows = payload.get("results", payload) if isinstance(payload, dict) else payload
+          if not isinstance(rows, list) or len(rows) != 1:
+              raise SystemExit(f"Expected one Proxbox settings row, got: {payload!r}")
+          print(rows[0]["id"])
+          PY
+          )
+          curl -kfsS -X PATCH \
+            -H "Authorization: Token ${TOKEN_VALUE}" \
+            -H "Content-Type: application/json" \
+            --data '{"custom_fields_enabled":true}' \
+            "${{ matrix.netbox_public_url }}/api/plugins/proxbox/settings/${SETTINGS_ID}/"
+
       - name: Start Proxbox API backend container
         run: |
           set -eux

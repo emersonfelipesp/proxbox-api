@@ -43,7 +43,30 @@ The `Dockerfile` at the repo root uses five stages:
 
 ## Key Notes
 
+- Raw and nginx-backed Uvicorn launch with `--no-proxy-headers`; Granian has no
+  forwarded-header wrapper. Preserve this so the application receives the real
+  transport peer and applies `PROXBOX_TRUSTED_PROXIES` itself.
+- Only the bundled nginx/supervisor topology prepends `127.0.0.1/32` to
+  `PROXBOX_TRUSTED_PROXIES`; its protected loopback Uvicorn hop must remain the
+  only application peer inside that topology. A custom command supplied to the
+  nginx image is dispatched before this default and therefore inherits no
+  trusted proxy unless the operator configured one. Raw/Granian deployments
+  likewise default to no trusted proxies and must list external peers explicitly.
 - `supervisor/proxbox.conf` runs `uvicorn proxbox_api.main:app` — update this if the ASGI entry point changes.
+- Both runtime-base stages set the internal fallback
+  `PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db` and declare `/data` as a
+  volume. The fallback is consulted only when neither operator-facing
+  `PROXBOX_DATABASE_PATH` nor `DATABASE_URL` is set. Lifespan startup requires
+  the selected target and its parent to support SQLite WAL writes plus the
+  persistent sibling `.startup.lock`; that lock serializes probe, tables, and
+  migrations across container workers. It never creates a cwd fallback
+  database. Custom targets must be absolute and mounted writable. Raw `?`
+  delimiters in `DATABASE_URL` are rejected.
+- The fresh-database-with-legacy recovery override is intentionally
+  single-worker. Stop the normal topology and set `UVICORN_WORKERS=1` before
+  starting recovery; the app rejects the override under the normal four-worker
+  production setting. Remove the override after first-key registration, then
+  restore the normal worker count.
 - The nginx image always uses HTTPS; there is no HTTP-only nginx variant.
 - The granian image requires the TLS key in PKCS#8 format; `entrypoint-granian.sh` converts it automatically with `openssl pkcs8`.
 - For Let's Encrypt / production TLS, configure nginx externally with cert volume mounts.

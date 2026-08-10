@@ -258,7 +258,7 @@ async def create_proxmox_devices(  # noqa: C901
                     }
                 )
             if hw_nodes:
-                await run_for_nodes(nb, hw_nodes, bridge=bridge)
+                await run_for_nodes(nb, hw_nodes, bridge=bridge, tag_refs=tag_refs)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Hardware discovery pass failed: %s", exc)
 

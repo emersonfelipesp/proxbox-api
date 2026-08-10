@@ -23,6 +23,10 @@ Endpoints for managing NetBox endpoint records and API diagnostics.
 - Status and OpenAPI handlers use an established NetBox session dependency.
 - The current model supports NetBox token v1 and v2 shapes (`token_version`, `token_key`, `token`).
 - This package is where NetBox endpoint persistence meets the runtime connection state used by the rest of the app.
+- After a successful endpoint create, update, or delete, invalidate the endpoint-host,
+  NetBox API-client, and plugin-settings caches. Endpoint creation otherwise leaves
+  the pre-connection default settings cached for five minutes, hiding the operator's
+  NetBox-backed feature flags from the newly configured runtime.
 
 ## Extension Guidance
 

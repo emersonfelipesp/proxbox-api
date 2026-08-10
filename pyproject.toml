@@ -68,6 +68,7 @@ dev = [
 ]
 
 [project.scripts]
+proxbox-auth-lockout = "proxbox_api.auth_lockout_cli:main"
 proxbox-proxmox-codegen = "proxbox_api.proxmox_codegen.cli:main"
 proxbox-schema = "proxbox_api.schema_cli:main"
 

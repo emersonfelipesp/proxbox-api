@@ -8,6 +8,8 @@ pynetbox_api
 # Ignore database file
 proxbox_api/database.db
 *.db
+*.auth-lockout.key
+*.auth-lockout.key.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

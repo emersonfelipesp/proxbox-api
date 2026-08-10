@@ -4,13 +4,35 @@
 
 ## Localizacao do banco
 
-- Arquivo SQLite padrao: `database.db` na raiz do repositorio.
-- A inicializacao com varios workers serializa a criacao e as migracoes do
-  schema com um lock consultivo adjacente `database.db.bootstrap.lock`. O lock
-  nao contem dados e e liberado automaticamente pelo kernel quando o worker
-  termina; mantenha-o no mesmo sistema de arquivos local do banco SQLite.
+- Arquivo SQLite padrao: `$XDG_DATA_HOME/proxbox/database.db` ou
+  `~/.local/share/proxbox/database.db` fora de containers; imagens publicadas
+  usam um fallback interno `/data/database.db` sem definir variavel do operador.
+- `PROXBOX_DATABASE_PATH` seleciona outro caminho absoluto.
+- `DATABASE_URL` mantem compatibilidade com URLs absolutas `sqlite`,
+  `sqlite+pysqlite` e `sqlite+aiosqlite`. URLs relativas/em memoria e todo
+  delimitador de query `?` literal sao recusados.
+- Se ambas as variaveis estiverem presentes, devem resolver para o mesmo
+  arquivo. Nao ha regra de precedencia nem fallback para o diretorio corrente.
 - ORM: SQLModel.
-- As tabelas sao criadas automaticamente no startup.
+- Um `.startup.lock` persistente e especifico do destino serializa probe WAL,
+  criacao de tabelas, validacao completa dos schemas de buckets, reservas,
+  metricas e bind de chave do auth-lockout e todas as migrations entre workers.
+  O SQLite instala o busy timeout de cinco segundos antes de inspecionar ou
+  negociar o modo WAL. Uma falha e fatal.
+- Todo destino e comparado aos locais legados implicitos para impedir que um
+  banco vazio reabra o bootstrap de chave. O override exato de um startup esta
+  documentado no guia de operacoes.
+
+Veja [Operacoes do banco de dados](../operations/database.md) para configuracao
+em container e systemd, migracao segura, backup e troubleshooting de startup.
+- Bloqueios isolados por credencial usam `auth_lockout_buckets` versionada junto
+  com reservas independentes por token em `auth_lockout_reservations`. A
+  expiracao da reserva altera capacidade sem apagar evidencia de crash; cada
+  expiracao renovavel e limitada por deadline absoluto persistido para que um
+  verificador travado nao retenha admissao. As
+  linhas duraveis de falha usam particoes limitadas separadas de credencial e
+  origem. A tabela legada `authlockout` permanece intacta para rollback, mas suas
+  linhas ambiguas por IP nao sao importadas.
 
 ## Endpoint NetBox
 
@@ -200,24 +222,38 @@ pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1
 
 A maioria dos tunaveis em runtime resolvem agora na ordem **variavel de ambiente > `ProxboxPluginSettings` (pagina de configuracoes do plugin no NetBox) > padrao embutido**, via `proxbox_api/runtime_settings.py`. O TTL do cache de configuracoes e de 5 minutos, entao mudancas feitas na pagina de configuracoes do plugin entram em efeito no proximo run de sync sem precisar reiniciar o backend. Definir uma variavel de ambiente continua funcionando como override; deixa-la em branco torna a pagina de configuracoes do plugin a fonte autoritativa.
 
-Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes da conexao com o NetBox existir ou sao infraestrutura exclusiva do operador: `PROXBOX_BIND_HOST`, `PROXBOX_RATE_LIMIT`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, `PROXBOX_CORS_EXTRA_ORIGINS` e `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS`. As demais mapeiam 1:1 para campos de `ProxboxPluginSettings` e podem ser editadas pela pagina de configuracoes do plugin no NetBox.
+Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes da conexao com o NetBox existir ou sao infraestrutura exclusiva do operador: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, o `DATABASE_URL` SQLite, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, `PROXBOX_AUTH_MAX_ACTIVE_KEYS`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` / `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`, `PROXBOX_TRUSTED_PROXIES`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR` e `PROXBOX_CORS_EXTRA_ORIGINS`. As demais mapeiam 1:1 para campos de `ProxboxPluginSettings` e podem ser editadas pela pagina de configuracoes do plugin no NetBox.
 
 ## Variaveis de ambiente
 
 | Variavel | Padrao | Descricao |
 |----------|--------|-----------|
+| `PROXBOX_DATABASE_PATH` | nao definido | Caminho absoluto opcional do SQLite operacional. Caminhos relativos sao recusados e o servico nunca usa o diretorio corrente como fallback. |
+| `DATABASE_URL` | nao definido | Entrada compativel para URL SQLite local absoluta, como `sqlite:////var/lib/proxbox-api/database.db`. Se usada com `PROXBOX_DATABASE_PATH`, ambas devem selecionar o mesmo arquivo. Queries e `?` literal sao recusados. |
+| `UVICORN_WORKERS` | padrao da imagem `1`; producao pode alterar | Contagem usada pelo entrypoint raw. Deve ser explicitamente `1` no recovery isolado de banco novo. |
+| `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY` | nao definido | Override sensivel com valor exato `1` para um startup auditado de control plane novo enquanto outro banco legado existe. Pare os workers, defina `UVICORN_WORKERS=1`, isole trafego, registre a primeira chave, remova o override e restaure workers. Um marcador duravel impede reuso. |
 | `PROXBOX_NETBOX_TIMEOUT` | `120` | Timeout da API NetBox em segundos. Aplicado ao `netbox-sdk` e as requisicoes internas. |
 | `PROXBOX_NETBOX_MAX_RETRIES` | `5` | Numero de tentativas para falhas transientes do NetBox. |
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Delay inicial, em segundos, para retries do NetBox. |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximo de requisicoes simultaneas ao NetBox. Mantenha baixo (1-2) para evitar agotar o pool de conexoes PostgreSQL do NetBox. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximo de fetches concorrentes de configuracao de VM Proxmox durante o sync de VMs e discos. |
-| `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` | `30` | Prazo maximo, em segundos, para uma requisicao de configuracao de VM no sync completo. O timeout falha apenas essa VM para que a etapa ainda termine com um resumo final. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Timeout por chamada (segundos, intervalo 1-600) para a requisicao `network-get-interfaces` do guest-agent QEMU. Guests com muitas interfaces (VRRP/alias) podem demorar a enumerar; aumente este valor se as buscas de interface via guest-agent expirarem. Mapeia para o campo `ProxboxPluginSettings.guest_agent_timeout`. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Override opcional para `ProxboxPluginSettings.reconciliation_engine`. Valores validos: `python`, `compare` e `rust`. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (sync de VM, discos) / `4` (snapshots) | Maximo de operacoes concorrentes de escrita no NetBox. O padrao varia por servico de sync. A reconciliacao de task history usa requisicoes bulk limitadas em vez de dispatch de escrita por VM. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (maioria dos fluxos) / `4` (task-history) | Maximo de operacoes concorrentes de leitura no Proxmox. O padrao varia por servico de sync. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Override legado de concorrencia usado por alguns entrypoints de sync. |
-| `PROXBOX_RATE_LIMIT` | `60` | Maximo de requisicoes por minuto por endereco IP. |
+| `PROXBOX_RATE_LIMIT` | `300` | Maximo de requisicoes por minuto por endereco IP. |
+| `PROXBOX_AUTH_LOCKOUT_THRESHOLD` | `5` | Falhas permitidas por bucket composto de origem/credencial. Intervalo 1-100; valor invalido interrompe o startup. |
+| `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD` | `50` | Falhas permitidas entre todas as credenciais apresentadas por uma origem normalizada. Intervalo 1-100000. |
+| `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS` | `300` | Janela fixa de falhas/bloqueio em segundos. Intervalo 1-86400; valor invalido interrompe o startup. |
+| `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS` | `10000` | Maximo total de linhas duraveis de falha, dividido em particoes independentes de credencial/origem. Intervalo 2-1000000. Falhas sem chave alocam somente linhas de origem. A admissao sempre usa o pool normal por origem/global e nao depende de linha de falha livre. Na saturacao, a linha expirada segura mais antiga e removida primeiro; uma rejeicao que nao pode ser persistida falha fechada e avanca a contabilidade agregada limitada. |
+| `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT` | `32` | Concorrência bcrypt separada por bucket. Intervalo 1-1024; esgotamento é pressão transitória e nunca incrementa falhas. |
+| `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT` | `256` | Concorrência bcrypt global entre workers, imposta atomicamente pelas reservas compartilhadas. Intervalo 1-4096; pares distintos de origem/chave não a contornam. |
+| `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS` | `180` | Lifetime absoluto de um verificador bcrypt admitido. Intervalo 0.1-3600 segundos. Heartbeats não passam do deadline persistido; a capacidade é recuperada e resultados tardios são descartados, embora a thread possa consumir CPU até o bcrypt retornar. |
+| `PROXBOX_AUTH_MAX_ACTIVE_KEYS` | `32` | Maximo de hashes de chaves de API ativas examinados por uma requisicao. Intervalo 1-1024. Criacao/reativacao autenticadas nao ultrapassam o teto. O startup avisa sobre banco legado acima do limite e o recovery examina somente as chaves mais antigas dentro do bound. |
+| `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` | não definido | Chave explícita opcional para identidades opacas; mínimo de 32 bytes. Quando ausente, o proxbox-api publica atomicamente um arquivo privado irmão por meio de arquivo temporário no mesmo diretório, flush/fsync, `os.replace` e fsync do diretório pai. Mantenha a fonte estável durante rotações da chave de criptografia. |
+| `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE` | `<banco>.auth-lockout.key` | Caminho opcional para a chave de identidade criada/lida automaticamente. O arquivo não pode ter permissões para grupo/outros e deve compartilhar o armazenamento durável do SQLite. Depois do bind do fingerprint não secreto, o startup fixa o material verificado na memória; perda/substituição é fatal no próximo startup, e mutação do arquivo após startup não altera identidades vivas. Use recovery offline `proxbox-auth-lockout rebind-key`. |
+| `PROXBOX_TRUSTED_PROXIES` | vazio em raw/Granian/comandos customizados; `127.0.0.1/32` na topologia nginx distribuida | CIDRs/IPs de proxies reversos confiaveis, separados por virgula. Entradas invalidas interrompem o startup. Somente esses peers podem fornecer `X-Forwarded-For`, e confianca nunca ignora autenticacao ou bloqueio. A imagem nginx adiciona o hop loopback apenas ao iniciar supervisor/nginx; comandos customizados mantem o padrao vazio. Deployments externos devem configurar os CIDRs exatos dos peers e manter a porta privada. Execute Uvicorn/FastAPI CLI com `--no-proxy-headers`; os entrypoints distribuidos ja fazem isso. |
 | `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` | nao definido | Quando `1`, `true` ou `yes`, permite execucao SSH remota no Cloud Image Pipeline. Desabilitado por padrao. Mantenha ausente/falso em staging e producao ate o netbox-packer possuir e validar seu contrato real de consumidor; a fixture consumer-shaped local pertence ao produtor e nao remove este HOLD. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Tamanho do lote de sync de backups. Reduza para diminuir a pressao de escrita no NetBox. |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay em milissegundos entre lotes de backup. |
