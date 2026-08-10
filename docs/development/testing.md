@@ -50,6 +50,12 @@ uv run pytest tests/ -n auto \
   --cov-report=xml:coverage.xml
 ```
 
+The Gitea pre-merge gate (`.gitea/workflows/ci.yml`) runs the same suite with
+statement-only coverage (`COVERAGE_CORE=sysmon`, no `--cov-branch`, `-n 8
+--dist worksteal`) so the job fits the shared runner pool's 60-minute member;
+branch coverage remains authoritative in the GitHub-hosted `.github/` CI and
+in the local invocation above.
+
 Generated schema output (`proxbox_api/generated/`) and E2E support code
 (`proxbox_api/e2e/`) are excluded from the core metric. The E2E support package
 is covered by the separate Docker E2E matrix, while generated declarations would

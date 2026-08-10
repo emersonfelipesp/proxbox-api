@@ -91,13 +91,16 @@ jobs:
         # core on Python 3.12 (branch events need 3.14), worksteal rebalances
         # xdist stragglers, and dropping -v/term-missing removes megabytes of
         # log output. Branch coverage still runs in the .github/ CI on
-        # GitHub-hosted runners.
+        # GitHub-hosted runners. -n is pinned, not auto: the runner containers
+        # carry an 8-CPU NanoCpus quota without a cpuset, so os.cpu_count()
+        # reports the 28-core host and -n auto oversubscribes 28 workers onto
+        # 8 CPUs of quota.
         env:
           COVERAGE_CORE: sysmon
         run: |
           set -eo pipefail
           export PATH="$HOME/.local/bin:$PATH"
-          uv run pytest tests/ -n auto --dist worksteal \
+          uv run pytest tests/ -n 8 --dist worksteal \
             --ignore=tests/e2e \
             --ignore=tests/test_generated_proxmox_routes.py \
             --tb=short \
