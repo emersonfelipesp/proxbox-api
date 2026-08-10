@@ -4,8 +4,15 @@ name: CI
 # is intentionally unschedulable until N-MultiCloud/nmulticloud-context#204
 # provisions an ephemeral, unprivileged runner with no production credentials.
 
+# push runs are limited to the long-lived branches: an unrestricted push
+# trigger made every feature-branch push start a push run AND a pull_request
+# run of the same tree, and the two ~55m suites kept landing together on one
+# capacity-2, 8-CPU-quota runner where both overran its 60m timeout.
 on:
   push:
+    branches:
+      - main
+      - develop
   pull_request:
 
 concurrency:
