@@ -99,13 +99,22 @@ def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
     assert checkout_step["uses"] == ("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd")
     assert checkout_step["with"]["persist-credentials"] is False
 
-    coverage_command = steps["Core tests with coverage"]["run"]
+    coverage_step = steps["Core tests with coverage"]
+    coverage_command = coverage_step["run"]
     assert "--ignore=tests/e2e" in coverage_command
     assert "--ignore=tests/test_generated_proxmox_routes.py" in coverage_command
     assert "--cov=proxbox_api" in coverage_command
-    assert "--cov-branch" in coverage_command
-    assert "--cov-report=term-missing" in coverage_command
     assert "--cov-report=xml:coverage.xml" in coverage_command
+    # The Gitea gate deliberately runs statement-only coverage so coverage.py
+    # can use its low-overhead sysmon core on Python 3.12; branch coverage
+    # stays in the GitHub-hosted .github/ CI. The worker count is pinned
+    # because the runner containers have an 8-CPU quota while os.cpu_count()
+    # reports the host's cores.
+    assert "--cov-branch" not in coverage_command
+    assert "--cov-report=term-missing" not in coverage_command
+    assert "-n 8" in coverage_command
+    assert "--dist worksteal" in coverage_command
+    assert coverage_step["env"]["COVERAGE_CORE"] == "sysmon"
 
     upload_step = steps["Upload coverage report"]
     assert upload_step["if"] == "${{ always() }}"

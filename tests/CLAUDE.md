@@ -106,7 +106,10 @@ uv run pytest tests
 # Single file
 uv run pytest tests/test_vm_sync.py
 
-# With coverage
+# With coverage (local / GitHub CI shape; the Gitea gate runs statement-only
+# coverage with COVERAGE_CORE=sysmon and -n 8 --dist worksteal to fit its
+# runner-pool timeout — see .gitea/workflows/ci.yml and
+# tests/test_release_workflows.py)
 uv run pytest tests/ -n auto \
   --ignore=tests/e2e \
   --ignore=tests/test_generated_proxmox_routes.py \
