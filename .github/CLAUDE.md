@@ -11,13 +11,16 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Purpose
 
-GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.github/workflows/`.
+GitHub and Gitea Actions CI/CD workflows for `proxbox-api`. Public workflows
+live under `.github/workflows/`; private registry and deployment workflows live
+under `.gitea/workflows/`.
 
 ## Workflow Index
 
 | File | Trigger | What it does |
 |------|---------|--------------|
-| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`) | Requires the tag to equal current green `develop`; builds without credentials, publishes and re-hashes a repository-linked immutable package with the short-lived Actions token. RC tags alone are pushed to GitHub. Runners: `ci-untrusted-python312`, then `mirror-host`. |
+| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`) | Requires the tag to equal current green `develop`; builds without credentials, verifies and seals the candidate in another credential-free job, publishes from a fresh job whose `PKG_TOKEN` exists only in the registry-write step, and re-hashes anonymously in a final fresh job. Twine reads credentials only from `TWINE_*`; Gitea API writes use a mode-0600 netrc or the environment-aware manifest helper. RC tags alone are promoted with `GH_MIRROR_TOKEN` through `GIT_ASKPASS`. Every job runs on `ci-untrusted-python312`. |
+| `.gitea/workflows/artifact-v3-compatibility.yml` | Gitea: pull request / manual dispatch | Runs a bounded, disposable upload/download checksum probe for the Gitea-compatible artifact v3 actions on `ci-untrusted-python312`. |
 | `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, then the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
@@ -68,6 +71,14 @@ publish-testpypi.yml (staged package release)
     ├── validate-pypi           (needs: prepare-release + publish-pypi; installs package from PyPI)
     ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish)
     └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox; same 20-minute NetBox readiness gate)
+
+publish-gitea.yml (private package release; every node is a fresh ci-untrusted-python312 job)
+├── validate-source
+├── build-candidate      (needs: validate-source; credential-free)
+├── verify-candidate     (needs: validate-source + build-candidate; credential-free seal)
+├── publish-gitea        (needs: validate-source + verify-candidate; PKG_TOKEN only in upload step)
+├── verify-registry      (needs: validate-source + publish-gitea; anonymous byte comparison)
+└── push-to-github       (RC only; needs: validate-source + verify-registry)
 ```
 
 ## E2E Dependency Modes
@@ -97,6 +108,10 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
 - The `uv.lock` at the repo root must stay in sync with `pyproject.toml` because CI runs `uv sync --frozen`.
 - Release workflows validate that the `pyproject.toml` version matches the Git tag before publishing.
 - Package uploads intentionally do not use `twine --skip-existing`; if an artifact version was consumed, bump to the next `.postN` or `rcN` and publish that immutable version.
+- Package-index credentials are step-scoped `TWINE_USERNAME` / `TWINE_PASSWORD`
+  environment variables, never Twine command-line arguments. The private
+  Gitea link call uses a mode-0600 netrc, and RC Git promotion uses a
+  mode-0500 `GIT_ASKPASS` helper so credentials never enter process argv.
 - Do not add secrets to workflow files — use repository secrets (`PYPI_TOKEN`, `DOCKERHUB_TOKEN`, etc.).
 - Keep `docs/development/ci-e2e-workflows.md`, `docs/pt-BR/development/ci-e2e-workflows.md`, and `docs/development/release-publishing.md` aligned with CI workflow changes.
 - Keep `rust-reconcile.yml` aligned with `proxbox-reconcile-rs/Cargo.toml`,

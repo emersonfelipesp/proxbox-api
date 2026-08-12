@@ -133,8 +133,9 @@ Open the nearest scoped guide for the code you are changing.
   `proxbox-api-staging`. Production is an NMS-dispatched manual run from
   canonical `main`: the default `latest_package` input binds an exact Gitea
   version, while `main_branch` is an explicit override. A successful package
-  deployment and health check publish immutable repository-linked completion
-  evidence; no bypass input can mint that evidence.
+  deployment, installed-version proof, active-image proof, and health check let
+  the workflow export root-issued immutable repository-linked completion
+  evidence; neither workflow code nor a bypass input can mint that evidence.
 - `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
   coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
   coverage-artifact step must pin `actions/upload-artifact@v3` (SHA

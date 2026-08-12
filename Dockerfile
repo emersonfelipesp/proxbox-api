@@ -1,5 +1,5 @@
 # Build dependencies and the app into a virtualenv with uv from the checked-out repo.
-ARG PYTHON_BASE_IMAGE=python:3.13-alpine
+ARG PYTHON_BASE_IMAGE=python:3.13-alpine@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
 
 FROM ${PYTHON_BASE_IMAGE} AS builder
 
@@ -14,7 +14,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 # git is required for DEV_OVERRIDES that install SDK branches during CI smoke runs.
 RUN apk add --no-cache build-base git
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa /uv /usr/local/bin/uv
 
 # Build from the local repository so the image always matches the checked-out commit.
 COPY README.md pyproject.toml uv.lock ./
@@ -164,7 +164,7 @@ FROM runtime-base AS granian
 ARG MKCERT_VERSION=1.4.4
 ARG TARGETARCH
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa /uv /usr/local/bin/uv
 
 RUN apk add --no-cache \
     ca-certificates \
@@ -190,7 +190,7 @@ FROM runtime-base-pyo3-rust AS granian-pyo3-rust
 ARG MKCERT_VERSION=1.4.4
 ARG TARGETARCH
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa /uv /usr/local/bin/uv
 
 RUN apk add --no-cache \
     ca-certificates \

@@ -110,6 +110,10 @@ sequenceDiagram
 - Tags Docker usam a mesma versao do pacote PyPI que passou na validacao. As
   imagens experimentais PyO3/Rust adicionam sufixos `-pyo3-rust` e aliases
   opt-in (`experimental`, `pyo3-rust` e sufixos para variantes HTTPS).
+- O Dockerfile incluido no pacote fixa por digest a base Python 3.13 Alpine e a
+  imagem uv 0.11.28. Altere esses digests somente em uma atualizacao de release
+  revisada e reconstrua o sdist; o recibo de producao vincula o ID da imagem
+  ativa resultante.
 - Jobs E2E pre-publicacao e pos-publicacao aguardam ate 20 minutos para o
   NetBox concluir migracoes/indexacao e exigem `/api/status/` pronto antes de
   configurar tokens ou endpoints do backend.

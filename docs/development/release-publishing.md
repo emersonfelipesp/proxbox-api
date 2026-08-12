@@ -108,6 +108,10 @@ sequenceDiagram
 - Docker image tags use the same version as the PyPI package that passed
   validation. Experimental PyO3/Rust images add `-pyo3-rust` tag suffixes and
   opt-in aliases (`experimental`, `pyo3-rust`, and HTTPS variant suffixes).
+- The package-carried Dockerfile pins the Python 3.13 Alpine base and uv 0.11.28
+  source image by digest. Change either digest only through a reviewed release
+  update and rebuild the sdist; production receipts bind the resulting active
+  image ID.
 - Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
   migrations/search indexing and require `/api/status/` readiness before
   configuring tokens or backend endpoints.

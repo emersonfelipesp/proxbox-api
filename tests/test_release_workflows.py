@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import tarfile
 import tomllib
@@ -286,7 +287,8 @@ def test_ci_docker_builds_use_mirror_backed_python_base_images():
 def test_publish_workflow_routes_rc_tags_to_testpypi_and_releases_to_pypi():
     workflow = _read(PUBLISH_WORKFLOW_PATH)
 
-    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)
+    # BaseLoader constructs strings only and preserves Actions' literal `on` key.
+    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)  # nosec B506
     dispatch_inputs = parsed["on"]["workflow_dispatch"]["inputs"]
 
     assert '- "v*rc*"' in workflow
@@ -402,7 +404,8 @@ def test_gitea_publish_is_single_triggered_and_promotes_only_rc_tags():
 
 def test_gitea_artifact_v3_compatibility_probe_is_bounded_and_disposable():
     workflow = _read(GITEA_ARTIFACT_WORKFLOW_PATH)
-    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)
+    # BaseLoader constructs strings only and preserves Actions' literal `on` key.
+    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)  # nosec B506
 
     assert parsed["on"] == {"pull_request": "", "workflow_dispatch": ""}
     assert parsed["permissions"] == {"contents": "read"}
@@ -515,6 +518,43 @@ def test_source_distribution_is_a_valid_raw_docker_build_context(tmp_path: Path)
     }
     assert all((context / source).exists() for source in raw_context_sources)
 
+    docker = shutil.which("docker")
+    if docker is None:
+        return
+    docker_help = subprocess.run(
+        [docker, "build", "--help"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    ).stdout
+    try:
+        docker_info = subprocess.run(
+            [docker, "info"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return
+    if "--check" not in docker_help or docker_info.returncode != 0:
+        return
+    docker_environment = os.environ.copy()
+    docker_config = tmp_path / "docker-config"
+    docker_config.mkdir()
+    docker_environment["DOCKER_CONFIG"] = str(docker_config)
+    subprocess.run(
+        [docker, "build", "--check", "--target", "raw", "."],
+        check=True,
+        cwd=context,
+        env=docker_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=120,
+    )
+
 
 def test_repository_deploy_workflow_is_nms_source_aware():
     workflow = _read(GITEA_DEPLOY_WORKFLOW_PATH)
@@ -547,6 +587,8 @@ def test_final_tag_promotion_requires_main_package_and_nms_evidence():
     assert "scripts/release_artifacts.py fetch-attestation" in workflow
     assert "https://github.com/emersonfelipesp/proxbox-api.git" in workflow
     assert "GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}" in workflow
+    assert 'GIT_ASKPASS="$SECRET_ROOT/askpass"' in workflow
+    assert "http.https://github.com/.extraheader" not in workflow
     assert workflow.index("fetch-attestation") < workflow.index("GH_TOKEN:")
     assert "gh release create" not in workflow
     assert "rc[0-9]" not in workflow.split('python3 - "$VERSION"', 1)[1].split("PY", 1)[0]

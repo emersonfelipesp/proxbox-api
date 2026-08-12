@@ -539,6 +539,16 @@ def test_dockerfile_keeps_container_default_out_of_operator_path_variable() -> N
 
     assert "PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db" in dockerfile
     assert "PROXBOX_DATABASE_PATH=/data/database.db" not in dockerfile
+    assert (
+        "python:3.13-alpine@sha256:"
+        "540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d"
+        in dockerfile
+    )
+    assert dockerfile.count(
+        "ghcr.io/astral-sh/uv:0.11.28@sha256:"
+        "0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa"
+    ) == 3
+    assert "ghcr.io/astral-sh/uv:latest" not in dockerfile
 
 
 @pytest.mark.parametrize(
