@@ -53,6 +53,8 @@ from proxbox_api.services.auth_lockout import (
 VALID_KEY = "valid-test-api-key-aaaaaaaaaaaaaaaaaaaaaaaa"
 STALE_KEY = "stale-test-api-key-bbbbbbbbbbbbbbbbbbbbbbbbb"
 CLIENT_IP = "10.0.0.42"
+PROCESS_COORDINATION_TIMEOUT_SECONDS = 30.0
+WRITE_TRANSACTION_HOLD_SECONDS = 1.0
 
 
 def _record_failures_in_process(
@@ -100,18 +102,30 @@ def _bootstrap_database_in_process(database_path: str) -> None:
 
 def _hold_write_transaction_in_process(
     database_path: str,
-    ready: Any,
-    release: Any,
+    ready_path: str,
 ) -> None:
     connection = sqlite3.connect(database_path, timeout=5.0, isolation_level=None)
     try:
         connection.execute("PRAGMA busy_timeout=5000")
         connection.execute("BEGIN IMMEDIATE")
-        ready.set()
-        assert release.wait(timeout=5)
+        Path(ready_path).write_text("ready\n", encoding="utf-8")
+        time.sleep(WRITE_TRANSACTION_HOLD_SECONDS)
         connection.rollback()
     finally:
         connection.close()
+
+
+def _wait_for_process_ready(holder: multiprocessing.Process, ready_path: Path) -> None:
+    deadline = time.monotonic() + PROCESS_COORDINATION_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if ready_path.is_file():
+            return
+        if holder.exitcode is not None:
+            break
+        time.sleep(0.01)
+    raise AssertionError(
+        f"write-transaction holder did not become ready; exitcode={holder.exitcode}"
+    )
 
 
 def _finalize_reservation_in_process(
@@ -2615,17 +2629,14 @@ async def test_async_sqlite_connections_receive_production_pragmas(tmp_path) -> 
 def test_sync_runtime_waits_for_concurrent_process_write_transaction(db_engine) -> None:
     database_path = str(db_engine.url.database)
     context = multiprocessing.get_context("spawn")
-    ready = context.Event()
-    release = context.Event()
+    ready_path = Path(database_path).with_suffix(".sync-write-ready")
     holder = context.Process(
         target=_hold_write_transaction_in_process,
-        args=(database_path, ready, release),
+        args=(database_path, str(ready_path)),
     )
     holder.start()
     try:
-        assert ready.wait(timeout=5)
-        timer = threading.Timer(0.2, release.set)
-        timer.start()
+        _wait_for_process_ready(holder, ready_path)
         identity = build_lockout_identity(
             resolve_auth_source_context(CLIENT_IP, None, ()),
             STALE_KEY,
@@ -2638,26 +2649,23 @@ def test_sync_runtime_waits_for_concurrent_process_write_transaction(db_engine) 
                 AuthLockoutPolicy(),
             )
         elapsed = time.monotonic() - started
-        timer.join(timeout=2)
         assert result.credential.attempts == 1
         assert 0.15 <= elapsed < 5
     finally:
-        release.set()
-        holder.join(timeout=5)
+        holder.join(timeout=PROCESS_COORDINATION_TIMEOUT_SECONDS)
         if holder.is_alive():
             holder.terminate()
-            holder.join(timeout=5)
+            holder.join(timeout=PROCESS_COORDINATION_TIMEOUT_SECONDS)
     assert holder.exitcode == 0
 
 
 async def test_async_runtime_waits_for_concurrent_process_write_transaction(db_engine) -> None:
     database_path = str(db_engine.url.database)
     context = multiprocessing.get_context("spawn")
-    ready = context.Event()
-    release = context.Event()
+    ready_path = Path(database_path).with_suffix(".async-write-ready")
     holder = context.Process(
         target=_hold_write_transaction_in_process,
-        args=(database_path, ready, release),
+        args=(database_path, str(ready_path)),
     )
     holder.start()
     async_engine = create_async_engine(
@@ -2667,9 +2675,7 @@ async def test_async_runtime_waits_for_concurrent_process_write_transaction(db_e
     configure_sqlite_engine(async_engine.sync_engine)
     sessions = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
     try:
-        assert ready.wait(timeout=5)
-        timer = threading.Timer(0.2, release.set)
-        timer.start()
+        _wait_for_process_ready(holder, ready_path)
         identity = build_lockout_identity(
             resolve_auth_source_context(CLIENT_IP, None, ()),
             STALE_KEY,
@@ -2682,15 +2688,13 @@ async def test_async_runtime_waits_for_concurrent_process_write_transaction(db_e
                 AuthLockoutPolicy(),
             )
         elapsed = time.monotonic() - started
-        timer.join(timeout=2)
         assert result.credential.attempts == 1
         assert 0.15 <= elapsed < 5
     finally:
-        release.set()
-        holder.join(timeout=5)
+        holder.join(timeout=PROCESS_COORDINATION_TIMEOUT_SECONDS)
         if holder.is_alive():
             holder.terminate()
-            holder.join(timeout=5)
+            holder.join(timeout=PROCESS_COORDINATION_TIMEOUT_SECONDS)
         await async_engine.dispose()
     assert holder.exitcode == 0
 
