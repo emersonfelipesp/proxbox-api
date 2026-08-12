@@ -29,17 +29,24 @@ totalmente gerado upstream.
 
 ### `ci.yml`
 
-A matriz de CI e gerada dinamicamente pelo job `setup`. O gerador emite o
-produto cartesiano de:
+A matriz de CI e gerada pelo helper testado `scripts/ci_e2e_matrix.py`. Ele
+sempre cobre cada transporte, versao suportada do NetBox, modo de pacote
+selecionado e caminho PVE. Runs de push/manual tambem cobrem o produto completo
+de PBS/PDM. Como release duplica os modos, PBS/PDM usam o transporte de base e
+PVE conserva os sete transportes, mantendo a matriz abaixo do limite rigido de
+256 jobs do GitHub.
 
 | Eixo | Origem | Padrao |
 |---|---|---|
-| `base` (combinacao de transporte) | Lista hard-coded em `setup.gen` | 7 combinacoes cobrindo `http_manage`, `https_nginx`, `https_granian` e dual-stack IPv6 |
+| `base` (combinacao de transporte) | `scripts/ci_e2e_matrix.py` | 7 combinacoes cobrindo `http_manage`, `https_nginx`, `https_granian` e dual-stack IPv6 |
 | `netbox_proxbox_mode` | Input `INPUT_NETBOX_PROXBOX_MODE` e o tipo de evento | `dev` em push/PR, `[dev, pypi]` em release |
-| `netbox_version` | `.github/netbox-versions.json` | Tags NetBox certificadas: `v4.5.8`, `v4.5.9` e `v4.6.0` ate `v4.6.4` |
-| `proxmox_service` | Lista hard-coded `["pve", "pbs", "pdm"]` | Tres servicos em todas as execucoes |
+| `netbox_version` | `.github/netbox-versions.json` | Tags NetBox certificadas: `v4.5.8`, `v4.5.9` e `v4.6.0` ate `v4.6.6` |
+| `proxmox_service` | `scripts/ci_e2e_matrix.py` | PVE em cada transporte; PBS/PDM em cada celula push/manual e no transporte base de release |
 
-O produto cartesiano e portanto **7 (transporte) × 1–2 (modo) × 7 (NetBox) × 3 (servico) = 147–294 celulas**.
+Push/manual usam **7 × 1 × 9 × 3 = 189 celulas**. Release usa **2 modos × 9
+versoes do NetBox × (7 transportes PVE + 1 base × 2 servicos sidecar) = 162
+celulas**. A regressao executavel rejeita qualquer matriz de evento acima de
+256 jobs.
 Cada celula usa `fail-fast: false`, entao a falha de uma celula nao aborta o
 restante do run.
 

@@ -230,58 +230,7 @@ jobs:
 
       - name: Generate E2E matrix
         id: gen
-        run: |
-          python3 - <<'PYEOF'
-          import json, os
-          from pathlib import Path
-
-          event = os.environ.get("GITHUB_EVENT_NAME", "push")
-          mode_input = os.environ.get("INPUT_NETBOX_PROXBOX_MODE", "dev")
-          netbox_versions = json.loads(
-              Path(".github/netbox-versions.json").read_text(encoding="utf-8")
-          )
-
-          if event == "release":
-              modes = ["dev", "pypi"]
-          elif event == "workflow_dispatch":
-              modes = [mode_input]
-          else:
-              modes = ["dev"]
-
-          proxmox_services = ["pve", "pbs", "pdm"]
-          base = [
-            {"netbox_transport":"https_nginx","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-nginx","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
-            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
-            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_nginx","proxbox_docker_target":"nginx","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k","network_stack":"ipv4"},
-            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k","network_stack":"ipv4"},
-            {"netbox_transport":"https_granian","netbox_public_url":"https://127.0.0.1:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://127.0.0.1:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"https_granian","proxbox_docker_target":"granian","proxbox_base_url":"https://127.0.0.1:18481","proxbox_host_port":18481,"proxbox_curl_flags":"-k","network_stack":"ipv4"},
-            {"netbox_transport":"http_manage","netbox_public_url":"http://127.0.0.1:18080","netbox_endpoint_host":"netbox-e2e-http","netbox_endpoint_port":8000,"netbox_endpoint_verify_ssl":False,"netbox_wait_url":"http://127.0.0.1:18080/api/","netbox_app_container":"netbox-e2e-http","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://127.0.0.1:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv4"},
-            {"netbox_transport":"https_granian","netbox_public_url":"https://[::1]:18443","netbox_endpoint_host":"netbox-e2e-granian","netbox_endpoint_port":8443,"netbox_endpoint_verify_ssl":True,"netbox_wait_url":"https://[::1]:18443/api/","netbox_app_container":"netbox-e2e-granian","proxbox_transport":"http_raw","proxbox_docker_target":"raw","proxbox_base_url":"http://[::1]:18081","proxbox_host_port":18081,"proxbox_curl_flags":"","network_stack":"ipv6"},
-          ]
-
-          includes = [
-              dict(
-                  **entry,
-                  netbox_proxbox_mode=mode,
-                  netbox_version=ver,
-                  proxmox_service=service,
-              )
-              for entry in base
-              for mode in modes
-              for ver in netbox_versions
-              for service in proxmox_services
-          ]
-          proxbox_image_includes = [
-              {"netbox_proxbox_mode": mode, "proxbox_docker_target": target}
-              for mode in modes
-              for target in sorted({entry["proxbox_docker_target"] for entry in base})
-          ]
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              fh.write(f"matrix={json.dumps({'include': includes})}\n")
-              fh.write(f"netbox_versions={json.dumps(netbox_versions)}\n")
-              fh.write(f"proxmox_services={json.dumps(proxmox_services)}\n")
-              fh.write(f"proxbox_image_matrix={json.dumps({'include': proxbox_image_includes})}\n")
-          PYEOF
+        run: python3 scripts/ci_e2e_matrix.py
         env:
           INPUT_NETBOX_PROXBOX_MODE: ${{ inputs.netbox_proxbox_mode || 'dev' }}
 

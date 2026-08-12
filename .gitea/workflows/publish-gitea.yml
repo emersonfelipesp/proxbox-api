@@ -3,215 +3,250 @@ name: Gitea Package Registry — Publish
 on:
   push:
     tags:
-      - 'v*'
-  create:
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Tag to publish (e.g. v0.0.16rc1 or v0.0.16)'
-        required: true
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-package-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  validate-version:
-    runs-on: mirror-host
+  validate-source:
+    name: Validate canonical release source
+    runs-on: ci-untrusted-python312
     outputs:
-      version: ${{ steps.extract.outputs.version }}
-      is_rc: ${{ steps.extract.outputs.is_rc }}
-      tag: ${{ steps.extract.outputs.tag }}
+      is_rc: ${{ steps.policy.outputs.is_rc }}
+      source_sha: ${{ steps.policy.outputs.source_sha }}
+      tag: ${{ steps.policy.outputs.tag }}
+      version: ${{ steps.policy.outputs.version }}
     steps:
-      - name: Determine tag
-        id: resolve_tag
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_TAG: ${{ inputs.tag_name }}
-        run: |
-          set -euo pipefail
-          # Validate tag format before use (v1.2.3 or v1.2.3rc4)
-          TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            TAG="$INPUT_TAG"
-          elif [ "$EVENT_NAME" = "create" ]; then
-            # create events fire for branches too — skip non-tag refs
-            if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
-              echo "Skipping create event for non-tag ref: ${GITHUB_REF}"
-              exit 0
-            fi
-            TAG="${GITHUB_REF_NAME}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          if ! echo "${TAG}" | grep -qE "${TAG_PATTERN}"; then
-            echo "ERROR: tag '${TAG}' does not match expected pattern ${TAG_PATTERN}"
-            exit 1
-          fi
-          echo "tag=${TAG}" >> "$GITHUB_ENV"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout tag
-        if: ${{ steps.resolve_tag.outputs.tag != '' }}
-        uses: actions/checkout@v4
+      - name: Checkout release source without persisted credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ steps.resolve_tag.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
 
-      - id: extract
-        name: Extract and validate version
-        if: ${{ steps.resolve_tag.outputs.tag != '' }}
+      - name: Bind tag, version, canonical develop, and successful CI
+        id: policy
         env:
-          TAG: ${{ steps.resolve_tag.outputs.tag }}
+          GITEA_API_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]* | v[0-9]*.[0-9]*.[0-9]*rc[0-9]* | v[0-9]*.[0-9]*.[0-9]*.post[0-9]*) ;;
+            *) echo "Invalid release tag: $TAG"; exit 1 ;;
+          esac
+          git fetch --force --no-tags origin \
+            "+refs/heads/develop:refs/remotes/gitea/release-develop" \
+            "+refs/tags/${TAG}:refs/release-policy/candidate"
+          SOURCE_SHA="$(git rev-parse refs/release-policy/candidate^{commit})"
+          DEVELOP_SHA="$(git rev-parse refs/remotes/gitea/release-develop^{commit})"
+          test "$SOURCE_SHA" = "$DEVELOP_SHA"
+          test "$SOURCE_SHA" = "$(git rev-parse HEAD^{commit})"
           VERSION="${TAG#v}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          if echo "${VERSION}" | grep -qE 'rc[0-9]+$'; then
-            echo "is_rc=true" >> "$GITHUB_OUTPUT"
-            echo "RC release: ${VERSION}"
-          else
-            echo "is_rc=false" >> "$GITHUB_OUTPUT"
-            echo "Official release: ${VERSION}"
-          fi
-          # Validate pyproject.toml matches tag
-          PYVER=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
-          if [ "${VERSION}" != "${PYVER}" ]; then
-            echo "ERROR: tag ${TAG} (${VERSION}) does not match pyproject.toml version ${PYVER}"
-            exit 1
-          fi
-          echo "Version ${VERSION} validated against pyproject.toml"
+          python3 - "$VERSION" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          version = sys.argv[1]
+          if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:rc[1-9][0-9]*|\.post[1-9][0-9]*)?", version) is None:
+              raise SystemExit("Release version is not canonical")
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          if project["project"]["name"] != "proxbox_api":
+              raise SystemExit("Unexpected package identity")
+          if project["project"]["version"] != version:
+              raise SystemExit("Tag and pyproject version differ")
+          PY
+          python3 scripts/gitea_ci_gate.py \
+            --owner emersonfelipesp --repository proxbox-api \
+            --source-sha "$SOURCE_SHA" --trusted-actor emersonfelipesp \
+            --required-context "CI / Lint, smoke, and core coverage (push)"
+          printf 'tag=%s\nversion=%s\nsource_sha=%s\n' "$TAG" "$VERSION" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          case "$VERSION" in *rc[0-9]*) echo 'is_rc=true' >> "$GITHUB_OUTPUT" ;; *) echo 'is_rc=false' >> "$GITHUB_OUTPUT" ;; esac
+
+  build-candidate:
+    name: Build credential-free candidate
+    needs: validate-source
+    runs-on: ci-untrusted-python312
+    steps:
+      - name: Checkout validated source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.validate-source.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Isolate uv and managed Python
+        env:
+          UV_ACTION_TOOL_CACHE: ${{ runner.temp }}/proxbox-api-uv-build-${{ github.run_id }}-${{ github.run_attempt }}
+          UV_MANAGED_PYTHON: ${{ runner.temp }}/proxbox-api-python-build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          test ! -e "$UV_ACTION_TOOL_CACHE"
+          test ! -e "$UV_MANAGED_PYTHON"
+          mkdir -p "$UV_ACTION_TOOL_CACHE"
+          printf 'RUNNER_TOOL_CACHE=%s\n' "$UV_ACTION_TOOL_CACHE" >> "$GITHUB_ENV"
+          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$UV_MANAGED_PYTHON" >> "$GITHUB_ENV"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false
+          github-token: ''
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          version: "0.11.28"
+          python-version: "3.12.13"
+
+      - name: Build and bind exact artifacts
+        env:
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          VERSION: ${{ needs.validate-source.outputs.version }}
+        run: |
+          set -euo pipefail
+          case "$(readlink -f "$(uv python find --managed-python 3.12.13)")" in
+            "$UV_PYTHON_INSTALL_DIR"/*) ;;
+            *) exit 1 ;;
+          esac
+          uv build
+          uv run --with twine==6.2.0 python -m twine check dist/*
+          python3 scripts/release_artifacts.py manifest \
+            --dist dist --package proxbox_api --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --manifest release-manifest.json
+          mkdir release-transfer
+          cp dist/*.whl dist/*.tar.gz release-manifest.json \
+            scripts/release_artifacts.py release-transfer/
+
+      - name: Transfer bounded candidate
+        uses: actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de # v3.2.2-node20
+        with:
+          name: private-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-transfer
+          if-no-files-found: error
+          retention-days: 1
 
   publish-gitea:
-    needs: validate-version
-    if: ${{ needs.validate-version.outputs.version != '' }}
+    name: Publish verified candidate to Gitea
+    needs: [validate-source, build-candidate]
     runs-on: mirror-host
-    env:
-      VERSION: ${{ needs.validate-version.outputs.version }}
-      TAG: ${{ needs.validate-version.outputs.tag }}
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-version.outputs.tag }}
-
-      - name: Install build tools
+      - name: Fetch validated publisher tool anonymously
+        env:
+          TOOL_SHA: ${{ needs.validate-source.outputs.source_sha }}
         run: |
           set -euo pipefail
-          # The Gitea act runner does not always export HOME; guard it so
-          # `set -u` does not abort on an unbound variable.
-          export HOME="${HOME:-/root}"
-          if ! command -v uv >/dev/null 2>&1; then
-            apt-get update -qq
-            apt-get install -y curl python3 2>/dev/null || true
-            curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --no-modify-path
-            export PATH="${HOME}/.local/bin:${PATH}"
-          fi
-          export PATH="${HOME}/.local/bin:${PATH}"
-          uv --version
+          test ! -e publisher-tool
+          git init publisher-tool
+          git -C publisher-tool remote add origin \
+            https://git.nmulti.cloud/emersonfelipesp/proxbox-api.git
+          git -C publisher-tool fetch --force --no-tags origin "$TOOL_SHA"
+          git -C publisher-tool checkout --detach FETCH_HEAD
+          test "$(git -C publisher-tool rev-parse HEAD)" = "$TOOL_SHA"
 
-      - name: Build distributions
-        run: |
-          export HOME="${HOME:-/root}"
-          export PATH="${HOME}/.local/bin:${PATH}"
-          uv build
-          ls dist/
-
-      - name: Publish to Gitea Package Registry
+      - name: Isolate uv and managed Python
         env:
-          TWINE_USERNAME: emersonfelipesp
-          TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}
-          TWINE_REPOSITORY_URL: https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi
+          UV_ACTION_TOOL_CACHE: ${{ runner.temp }}/proxbox-api-uv-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          UV_MANAGED_PYTHON: ${{ runner.temp }}/proxbox-api-python-publish-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          export HOME="${HOME:-/root}"
-          export PATH="${HOME}/.local/bin:${PATH}"
-          uv run --with twine twine upload --non-interactive dist/*
+          set -euo pipefail
+          test ! -e "$UV_ACTION_TOOL_CACHE"
+          test ! -e "$UV_MANAGED_PYTHON"
+          mkdir -p "$UV_ACTION_TOOL_CACHE"
+          printf 'RUNNER_TOOL_CACHE=%s\n' "$UV_ACTION_TOOL_CACHE" >> "$GITHUB_ENV"
+          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$UV_MANAGED_PYTHON" >> "$GITHUB_ENV"
 
-      - name: Verify package in Gitea registry
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: false
+          github-token: ''
+          checksum: e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224
+          version: "0.11.28"
+          python-version: "3.12.13"
+
+      - name: Download bounded candidate
+        uses: actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b # v3.1.0-node20
+        with:
+          name: private-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-transfer
+
+      - name: Install locked publisher toolchain without package authority
+        run: |
+          set -euo pipefail
+          uv sync --project publisher-tool --only-group publish --locked
+          case "$(readlink -f publisher-tool/.venv/bin/python)" in
+            "$UV_PYTHON_INSTALL_DIR"/*) ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Verify candidate with canonical-main publisher code
+        env:
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          VERSION: ${{ needs.validate-source.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir dist verified-dist
+          mv release-transfer/*.whl release-transfer/*.tar.gz dist/
+          cmp publisher-tool/scripts/release_artifacts.py \
+            release-transfer/release_artifacts.py
+          publisher-tool/.venv/bin/python publisher-tool/scripts/release_artifacts.py verify \
+            --dist dist --package proxbox_api --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --manifest release-transfer/release-manifest.json
+
+      - name: Publish exact files with package-only authority
         env:
           GITEA_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
-          PKG_NAME=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['name'])")
-          sleep 5
-          COUNT=$(curl -sf \
-            "https://git.nmulti.cloud/api/v1/packages/emersonfelipesp?type=pypi&q=${PKG_NAME}&limit=50" \
-            -H "Authorization: token ${GITEA_TOKEN}" \
-            | VERSION="${VERSION}" python3 -c 'import json, os, sys; v = os.environ["VERSION"]; pkgs = json.load(sys.stdin); print(sum(1 for p in pkgs if p.get("version") == v))')
-          echo "Found ${COUNT} package(s) matching ${PKG_NAME} ${VERSION}"
-          if [ "${COUNT}" -lt 1 ]; then
-            echo "ERROR: Package ${PKG_NAME} ${VERSION} not found in Gitea registry"
-            exit 1
-          fi
-          echo "Package ${PKG_NAME} ${VERSION} successfully published to Gitea registry"
+          publisher-tool/.venv/bin/python -m twine upload --non-interactive \
+            --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
+            --username emersonfelipesp --password "$GITEA_TOKEN" dist/*
+          curl --fail --silent --show-error --request POST \
+            --header "Authorization: token ${GITEA_TOKEN}" \
+            "https://git.nmulti.cloud/api/v1/packages/emersonfelipesp/pypi/proxbox-api/-/link/proxbox-api"
+          GITEA_PACKAGE_TOKEN="$GITEA_TOKEN" \
+            publisher-tool/.venv/bin/python publisher-tool/scripts/release_artifacts.py publish-manifest \
+            --owner emersonfelipesp --repository proxbox-api \
+            --manifest release-transfer/release-manifest.json
+
+      - name: Re-download and compare registry bytes without credentials
+        env:
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          VERSION: ${{ needs.validate-source.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 publisher-tool/scripts/release_artifacts.py fetch-gitea \
+            --owner emersonfelipesp --repository proxbox-api \
+            --package proxbox_api --version "$VERSION" --source-sha "$SOURCE_SHA" \
+            --dist verified-dist --manifest verified-manifest.json
+          cmp release-transfer/release-manifest.json verified-manifest.json
 
   push-to-github:
-    needs: [validate-version, publish-gitea]
-    if: ${{ needs.validate-version.outputs.version != '' }}
+    name: Promote verified RC tag to GitHub
+    needs: [validate-source, publish-gitea]
+    if: ${{ needs.validate-source.outputs.is_rc == 'true' }}
     runs-on: mirror-host
-    env:
-      # The Gitea act runner does not export HOME; git and `gh auth setup-git`
-      # abort with "fatal: $HOME not set" without this. mirror-host runs as root.
-      HOME: /root
-      VERSION: ${{ needs.validate-version.outputs.version }}
-      TAG: ${{ needs.validate-version.outputs.tag }}
-      IS_RC: ${{ needs.validate-version.outputs.is_rc }}
-      GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
-      GITHUB_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
     steps:
-      - name: Install GitHub CLI
-        run: |
-          set -euo pipefail
-          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
-          apt-get update -qq
-          apt-get install -y ca-certificates curl gnupg
-          mkdir -p -m 755 /etc/apt/keyrings
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-            | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
-          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-            | tee /etc/apt/sources.list.d/github-cli.list >/dev/null
-          apt-get update -qq
-          apt-get install -y gh
-          gh --version
-
-      - name: Checkout tag
-        uses: actions/checkout@v4
+      - name: Checkout verified tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ needs.validate-version.outputs.tag }}
           fetch-depth: 0
-          fetch-tags: true
+          persist-credentials: false
+          ref: ${{ needs.validate-source.outputs.tag }}
 
-      - name: Push tag to GitHub
+      - name: Push immutable RC tag to the authorized GitHub destination
+        env:
+          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+          TAG: ${{ needs.validate-source.outputs.tag }}
         run: |
           set -euo pipefail
-          REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          git config user.email "gitea-actions@git.nmulti.cloud"
-          git config user.name "Gitea Actions"
-          gh auth setup-git --hostname github.com --force
-          git remote add github "https://github.com/emersonfelipesp/${REPO_NAME}.git" \
-            || git remote set-url github "https://github.com/emersonfelipesp/${REPO_NAME}.git"
-          git push github "refs/tags/${TAG}:refs/tags/${TAG}"
-          echo "Tag ${TAG} pushed to GitHub"
-
-      - name: Create or publish GitHub Release (non-RC only)
-        if: env.IS_RC == 'false'
-        run: |
-          set -euo pipefail
-          REPO_NAME="${GITHUB_REPOSITORY#*/}"
-          GH_REPO="emersonfelipesp/${REPO_NAME}"
-          NOTES_FILE="docs/release-notes/version-${VERSION}.md"
-          if [ -f "${NOTES_FILE}" ]; then
-            NOTES_ARGS="--notes-file ${NOTES_FILE}"
-          else
-            NOTES_ARGS="--generate-notes"
-          fi
-          TARGET_BRANCH="main"
-          if gh release view "${TAG}" --repo "${GH_REPO}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists — ensuring it is not a draft"
-            gh release edit "${TAG}" --repo "${GH_REPO}" --draft=false
-            echo "Release ${TAG} published (was draft)"
-          else
-            gh release create "${TAG}" \
-              --repo "${GH_REPO}" \
-              --target "${TARGET_BRANCH}" \
-              --title "${TAG}" \
-              ${NOTES_ARGS}
-            echo "GitHub release ${TAG} created for ${GH_REPO}"
-          fi
+          test "$(git rev-parse HEAD^{commit})" = "${{ needs.validate-source.outputs.source_sha }}"
+          git remote add github https://github.com/emersonfelipesp/proxbox-api.git
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" \
+            push github "refs/tags/${TAG}:refs/tags/${TAG}"

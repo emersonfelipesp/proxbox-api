@@ -26,12 +26,12 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
+- **`netbox-proxbox` v0.0.24** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
-  `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
-  RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
-  VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
+  pairing is `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
+  `proxbox-api 0.0.20` adds NetBox 4.6.6 certification, strict Python 3.12/3.13
+  support, FIPS-safe tag hashing, bounded release matrices, and immutable
+  Gitea-first release/deployment evidence. Operational-verb routes (start/stop/snapshot/migrate)
   require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
   Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
@@ -129,21 +129,12 @@ Open the nearest scoped guide for the code you are changing.
   source fetches, the dedicated `mirror-host` runner label, `gh`
   authentication, and a single triggering-branch push. Do not broaden it to
   tags, `--all`, or `--mirror`.
-- `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
-  Pushes to `develop` deploy `proxbox-api-staging`; pushes to `main` deploy
-  `proxbox-api` through the `prod-deploy` runner on the Gitea server
-  (`10.0.30.96`). **Gated on CI**: a `verify-ci` job runs first and the deploy
-  job `needs` it, so a commit cannot reach staging or production unless the
-  `CI / Lint, smoke, and core coverage (push)` context is `success` for that
-  **exact SHA**. Previously CI and deploy were sibling workflows on the same
-  push -- they raced, and deploy never consulted CI
-  (N-MultiCloud/nmulticloud-context#204 requirement 6). The gate lives in
-  `.gitea/scripts/require_ci_status.py`, polls the commit-status API, and
-  **fails closed**: a missing context, an unreadable response, or a timeout all
-  block the deploy. The only bypass is the explicit, logged `skip_ci_gate`
-  dispatch input, kept so an incident rollback to a known-good older SHA is not
-  locked out. A dispatch `ref` that is not a full 40-character SHA is refused
-  rather than verified imprecisely. Contracts: `tests/test_deploy_ci_gate.py`.
+- `.gitea/workflows/deploy-production.yml`: reviewed `develop` pushes deploy
+  `proxbox-api-staging`. Production is an NMS-dispatched manual run from
+  canonical `main`: the default `latest_package` input binds an exact Gitea
+  version, while `main_branch` is an explicit override. A successful package
+  deployment and health check publish immutable repository-linked completion
+  evidence; no bypass input can mint that evidence.
 - `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
   coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
   coverage-artifact step must pin `actions/upload-artifact@v3` (SHA
@@ -153,13 +144,18 @@ Open the nearest scoped guide for the code you are changing.
   run red and blocking the CI-gated deploy. The `.github/workflows/ci.yml` twin
   keeps v4 because it runs on GitHub-hosted runners that support it.
 - `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
-  committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
-  events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
-  tag to GitHub, and creates/publishes the GitHub release for non-RC tags (which
-  fires `release: published` on GitHub Actions). Secret name: `PKG_TOKEN`
-  (`GITEA_` prefix is reserved by Gitea Actions and cannot be used for secrets).
-  If Gitea 1.26.2 tag triggers are not operational on this instance, use the
-  manual fallback documented in the Release Procedure section below.
+  committed to `main`. Handles `push: tags:` only, requires the tag to equal
+  current `develop`, resolves each latest required status to authenticated
+  successful `ci.yml` push-run/job evidence for that exact SHA and trusted
+  runner class, builds a manifest-bound wheel/sdist without
+  credentials, then publishes and re-hashes it under a protected short-lived
+  Actions token. RC tags are
+  pushed to GitHub for TestPyPI validation. Final tags stay private until the
+  NMS package-first production gate passes; canonical-main
+  `promote-final-tag.yml` verifies the package and NMS attestation before
+  pushing the tag to the exact authorized GitHub repository. The operator then creates the
+  GitHub Release that authorizes PyPI and Docker Hub. A failed tag-trigger run
+  fixes forward to a new immutable version; there is no local-upload fallback.
 
 ## Architecture
 
@@ -216,13 +212,15 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 
 Branch-tier deploys are Gitea-first. A push to Gitea `develop` deploys the
 staging backend at `https://staging.backend.proxbox.nmulti.cloud` via
-`proxbox-api-staging`. A push to Gitea `main` deploys production at
-`https://backend.proxbox.nmulti.cloud` via `proxbox-api`.
+`proxbox-api-staging`. Production is an NMS-dispatched manual workflow on
+canonical `main`, using `latest_package` by default or `main_branch` only as an
+explicit override. A healthy package deployment emits immutable repository-
+linked Gitea evidence for the public promotion gate.
 
 The workflow resolves the app from the triggering branch and calls:
 
 ```bash
-ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
+/opt/nmulticloud/deploy/bin/deploy-app-package proxbox-api "$PACKAGE_VERSION"
 ```
 
 The production host is `10.0.30.207`. Deploy host state is kept outside the
@@ -760,12 +758,12 @@ All checks MUST pass before committing.
 
 ## Release Procedure
 
-The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: tags: v*` (RC and final), `release: published`, and `workflow_dispatch`. The **Gitea-first** pipeline (introduced in v0.0.16) uses `.gitea/workflows/publish-gitea.yml` to publish to the Gitea Package Registry, push the tag to GitHub, and create the GitHub release — which fires the `release: published` event and triggers the PyPI publish.
+The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only `push: tags: v*rc*`, `release: published`, and `workflow_dispatch`. The Gitea-first pipeline publishes every candidate/final version privately. RC tags are promoted to GitHub for TestPyPI; a final tag is promoted and published as a GitHub Release only after the NMS package-first production deployment succeeds.
 
 | Trigger | Use for | Publishes to |
 |---------|---------|--------------|
 | `push: tags: v*rc*` (plain Gitea tag push to Gitea mirrored to GitHub) | RC `vX.Y.ZrcN` | TestPyPI via GitHub Actions |
-| `release: published` (created by `publish-gitea.yml`) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
+| `release: published` (operator-created after production validation) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
 | Docker Hub publish | Called after PyPI validation | Docker Hub (raw/nginx/granian images) |
 
 ### Gitea-first release flow (standard — vX.Y.Z)
@@ -774,31 +772,40 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: 
    ```bash
    uv run ruff check . && uv run python -m compileall proxbox_api tests && uv run pytest tests
    ```
-2. **Merge to `main`** on Gitea (normal merge or PR merge). Verify:
+2. **Merge the reviewed release line to `develop`, then promote the reviewed
+   workflow/source to `main`** on Gitea. The release tag remains bound to the
+   exact green `develop` SHA; the NMS production workflow runs from canonical
+   `main`. Verify both refs explicitly:
    ```bash
+   git log --oneline origin/develop | head -5
    git log --oneline origin/main | head -5
    grep '^version' pyproject.toml
    ```
-3. **Push annotated tag to Gitea:**
+3. **Push the reviewed annotated tag to Gitea:**
    ```bash
    git tag -a vX.Y.Z -m "Release vX.Y.Z"
    git push gitea vX.Y.Z
    ```
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds dist, publishes to Gitea Package Registry (`PKG_TOKEN` secret).
-   - Pushes tag to GitHub. This fires `push: tags: v*` on GitHub Actions.
-   - For non-RC tags: creates (or publishes draft) GitHub release, which fires `release: published`.
-   - The PyPI idempotency check in `publish-pypi` handles the `release: published` re-trigger gracefully (skips upload if already on PyPI).
-5. **Monitor both CI runs:**
+   - Builds without package credentials, then publishes and independently
+     re-hashes the exact repository-linked Gitea artifacts in a protected job.
+   - RC tags are pushed to GitHub and trigger the RC-only TestPyPI lane.
+   - Final tags are not pushed publicly and do not create a GitHub Release.
+5. **Link and verify the exact Gitea package, then deploy through NMS** with the default `latest_package` source. `main_branch` must remain an explicit operator selection.
+6. **Push the exact final tag to GitHub and create the GitHub Release with
+   `--verify-tag`** only after the production health gate passes. The release
+   event verifies protected deployment evidence and then authorizes the exact
+   Gitea bytes for PyPI and Docker Hub.
+7. **Monitor both CI runs:**
    ```bash
    gh run list --repo emersonfelipesp/proxbox-api --event push --limit 3
    gh run list --repo emersonfelipesp/proxbox-api --event release --limit 3
    ```
-6. **Verify dist is live on PyPI:**
+8. **Verify dist is live on PyPI and Docker Hub:**
    ```bash
    pip index versions proxbox-api
    ```
-7. **Cleanup**: delete the release branch locally and on both remotes.
+9. **Cleanup**: delete the release branch locally and on both remotes.
 
 ### RC flow (TestPyPI gate)
 
@@ -806,49 +813,45 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: 
 2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
 3. Fix-forward with `rcN+1` if anything fails.
 
-### Manual fallback (if Gitea Actions unavailable)
+### Publisher recovery
 
-If Gitea Actions tag triggers are not operational on this instance (Gitea 1.26.2 limitation — confirm with `git.nmulti.cloud` admin), use the following direct-upload path:
+If the Gitea publisher fails, fix the workflow through the issue-backed feature
+process and advance to the next immutable `rcN` or `postN`. Do not bypass the
+audited publisher with a local registry upload or push a final tag to GitHub
+before the Gitea package and NMS production gates.
 
-```bash
-# Build and publish to Gitea registry directly
-uv build
-uv run --with twine twine upload \
-  --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
-  --username emersonfelipesp --password $PKG_TOKEN \
-  --non-interactive dist/*
-
-# Push tag directly to GitHub (fires push: tags: v* on GitHub Actions)
-git push origin vX.Y.Z
-
-# Watch the tag-push publish run
-gh run watch <run-id> --repo emersonfelipesp/proxbox-api
-
-# Then create the GitHub release manually
-gh release create vX.Y.Z --repo emersonfelipesp/proxbox-api --title vX.Y.Z --generate-notes
-# The release: published run will fire; the PyPI idempotency check will skip the upload (already done)
-```
-
-Note: `PKG_TOKEN` is the secret name for Gitea package uploads. The `GITEA_` prefix is reserved by Gitea Actions and cannot be used as a secret name.
+The private publisher uses checksum-pinned uv in fresh per-run tool and managed
+Python roots, anonymously fetches the exact validated publisher source, and
+exposes the repository `PKG_TOKEN` only to registry writes. The Gitea Actions
+job token is not a supported package-registry credential.
 
 ### What was done for v0.0.16
+
+The bullets below are historical evidence only. They describe the former
+publisher and must not be used as the current release procedure.
 
 - Bumped versions, merged to main on Gitea.
 - Pushed tag `v0.0.16` to Gitea. `publish-gitea.yml` was present but Gitea 1.26.2 tag triggers were not fully operational at time of release.
 - Manual fallback path was used: built dist locally, uploaded to Gitea registry directly, pushed tag to GitHub → GitHub Actions `push: tags: v*` fired → proxbox-api 0.0.16 published to PyPI.
 - GitHub draft release `v0.0.16` was created in a prior session but left as Draft. One-time cleanup: `gh release edit v0.0.16 --repo emersonfelipesp/proxbox-api --draft=false`.
-- `release: published` re-triggered the workflow; the new PyPI idempotency check (added in this PR) skips the upload cleanly.
+- `release: published` re-triggered the former workflow, whose historical PyPI
+  existence check skipped the duplicate upload. Current releases fail closed
+  on consumed versions and fix forward.
 - Paired plugin: `netbox-proxbox 0.0.22`.
 
 ### What was done for v0.0.17.post2
 
 - Root cause: the published `0.0.17.post1` (PyPI, tag `ac0514a`) shipped `proxmox-sdk==0.0.11.post1` / `netbox-sdk==0.0.9.post1`. Four commits then landed on `main` re-pinning the SDKs to `proxmox-sdk==0.0.11.post2` / `netbox-sdk==0.0.9.post2` and adding independent IP/MAC gating to the inline + standalone VM-interface sync streams, but the `version` field stayed at `0.0.17.post1` — already immutable on PyPI.
 - Fix-forward to `0.0.17.post2` (PEP 440; never republish `post1`) carrying the validated `.post2` SDK pins and the IP/MAC gating fix. Bumped `pyproject.toml` + `uv.lock`, updated the pairing line.
-- Released via the standard Gitea-first flow: tag `v0.0.17.post2` pushed to Gitea → `publish-gitea.yml` publishes to the Gitea registry, pushes the tag to GitHub, and creates the GitHub release → GitHub Actions publishes to PyPI (idempotency check absorbs the `release: published` re-trigger).
+- Historical release note: `v0.0.17.post2` used the former publisher that pushed
+  final tags and created the GitHub Release automatically. Current releases use
+  the package-first NMS gate documented above; this legacy behavior must not be
+  copied into a new release.
 - Paired plugin: `netbox-proxbox 0.0.20.post1`.
 
 ### Don't
 
-- Don't add `twine --skip-existing`. The `publish-pypi` job has a PyPI existence pre-check; fix forward with `.postN` per PEP 440 for new versions.
+- Don't add `twine --skip-existing` or a PyPI existence-skip path. Existing
+  versions fail closed; fix forward with `.postN` per PEP 440.
 - Don't force-push a published tag. Tags on the remote are immutable.
 - Don't create a GitHub release before Gitea Actions has pushed the tag — the release `--target` branch needs the tag commit reachable.

@@ -13,10 +13,10 @@ Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code 
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
-`proxbox-api 0.0.19` ships the Proxmox SDN sync collectors, NetBox
-L2VPN/RouteTarget/Prefix reconcile, plugin inventory reconciliation, and
-VM-interface reconcile idempotency hardening.
+Current pairing: `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
+`proxbox-api 0.0.20` adds NetBox 4.6.6 certification, strict Python 3.12/3.13
+support, FIPS-safe tag hashing, bounded release matrices, and immutable
+Gitea-first release/deployment evidence.
 
 ## VM Interface Sync Strategy
 
@@ -161,11 +161,11 @@ custom-field data while the flag exists.
 
 The official release pipeline for proxbox-api runs in this order:
 
-1. **Gitea tag push** — annotated tag `vX.Y.Z` pushed to Gitea (`git push gitea vX.Y.Z`).
-2. **Gitea Actions: `.gitea/workflows/publish-gitea.yml`** — builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes tag to GitHub, creates or publishes GitHub release (`GH_MIRROR_TOKEN`).
-3. **GitHub Actions: `push: tags: v*` trigger** — fires when Gitea workflow pushes tag to GitHub. Validates version, runs validate and E2E checks, then publishes to PyPI.
-4. **GitHub Actions: `release: published` trigger** — fires when Gitea workflow creates the GitHub release. The `publish-pypi` job has a pre-check: if the version already exists on PyPI (from the tag-push run), the upload is skipped and the run succeeds.
-5. **Docker Hub** — `publish-docker` job in `publish-testpypi.yml` calls `docker-hub-publish.yml` after PyPI validation.
+1. **Gitea tag push** — annotated `vX.Y.ZrcN` or `vX.Y.Z` tag is pushed to Gitea.
+2. **Gitea package** — `.gitea/workflows/publish-gitea.yml` publishes the exact immutable package. RC tags alone are pushed to GitHub for TestPyPI.
+3. **RC validation** — GitHub `push: tags: v*rc*` validates the RC through TestPyPI.
+4. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
+5. **Public promotion** — after production health validation, promote the final tag and create the GitHub Release. Its `release: published` event is the sole automatic authority for PyPI and then Docker Hub.
 
 ### RC (release-candidate) pipeline
 
@@ -174,15 +174,17 @@ The official release pipeline for proxbox-api runs in this order:
 
 ### Secrets required
 
-- `PKG_TOKEN`: Gitea Personal Access Token with `write:packages` scope. Name must be exactly `PKG_TOKEN` — `GITEA_` prefix is reserved by Gitea Actions.
-- `GH_MIRROR_TOKEN`: GitHub PAT with `repo` and `workflow` scopes for tag push and release creation.
+- Gitea package and attestation publication uses the short-lived Actions token
+  with `packages: write`; the credential-free build job receives no package
+  credential.
+- `GH_MIRROR_TOKEN`: GitHub PAT with `repo` and `workflow` scopes for RC tag promotion.
 - `PYPI_TOKEN` / `PYPI_USERNAME`: PyPI credentials for GitHub Actions upload.
 - `TEST_PYPI_TOKEN` / `TEST_PYPI_USERNAME`: TestPyPI credentials for RC validation.
 - `DOCKERHUB_TOKEN` / `DOCKERHUB_USERNAME`: Docker Hub credentials.
 
-### Idempotency
+### Immutability
 
-The `publish-pypi` job checks the PyPI API before uploading. If `proxbox-api==${VERSION}` already exists (HTTP 200), the upload step is skipped and the job succeeds. This prevents failures when `release: published` re-triggers after the tag-push run already published.
+Package uploads never use `--skip-existing`. A consumed Gitea, TestPyPI, or PyPI version is never overwritten or retried with different bytes; advance to the next `rcN` or `postN` and record it in the release ledger. GitHub promotes the exact repository-linked Gitea wheel/sdist and requires immutable successful-NMS-deployment evidence for final publication.
 
 ## Code Quality Standards
 
@@ -277,12 +279,13 @@ Branch-tier deploys run from Gitea through
 `.gitea/workflows/deploy-production.yml` on the `prod-deploy` runner hosted by
 the Gitea server (`10.0.30.96`). Pushes to `develop` deploy
 `proxbox-api-staging` to `https://staging.backend.proxbox.nmulti.cloud`.
-Pushes to `main` deploy `proxbox-api` to
-`https://backend.proxbox.nmulti.cloud`. The workflow uses the restricted SSH
-alias `nmc-prod-207` and the allowlisted command:
+Production is an NMS-dispatched manual workflow from canonical `main`, with
+`latest_package` as the default and `main_branch` as an explicit override. The
+runner uses fixed, allowlisted deployment gateways and emits protected package-
+deployment evidence only after production health succeeds.
 
 ```bash
-ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
+/opt/nmulticloud/deploy/bin/deploy-app-package proxbox-api "$PACKAGE_VERSION"
 ```
 
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside

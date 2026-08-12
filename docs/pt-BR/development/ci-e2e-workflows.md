@@ -9,7 +9,7 @@ NetBox e publicacao em etapas.
 | Workflow | Gatilho | Finalidade |
 |---|---|---|
 | `.github/workflows/ci.yml` | Push, pull request, release, dispatch manual | Roda checagens principais e a matriz E2E Docker com NetBox + Proxmox. |
-| `.github/workflows/publish-testpypi.yml` | Tag de versao, GitHub release, dispatch manual | Publica versoes imutaveis no TestPyPI, candidatos PyPI, releases finais PyPI, imagens Docker e E2E pos-publicacao. |
+| `.github/workflows/publish-testpypi.yml` | Tag RC ou dispatch manual exclusivo para RC; GitHub Release publicada | Publica RCs imutaveis no TestPyPI e releases finais/post no PyPI, seguidas por imagens Docker e E2E pos-publicacao. |
 | `.github/workflows/docker-hub-publish.yml` | Workflow reutilizavel / dispatch manual | Constroi e publica variantes raw, nginx, granian e experimentais PyO3/Rust da imagem Docker. |
 | `.github/workflows/release-docker-verify.yml` | Release / dispatch manual | Baixa as tags Docker publicadas, incluindo as tags experimentais PyO3/Rust, e verifica startup dos conteineres. |
 | `.github/workflows/docs.yml` | Mudancas de docs em main / PR | Constroi e publica o site MkDocs. |
@@ -115,13 +115,13 @@ sequenceDiagram
     participant DH as Docker Hub
     participant E2E as Stack E2E NetBox
 
-    Tag->>WF: vX.Y.Z ou vX.Y.Z.postN
+    Tag->>WF: vX.Y.ZrcN
     WF->>WF: Validar pyproject + uv.lock + tag
     WF->>TP: Publicar proxbox-api
-    WF->>TP: Reinstalar versao exata em Python 3.11, 3.12, 3.13
+    WF->>TP: Reinstalar versao exata em Python 3.12 e 3.13
     WF->>WF: Rodar lint, tipos, compile, import, schema e pytest
 
-    Tag->>WF: vX.Y.ZrcN, release event, ou publish_target=pypi
+    Tag->>WF: GitHub Release publicada para vX.Y.Z ou vX.Y.Z.postN
     WF->>E2E: Rodar E2E pre-publicacao com dependencias dev
     WF->>PY: Publicar proxbox-api
     WF->>PY: Reinstalar pacote exato
@@ -131,5 +131,5 @@ sequenceDiagram
 
 Uploads de pacote intencionalmente nao usam `twine --skip-existing`. Se alguma
 validacao falhar depois do upload, publique uma versao fix-forward:
-`vX.Y.Z.postN` para TestPyPI ou correcoes pos-release, e `vX.Y.ZrcN` para novas
-tentativas de release candidate no PyPI.
+`vX.Y.ZrcN` para novas tentativas de release candidate no TestPyPI e
+`vX.Y.Z.postN` para correcoes pos-release.

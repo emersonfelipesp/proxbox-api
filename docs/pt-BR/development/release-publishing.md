@@ -17,14 +17,16 @@ flowchart TD
     RCTag[Criar tag de release candidate\nvX.Y.ZrcN]
     RCCI[CI faz build do dist\nvalida tag/versao/uv.lock]
     RCUpload[Upload vX.Y.ZrcN para TestPyPI\nsem --skip-existing]
-    RCValidate[Instalar rcN do TestPyPI\nem Python 3.11, 3.12, 3.13]
+    RCValidate[Instalar rcN do TestPyPI\nem Python 3.12 e 3.13]
     RCChecks[Rodar lint, tipos, compile,\nimport, schema, pytest]
     RCE2E[E2E Docker\nproxbox-api rcN do TestPyPI]
     RCFailed{Alguma validacao\nTestPyPI falhou?}
     NextRC[Bump para vX.Y.ZrcN+1]
-    FinalTag[Criar ou disparar tag final\nvX.Y.Z]
+    FinalPrivate[Publicar pacote final no Gitea\nvX.Y.Z]
+    Deploy[Implantar pacote Gitea exato\npelo NMS]
+    PublicRelease[Criar GitHub Release\napos validar producao]
     FinalUpload[Upload vX.Y.Z para PyPI]
-    FinalValidate[Instalar final do PyPI\nem Python 3.11, 3.12, 3.13]
+    FinalValidate[Instalar final do PyPI\nem Python 3.12 e 3.13]
     Docker[Publicar imagens Docker\nraw, nginx, granian\n+ experimentais PyO3/Rust]
     FinalE2E[Rodar E2E pos-publicacao\npacote PyPI + imagem Docker]
     FinalFailed{Precisa de fix\npos-release?}
@@ -33,8 +35,8 @@ flowchart TD
 
     Start --> Bump --> RCTag --> RCCI --> RCUpload --> RCValidate --> RCChecks --> RCE2E --> RCFailed
     RCFailed -- sim --> NextRC --> RCTag
-    RCFailed -- nao --> FinalTag --> FinalUpload --> FinalValidate --> Docker --> FinalE2E --> FinalFailed
-    FinalFailed -- sim --> Post --> FinalTag
+    RCFailed -- nao --> FinalPrivate --> Deploy --> PublicRelease --> FinalUpload --> FinalValidate --> Docker --> FinalE2E --> FinalFailed
+    FinalFailed -- sim --> Post --> FinalPrivate
     FinalFailed -- nao --> Done
 ```
 
@@ -55,7 +57,7 @@ sequenceDiagram
     WF->>TP: Reinstalar versao exata rcN
     WF->>WF: Rodar checks locais a partir da instalacao TestPyPI
 
-    Tag->>WF: vX.Y.Z, vX.Y.Z.postN, evento de release, ou publish_target=pypi
+    Tag->>WF: GitHub Release publicada para vX.Y.Z ou vX.Y.Z.postN
     WF->>WF: Rodar checks da candidata e E2E pre-publicacao
     WF->>E2E: Aguardar migracoes do NetBox e /api/status/
     WF->>PY: Upload do pacote
@@ -68,8 +70,24 @@ sequenceDiagram
 
 - `pyproject.toml`, `uv.lock` e a tag Git precisam descrever a mesma versao.
 - Push de tags `rcN` publica no TestPyPI para validacao de release candidate.
-- Push de tags nao-rc (`vX.Y.Z`, `vX.Y.Z.postN`), releases do GitHub, ou
-  dispatch manual com `publish_target=pypi` publica no PyPI.
+- Pacotes finais/post sao publicados primeiro no Gitea, implantados pelo NMS e
+  chegam ao PyPI somente quando o operador publica a GitHub Release correspondente.
+- A tag do Gitea deve ser o `develop` canonico atual. Cada status CI obrigatorio
+  mais recente precisa resolver, via registros autenticados da API Gitea, para
+  um run `push` bem-sucedido de `ci.yml` no SHA exato, ator confiavel, nome de
+  job e classe de runner nao confiavel esperados. Um job sem credenciais gera
+  wheel e sdist com uv validado por checksum e raizes novas por run para as
+  ferramentas e o Python gerenciado. O publicador protegido busca anonimamente
+  a fonte validada exata, usa ferramentas travadas, expoe o `PKG_TOKEN` do
+  repositorio somente nas escritas do registro, vincula os artefatos ao
+  repositorio e compara os bytes baixados com o manifesto canonico. O token do
+  job do Gitea Actions, sem suporte para pacotes, nao autentica o registro.
+- O GitHub baixa esses artefatos exatos, instala wheel e sdist em Python 3.12 e
+  3.13 e nunca recompila antes do upload para TestPyPI/PyPI.
+- Um run de producao NMS `latest_package` bem-sucedido publica uma atestacao
+  imutavel vinculada ao repositorio. A promocao publica valida SHA, hashes,
+  digest do manifesto, ambiente e identidade do run no Gitea.
+- O dispatch manual do workflow e exclusivo do TestPyPI e exige uma versao RC.
 - Uploads de pacote intencionalmente nao usam `twine --skip-existing`; se uma
   versao foi consumida por qualquer indice, corrija para frente com o proximo
   `.postN` ou `rcN`.
@@ -88,6 +106,12 @@ sequenceDiagram
 2. Crie a tag `vX.Y.Zrc1` para validacao de release candidate no TestPyPI. Se
    a validacao falhar depois do upload, continue com `rc2`, `rc3`, e assim
    por diante.
-3. Publique a final `vX.Y.Z` no PyPI apenas depois de uma lane rc verde.
-4. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
+3. Publique e verifique `vX.Y.Z` no Gitea, implante esse pacote pelo NMS e
+   valide a saude de producao.
+4. Dispare `promote-final-tag.yml` no `main` canonico do Gitea; ele valida o
+   pacote privado exato e a atestacao NMS antes de enviar a tag ao repositorio
+   GitHub autorizado. Depois crie a GitHub Release com `--verify-tag`; o evento
+   valida a atestacao protegida do Gitea,
+   publica os mesmos bytes no PyPI e depois as imagens no Docker Hub.
+5. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
    depois da publicacao final no PyPI.

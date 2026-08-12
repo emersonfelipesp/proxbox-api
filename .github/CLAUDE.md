@@ -17,11 +17,11 @@ GitHub Actions CI/CD workflows for `proxbox-api`. All workflows live under `.git
 
 | File | Trigger | What it does |
 |------|---------|--------------|
-| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`), create event, or workflow_dispatch | Builds dist, publishes to Gitea Package Registry, pushes tag to GitHub, creates/publishes GitHub release for non-RC tags (which fires `release: published` on GitHub Actions). Secrets: `PKG_TOKEN` (Gitea package upload), `GH_MIRROR_TOKEN` (tag push + release create). Runner: `mirror-host`. |
+| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`) | Requires the tag to equal current green `develop`; builds without credentials, publishes and re-hashes a repository-linked immutable package with the short-lived Actions token. RC tags alone are pushed to GitHub. Runners: `ci-untrusted-python312`, then `mirror-host`. |
 | `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, then the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
-| `publish-testpypi.yml` | Version tag push, GitHub Release published, or manual dispatch | Validates release metadata, builds dist, then runs either the TestPyPI lane or the PyPI lane. `rcN` tag pushes publish to TestPyPI for release-candidate validation; non-rc tag pushes (`vX.Y.Z`, `vX.Y.Z.postN`), GitHub releases, and `publish_target=pypi` dispatches publish to PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
+| `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Downloads the exact linked Gitea wheel/sdist and validates both on Python 3.12/3.13. `rcN` versions publish to TestPyPI; final/post events additionally require immutable successful-NMS-deployment evidence before those bytes reach PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
 | `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across Linux/macOS/Windows for Python 3.12 and 3.13. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
 | `release-docker-verify.yml` | Release published | Post-release smoke test of all three published Docker images |
@@ -56,12 +56,13 @@ ci.yml (release event — both dev + pypi modes)
 └── e2e-docker matrix runs both netbox_proxbox_mode=dev and netbox_proxbox_mode=pypi
 
 publish-testpypi.yml (staged package release)
-├── prepare-release        (validate tag/version, build dist, upload artifact)
+├── prepare-release        (validate tag/version; fetch exact Gitea dist + final deployment attestation)
+├── validate-gitea-artifacts (install exact wheel + sdist on py3.12/3.13)
 ├── TestPyPI lane
 │   ├── publish-testpypi   (needs: prepare-release)
-│   └── validate-testpypi  (needs: prepare-release + publish-testpypi; installs package from TestPyPI across py3.11/3.12/3.13, then runs local checks)
+│   └── validate-testpypi  (needs: prepare-release + publish-testpypi; installs package from TestPyPI across py3.12/3.13, then runs local checks)
 └── PyPI lane
-    ├── validate-pypi-candidate (needs: prepare-release; local checks across py3.11/3.12/3.13)
+    ├── validate-pypi-candidate (needs: prepare-release; local checks across py3.12/3.13)
     ├── e2e-pre-publish         (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES; same 20-minute NetBox readiness gate)
     ├── publish-pypi            (needs: prepare-release + validate-pypi-candidate + e2e-pre-publish)
     ├── validate-pypi           (needs: prepare-release + publish-pypi; installs package from PyPI)
