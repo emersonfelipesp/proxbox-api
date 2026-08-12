@@ -75,18 +75,32 @@ sequenceDiagram
 - A tag do Gitea deve ser o `develop` canonico atual. Cada status CI obrigatorio
   mais recente precisa resolver, via registros autenticados da API Gitea, para
   um run `push` bem-sucedido de `ci.yml` no SHA exato, ator confiavel, nome de
-  job e classe de runner nao confiavel esperados. Um job sem credenciais gera
-  wheel e sdist com uv validado por checksum e raizes novas por run para as
-  ferramentas e o Python gerenciado. O publicador protegido busca anonimamente
-  a fonte validada exata, usa ferramentas travadas, expoe o `PKG_TOKEN` do
-  repositorio somente nas escritas do registro, vincula os artefatos ao
-  repositorio e compara os bytes baixados com o manifesto canonico. O token do
-  job do Gitea Actions, sem suporte para pacotes, nao autentica o registro.
+  job e classe de runner nao confiavel esperados. Um job descartavel sem
+  credenciais baixa e valida diretamente o arquivo uv fixado, limpa o estado
+  `UV_*` herdado, desativa configuracao descoberta e usa raizes novas por run
+  para cache e Python gerenciado antes de gerar wheel e sdist. Outro job
+  descartavel sem credenciais busca a fonte validada exata, instala as
+  ferramentas travadas sem instalar o projeto, verifica o candidato e sela
+  wheel, sdist, manifesto, helper, metadados do projeto e lock. Um job publicador
+  novo verifica esse selo antes de expor o `PKG_TOKEN` do repositorio somente na
+  etapa de escrita do registro. O Twine le `TWINE_USERNAME` /
+  `TWINE_PASSWORD`; a vinculacao ao repositorio usa netrc com modo 0600; e o
+  helper de manifesto le o token do ambiente, portanto nenhuma credencial entra
+  em argv. Um job final novo, sem credenciais, baixa anonimamente e compara os
+  bytes do registro. Todos os estagios privados usam
+  `ci-untrusted-python312`; o token do job do Gitea Actions nunca autentica o
+  registro de pacotes.
 - O GitHub baixa esses artefatos exatos, instala wheel e sdist em Python 3.12 e
-  3.13 e nunca recompila antes do upload para TestPyPI/PyPI.
-- Um run de producao NMS `latest_package` bem-sucedido publica uma atestacao
-  imutavel vinculada ao repositorio. A promocao publica valida SHA, hashes,
-  digest do manifesto, ambiente e identidade do run no Gitea.
+  3.13 e nunca recompila antes do upload para TestPyPI/PyPI. Os jobs de upload
+  para TestPyPI/PyPI rodam separadamente em runners GitHub-hosted
+  `ubuntu-latest` novos, instalam somente o grupo travado do publicador com
+  `--no-install-project` e passam credenciais ao Twine apenas por `TWINE_*`.
+- Um run de producao NMS `latest_package` bem-sucedido exporta um recibo
+  schema-2 emitido pelo helper root somente apos comprovar a imagem construida
+  do sdist exato, a versao instalada e a saude de producao. O workflow publica
+  esses bytes, mas nao pode criar a propria evidencia de sucesso. A promocao
+  publica valida SHA, hashes, manifesto, identidade observada da imagem,
+  ambiente e identidade do run no Gitea.
 - O dispatch manual do workflow e exclusivo do TestPyPI e exige uma versao RC.
 - Uploads de pacote intencionalmente nao usam `twine --skip-existing`; se uma
   versao foi consumida por qualquer indice, corrija para frente com o proximo

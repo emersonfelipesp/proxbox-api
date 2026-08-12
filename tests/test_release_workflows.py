@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shlex
+import subprocess
+import tarfile
 import tomllib
 from pathlib import Path
 
@@ -19,6 +23,7 @@ CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 GITEA_CI_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "ci.yml"
 PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-testpypi.yml"
 GITEA_PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "publish-gitea.yml"
+GITEA_ARTIFACT_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "artifact-v3-compatibility.yml"
 GITEA_DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "deploy-production.yml"
 GITEA_PROMOTE_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "promote-final-tag.yml"
 RELEASE_ARTIFACTS_PATH = REPO_ROOT / "scripts" / "release_artifacts.py"
@@ -319,28 +324,196 @@ def test_gitea_publish_is_single_triggered_and_promotes_only_rc_tags():
     assert "actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de" in workflow
     assert "actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b" in workflow
     parsed = yaml.safe_load(workflow)
-    setup_uv_steps = [
-        step
-        for job in parsed["jobs"].values()
-        for step in job.get("steps", [])
-        if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+    assert all(job["runs-on"] == "ci-untrusted-python312" for job in parsed["jobs"].values())
+    assert parsed["jobs"]["publish-gitea"]["permissions"] == {
+        "contents": "read",
+        "packages": "read",
+    }
+    assert parsed["jobs"]["verify-candidate"]["needs"] == [
+        "validate-source",
+        "build-candidate",
     ]
-    assert setup_uv_steps
-    assert all(step.get("with", {}).get("github-token") == "" for step in setup_uv_steps)
-    assert all(
-        step.get("with", {}).get("checksum")
-        == "e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"
-        for step in setup_uv_steps
+    assert parsed["jobs"]["publish-gitea"]["needs"] == [
+        "validate-source",
+        "verify-candidate",
+    ]
+    assert parsed["jobs"]["verify-registry"]["needs"] == [
+        "validate-source",
+        "publish-gitea",
+    ]
+    assert parsed["jobs"]["push-to-github"]["needs"] == [
+        "validate-source",
+        "verify-registry",
+    ]
+    assert "astral-sh/setup-uv@" not in workflow
+    assert "RUNNER_TOOL_CACHE" not in workflow
+    assert "UV_MANAGED_PYTHON" not in workflow
+    assert "mirror-host" not in workflow
+    assert "packages: write" not in workflow
+    assert (
+        workflow.count(
+            "https://github.com/astral-sh/uv/releases/download/0.11.28/"
+            "uv-x86_64-unknown-linux-gnu.tar.gz"
+        )
+        == 3
     )
-    assert workflow.count("UV_PYTHON_INSTALL_DIR=%s") == 2
-    assert workflow.count('"$UV_PYTHON_INSTALL_DIR"/*) ;;') == 2
-    assert "GITEA_TOKEN: ${{ secrets.PKG_TOKEN }}" in workflow
+    assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 3
+    assert workflow.count("UV_PYTHON_INSTALL_DIR=%s") == 3
+    assert workflow.count("while IFS='=' read -r VARIABLE _; do") == 6
+    assert workflow.count('case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac') == 6
+    assert workflow.count("--no-config") == 6
+    assert workflow.count("--managed-python") == 6
+    assert workflow.count("--no-python-downloads") == 3
+    assert workflow.count('"$MANAGED_PYTHON_ROOT"/*) ;;') == 3
+    assert "GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}" in workflow
+    assert "TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}" in workflow
     assert "GITEA_TOKEN: ${{ github.token }}" not in workflow
     assert "Fetch validated publisher tool anonymously" in workflow
-    assert "uv sync --project publisher-tool --only-group publish --locked" in workflow
-    assert "publisher-tool/.venv/bin/python -m twine upload" in workflow
+    assert '"$PUBLISHER_UV" sync' in workflow
+    assert '"$PUBLISHER_PYTHON" -m twine upload' in workflow
+    assert '"$BUILD_ROOT/venv/bin/python" -m build --no-isolation' in workflow
     assert "uvx --from twine" not in workflow
-    assert "uv run --with twine==6.2.0 python -m twine check" in workflow
+    assert "--password" not in workflow
+    assert "--username" not in workflow
+    assert "Authorization: token" not in workflow
+    assert "http.https://github.com/.extraheader" not in workflow
+    assert '--netrc-file "$SECRET_ROOT/netrc"' in workflow
+    assert 'GIT_ASKPASS="$SECRET_ROOT/askpass"' in workflow
+    assert "sealed-private-release-${{ github.run_id }}-${{ github.run_attempt }}" in workflow
+    assert "sha256sum -- *.whl *.tar.gz" in workflow
+    assert workflow.count("sha256sum --check --strict SHA256SUMS") == 3
+
+    pkg_token_steps = [
+        (job_name, step)
+        for job_name, job in parsed["jobs"].items()
+        for step in job.get("steps", [])
+        if "${{ secrets.PKG_TOKEN }}" in yaml.safe_dump(step)
+    ]
+    assert len(pkg_token_steps) == 1
+    job_name, pkg_token_step = pkg_token_steps[0]
+    assert job_name == "publish-gitea"
+    assert pkg_token_step["name"] == "Publish exact files with package-only authority"
+    assert pkg_token_step["env"] == {
+        "GITEA_PACKAGE_TOKEN": "${{ secrets.PKG_TOKEN }}",
+        "TWINE_PASSWORD": "${{ secrets.PKG_TOKEN }}",
+        "TWINE_USERNAME": "emersonfelipesp",
+    }
+
+
+def test_gitea_artifact_v3_compatibility_probe_is_bounded_and_disposable():
+    workflow = _read(GITEA_ARTIFACT_WORKFLOW_PATH)
+    parsed = yaml.load(workflow, Loader=yaml.BaseLoader)
+
+    assert parsed["on"] == {"pull_request": "", "workflow_dispatch": ""}
+    assert parsed["permissions"] == {"contents": "read"}
+    assert set(parsed["jobs"]) == {"upload-probe", "download-probe"}
+    assert all(job["runs-on"] == "ci-untrusted-python312" for job in parsed["jobs"].values())
+    assert parsed["jobs"]["download-probe"]["needs"] == "upload-probe"
+    assert workflow.count("dc2c74581ade8cb95ad4ce2cd0ceddd82968531606eb02a8fadf60905b379f6b") == 2
+    assert "actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de" in workflow
+    assert "actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b" in workflow
+    assert "mirror-host" not in workflow
+
+
+def test_source_distribution_is_a_valid_raw_docker_build_context(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    environment = os.environ.copy()
+    environment["UV_CACHE_DIR"] = str(tmp_path / "uv-cache")
+    subprocess.run(
+        ["uv", "build", "--sdist", "--out-dir", str(dist), str(REPO_ROOT)],
+        check=True,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    archives = list(dist.glob("proxbox_api-*.tar.gz"))
+    assert len(archives) == 1
+
+    extract_root = tmp_path / "extracted"
+    extract_root.mkdir()
+    with tarfile.open(archives[0], "r:gz") as archive:
+        archive.extractall(extract_root, filter="data")
+    roots = list(extract_root.iterdir())
+    assert len(roots) == 1 and roots[0].is_dir()
+    context = roots[0]
+
+    runtime_inputs = {
+        "Dockerfile",
+        "uv.lock",
+        "docker/entrypoint-granian.sh",
+        "docker/entrypoint-nginx.sh",
+        "docker/entrypoint-raw.sh",
+        "docker/nginx/proxbox-https.conf.template",
+        "docker/supervisor/proxbox.conf",
+        "docker/supervisor/supervisord.conf",
+    }
+    assert all((context / path).is_file() for path in runtime_inputs)
+
+    logical_lines: list[str] = []
+    pending = ""
+    for raw_line in (context / "Dockerfile").read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        pending = f"{pending} {line}".strip()
+        if pending.endswith("\\"):
+            pending = pending[:-1].rstrip()
+            continue
+        logical_lines.append(pending)
+        pending = ""
+    assert not pending
+
+    stage_bases: dict[str, str] = {}
+    stage_sources: dict[str, list[str]] = {}
+    stage_dependencies: dict[str, set[str]] = {}
+    current_stage = ""
+    for line in logical_lines:
+        tokens = shlex.split(line)
+        instruction = tokens[0].upper()
+        if instruction == "FROM":
+            assert len(tokens) >= 2
+            current_stage = tokens[-1] if len(tokens) >= 4 and tokens[-2].upper() == "AS" else ""
+            if current_stage:
+                stage_bases[current_stage] = tokens[1]
+                stage_sources[current_stage] = []
+                stage_dependencies[current_stage] = set()
+        elif instruction == "COPY" and current_stage:
+            stage_copy = next(
+                (
+                    token.removeprefix("--from=")
+                    for token in tokens[1:]
+                    if token.startswith("--from=")
+                ),
+                None,
+            )
+            if stage_copy:
+                stage_dependencies[current_stage].add(stage_copy)
+                continue
+            sources = [token for token in tokens[1:-1] if not token.startswith("--")]
+            stage_sources[current_stage].extend(sources)
+
+    required_stages: set[str] = set()
+    pending_stages = ["raw"]
+    while pending_stages:
+        stage = pending_stages.pop()
+        if stage not in stage_bases or stage in required_stages:
+            continue
+        required_stages.add(stage)
+        pending_stages.append(stage_bases[stage])
+        pending_stages.extend(stage_dependencies[stage])
+    assert required_stages == {"builder", "runtime-base", "raw"}
+    raw_context_sources = {
+        source for stage in required_stages for source in stage_sources.get(stage, [])
+    }
+    assert raw_context_sources == {
+        "README.md",
+        "pyproject.toml",
+        "uv.lock",
+        "proxbox_api",
+        "docker/entrypoint-raw.sh",
+    }
+    assert all((context / source).exists() for source in raw_context_sources)
 
 
 def test_repository_deploy_workflow_is_nms_source_aware():
@@ -352,9 +525,13 @@ def test_repository_deploy_workflow_is_nms_source_aware():
     assert "- main_branch" in workflow
     assert "package_version:" in workflow
     assert "proxbox-api-staging" in workflow
-    assert "deploy-app-package proxbox-api" in workflow
+    assert "deploy-app-package \\\n            proxbox-api" in workflow
     assert "deploy-app proxbox-api" in workflow
-    assert "create-attestation" in workflow
+    assert "create-attestation" not in workflow
+    assert "export-package-deploy-receipt" in workflow
+    assert "GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}" in workflow
+    assert "GITEA_PACKAGE_TOKEN: ${{ github.token }}" not in workflow
+    assert "packages: write" not in workflow
     assert "publish-attestation" in workflow
     assert "inputs.skip_ci_gate != true" in workflow
     assert "healthcheck-app proxbox-api" in workflow
@@ -413,9 +590,30 @@ def test_public_publish_workflow_uses_immutable_locked_tooling():
         "wheel==0.45.1",
     ]
     assert workflow.count("uv sync --only-group publish --locked") == 3
+    assert workflow.count("uv sync --only-group publish --locked --no-install-project") == 2
     assert "uv run --with twine python -m twine check" not in workflow
     assert "uv run --with twine python -m twine upload" not in workflow
     assert workflow.count(".venv/bin/python -m twine upload") == 2
+    assert "--username" not in workflow
+    assert "--password" not in workflow
+
+    expected_upload_env = {
+        "publish-testpypi": {
+            "TWINE_PASSWORD": "${{ secrets.TEST_PYPI_TOKEN }}",
+            "TWINE_USERNAME": "${{ secrets.TEST_PYPI_USERNAME }}",
+        },
+        "publish-pypi": {
+            "TWINE_PASSWORD": "${{ secrets.PYPI_TOKEN }}",
+            "TWINE_USERNAME": "${{ secrets.PYPI_USERNAME }}",
+        },
+    }
+    for job_name, expected_env in expected_upload_env.items():
+        job = parsed["jobs"][job_name]
+        secret_steps = [step for step in job["steps"] if "${{ secrets." in yaml.safe_dump(step)]
+        assert len(secret_steps) == 1
+        assert secret_steps[0]["env"] == expected_env
+        assert "twine upload" in secret_steps[0]["run"]
+        assert job["runs-on"] == "ubuntu-latest"
 
 
 def test_github_promotion_uses_exact_gitea_artifacts_and_nms_evidence():
@@ -574,11 +772,21 @@ def test_final_release_requires_exact_nms_promotion_evidence(tmp_path: Path) -> 
         version="0.0.20",
         source_sha="b" * 40,
     )
-    evidence = release_artifacts.create_deployment_attestation(
-        manifest=manifest,
-        repository="emersonfelipesp/proxbox-api",
-        run_id=123,
-    )
+    evidence = {
+        "artifacts": manifest["artifacts"],
+        "deploy_source": "latest_package",
+        "deployment_run_id": 123,
+        "deployment_status": "success",
+        "environment": "production",
+        "manifest_sha256": release_artifacts.manifest_sha256(manifest),
+        "observed_runtime_identity": f"proxbox_api==0.0.20@sha256:{'c' * 64}",
+        "package": "proxbox-api",
+        "repository": "emersonfelipesp/proxbox-api",
+        "schema": 2,
+        "source_sha": "b" * 40,
+        "target": "proxbox-api",
+        "version": "0.0.20",
+    }
     assert (
         release_artifacts.validate_release_attestation(
             evidence=evidence,
@@ -589,6 +797,15 @@ def test_final_release_requires_exact_nms_promotion_evidence(tmp_path: Path) -> 
     )
 
     evidence["deploy_source"] = "main_branch"
+    with pytest.raises(release_artifacts.ReleaseArtifactError):
+        release_artifacts.validate_release_attestation(
+            evidence=evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
+
+    evidence["deploy_source"] = "latest_package"
+    evidence["observed_runtime_identity"] = "proxbox_api==0.0.20@sha256:short"
     with pytest.raises(release_artifacts.ReleaseArtifactError):
         release_artifacts.validate_release_attestation(
             evidence=evidence,

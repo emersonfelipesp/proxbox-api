@@ -147,9 +147,12 @@ Open the nearest scoped guide for the code you are changing.
   committed to `main`. Handles `push: tags:` only, requires the tag to equal
   current `develop`, resolves each latest required status to authenticated
   successful `ci.yml` push-run/job evidence for that exact SHA and trusted
-  runner class, builds a manifest-bound wheel/sdist without
-  credentials, then publishes and re-hashes it under a protected short-lived
-  Actions token. RC tags are
+  runner class, builds a manifest-bound wheel/sdist without credentials, and
+  verifies and seals it in a second credential-free job. A fresh job receives
+  repository `PKG_TOKEN` only in its registry-write step: Twine reads it from
+  `TWINE_PASSWORD`, while link and manifest calls use a mode-0600 netrc and the
+  environment-aware helper. Another fresh credential-free job anonymously
+  re-hashes the registry bytes. RC tags are
   pushed to GitHub for TestPyPI validation. Final tags stay private until the
   NMS package-first production gate passes; canonical-main
   `promote-final-tag.yml` verifies the package and NMS attestation before
@@ -214,13 +217,16 @@ Branch-tier deploys are Gitea-first. A push to Gitea `develop` deploys the
 staging backend at `https://staging.backend.proxbox.nmulti.cloud` via
 `proxbox-api-staging`. Production is an NMS-dispatched manual workflow on
 canonical `main`, using `latest_package` by default or `main_branch` only as an
-explicit override. A healthy package deployment emits immutable repository-
-linked Gitea evidence for the public promotion gate.
+explicit override. The fixed root-owned package helper builds from the exact
+manifest-bound sdist and emits schema-2 evidence only after health, installed
+version, and active image identity are proven. Workflow code may export and
+publish that receipt but cannot construct production evidence itself.
 
 The workflow resolves the app from the triggering branch and calls:
 
 ```bash
-/opt/nmulticloud/deploy/bin/deploy-app-package proxbox-api "$PACKAGE_VERSION"
+/opt/nmulticloud/deploy/bin/deploy-app-package \
+  proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
 ```
 
 The production host is `10.0.30.207`. Deploy host state is kept outside the
@@ -787,8 +793,9 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
    git push gitea vX.Y.Z
    ```
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds without package credentials, then publishes and independently
-     re-hashes the exact repository-linked Gitea artifacts in a protected job.
+   - Builds without package credentials, verifies and seals the candidate in a
+     second credential-free job, publishes it from a fresh package-authority
+     job, then anonymously re-hashes the registry bytes in another fresh job.
    - RC tags are pushed to GitHub and trigger the RC-only TestPyPI lane.
    - Final tags are not pushed publicly and do not create a GitHub Release.
 5. **Link and verify the exact Gitea package, then deploy through NMS** with the default `latest_package` source. `main_branch` must remain an explicit operator selection.
@@ -820,10 +827,17 @@ process and advance to the next immutable `rcN` or `postN`. Do not bypass the
 audited publisher with a local registry upload or push a final tag to GitHub
 before the Gitea package and NMS production gates.
 
-The private publisher uses checksum-pinned uv in fresh per-run tool and managed
-Python roots, anonymously fetches the exact validated publisher source, and
-exposes the repository `PKG_TOKEN` only to registry writes. The Gitea Actions
-job token is not a supported package-registry credential.
+The private publisher directly downloads and verifies the pinned uv archive,
+clears inherited `UV_*` state, disables discovered configuration, and uses fresh
+per-run managed-Python and cache roots. Every release stage runs as a separate
+disposable `ci-untrusted-python312` job. The candidate is sealed before the
+fresh publisher job starts; repository `PKG_TOKEN` reaches only its final
+registry-write step. Twine receives it only through `TWINE_PASSWORD`, Gitea link
+operations use a mode-0600 netrc, and the manifest helper reads it from the
+environment. The built-in Gitea Actions token is never used as a package-
+registry credential. Public TestPyPI/PyPI upload jobs run separately on fresh
+GitHub-hosted `ubuntu-latest` runners, install the locked publisher group with
+`--no-install-project`, and likewise pass credentials only through `TWINE_*`.
 
 ### What was done for v0.0.16
 

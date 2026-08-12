@@ -174,13 +174,21 @@ The official release pipeline for proxbox-api runs in this order:
 
 ### Secrets required
 
-- Gitea package and attestation publication uses the short-lived Actions token
-  with `packages: write`; the credential-free build job receives no package
-  credential.
+- Gitea package publication runs in separate disposable
+  `ci-untrusted-python312` jobs. Credential-free jobs build, verify, and seal
+  the candidate before a fresh publisher job starts. Repository `PKG_TOKEN`
+  reaches only that job's registry-write step, where Twine reads `TWINE_*`, the
+  link call uses a mode-0600 netrc, and the manifest helper reads the token from
+  the environment. A final fresh job anonymously verifies the registry bytes;
+  the built-in Actions token is never a package-registry credential.
 - `GH_MIRROR_TOKEN`: GitHub PAT with `repo` and `workflow` scopes for RC tag promotion.
 - `PYPI_TOKEN` / `PYPI_USERNAME`: PyPI credentials for GitHub Actions upload.
 - `TEST_PYPI_TOKEN` / `TEST_PYPI_USERNAME`: TestPyPI credentials for RC validation.
 - `DOCKERHUB_TOKEN` / `DOCKERHUB_USERNAME`: Docker Hub credentials.
+
+TestPyPI and PyPI uploads use separate fresh GitHub-hosted `ubuntu-latest` jobs,
+install only the locked publisher dependency group with
+`--no-install-project`, and pass credentials to Twine only through `TWINE_*`.
 
 ### Immutability
 
@@ -282,10 +290,13 @@ the Gitea server (`10.0.30.96`). Pushes to `develop` deploy
 Production is an NMS-dispatched manual workflow from canonical `main`, with
 `latest_package` as the default and `main_branch` as an explicit override. The
 runner uses fixed, allowlisted deployment gateways and emits protected package-
-deployment evidence only after production health succeeds.
+deployment evidence only after production health, installed version, and exact
+active image identity succeed. The workflow exports the root-issued schema-2
+receipt and cannot construct successful-production evidence itself.
 
 ```bash
-/opt/nmulticloud/deploy/bin/deploy-app-package proxbox-api "$PACKAGE_VERSION"
+/opt/nmulticloud/deploy/bin/deploy-app-package \
+  proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
 ```
 
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside

@@ -75,19 +75,31 @@ sequenceDiagram
 - The Gitea tag must equal current canonical `develop`. Each latest required CI
   status must resolve through authenticated Gitea API records to a successful
   `ci.yml` push run for that exact SHA, trusted actor, job name, and untrusted
-  runner class. A credential-free job builds one wheel and one sdist using
-  checksum-pinned uv in fresh per-run tool and managed Python roots. The
-  protected publisher anonymously fetches the exact validated source, uses a
-  locked toolchain, exposes the repository `PKG_TOKEN` only for registry writes,
-  links the artifacts to this repository, and verifies the downloaded bytes
-  against the canonical manifest. The unsupported Gitea Actions job token is
-  never used as a package-registry credential.
+  runner class. A credential-free disposable job builds one wheel and one sdist
+  after directly verifying the pinned uv archive, clearing inherited `UV_*`
+  state, disabling discovered configuration, and selecting fresh per-run
+  managed-Python/cache roots. Another credential-free disposable job fetches
+  the exact validated source, installs the locked publisher toolchain without
+  installing the project, verifies the candidate, and seals the wheel, sdist,
+  manifest, helper, project metadata, and lock file. A fresh publisher job
+  verifies that seal before repository `PKG_TOKEN` is exposed only to its
+  registry-write step. Twine reads `TWINE_USERNAME` / `TWINE_PASSWORD`; the
+  repository-link call uses a mode-0600 netrc; and the manifest helper reads the
+  token from the environment, so no credential enters process argv. A final
+  fresh credential-free job anonymously downloads and compares the registry
+  bytes. Every private stage uses `ci-untrusted-python312`; the unsupported
+  Gitea Actions job token is never used as a package-registry credential.
 - GitHub downloads those exact Gitea artifacts, installs both wheel and sdist on
-  Python 3.12 and 3.13, and never rebuilds before TestPyPI/PyPI upload.
-- A successful NMS `latest_package` production run publishes an immutable,
-  repository-linked Gitea completion attestation. Final public promotion
-  verifies its source SHA, artifact hashes, manifest digest, environment, and
-  Gitea run identity.
+  Python 3.12 and 3.13, and never rebuilds before TestPyPI/PyPI upload. The
+  TestPyPI/PyPI upload jobs run separately on fresh GitHub-hosted
+  `ubuntu-latest` runners, install the locked publisher group with
+  `--no-install-project`, and pass credentials to Twine only through `TWINE_*`.
+- A successful NMS `latest_package` production run exports a root-issued
+  schema-2 receipt only after the exact sdist-built image, installed version,
+  and production health are proven. Workflow code publishes those bytes but
+  cannot create successful-production evidence. Final public promotion verifies
+  its source SHA, artifact hashes, manifest digest, observed image identity,
+  environment, and Gitea run identity.
 - Manual workflow dispatch is TestPyPI-only and requires an RC version.
 - Package uploads intentionally omit `twine --skip-existing`; if a version was
   consumed by any package index, fix forward with the next `.postN` or `rcN`.

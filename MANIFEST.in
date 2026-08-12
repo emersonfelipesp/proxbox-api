@@ -1,1 +1,4 @@
+include Dockerfile
+include uv.lock
+recursive-include docker *.conf *.sh *.template
 recursive-include proxbox_api/packer_templates *.hcl *.sh
