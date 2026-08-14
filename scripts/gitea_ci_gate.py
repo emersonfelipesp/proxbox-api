@@ -16,6 +16,8 @@ API_ORIGIN = "https://git.nmulti.cloud/api/v1"
 HTML_ORIGIN = "https://git.nmulti.cloud"
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
+FIRST_JOB_ATTEMPT = 1
+FIRST_RUN_ATTEMPT_ENCODINGS = frozenset({0, 1})
 
 
 class CIGateError(ValueError):
@@ -116,7 +118,6 @@ def _validate_run(
 ) -> None:
     actor = run.get("actor") if isinstance(run, dict) else None
     expected = {
-        "id": run_id,
         "event": "push",
         "status": "completed",
         "conclusion": "success",
@@ -126,8 +127,22 @@ def _validate_run(
     }
     if not isinstance(run, dict) or any(run.get(key) != value for key, value in expected.items()):
         raise CIGateError(f"Gitea CI run does not match the release source: {context}")
+    observed_run_id = run.get("id")
+    if (
+        isinstance(observed_run_id, bool)
+        or not isinstance(observed_run_id, int)
+        or observed_run_id != run_id
+    ):
+        raise CIGateError(f"Gitea CI run does not match the release source: {context}")
     if not isinstance(actor, dict) or actor.get("login") != trusted_actor:
         raise CIGateError(f"Gitea CI run actor is not trusted: {context}")
+    run_attempt = run.get("run_attempt")
+    if (
+        isinstance(run_attempt, bool)
+        or not isinstance(run_attempt, int)
+        or run_attempt not in FIRST_RUN_ATTEMPT_ENCODINGS
+    ):
+        raise CIGateError(f"Gitea CI run attempt is invalid: {context}")
 
 
 def _validate_job(
@@ -141,14 +156,22 @@ def _validate_job(
     source_sha: str,
 ) -> None:
     expected = {
-        "id": job_id,
-        "run_id": run_id,
         "name": _expected_job_name(context),
         "status": "completed",
         "conclusion": "success",
         "head_sha": source_sha,
     }
     if not isinstance(job, dict) or any(job.get(key) != value for key, value in expected.items()):
+        raise CIGateError(f"Gitea CI job does not match its status: {context}")
+    strict_integer_fields = {
+        "id": job_id,
+        "run_id": run_id,
+        "run_attempt": FIRST_JOB_ATTEMPT,
+    }
+    if any(
+        isinstance(job.get(key), bool) or not isinstance(job.get(key), int) or job.get(key) != value
+        for key, value in strict_integer_fields.items()
+    ):
         raise CIGateError(f"Gitea CI job does not match its status: {context}")
     labels = job.get("labels")
     runner_name = job.get("runner_name")
@@ -210,7 +233,11 @@ def validate_ci_gate(
             job_id=job_id,
             source_sha=source_sha,
         )
-        evidence[context] = {"job_id": job_id, "run_id": run_id}
+        evidence[context] = {
+            "job_id": job_id,
+            "run_attempt": FIRST_JOB_ATTEMPT,
+            "run_id": run_id,
+        }
     return evidence
 
 

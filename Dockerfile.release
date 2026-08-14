@@ -1,0 +1,32 @@
+# Offline package-deploy context. The prior reviewed raw image supplies Alpine,
+# OpenSSH, and the service runtime; the pinned uv image supplies only /uv.
+ARG RUNTIME_BASE_IMAGE=emersonfelipesp/proxbox-api:0.0.19.post5@sha256:f8b5decb8415867d2befb013f64f158d31650a974e9bc60bdf4f2e78c1808794
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa
+
+FROM ${RUNTIME_BASE_IMAGE} AS raw
+
+COPY --from=${UV_IMAGE} /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PORT=8000
+ENV PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db
+ENV PROXBOX_BIND_HOST=0.0.0.0
+ENV PYTHONUNBUFFERED=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+ENV UV_PYTHON_DOWNLOADS=never
+
+COPY docker/build-cache /root/.cache/uv
+COPY README.md pyproject.toml uv.lock ./
+COPY proxbox_api ./proxbox_api
+RUN uv sync --frozen --offline --no-index --find-links /root/.cache/uv --no-dev --no-editable
+
+COPY docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh
+RUN chmod 0555 /usr/local/bin/docker-entrypoint-raw.sh
+
+EXPOSE 8000
+VOLUME ["/data"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-raw.sh"]
+CMD []

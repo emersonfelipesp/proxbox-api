@@ -15,7 +15,8 @@ flowchart TD
     Start([Escolher release alvo\nX.Y.Z])
     Bump[Bump da versao do pacote\npyproject.toml + uv.lock]
     RCTag[Criar tag de release candidate\nvX.Y.ZrcN]
-    RCCI[CI faz build do dist\nvalida tag/versao/uv.lock]
+    RCCI[CI alvo gera solicitacao de controle\ncom quatro arquivos e sem credenciais]
+    Control[Controle de release travado valida\ne publica os bytes selados exatos]
     RCUpload[Upload vX.Y.ZrcN para TestPyPI\nsem --skip-existing]
     RCValidate[Instalar rcN do TestPyPI\nem Python 3.12 e 3.13]
     RCChecks[Rodar lint, tipos, compile,\nimport, schema, pytest]
@@ -33,7 +34,7 @@ flowchart TD
     Post[Bump para vX.Y.Z.postN\npublicar .postN no PyPI]
     Done([Release verde])
 
-    Start --> Bump --> RCTag --> RCCI --> RCUpload --> RCValidate --> RCChecks --> RCE2E --> RCFailed
+    Start --> Bump --> RCTag --> RCCI --> Control --> RCUpload --> RCValidate --> RCChecks --> RCE2E --> RCFailed
     RCFailed -- sim --> NextRC --> RCTag
     RCFailed -- nao --> FinalPrivate --> Deploy --> PublicRelease --> FinalUpload --> FinalValidate --> Docker --> FinalE2E --> FinalFailed
     FinalFailed -- sim --> Post --> FinalPrivate
@@ -45,15 +46,21 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant Tag as Tag de versao
-    participant WF as publish-testpypi.yml
+    participant TargetWF as Workflow de solicitacao proxbox-api
+    participant Control as Controle de release travado
+    participant GP as Registro de pacotes Gitea
+    participant WF as Workflow publico no GitHub
     participant TP as TestPyPI
     participant PY as PyPI
     participant DH as Docker Hub
     participant E2E as Stack E2E
 
-    Tag->>WF: vX.Y.ZrcN
-    WF->>WF: Validar pyproject + uv.lock + tag
-    WF->>TP: Upload do pacote
+    Tag->>TargetWF: vX.Y.ZrcN
+    TargetWF->>Control: wheel + sdist + manifesto + solicitacao canonica
+    Control->>Control: Validar run, workflow, solicitacao e bytes selados
+    Control->>GP: Publicar bytes exatos do pacote selado
+    Control->>WF: Promover a tag RC exata
+    WF->>TP: Upload dos bytes exatos do pacote Gitea
     WF->>TP: Reinstalar versao exata rcN
     WF->>WF: Rodar checks locais a partir da instalacao TestPyPI
 
@@ -75,21 +82,18 @@ sequenceDiagram
 - A tag do Gitea deve ser o `develop` canonico atual. Cada status CI obrigatorio
   mais recente precisa resolver, via registros autenticados da API Gitea, para
   um run `push` bem-sucedido de `ci.yml` no SHA exato, ator confiavel, nome de
-  job e classe de runner nao confiavel esperados. Um job descartavel sem
-  credenciais baixa e valida diretamente o arquivo uv fixado, limpa o estado
-  `UV_*` herdado, desativa configuracao descoberta e usa raizes novas por run
-  para cache e Python gerenciado antes de gerar wheel e sdist. Outro job
-  descartavel sem credenciais busca a fonte validada exata, instala as
-  ferramentas travadas sem instalar o projeto, verifica o candidato e sela
-  wheel, sdist, manifesto, helper, metadados do projeto e lock. Um job publicador
-  novo verifica esse selo antes de expor o `PKG_TOKEN` do repositorio somente na
-  etapa de escrita do registro. O Twine le `TWINE_USERNAME` /
-  `TWINE_PASSWORD`; a vinculacao ao repositorio usa netrc com modo 0600; e o
-  helper de manifesto le o token do ambiente, portanto nenhuma credencial entra
-  em argv. Um job final novo, sem credenciais, baixa anonimamente e compara os
-  bytes do registro. Todos os estagios privados usam
-  `ci-untrusted-python312`; o token do job do Gitea Actions nunca autentica o
-  registro de pacotes.
+  job e classe de runner nao confiavel esperados. Um job alvo descartavel valida
+  o arquivo uv fixado, usa raizes novas por run para Python/cache e gera wheel e
+  sdist. Ele envia exatamente quatro arquivos de dados: wheel, sdist, manifesto
+  canonico e `release-request.json` canonico. A solicitacao vincula o ID 37 do
+  repositorio, fonte/tag/versao, identidade do primeiro run, digest do workflow
+  alvo, digest do manifesto e inventario ordenado. O repositorio alvo nao possui
+  credencial de pacote ou espelho GitHub e nao pode publicar nem enviar tags. O
+  repositorio de controle administrado separadamente busca o run exato, valida
+  workflow fixado e todos os bytes no builder isolado e sela a transferencia.
+  Somente o publisher isolado pode ler credenciais e executar ferramentas de
+  publicacao fixas por digest. Downloads publicos sem autoridade precisam
+  coincidir com o manifesto antes do avanco do ledger duravel.
 - O GitHub baixa esses artefatos exatos, instala wheel e sdist em Python 3.12 e
   3.13 e nunca recompila antes do upload para TestPyPI/PyPI. Os jobs de upload
   para TestPyPI/PyPI rodam separadamente em runners GitHub-hosted
@@ -110,26 +114,42 @@ sequenceDiagram
 - Tags Docker usam a mesma versao do pacote PyPI que passou na validacao. As
   imagens experimentais PyO3/Rust adicionam sufixos `-pyo3-rust` e aliases
   opt-in (`experimental`, `pyo3-rust` e sufixos para variantes HTTPS).
-- O Dockerfile incluido no pacote fixa por digest a base Python 3.13 Alpine e a
-  imagem uv 0.11.28. Altere esses digests somente em uma atualizacao de release
-  revisada e reconstrua o sdist; o recibo de producao vincula o ID da imagem
-  ativa resultante.
+- O Dockerfile de release incluido no pacote fixa por digest completo o ultimo
+  runtime raw revisado (`0.0.19.post5`) e a imagem uv 0.11.28. O build alvo
+  exporta requisitos com hashes, baixa apenas wheels compativeis no runtime
+  fixado e inclui o inventario canonico schema-2 exato em
+  `docker/build-cache`. O controle travado rejeita independentemente divergencia
+  de hash, imagens mutaveis, instrucoes Docker com rede, diretivas do parser,
+  `ADD` ou ausencia de `uv sync --frozen --offline` antes de selar. Altere os
+  digests somente em uma atualizacao de release revisada; o recibo de producao
+  vincula o ID da imagem ativa resultante.
 - Jobs E2E pre-publicacao e pos-publicacao aguardam ate 20 minutos para o
   NetBox concluir migracoes/indexacao e exigem `/api/status/` pronto antes de
   configurar tokens ou endpoints do backend.
 
 ## Checklist Operacional
 
-1. Atualize `pyproject.toml` e regenere `uv.lock`.
-2. Crie a tag `vX.Y.Zrc1` para validacao de release candidate no TestPyPI. Se
+1. Nao faca merge do corte do repositorio alvo ate que o repositorio de
+   controle privado tenha ID positivo fixado na politica e seus workflows
+   protegidos, limites de host, sockets e runners por repositorio passem na
+   verificacao de prontidao. Ate la, mantenha o existing publisher ativo.
+2. Atualize `pyproject.toml` e regenere `uv.lock`.
+3. Crie a tag `vX.Y.Zrc1`, aguarde `publish-gitea.yml` gerar o artefato
+   `release-control-request` e calcule o SHA-256 do `release-request.json`
+   canonico.
+4. Dispare `validate.yml` com exatamente o repository name, target run ID e
+   request SHA-256. Depois do sucesso, dispare o `publish.yml` irreversivel e
+   separado com os mesmos tres valores. O controle publica o
+   pacote Gitea e promove somente a tag RC exata para validacao no TestPyPI. Se
    a validacao falhar depois do upload, continue com `rc2`, `rc3`, e assim
    por diante.
-3. Publique e verifique `vX.Y.Z` no Gitea, implante esse pacote pelo NMS e
+5. Publique e verifique `vX.Y.Z` pela mesma transferencia de controle, implante
+   esse pacote pelo NMS e
    valide a saude de producao.
-4. Dispare `promote-final-tag.yml` no `main` canonico do Gitea; ele valida o
+6. Dispare `promote-final-tag.yml` no `main` canonico do Gitea; ele valida o
    pacote privado exato e a atestacao NMS antes de enviar a tag ao repositorio
    GitHub autorizado. Depois crie a GitHub Release com `--verify-tag`; o evento
    valida a atestacao protegida do Gitea,
    publica os mesmos bytes no PyPI e depois as imagens no Docker Hub.
-5. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
+7. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
    depois da publicacao final no PyPI.

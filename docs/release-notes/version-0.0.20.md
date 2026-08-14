@@ -18,12 +18,16 @@ proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
 
 ## Release integrity
 
-- Builds one wheel and one sdist without credentials, stores their canonical
-  source-bound manifest as a repository-linked Gitea package, and verifies the
-  uploaded bytes by downloading them again.
-- Uses checksum-pinned uv in fresh per-run tool and managed-Python roots and a
-  fully locked publisher toolchain. Only the registry-write step receives the
-  repository package token.
+- Builds one wheel and one sdist without credentials and binds them to a
+  canonical four-file request containing their source-bound manifest.
+- Uses checksum-pinned uv in fresh per-run tool and managed-Python roots. The
+  target repository cannot publish; a separately administered control plane
+  verifies the policy-pinned workflow, exact first-attempt run, request,
+  manifest, and artifact bytes before its isolated publisher invokes fixed,
+  digest-locked publication tooling.
+- Embeds a release-only full-digest Docker context with a hash-locked wheelhouse
+  and canonical schema-2 inventory, allowing both the control plane and package
+  deploy gateway to reject mutable or networked build inputs before publish.
 - Requires authenticated Gitea CI run/job evidence for the exact canonical
   `develop` commit before a tag is accepted.
 - Reuses the exact Gitea artifacts for TestPyPI, PyPI, and downstream Docker

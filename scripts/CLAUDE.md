@@ -18,6 +18,7 @@ Utility and maintenance scripts for the `proxbox-api` project. These are one-off
 | File | Role |
 |------|------|
 | `refresh_schemas.py` | Regenerates the Proxmox and NetBox OpenAPI schema snapshots in `proxbox_api/generated/`. Run this when a new Proxmox or NetBox version is targeted. |
+| `prepare_offline_release.py` | Converts the reviewed `Dockerfile.release` plus a CI-populated wheelhouse into the canonical schema-2 offline context embedded only in release sdists. |
 
 ## Running
 

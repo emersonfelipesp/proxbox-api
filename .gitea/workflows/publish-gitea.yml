@@ -1,4 +1,4 @@
-name: Gitea Package Registry — Publish
+name: Gitea Release — Build Control Request
 
 on:
   push:
@@ -6,10 +6,11 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: private-package-${{ github.repository }}-${{ github.ref }}
+  group: release-request-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +18,6 @@ jobs:
     name: Validate canonical release source
     runs-on: ci-untrusted-python312
     outputs:
-      is_rc: ${{ steps.policy.outputs.is_rc }}
       source_sha: ${{ steps.policy.outputs.source_sha }}
       tag: ${{ steps.policy.outputs.tag }}
       version: ${{ steps.policy.outputs.version }}
@@ -35,6 +35,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
           case "$TAG" in
             v[0-9]*.[0-9]*.[0-9]* | v[0-9]*.[0-9]*.[0-9]*rc[0-9]* | v[0-9]*.[0-9]*.[0-9]*.post[0-9]*) ;;
             *) echo "Invalid release tag: $TAG"; exit 1 ;;
@@ -66,11 +67,11 @@ jobs:
             --owner emersonfelipesp --repository proxbox-api \
             --source-sha "$SOURCE_SHA" --trusted-actor emersonfelipesp \
             --required-context "CI / Lint, smoke, and core coverage (push)"
-          printf 'tag=%s\nversion=%s\nsource_sha=%s\n' "$TAG" "$VERSION" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
-          case "$VERSION" in *rc[0-9]*) echo 'is_rc=true' >> "$GITHUB_OUTPUT" ;; *) echo 'is_rc=false' >> "$GITHUB_OUTPUT" ;; esac
+          printf 'tag=%s\nversion=%s\nsource_sha=%s\n' \
+            "$TAG" "$VERSION" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
-  build-candidate:
-    name: Build credential-free candidate
+  build-request:
+    name: Build exact credential-free release-control request
     needs: validate-source
     runs-on: ci-untrusted-python312
     steps:
@@ -82,17 +83,16 @@ jobs:
 
       - name: Install checksum-verified uv and managed Python
         env:
-          BOOTSTRAP_UV_ROOT: ${{ runner.temp }}/proxbox-api-uv-build-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_PYTHON_ROOT: ${{ runner.temp }}/proxbox-api-python-build-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_CACHE_ROOT: ${{ runner.temp }}/proxbox-api-uv-cache-build-${{ github.run_id }}-${{ github.run_attempt }}
+          BOOTSTRAP_CACHE_ROOT: ${{ runner.temp }}/proxbox-api-uv-cache-${{ github.run_id }}-${{ github.run_attempt }}
+          BOOTSTRAP_PYTHON_ROOT: ${{ runner.temp }}/proxbox-api-python-${{ github.run_id }}-${{ github.run_attempt }}
+          BOOTSTRAP_UV_ROOT: ${{ runner.temp }}/proxbox-api-uv-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          test "$GITHUB_RUN_ATTEMPT" = 1
           test ! -e "$BOOTSTRAP_UV_ROOT"
           test ! -e "$BOOTSTRAP_PYTHON_ROOT"
           test ! -e "$BOOTSTRAP_CACHE_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_UV_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_PYTHON_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_CACHE_ROOT"
+          mkdir -m 0700 "$BOOTSTRAP_UV_ROOT" "$BOOTSTRAP_PYTHON_ROOT" "$BOOTSTRAP_CACHE_ROOT"
           curl --fail --location --proto '=https' --tlsv1.2 \
             --output "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
             https://github.com/astral-sh/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz
@@ -103,374 +103,99 @@ jobs:
             --directory "$BOOTSTRAP_UV_ROOT" --strip-components=1 \
             uv-x86_64-unknown-linux-gnu/uv
           chmod 0555 "$BOOTSTRAP_UV_ROOT/uv"
-          printf 'UV_BIN=%s\n' "$BOOTSTRAP_UV_ROOT/uv" >> "$GITHUB_ENV"
-          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$BOOTSTRAP_PYTHON_ROOT" >> "$GITHUB_ENV"
-          while IFS='=' read -r VARIABLE _; do
-            case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac
-          done < <(env)
+          printf 'UV_BIN=%s\nUV_PYTHON_INSTALL_DIR=%s\n' \
+            "$BOOTSTRAP_UV_ROOT/uv" "$BOOTSTRAP_PYTHON_ROOT" >> "$GITHUB_ENV"
           "$BOOTSTRAP_UV_ROOT/uv" python install \
-            --no-config \
-            --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
-            --install-dir "$BOOTSTRAP_PYTHON_ROOT" \
-            --managed-python \
-            --no-bin \
-            3.12.13
-
-      - name: Prepare locked release tools
-        env:
-          BUILD_ROOT: ${{ runner.temp }}/proxbox-api-build-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          umask 077
-          PUBLISHER_UV="$UV_BIN"
-          MANAGED_PYTHON_ROOT="$UV_PYTHON_INSTALL_DIR"
-          while IFS='=' read -r VARIABLE _; do
-            case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac
-          done < <(env)
-          test ! -e "$BUILD_ROOT"
-          mkdir -p "$BUILD_ROOT"
-          UV_PYTHON_INSTALL_DIR="$MANAGED_PYTHON_ROOT" \
-            UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
-            "$PUBLISHER_UV" sync \
-            --no-config \
-            --cache-dir "$BUILD_ROOT/uv-cache" \
-            --managed-python \
-            --no-python-downloads \
-            --python 3.12.13 \
-            --locked --only-group publish --no-install-project
-          test "$("$PUBLISHER_UV" --version)" = "uv 0.11.28 (x86_64-unknown-linux-gnu)"
-          test "$("$BUILD_ROOT/venv/bin/python" -c 'import platform; print(platform.python_version())')" = 3.12.13
-          case "$(readlink -f "$BUILD_ROOT/venv/bin/python")" in
-            "$MANAGED_PYTHON_ROOT"/*) ;;
-            *) exit 1 ;;
-          esac
+            --no-config --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
+            --install-dir "$BOOTSTRAP_PYTHON_ROOT" --managed-python --no-bin 3.12.13
 
       - name: Build and bind exact artifacts
         env:
           BUILD_ROOT: ${{ runner.temp }}/proxbox-api-build-${{ github.run_id }}-${{ github.run_attempt }}
+          OFFLINE_RUNTIME_IMAGE: emersonfelipesp/proxbox-api:0.0.19.post5@sha256:f8b5decb8415867d2befb013f64f158d31650a974e9bc60bdf4f2e78c1808794
           SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          TAG: ${{ needs.validate-source.outputs.tag }}
           VERSION: ${{ needs.validate-source.outputs.version }}
         run: |
           set -euo pipefail
+          umask 077
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test ! -e "$BUILD_ROOT"
+          mkdir -p "$BUILD_ROOT"
+          UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
+            "$UV_BIN" sync --no-config --cache-dir "$BUILD_ROOT/uv-cache" \
+            --managed-python --no-python-downloads --python 3.12.13 \
+            --locked --only-group publish --no-install-project
+          "$UV_BIN" export --no-config --frozen --no-dev --group publish \
+            --no-emit-project --format requirements-txt \
+            --output-file "$BUILD_ROOT/runtime-requirements.txt"
+          test ! -e docker/build-cache
+          test ! -e docker/offline-build-inputs.json
+          mkdir -m 0700 -p docker/build-cache
+          docker run --rm --network bridge --entrypoint /bin/sh \
+            --volume "$BUILD_ROOT/runtime-requirements.txt:/requirements.txt:ro" \
+            --volume "$PWD/docker/build-cache:/wheelhouse" \
+            "$OFFLINE_RUNTIME_IMAGE" -ceu '
+              /usr/local/bin/python -m ensurepip
+              /usr/local/bin/python -m pip download \
+                --disable-pip-version-check --require-hashes \
+                --only-binary=:all: --dest /wheelhouse \
+                --requirement /requirements.txt
+            '
+          find docker/build-cache -mindepth 1 -maxdepth 1 -type f -name '*.whl' \
+            -exec chmod 0444 {} +
+          test "$(find docker/build-cache -mindepth 1 -maxdepth 1 -type f | wc -l)" -gt 0
+          test "$(find docker/build-cache -mindepth 1 -maxdepth 1 ! -type f | wc -l)" -eq 0
+          "$BUILD_ROOT/venv/bin/python" scripts/prepare_offline_release.py
           "$BUILD_ROOT/venv/bin/python" -m build --no-isolation --outdir dist
           "$BUILD_ROOT/venv/bin/python" -m twine check dist/*
           "$BUILD_ROOT/venv/bin/python" scripts/release_artifacts.py manifest \
             --dist dist --package proxbox_api --version "$VERSION" \
             --source-sha "$SOURCE_SHA" --manifest release-manifest.json
           mkdir release-transfer
-          cp dist/*.whl dist/*.tar.gz release-manifest.json \
-            scripts/release_artifacts.py release-transfer/
+          cp dist/*.whl dist/*.tar.gz release-manifest.json release-transfer/
+          WORKFLOW_SHA256="$(sha256sum .gitea/workflows/publish-gitea.yml | cut -d' ' -f1)"
+          export WORKFLOW_SHA256
+          "$BUILD_ROOT/venv/bin/python" - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
 
-      - name: Transfer bounded candidate
+          manifest_raw = Path("release-manifest.json").read_bytes()
+          manifest = json.loads(manifest_raw)
+          artifacts = [
+              {"filename": row["name"], "sha256": row["sha256"], "size": row["size"]}
+              for row in manifest["artifacts"]
+          ]
+          request = {
+              "artifacts": artifacts,
+              "initiating_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "initiating_run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "owner": "emersonfelipesp",
+              "package": manifest["package"],
+              "release_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+              "repository": "proxbox-api",
+              "repository_id": 37,
+              "schema": 1,
+              "source_sha": os.environ["SOURCE_SHA"],
+              "tag": os.environ["TAG"],
+              "version": os.environ["VERSION"],
+              "workflow_sha256": os.environ["WORKFLOW_SHA256"],
+          }
+          if artifacts != sorted(artifacts, key=lambda row: row["filename"]):
+              raise SystemExit("Artifact inventory is not sorted")
+          raw = json.dumps(request, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+          Path("release-transfer/release-request.json").write_bytes(raw)
+          PY
+          test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 4
+          test "$(find release-transfer -mindepth 1 -maxdepth 1 -type l | wc -l)" -eq 0
+
+      - name: Upload exact data-only control request
         uses: actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de # v3.2.2-node20
         with:
-          name: private-release-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-control-request
           path: release-transfer
           if-no-files-found: error
           retention-days: 1
-
-  verify-candidate:
-    name: Verify and seal candidate without package authority
-    needs: [validate-source, build-candidate]
-    runs-on: ci-untrusted-python312
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Fetch validated publisher tool anonymously
-        env:
-          TOOL_SHA: ${{ needs.validate-source.outputs.source_sha }}
-        run: |
-          set -euo pipefail
-          test ! -e publisher-tool
-          git init publisher-tool
-          git -C publisher-tool remote add origin \
-            https://git.nmulti.cloud/emersonfelipesp/proxbox-api.git
-          git -C publisher-tool fetch --force --no-tags origin "$TOOL_SHA"
-          git -C publisher-tool checkout --detach FETCH_HEAD
-          test "$(git -C publisher-tool rev-parse HEAD)" = "$TOOL_SHA"
-
-      - name: Install checksum-verified uv and managed Python
-        env:
-          BOOTSTRAP_UV_ROOT: ${{ runner.temp }}/proxbox-api-uv-verify-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_PYTHON_ROOT: ${{ runner.temp }}/proxbox-api-python-verify-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_CACHE_ROOT: ${{ runner.temp }}/proxbox-api-uv-cache-verify-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          test ! -e "$BOOTSTRAP_UV_ROOT"
-          test ! -e "$BOOTSTRAP_PYTHON_ROOT"
-          test ! -e "$BOOTSTRAP_CACHE_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_UV_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_PYTHON_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_CACHE_ROOT"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
-            https://github.com/astral-sh/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz
-          printf '%s  %s\n' \
-            e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224 \
-            "$BOOTSTRAP_UV_ROOT/uv.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
-            --directory "$BOOTSTRAP_UV_ROOT" --strip-components=1 \
-            uv-x86_64-unknown-linux-gnu/uv
-          chmod 0555 "$BOOTSTRAP_UV_ROOT/uv"
-          printf 'UV_BIN=%s\n' "$BOOTSTRAP_UV_ROOT/uv" >> "$GITHUB_ENV"
-          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$BOOTSTRAP_PYTHON_ROOT" >> "$GITHUB_ENV"
-          while IFS='=' read -r VARIABLE _; do
-            case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac
-          done < <(env)
-          "$BOOTSTRAP_UV_ROOT/uv" python install \
-            --no-config \
-            --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
-            --install-dir "$BOOTSTRAP_PYTHON_ROOT" \
-            --managed-python \
-            --no-bin \
-            3.12.13
-
-      - name: Download bounded candidate
-        uses: actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b # v3.1.0-node20
-        with:
-          name: private-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: release-transfer
-
-      - name: Install locked publisher toolchain without package authority
-        env:
-          PUBLISH_ROOT: ${{ runner.temp }}/proxbox-api-verify-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          umask 077
-          PUBLISHER_UV="$UV_BIN"
-          MANAGED_PYTHON_ROOT="$UV_PYTHON_INSTALL_DIR"
-          while IFS='=' read -r VARIABLE _; do
-            case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac
-          done < <(env)
-          test ! -e "$PUBLISH_ROOT"
-          mkdir -p "$PUBLISH_ROOT"
-          UV_PYTHON_INSTALL_DIR="$MANAGED_PYTHON_ROOT" \
-            UV_PROJECT_ENVIRONMENT="$PUBLISH_ROOT/venv" \
-            "$PUBLISHER_UV" sync \
-            --directory publisher-tool \
-            --no-config \
-            --cache-dir "$PUBLISH_ROOT/uv-cache" \
-            --managed-python \
-            --no-python-downloads \
-            --python 3.12.13 \
-            --locked --only-group publish --no-install-project
-          test "$("$PUBLISHER_UV" --version)" = "uv 0.11.28 (x86_64-unknown-linux-gnu)"
-          test "$("$PUBLISH_ROOT/venv/bin/python" -c 'import platform; print(platform.python_version())')" = 3.12.13
-          case "$(readlink -f "$PUBLISH_ROOT/venv/bin/python")" in
-            "$MANAGED_PYTHON_ROOT"/*) ;;
-            *) exit 1 ;;
-          esac
-          printf 'PUBLISHER_PYTHON=%s\n' "$PUBLISH_ROOT/venv/bin/python" >> "$GITHUB_ENV"
-
-      - name: Verify candidate with canonical publisher code and seal exact inputs
-        env:
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
-          VERSION: ${{ needs.validate-source.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir dist sealed-release
-          mv release-transfer/*.whl release-transfer/*.tar.gz dist/
-          cmp publisher-tool/scripts/release_artifacts.py \
-            release-transfer/release_artifacts.py
-          "$PUBLISHER_PYTHON" publisher-tool/scripts/release_artifacts.py verify \
-            --dist dist --package proxbox_api --version "$VERSION" \
-            --source-sha "$SOURCE_SHA" --manifest release-transfer/release-manifest.json
-          cp dist/*.whl dist/*.tar.gz \
-            release-transfer/release-manifest.json \
-            release-transfer/release_artifacts.py \
-            publisher-tool/pyproject.toml publisher-tool/uv.lock \
-            sealed-release/
-          (
-            cd sealed-release
-            sha256sum -- *.whl *.tar.gz pyproject.toml release-manifest.json \
-              release_artifacts.py uv.lock > SHA256SUMS
-            test "$(wc -l < SHA256SUMS)" -eq 6
-            sha256sum --check --strict SHA256SUMS
-          )
-
-      - name: Transfer sealed candidate into a fresh publisher job
-        uses: actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de # v3.2.2-node20
-        with:
-          name: sealed-private-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: sealed-release
-          if-no-files-found: error
-          retention-days: 1
-
-  publish-gitea:
-    name: Publish sealed candidate with package-only authority
-    needs: [validate-source, verify-candidate]
-    runs-on: ci-untrusted-python312
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Download sealed candidate into fresh job
-        uses: actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b # v3.1.0-node20
-        with:
-          name: sealed-private-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: sealed-release
-
-      - name: Verify seal before preparing publisher toolchain
-        run: |
-          set -euo pipefail
-          test "$(find sealed-release -maxdepth 1 -type f -printf '%f\n' | wc -l)" -eq 7
-          (cd sealed-release && sha256sum --check --strict SHA256SUMS)
-
-      - name: Install checksum-verified uv and managed Python
-        env:
-          BOOTSTRAP_UV_ROOT: ${{ runner.temp }}/proxbox-api-uv-publish-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_PYTHON_ROOT: ${{ runner.temp }}/proxbox-api-python-publish-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_CACHE_ROOT: ${{ runner.temp }}/proxbox-api-uv-cache-publish-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          test ! -e "$BOOTSTRAP_UV_ROOT"
-          test ! -e "$BOOTSTRAP_PYTHON_ROOT"
-          test ! -e "$BOOTSTRAP_CACHE_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_UV_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_PYTHON_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_CACHE_ROOT"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
-            https://github.com/astral-sh/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz
-          printf '%s  %s\n' \
-            e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224 \
-            "$BOOTSTRAP_UV_ROOT/uv.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
-            --directory "$BOOTSTRAP_UV_ROOT" --strip-components=1 \
-            uv-x86_64-unknown-linux-gnu/uv
-          chmod 0555 "$BOOTSTRAP_UV_ROOT/uv"
-          printf 'UV_BIN=%s\n' "$BOOTSTRAP_UV_ROOT/uv" >> "$GITHUB_ENV"
-          printf 'UV_PYTHON_INSTALL_DIR=%s\n' "$BOOTSTRAP_PYTHON_ROOT" >> "$GITHUB_ENV"
-          while IFS='=' read -r VARIABLE _; do
-            case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac
-          done < <(env)
-          "$BOOTSTRAP_UV_ROOT/uv" python install \
-            --no-config \
-            --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
-            --install-dir "$BOOTSTRAP_PYTHON_ROOT" \
-            --managed-python \
-            --no-bin \
-            3.12.13
-
-      - name: Install sealed locked publisher toolchain without package authority
-        env:
-          PUBLISH_ROOT: ${{ runner.temp }}/proxbox-api-publish-${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          umask 077
-          PUBLISHER_UV="$UV_BIN"
-          MANAGED_PYTHON_ROOT="$UV_PYTHON_INSTALL_DIR"
-          while IFS='=' read -r VARIABLE _; do
-            case "$VARIABLE" in UV_*) unset "$VARIABLE" ;; esac
-          done < <(env)
-          test ! -e "$PUBLISH_ROOT"
-          mkdir -p "$PUBLISH_ROOT"
-          UV_PYTHON_INSTALL_DIR="$MANAGED_PYTHON_ROOT" \
-            UV_PROJECT_ENVIRONMENT="$PUBLISH_ROOT/venv" \
-            "$PUBLISHER_UV" sync \
-            --directory sealed-release \
-            --no-config \
-            --cache-dir "$PUBLISH_ROOT/uv-cache" \
-            --managed-python \
-            --no-python-downloads \
-            --python 3.12.13 \
-            --locked --only-group publish --no-install-project
-          test "$("$PUBLISHER_UV" --version)" = "uv 0.11.28 (x86_64-unknown-linux-gnu)"
-          test "$("$PUBLISH_ROOT/venv/bin/python" -c 'import platform; print(platform.python_version())')" = 3.12.13
-          case "$(readlink -f "$PUBLISH_ROOT/venv/bin/python")" in
-            "$MANAGED_PYTHON_ROOT"/*) ;;
-            *) exit 1 ;;
-          esac
-          printf 'PUBLISHER_PYTHON=%s\n' "$PUBLISH_ROOT/venv/bin/python" >> "$GITHUB_ENV"
-
-      - name: Publish exact files with package-only authority
-        env:
-          GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
-          TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}
-          TWINE_USERNAME: emersonfelipesp
-        run: |
-          set -euo pipefail
-          umask 077
-          SECRET_ROOT="${RUNNER_TEMP}/proxbox-api-registry-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          test ! -e "$SECRET_ROOT"
-          mkdir -m 0700 "$SECRET_ROOT"
-          trap 'rm -rf -- "$SECRET_ROOT"' EXIT
-          printf 'machine git.nmulti.cloud\nlogin %s\npassword %s\n' \
-            "$TWINE_USERNAME" "$TWINE_PASSWORD" > "$SECRET_ROOT/netrc"
-          chmod 0600 "$SECRET_ROOT/netrc"
-          "$PUBLISHER_PYTHON" -m twine upload --non-interactive \
-            --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
-            sealed-release/*.whl sealed-release/*.tar.gz
-          curl --fail --silent --show-error --netrc-file "$SECRET_ROOT/netrc" \
-            --request POST \
-            "https://git.nmulti.cloud/api/v1/packages/emersonfelipesp/pypi/proxbox-api/-/link/proxbox-api"
-          "$PUBLISHER_PYTHON" sealed-release/release_artifacts.py publish-manifest \
-            --owner emersonfelipesp --repository proxbox-api \
-            --manifest sealed-release/release-manifest.json
-
-  verify-registry:
-    name: Re-download and compare registry bytes without credentials
-    needs: [validate-source, publish-gitea]
-    runs-on: ci-untrusted-python312
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Download sealed candidate into fresh verification job
-        uses: actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b # v3.1.0-node20
-        with:
-          name: sealed-private-release-${{ github.run_id }}-${{ github.run_attempt }}
-          path: sealed-release
-
-      - name: Verify seal and registry bytes without credentials
-        env:
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
-          VERSION: ${{ needs.validate-source.outputs.version }}
-        run: |
-          set -euo pipefail
-          (cd sealed-release && sha256sum --check --strict SHA256SUMS)
-          mkdir verified-dist
-          python3 sealed-release/release_artifacts.py fetch-gitea \
-            --owner emersonfelipesp --repository proxbox-api \
-            --package proxbox_api --version "$VERSION" --source-sha "$SOURCE_SHA" \
-            --dist verified-dist --manifest verified-manifest.json
-          cmp sealed-release/release-manifest.json verified-manifest.json
-
-  push-to-github:
-    name: Promote verified RC tag to GitHub
-    needs: [validate-source, verify-registry]
-    if: ${{ needs.validate-source.outputs.is_rc == 'true' }}
-    runs-on: ci-untrusted-python312
-    steps:
-      - name: Checkout verified tag
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ needs.validate-source.outputs.tag }}
-
-      - name: Push immutable RC tag to the authorized GitHub destination
-        env:
-          GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
-          TAG: ${{ needs.validate-source.outputs.tag }}
-        run: |
-          set -euo pipefail
-          umask 077
-          test "$(git rev-parse HEAD^{commit})" = "${{ needs.validate-source.outputs.source_sha }}"
-          git remote add github https://github.com/emersonfelipesp/proxbox-api.git
-          SECRET_ROOT="${RUNNER_TEMP}/proxbox-api-github-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          test ! -e "$SECRET_ROOT"
-          mkdir -m 0700 "$SECRET_ROOT"
-          trap 'rm -rf -- "$SECRET_ROOT"' EXIT
-          cat > "$SECRET_ROOT/askpass" <<'EOF'
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' x-access-token ;;
-            *Password*) printf '%s\n' "$GH_TOKEN" ;;
-            *) exit 1 ;;
-          esac
-          EOF
-          chmod 0500 "$SECRET_ROOT/askpass"
-          GIT_ASKPASS="$SECRET_ROOT/askpass" GIT_TERMINAL_PROMPT=0 \
-            git push github "refs/tags/${TAG}:refs/tags/${TAG}"
+          compression-level: 0

@@ -144,17 +144,26 @@ Open the nearest scoped guide for the code you are changing.
   and fails the step with `GHESNotSupportedError`, turning an otherwise-passing
   run red and blocking the CI-gated deploy. The `.github/workflows/ci.yml` twin
   keeps v4 because it runs on GitHub-hosted runners that support it.
-- `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
-  committed to `main`. Handles `push: tags:` only, requires the tag to equal
-  current `develop`, resolves each latest required status to authenticated
+- `.gitea/workflows/publish-gitea.yml`: data-only release-control request
+  workflow committed to `main`. Handles `push: tags:` only, requires the tag to
+  equal current `develop`, resolves each latest required status to authenticated
   successful `ci.yml` push-run/job evidence for that exact SHA and trusted
-  runner class, builds a manifest-bound wheel/sdist without credentials, and
-  verifies and seals it in a second credential-free job. A fresh job receives
-  repository `PKG_TOKEN` only in its registry-write step: Twine reads it from
-  `TWINE_PASSWORD`, while link and manifest calls use a mode-0600 netrc and the
-  environment-aware helper. Another fresh credential-free job anonymously
-  re-hashes the registry bytes. RC tags are
-  pushed to GitHub for TestPyPI validation. Final tags stay private until the
+  runner class, and uploads exactly wheel, sdist, manifest, and canonical
+  `release-request.json`. The request binds repository ID 37, source/tag/version,
+  first-attempt run identity, target-workflow digest, manifest digest, and
+  artifact inventory. The target repository has no package or RC-mirror
+  credential and cannot publish or push tags. The separately administered
+  locked control plane independently verifies the policy-pinned target workflow
+  and exact bytes on its isolated builder, seals the handoff, and lets only its
+  isolated publisher invoke fixed digest-locked tooling with publication
+  credentials. It anonymously re-downloads and verifies every registry byte.
+  Before the sdist build, the target generates the release-only context from
+  `Dockerfile.release`, downloads only hash-locked compatible wheels inside the
+  full-digest prior raw runtime, and writes the canonical schema-2 cache/image
+  inventory. The locked control independently rejects mutable/networked Docker
+  inputs and hash drift before sealing; the ordinary development `Dockerfile`
+  is not the package-deploy contract.
+  The control publisher pushes RC tags to GitHub for TestPyPI validation. Final tags stay private until the
   NMS package-first production gate passes; canonical-main
   `promote-final-tag.yml` verifies the package and NMS attestation before
   pushing the tag to the exact authorized GitHub repository. The operator then creates the
@@ -794,10 +803,18 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
    git push gitea vX.Y.Z
    ```
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds without package credentials, verifies and seals the candidate in a
-     second credential-free job, publishes it from a fresh package-authority
-     job, then anonymously re-hashes the registry bytes in another fresh job.
-   - RC tags are pushed to GitHub and trigger the RC-only TestPyPI lane.
+   - Builds without publication credentials and uploads the exact four-file
+     `release-control-request` artifact.
+   - Do not merge this target cutover until the private control repository has
+     a positive policy-pinned ID and its protected workflows, host boundaries,
+     sockets, and repository-scoped runners pass readiness. Leave the existing
+     publisher active until then.
+   - Record the first-attempt target run ID and SHA-256 of the canonical
+     `release-request.json`; dispatch `validate.yml` with those values and
+     `repository=proxbox-api`, then dispatch the separate irreversible
+     `publish.yml` with the same three exact inputs.
+   - The control builder verifies/seals the bytes; its isolated publisher uploads
+     the Gitea package and pushes RC tags to GitHub for the RC-only TestPyPI lane.
    - Final tags are not pushed publicly and do not create a GitHub Release.
 5. **Link and verify the exact Gitea package, then deploy through NMS** with the default `latest_package` source. `main_branch` must remain an explicit operator selection.
 6. **Push the exact final tag to GitHub and create the GitHub Release with
@@ -817,9 +834,10 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
 
 ### RC flow (TestPyPI gate)
 
-1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
-2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
-3. Fix-forward with `rcN+1` if anything fails.
+1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` uploads the data-only control request.
+2. Hash its canonical request; dispatch `validate.yml`, then the separate irreversible `publish.yml`, with exactly `repository=proxbox-api`, the first-attempt target run ID, and that request SHA-256. The control publisher uploads the Gitea package and pushes only that RC tag to GitHub.
+3. GitHub Actions `push: tags: v*rc*` fires → publishes the exact Gitea bytes to TestPyPI → validates.
+4. Fix-forward with `rcN+1` if anything fails.
 
 ### Publisher recovery
 
@@ -828,15 +846,13 @@ process and advance to the next immutable `rcN` or `postN`. Do not bypass the
 audited publisher with a local registry upload or push a final tag to GitHub
 before the Gitea package and NMS production gates.
 
-The private publisher directly downloads and verifies the pinned uv archive,
-clears inherited `UV_*` state, disables discovered configuration, and uses fresh
-per-run managed-Python and cache roots. Every release stage runs as a separate
-disposable `ci-untrusted-python312` job. The candidate is sealed before the
-fresh publisher job starts; repository `PKG_TOKEN` reaches only its final
-registry-write step. Twine receives it only through `TWINE_PASSWORD`, Gitea link
-operations use a mode-0600 netrc, and the manifest helper reads it from the
-environment. The built-in Gitea Actions token is never used as a package-
-registry credential. Public TestPyPI/PyPI upload jobs run separately on fresh
+The target workflow verifies the pinned uv archive and uses fresh per-run
+managed-Python and cache roots. It emits only a canonical four-file request and
+holds no publication credential. The separate locked control plane verifies the
+policy-pinned target workflow, run identity, request, manifest, and artifacts;
+its builder seals the bytes and only its isolated publisher can read credentials
+or invoke fixed digest-locked publication tooling. Public no-authority downloads
+must match before its durable ledger completes. Public TestPyPI/PyPI upload jobs run separately on fresh
 GitHub-hosted `ubuntu-latest` runners, install the locked publisher group with
 `--no-install-project`, and likewise pass credentials only through `TWINE_*`.
 
