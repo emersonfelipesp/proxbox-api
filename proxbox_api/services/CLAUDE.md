@@ -55,6 +55,11 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   It preserves valid-empty versus malformed collection semantics so malformed
   payloads fail closed, and it requires affirmative storage health state. It
   must remain usable when endpoint writes are disabled.
+- `packer_plans.py`: issues and verifies short-lived HMAC-bound Cloud Image
+  Pipeline execution plans. Token segments use unpadded canonical Base64URL;
+  verification rejects padding, invalid characters, and alternate encodings
+  whose unused padding bits decode to the same bytes, then binds the plan to
+  the current endpoint authority, target, recipe, expiry, and durable lease.
 - `hardware_discovery.py`: opt-in SSH node hardware discovery
   (`dmidecode`/`ip`/`ethtool` allowlist). `reflect_to_netbox()` writes
   chassis/NIC custom fields and, via `_reflect_nic_mac()`, the physical-NIC MAC

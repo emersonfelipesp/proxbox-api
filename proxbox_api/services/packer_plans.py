@@ -67,7 +67,19 @@ def _b64encode(value: bytes) -> str:
 
 
 def _b64decode(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    if not value or "=" in value:
+        raise ValueError("non-canonical base64url")
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (ValueError, TypeError) as exc:
+        raise ValueError("invalid base64url") from exc
+    if not hmac.compare_digest(_b64encode(decoded), value):
+        raise ValueError("non-canonical base64url")
+    return decoded
 
 
 def _endpoint_config_payload(endpoint: ProxmoxEndpoint) -> dict[str, object]:

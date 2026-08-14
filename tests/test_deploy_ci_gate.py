@@ -51,12 +51,13 @@ def test_deploy_depends_on_the_ci_gate(workflow):
     jobs = workflow["jobs"]
     assert "verify-ci" in jobs, "the deploy workflow must define a verify-ci gate job"
 
-    needs = jobs["deploy"].get("needs")
-    needs = [needs] if isinstance(needs, str) else (needs or [])
-    assert "verify-ci" in needs, (
-        "the deploy job must declare `needs: verify-ci`; without it the gate and "
-        "the rollout race, which is the exact defect #204 requirement 6 describes"
-    )
+    for job_name in ("staging", "production"):
+        needs = jobs[job_name].get("needs")
+        needs = [needs] if isinstance(needs, str) else (needs or [])
+        assert "verify-ci" in needs, (
+            f"the {job_name} job must declare `needs: verify-ci`; without it the "
+            "gate and the rollout race"
+        )
 
 
 def test_gate_runs_on_a_trusted_runner(workflow):
@@ -71,15 +72,19 @@ def test_gate_runs_on_a_trusted_runner(workflow):
 
 def test_gate_verifies_an_exact_sha(workflow):
     """The gate must be pinned to github.sha, not a branch name."""
-    step = next(
+    resolve_step = next(
+        s
+        for s in workflow["jobs"]["verify-ci"]["steps"]
+        if "release-policy/candidate" in str(s.get("run", ""))
+    )
+    gate_step = next(
         s
         for s in workflow["jobs"]["verify-ci"]["steps"]
         if "require_ci_status" in str(s.get("run", ""))
     )
-    assert step["env"]["DEPLOY_SHA"] == "${{ github.sha }}", (
-        "the gate must verify the exact commit being deployed; a branch name "
-        "could move between verification and rollout"
-    )
+    assert "git rev-parse refs/release-policy/candidate^{commit}" in resolve_step["run"]
+    assert gate_step["env"]["DEPLOY_SHA"] == "${{ steps.source.outputs.deploy_sha }}"
+    assert "VERIFIED_DEPLOY_SHA" in str(workflow["jobs"]["production"])
 
 
 def test_emergency_bypass_exists_and_defaults_off(workflow):

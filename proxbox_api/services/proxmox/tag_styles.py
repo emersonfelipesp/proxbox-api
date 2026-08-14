@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-from typing import Any
+from typing import Any, cast
 
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
@@ -104,7 +104,8 @@ async def fetch_tag_color_map(proxmox_session: Any) -> dict[str, str]:
 
     if not isinstance(options, dict):
         return {}
-    tag_style = options.get("tag-style") or options.get("tag_style")
+    typed_options = cast(dict[str, Any], options)
+    tag_style = typed_options.get("tag-style") or typed_options.get("tag_style")
     if not tag_style:
         return {}
     if not isinstance(tag_style, str):
@@ -119,8 +120,5 @@ def fallback_color(tag_name: str) -> str:
     colors for tags that aren't in the Proxmox color-map.
     """
     data = tag_name.encode("utf-8")
-    try:
-        digest = hashlib.md5(data, usedforsecurity=False).hexdigest()
-    except TypeError:
-        digest = hashlib.md5(data).hexdigest()
+    digest = hashlib.md5(data, usedforsecurity=False).hexdigest()
     return digest[:6]
