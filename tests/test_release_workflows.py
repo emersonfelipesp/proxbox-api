@@ -423,13 +423,13 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert gate_sha256 in workflow
     assert "1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad" in workflow
     assert runner_gate_sha256 == (
-        "9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b"
+        "d541d40b7fb1c5fb8b373e67ee8b89ebf9e1c8e63379cd80ec336a64380acf5b"
     )
     assert build_boundary_sha256 == (
         "68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
-    assert acceptance_sha256 == ("317aa748f53b1972870246c475dbb70df6d43bc9466a4e75b04ed0a032ce6c4b")
+    assert acceptance_sha256 == ("ecdde2436af78c4ccf7d7ae02ebe6fe5e4b3f1994338ddfa823045682ec1ccdc")
     assert workflow.count(runner_gate_sha256) == 2
     assert workflow.count(build_boundary_sha256) == 1
     assert workflow.count(handoff_sha256) == 1
@@ -444,8 +444,6 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert acceptance["supervisor_policy_sha256"] == "0" * 64
     assert acceptance["registered_labels"] == [
         "ci-release-proxbox-api",
-        "ci-untrusted-netbox46",
-        "ci-untrusted-python312",
     ]
     build_steps = parsed["jobs"]["build-request"]["steps"]
     completion_run = next(
@@ -1467,8 +1465,6 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "network_attestation_sha256": "b" * 64,
         "registered_labels": [
             "ci-release-proxbox-api",
-            "ci-untrusted-netbox46",
-            "ci-untrusted-python312",
         ],
         "runner_id": 41,
         "runner_label": "ci-release-proxbox-api",

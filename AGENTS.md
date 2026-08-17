@@ -188,7 +188,8 @@ inventory drift, networked/mutable Docker inputs, and any build path other than
 ### Secrets required
 
 - The target repository uses no Gitea package or RC-promotion secret. Its
-  disposable repository-scoped `ci-release-proxbox-api` jobs first require the
+  disposable repository-scoped `ci-release-proxbox-api` jobs run on a dedicated
+  ephemeral registration that advertises only that release label, then require the
   live runner ID, name, and sole label to match the checksum-pinned acceptance
   record plus a fresh signed external-supervisor attestation bound to
   repository/run/job/source, complete registered labels, runtime image, and

@@ -38,10 +38,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b \
+            d541d40b7fb1c5fb8b373e67ee8b89ebf9e1c8e63379cd80ec336a64380acf5b \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            317aa748f53b1972870246c475dbb70df6d43bc9466a4e75b04ed0a032ce6c4b \
+            ecdde2436af78c4ccf7d7ae02ebe6fe5e4b3f1994338ddfa823045682ec1ccdc \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \
@@ -121,10 +121,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b \
+            d541d40b7fb1c5fb8b373e67ee8b89ebf9e1c8e63379cd80ec336a64380acf5b \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            317aa748f53b1972870246c475dbb70df6d43bc9466a4e75b04ed0a032ce6c4b \
+            ecdde2436af78c4ccf7d7ae02ebe6fe5e4b3f1994338ddfa823045682ec1ccdc \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \

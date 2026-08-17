@@ -97,13 +97,7 @@ def _load_acceptance(path: Path, repository: str) -> dict[str, Any]:
         or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value["runner_name"]) is None
         or value.get("runner_label") != f"ci-release-{repository}"
         or not isinstance(registered_labels, list)
-        or registered_labels != sorted(set(registered_labels))
-        or value.get("runner_label") not in registered_labels
-        or any(
-            not isinstance(label, str)
-            or re.fullmatch(r"ci-(?:release|untrusted)-[a-z0-9-]+", label) is None
-            for label in registered_labels
-        )
+        or registered_labels != [value.get("runner_label")]
         or any(
             not isinstance(digest, str)
             or SHA256_RE.fullmatch(digest) is None

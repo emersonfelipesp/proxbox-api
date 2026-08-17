@@ -83,7 +83,8 @@ sequenceDiagram
   commit statuses are ignored; the newest authenticated `ci.yml` Actions run
   and its required jobs must prove a successful first push attempt for the
   exact SHA, trusted actor, job name, and untrusted runner class. Both release
-  jobs use `ci-release-proxbox-api` and, before candidate execution, require
+  jobs use a dedicated ephemeral registration whose only advertised label is
+  `ci-release-proxbox-api` and, before candidate execution, require
   their live runner ID/name/sole label to match the checksum-pinned acceptance
   record plus a fresh signed external-supervisor attestation bound to the
   repository/run/job/source, complete registered labels, runtime image, and

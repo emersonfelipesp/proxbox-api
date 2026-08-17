@@ -151,7 +151,8 @@ Open the nearest scoped guide for the code you are changing.
   fetches that exact source-SHA GitHub workflow through the Contents API and
   verifies both its Git object ID and reviewed SHA-256, pins the reviewed
   gate-helper bytes before isolated execution, and schedules
-  both release jobs only on `ci-release-proxbox-api`. Before candidate
+  both release jobs only on a dedicated ephemeral registration advertising the
+  sole `ci-release-proxbox-api` label. Before candidate
   execution, each job must match its live runner ID/name/sole label to the
   checksum-pinned acceptance record plus a fresh signed external-supervisor
   attestation bound to repository/run/job/source, complete registered labels,
