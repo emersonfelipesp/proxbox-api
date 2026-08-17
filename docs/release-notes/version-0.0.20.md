@@ -19,7 +19,8 @@ proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
 ## Release integrity
 
 - Builds one wheel and one sdist without credentials and binds them to a
-  canonical four-file request containing their source-bound manifest.
+  canonical signed six-file request containing the source-bound manifest,
+  request, supervisor completion statement, and detached signature.
 - Uses checksum-pinned uv in fresh per-run tool and managed-Python roots. The
   target repository cannot publish; a separately administered control plane
   verifies the policy-pinned workflow, exact first-attempt run, request,

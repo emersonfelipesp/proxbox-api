@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shlex
@@ -31,6 +32,7 @@ GITEA_DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "deploy-produc
 GITEA_PROMOTE_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "promote-final-tag.yml"
 RELEASE_ARTIFACTS_PATH = REPO_ROOT / "scripts" / "release_artifacts.py"
 PREPARE_OFFLINE_RELEASE_PATH = REPO_ROOT / "scripts" / "prepare_offline_release.py"
+VERIFY_OFFLINE_RELEASE_PATH = REPO_ROOT / "scripts" / "verify_offline_release_sdist.py"
 CI_MATRIX_PATH = REPO_ROOT / "scripts" / "ci_e2e_matrix.py"
 CI_GATE_PATH = REPO_ROOT / "scripts" / "gitea_ci_gate.py"
 RUNNER_GATE_PATH = REPO_ROOT / "scripts" / "gitea_release_runner_gate.py"
@@ -42,6 +44,14 @@ RELEASE_CONTROL_DOC_PATHS = (
     REPO_ROOT / "CLAUDE.md",
     REPO_ROOT / "docs" / "development" / "release-publishing.md",
     REPO_ROOT / "docs" / "pt-BR" / "development" / "release-publishing.md",
+)
+SIGNED_HANDOFF_DOC_PATHS = (
+    REPO_ROOT / ".github" / "CLAUDE.md",
+    REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "CLAUDE.md",
+    REPO_ROOT / "docs" / "development" / "release-publishing.md",
+    REPO_ROOT / "docs" / "pt-BR" / "development" / "release-publishing.md",
+    REPO_ROOT / "docs" / "release-notes" / "version-0.0.20.md",
 )
 
 
@@ -56,6 +66,16 @@ def _load_release_artifacts():
 def _load_offline_release_preparer():
     spec = importlib.util.spec_from_file_location(
         "prepare_offline_release", PREPARE_OFFLINE_RELEASE_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_offline_sdist_verifier():
+    spec = importlib.util.spec_from_file_location(
+        "verify_offline_release_sdist", VERIFY_OFFLINE_RELEASE_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -573,7 +593,8 @@ def test_release_sdist_uses_a_pinned_network_free_docker_contract():
     assert "FROM ${UV_IMAGE} AS uv-source" in dockerfile
     assert "FROM ${RUNTIME_BASE_IMAGE} AS raw" in dockerfile
     assert "COPY --from=uv-source /uv /usr/local/bin/uv" in dockerfile
-    assert "COPY --from=${" not in dockerfile
+    verifier = _load_offline_sdist_verifier()
+    assert verifier.VARIABLE_COPY_FROM_RE.search(dockerfile) is None
     assert "COPY docker/build-cache /root/.cache/uv" in dockerfile
     assert "uv sync --frozen --offline --no-index --find-links" in dockerfile
     assert not any(
@@ -585,6 +606,107 @@ def test_release_sdist_uses_a_pinned_network_free_docker_contract():
     assert "sort_keys=True" in preparer
     assert '"schema": 2' in preparer
     assert "PINNED_IMAGES" in preparer
+
+
+def test_release_offline_sdist_job_builds_the_extracted_context_without_network():
+    workflow = _read(CI_WORKFLOW_PATH)
+    parsed = yaml.safe_load(workflow)
+    job = parsed["jobs"]["release-offline-image"]
+    source = "\n".join(str(step.get("run", "")) for step in job["steps"])
+
+    assert job["name"] == "Build extracted offline release sdist"
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "scripts/prepare_offline_release.py" in source
+    assert "scripts/verify_offline_release_sdist.py" in source
+    assert "python -m build --no-isolation --sdist" in source
+    assert "--require-hashes" in source
+    assert "--only-binary=:all:" in source
+    assert "--platform musllinux_1_2_x86_64" in source
+    assert "--platform musllinux_1_1_x86_64" in source
+    assert "--python-version 3.13" in source
+    assert "--abi cp313 --abi abi3 --abi none" in source
+    assert source.count("docker pull") == 2
+    assert "docker build --network=none --pull=false --target raw" in source
+    assert "$RUNNER_TEMP/proxbox-release-context" in source
+
+
+def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
+    tmp_path: Path,
+) -> None:
+    verifier = _load_offline_sdist_verifier()
+    version = "0.0.20rc1"
+
+    def make_sdist(path: Path, dockerfile: bytes, *, hostile_link: bool = False) -> None:
+        wheel = b"wheel-bytes"
+        uv_lock = b"version = 1\n"
+        lock = {
+            "dockerfile_sha256": hashlib.sha256(dockerfile).hexdigest(),
+            "files": [
+                {
+                    "path": "docker/build-cache/package-1.0-py3-none-any.whl",
+                    "sha256": hashlib.sha256(wheel).hexdigest(),
+                    "size": len(wheel),
+                }
+            ],
+            "images": sorted(set(verifier.PINNED_IMAGE_RE.findall(dockerfile.decode()))),
+            "schema": 2,
+            "uv_lock_sha256": hashlib.sha256(uv_lock).hexdigest(),
+        }
+        files = {
+            "Dockerfile": dockerfile,
+            "docker/build-cache/package-1.0-py3-none-any.whl": wheel,
+            "docker/offline-build-inputs.json": (
+                json.dumps(lock, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+            ),
+            "pyproject.toml": b"[project]\nname='proxbox_api'\nversion='0.0.20rc1'\n",
+            "uv.lock": uv_lock,
+        }
+        root = f"proxbox_api-{version}"
+        with tarfile.open(path, "w:gz") as archive:
+            root_member = tarfile.TarInfo(root)
+            root_member.type = tarfile.DIRTYPE
+            archive.addfile(root_member)
+            for name, payload in files.items():
+                member = tarfile.TarInfo(f"{root}/{name}")
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+            if hostile_link:
+                member = tarfile.TarInfo(f"{root}/escape")
+                member.type = tarfile.SYMTYPE
+                member.linkname = "../../etc/passwd"
+                archive.addfile(member)
+
+    accepted = tmp_path / "accepted.tar.gz"
+    make_sdist(
+        accepted,
+        b"FROM registry.invalid/uv@sha256:"
+        + b"b" * 64
+        + b" AS uv-source\nFROM registry.invalid/runtime@sha256:"
+        + b"a" * 64
+        + b" AS raw\n",
+    )
+    output = verifier.extract_and_verify(accepted, tmp_path / "accepted", version)
+    assert (output / "docker/offline-build-inputs.json").is_file()
+
+    for index, syntax in enumerate((b"$UV_IMAGE", b"${UV_IMAGE}"), start=1):
+        hostile = tmp_path / f"variable-{index}.tar.gz"
+        make_sdist(
+            hostile,
+            b"FROM registry.invalid/uv@sha256:"
+            + b"b" * 64
+            + b" AS uv-source\nFROM registry.invalid/runtime@sha256:"
+            + b"a" * 64
+            + b" AS raw\nCOPY --from="
+            + syntax
+            + b" /uv /usr/local/bin/uv\n",
+        )
+        with pytest.raises(verifier.OfflineSdistError, match="cannot use a variable"):
+            verifier.extract_and_verify(hostile, tmp_path / f"variable-{index}", version)
+
+    linked = tmp_path / "linked.tar.gz"
+    make_sdist(linked, b"FROM scratch\n", hostile_link=True)
+    with pytest.raises(verifier.OfflineSdistError, match="link or special"):
+        verifier.extract_and_verify(linked, tmp_path / "linked", version)
 
 
 def test_offline_release_preparer_binds_exact_inputs(tmp_path: Path, monkeypatch) -> None:
@@ -685,16 +807,31 @@ def test_release_control_request_binds_exact_repository_run_and_artifacts():
 
 
 def test_operator_docs_match_the_locked_control_dispatch_contract() -> None:
-    documentation = "\n".join(_read(path) for path in RELEASE_CONTROL_DOC_PATHS)
+    required = {
+        "AGENTS.md": ("validate.yml", "publish.yml", "target run ID", "request SHA-256"),
+        "CLAUDE.md": ("validate.yml", "publish.yml", "target run ID", "SHA-256"),
+        "release-publishing.md": (
+            "validate.yml",
+            "publish.yml",
+            "target run ID",
+            "request SHA-256",
+        ),
+    }
+    for path in RELEASE_CONTROL_DOC_PATHS:
+        documentation = _read(path)
+        assert "publish=true" not in documentation, path
+        for phrase in required[path.name]:
+            assert phrase in documentation, (path, phrase)
 
-    assert "publish=true" not in documentation
-    assert "validate.yml" in documentation
-    assert "publish.yml" in documentation
-    assert "repository name" in documentation
-    assert "target run ID" in documentation
-    assert "request SHA-256" in documentation
-    assert "do not merge" in documentation.lower()
-    assert "existing publisher" in documentation.lower()
+    for path in SIGNED_HANDOFF_DOC_PATHS:
+        documentation = _read(path).lower()
+        assert "four-file" not in documentation, path
+        assert "quatro arquivos" not in documentation, path
+        assert (
+            "six-file" in documentation
+            or "six data files" in documentation
+            or "seis arquivos" in documentation
+        ), path
 
 
 def test_gitea_job_token_is_confined_to_trusted_evidence_steps():

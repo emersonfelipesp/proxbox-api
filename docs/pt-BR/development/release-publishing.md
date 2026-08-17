@@ -15,7 +15,7 @@ flowchart TD
     Start([Escolher release alvo\nX.Y.Z])
     Bump[Bump da versao do pacote\npyproject.toml + uv.lock]
     RCTag[Criar tag de release candidate\nvX.Y.ZrcN]
-    RCCI[CI alvo gera solicitacao de controle\ncom quatro arquivos e sem credenciais]
+    RCCI[CI alvo gera solicitacao de controle\nassinada com seis arquivos e sem credenciais]
     Control[Controle de release travado valida\ne publica os bytes selados exatos]
     RCUpload[Upload vX.Y.ZrcN para TestPyPI\nsem --skip-existing]
     RCValidate[Instalar rcN do TestPyPI\nem Python 3.12 e 3.13]
@@ -137,6 +137,11 @@ sequenceDiagram
   `ADD` ou ausencia de `uv sync --frozen --offline` antes de selar. Altere os
   digests somente em uma atualizacao de release revisada; o recibo de producao
   vincula o ID da imagem ativa resultante.
+- O CI obrigatorio do GitHub reproduz o wheelhouse musllinux real de CPython
+  3.13, gera o sdist de release, extrai e recalcula com seguranca seu inventario
+  canonico schema-2, rejeita fontes variaveis `COPY --from` com ou sem chaves e
+  constroi o contexto extraido com as bases exatas pre-carregadas e a rede do
+  build Docker desabilitada.
 - Jobs E2E pre-publicacao e pos-publicacao aguardam ate 20 minutos para o
   NetBox concluir migracoes/indexacao e exigem `/api/status/` pronto antes de
   configurar tokens ou endpoints do backend.

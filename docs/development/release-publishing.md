@@ -140,6 +140,11 @@ sequenceDiagram
   missing `uv sync --frozen --offline` path before sealing. Change either image
   digest only through a reviewed release update; production receipts bind the
   resulting active image ID.
+- Required GitHub CI reproduces the real CPython 3.13 musllinux wheelhouse,
+  builds the release sdist, safely extracts and rehashes its canonical schema-2
+  inventory, rejects braced and unbraced variable `COPY --from` sources, and
+  builds that extracted context with the exact bases preloaded and Docker build
+  networking disabled.
 - Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
   migrations/search indexing and require `/api/status/` readiness before
   configuring tokens or backend endpoints.

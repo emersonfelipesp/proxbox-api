@@ -19,9 +19,9 @@ under `.gitea/workflows/`.
 
 | File | Trigger | What it does |
 |------|---------|--------------|
-| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`) | Requires the tag to equal current green `develop`; builds without credentials, verifies and seals the candidate in another credential-free job, publishes from a fresh job whose `PKG_TOKEN` exists only in the registry-write step, and re-hashes anonymously in a final fresh job. Twine reads credentials only from `TWINE_*`; Gitea API writes use a mode-0600 netrc or the environment-aware manifest helper. RC tags alone are promoted with `GH_MIRROR_TOKEN` through `GIT_ASKPASS`. Every job runs on `ci-untrusted-python312`. |
+| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`) | Uses two data-only jobs on the repository-unique `ci-release-proxbox-api` runner. The first proves the exact tag/source/CI and accepted runner before candidate execution. The second builds behind the token-free UID boundary and uploads exactly the signed six-file control request. The target workflow has no package or GitHub-mirror credential and cannot publish or push tags; the separate locked control owns those capabilities. |
 | `.gitea/workflows/artifact-v3-compatibility.yml` | Gitea: pull request / manual dispatch | Runs a bounded, disposable upload/download checksum probe for the Gitea-compatible artifact v3 actions on `ci-untrusted-python312`. |
-| `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, then the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
+| `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
 | `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Downloads the exact linked Gitea wheel/sdist and validates both on Python 3.12/3.13. `rcN` versions publish to TestPyPI; final/post events additionally require immutable successful-NMS-deployment evidence before those bytes reach PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
@@ -72,13 +72,13 @@ publish-testpypi.yml (staged package release)
     ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish)
     └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox; same 20-minute NetBox readiness gate)
 
-publish-gitea.yml (private package release; every node is a fresh ci-untrusted-python312 job)
-├── validate-source
-├── build-candidate      (needs: validate-source; credential-free)
-├── verify-candidate     (needs: validate-source + build-candidate; credential-free seal)
-├── publish-gitea        (needs: validate-source + verify-candidate; PKG_TOKEN only in upload step)
-├── verify-registry      (needs: validate-source + publish-gitea; anonymous byte comparison)
-└── push-to-github       (RC only; needs: validate-source + verify-registry)
+publish-gitea.yml (credential-free target request; ci-release-proxbox-api)
+├── validate-source      (prove tag/develop/CI and accepted runner)
+└── build-request        (needs: validate-source; token-free build + signed exact six-file upload)
+
+N-MultiCloud/release-control (separate private control repository)
+├── validate.yml         (independently fetch, verify, and seal the exact request)
+└── publish.yml          (isolated credential owner; publish Gitea bytes and promote RC tag)
 ```
 
 ## E2E Dependency Modes

@@ -861,7 +861,11 @@ audited publisher with a local registry upload or push a final tag to GitHub
 before the Gitea package and NMS production gates.
 
 The target workflow verifies the pinned uv archive and uses fresh per-run
-managed-Python and cache roots. It emits only a canonical six-file request,
+managed-Python and cache roots. Required GitHub CI independently reproduces
+that real CPython 3.13 musllinux wheelhouse, safely extracts and rehashes the
+release sdist, rejects every variable `COPY --from` spelling, and builds the
+extracted Docker context with preloaded exact bases and networking disabled. It
+emits only a canonical six-file request,
 including the external supervisor's completion statement and detached signature, and
 holds no publication credential. The separate locked control plane verifies the
 policy-pinned target workflow, run identity, completion signature, request,
