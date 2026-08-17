@@ -400,7 +400,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert gate_sha256 == "20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c"
     assert gate_sha256 in workflow
     assert runner_gate_sha256 == (
-        "7a4ca5d6c81161ec97459ca0e597d91c7219780b9aeada7741c838f320058dc0"
+        "97f1e83d496262f868509904281eb1c73a8568c8cc5f6c4c4cc63f8f6363b214"
     )
     assert build_boundary_sha256 == (
         "68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad"
@@ -437,7 +437,13 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert gate_index < candidate_index
     assert "/nmc-build/proxbox-api-" in workflow
     assert "docker run" not in yaml.safe_dump(parsed["jobs"]["build-request"])
-    assert "/usr/local/bin/nmc-release-attestation-client complete" in workflow
+    assert "/usr/local/bin/nmc-release-attestation-client" in workflow
+    assert "05bcef2befff595d403b59b8258a75583bc44d2dfe39cc5b9bc919167725c3f3" in workflow
+    assert "os.O_NOFOLLOW" in workflow
+    assert "pass_fds=(snapshot,)" in workflow
+    assert 'os.memfd_create("nmc-release-client", flags)' in workflow
+    assert "fcntl.fcntl(snapshot, 1033, seals)" in workflow
+    assert '"--public-key"' in workflow
     assert "runner-completion-attestation.json" in workflow
     assert "runner-completion-attestation.sig" in workflow
     assert workflow.count("UV_PYTHON_INSTALL_DIR=%s") == 1
@@ -629,7 +635,14 @@ def test_release_control_request_binds_exact_repository_run_and_artifacts():
     assert build_job["needs"] == "validate-source"
     assert upload_step["with"] == {
         "name": "release-control-request",
-        "path": "release-transfer",
+        "path": (
+            "release-transfer/*.whl\n"
+            "release-transfer/*.tar.gz\n"
+            "release-transfer/release-manifest.json\n"
+            "release-transfer/release-request.json\n"
+            "release-transfer/runner-completion-attestation.json\n"
+            "release-transfer/runner-completion-attestation.sig\n"
+        ),
         "if-no-files-found": "error",
         "retention-days": 1,
         "compression-level": 0,

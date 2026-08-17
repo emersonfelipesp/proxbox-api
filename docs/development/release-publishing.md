@@ -100,7 +100,11 @@ sequenceDiagram
   request/artifact bytes plus live runner policy. The request binds repository
   ID 37, source/tag/version, first-attempt run identity, target workflow digest,
   manifest digest, and sorted artifact inventory. The target repository has no
-  package or GitHub-mirror credential and cannot publish or push tags. The
+  package or GitHub-mirror credential and cannot publish or push tags. The job
+  verifies the root-owned completion client digest, executes a sealed in-memory
+  snapshot of those exact bytes, and the client verifies the supervisor
+  signature locally against its policy-pinned public key before the exact
+  six-file upload. The
   separately administered release-control repository fetches that exact run,
   verifies the policy-pinned workflow, supervisor signature, and every byte on its isolated builder,
   then seals the handoff. Only its isolated publisher can read publication
