@@ -3,9 +3,11 @@
 ARG RUNTIME_BASE_IMAGE=emersonfelipesp/proxbox-api:0.0.19.post5@sha256:f8b5decb8415867d2befb013f64f158d31650a974e9bc60bdf4f2e78c1808794
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa
 
+FROM ${UV_IMAGE} AS uv-source
+
 FROM ${RUNTIME_BASE_IMAGE} AS raw
 
-COPY --from=${UV_IMAGE} /uv /usr/local/bin/uv
+COPY --from=uv-source /uv /usr/local/bin/uv
 
 WORKDIR /app
 

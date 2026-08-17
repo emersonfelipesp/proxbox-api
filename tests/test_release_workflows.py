@@ -6,6 +6,7 @@ TestPyPI -> PyPI release process without running a publishing workflow.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -424,6 +425,20 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
         "ci-untrusted-python312",
     ]
     build_steps = parsed["jobs"]["build-request"]["steps"]
+    completion_run = next(
+        step["run"]
+        for step in build_steps
+        if step["name"] == "Obtain supervisor-signed completion evidence"
+    )
+    assert isinstance(completion_run, str)
+    completion_source = completion_run.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    completion_tree = ast.parse(completion_source)
+    completion_imports = {
+        alias.name.split(".", 1)[0]
+        for node in ast.walk(completion_tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
     gate_index = next(
         index
         for index, step in enumerate(build_steps)
@@ -443,6 +458,8 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert "pass_fds=(snapshot,)" in workflow
     assert 'os.memfd_create("nmc-release-client", flags)' in workflow
     assert "fcntl.fcntl(snapshot, 1033, seals)" in workflow
+    assert {"ctypes", "fcntl", "hashlib", "os", "stat", "subprocess", "sys"} <= (completion_imports)
+    compile(completion_source, "publish-gitea-completion", "exec")
     assert '"--public-key"' in workflow
     assert "runner-completion-attestation.json" in workflow
     assert "runner-completion-attestation.sig" in workflow
@@ -553,6 +570,10 @@ def test_release_sdist_uses_a_pinned_network_free_docker_contract():
 
     assert "\\\n" not in dockerfile
     assert dockerfile.count("@sha256:") == 2
+    assert "FROM ${UV_IMAGE} AS uv-source" in dockerfile
+    assert "FROM ${RUNTIME_BASE_IMAGE} AS raw" in dockerfile
+    assert "COPY --from=uv-source /uv /usr/local/bin/uv" in dockerfile
+    assert "COPY --from=${" not in dockerfile
     assert "COPY docker/build-cache /root/.cache/uv" in dockerfile
     assert "uv sync --frozen --offline --no-index --find-links" in dockerfile
     assert not any(
