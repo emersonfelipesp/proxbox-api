@@ -863,10 +863,14 @@ before the Gitea package and NMS production gates.
 The target workflow verifies the pinned uv archive and uses fresh per-run
 managed-Python and cache roots. Required GitHub CI independently reproduces
 that real CPython 3.13 musllinux wheelhouse, safely extracts and rehashes the
-release sdist, rejects every variable `COPY --from` spelling, and builds the
-extracted Docker context with preloaded exact bases and networking disabled. It
+release sdist, permits only two literal pinned base images and declared-stage
+`COPY --from` sources, and builds the extracted Docker context with preloaded
+exact bases and networking disabled. The Gitea tag gate requires that exact
+successful first-attempt GitHub job on the same canonical `develop` SHA. It
 emits only a canonical six-file request,
-including the external supervisor's completion statement and detached signature, and
+including the external supervisor's completion statement and detached signature.
+That signed statement binds the supervisor-derived repository-registration
+scope digest and must equal the pinned acceptance record. The workflow
 holds no publication credential. The separate locked control plane verifies the
 policy-pinned target workflow, run identity, completion signature, request,
 manifest, and artifacts;

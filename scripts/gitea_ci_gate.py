@@ -14,6 +14,8 @@ from typing import Any
 
 API_ORIGIN = "https://git.nmulti.cloud/api/v1"
 HTML_ORIGIN = "https://git.nmulti.cloud"
+GITHUB_API_ORIGIN = "https://api.github.com"
+GITHUB_HTML_ORIGIN = "https://github.com"
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
 FIRST_JOB_ATTEMPT = 1
@@ -55,6 +57,127 @@ def _request_json(path: str, *, token: str) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise CIGateError("Gitea CI evidence is not valid JSON") from exc
+
+
+def _request_github_json(path: str) -> Any:
+    if not path.startswith("/repos/emersonfelipesp/proxbox-api/") or ".." in path:
+        raise CIGateError("GitHub API path is invalid")
+    request = urllib.request.Request(
+        f"{GITHUB_API_ORIGIN}{path}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "release-ci-gate/1",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
+            if response.status != 200:
+                raise CIGateError(f"GitHub returned HTTP {response.status}")
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise CIGateError("GitHub CI evidence request failed") from exc
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise CIGateError("GitHub CI evidence exceeds its size bound")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CIGateError("GitHub CI evidence is not valid JSON") from exc
+
+
+def _validate_github_offline_image(
+    *, source_sha: str, trusted_actor: str, required_job: str
+) -> dict[str, int]:
+    query = urllib.parse.urlencode(
+        {
+            "branch": "develop",
+            "event": "push",
+            "head_sha": source_sha,
+            "page": 1,
+            "per_page": 100,
+        }
+    )
+    payload = _request_github_json(f"/repos/emersonfelipesp/proxbox-api/actions/runs?{query}")
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    total_count = payload.get("total_count") if isinstance(payload, dict) else None
+    if (
+        not isinstance(runs, list)
+        or isinstance(total_count, bool)
+        or not isinstance(total_count, int)
+        or total_count != len(runs)
+        or total_count > 100
+    ):
+        raise CIGateError("GitHub Actions run inventory is incomplete")
+    candidates: list[dict[str, Any]] = []
+    for run in runs:
+        actor = run.get("actor") if isinstance(run, dict) else None
+        repository = run.get("repository") if isinstance(run, dict) else None
+        head_repository = run.get("head_repository") if isinstance(run, dict) else None
+        run_id = run.get("id") if isinstance(run, dict) else None
+        run_attempt = run.get("run_attempt") if isinstance(run, dict) else None
+        if (
+            isinstance(run, dict)
+            and isinstance(run_id, int)
+            and not isinstance(run_id, bool)
+            and run_id > 0
+            and run.get("path") == ".github/workflows/ci.yml"
+            and run.get("event") == "push"
+            and run.get("head_branch") == "develop"
+            and run.get("head_sha") == source_sha
+            and run.get("status") == "completed"
+            and run.get("conclusion") == "success"
+            and isinstance(run_attempt, int)
+            and not isinstance(run_attempt, bool)
+            and run_attempt == 1
+            and isinstance(actor, dict)
+            and actor.get("login") == trusted_actor
+            and isinstance(repository, dict)
+            and repository.get("full_name") == "emersonfelipesp/proxbox-api"
+            and isinstance(head_repository, dict)
+            and head_repository.get("full_name") == "emersonfelipesp/proxbox-api"
+        ):
+            candidates.append(run)
+    if not candidates:
+        raise CIGateError("Required GitHub Actions workflow run is missing")
+    latest = max(candidates, key=lambda row: int(row["id"]))
+    run_id = int(latest["id"])
+    jobs_payload = _request_github_json(
+        f"/repos/emersonfelipesp/proxbox-api/actions/runs/{run_id}/jobs?per_page=100&page=1"
+    )
+    jobs = jobs_payload.get("jobs") if isinstance(jobs_payload, dict) else None
+    jobs_total = jobs_payload.get("total_count") if isinstance(jobs_payload, dict) else None
+    if (
+        not isinstance(jobs, list)
+        or isinstance(jobs_total, bool)
+        or not isinstance(jobs_total, int)
+        or jobs_total != len(jobs)
+        or jobs_total > 100
+    ):
+        raise CIGateError("GitHub Actions job inventory is incomplete")
+    matches = [job for job in jobs if isinstance(job, dict) and job.get("name") == required_job]
+    if len(matches) != 1:
+        raise CIGateError("Required GitHub Actions job is missing or ambiguous")
+    job = matches[0]
+    job_id = job.get("id")
+    labels = job.get("labels")
+    if (
+        isinstance(job_id, bool)
+        or not isinstance(job_id, int)
+        or job_id <= 0
+        or job.get("run_id") != run_id
+        or job.get("run_attempt") != 1
+        or isinstance(job.get("run_attempt"), bool)
+        or job.get("head_sha") != source_sha
+        or job.get("status") != "completed"
+        or job.get("conclusion") != "success"
+        or not isinstance(labels, list)
+        or "ubuntu-latest" not in labels
+        or job.get("runner_group_name") != "GitHub Actions"
+        or job.get("html_url")
+        != f"{GITHUB_HTML_ORIGIN}/emersonfelipesp/proxbox-api/actions/runs/{run_id}/job/{job_id}"
+    ):
+        raise CIGateError("Required GitHub Actions job identity is invalid")
+    return {"job_id": job_id, "run_attempt": 1, "run_id": run_id}
 
 
 def _expected_job_name(context: str) -> str:
@@ -234,6 +357,7 @@ def validate_ci_gate(
     required_contexts: list[str],
     trusted_actor: str,
     token: str,
+    github_required_job: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """Require the latest authenticated Actions run and its trusted CI jobs."""
     if SHA_RE.fullmatch(source_sha) is None:
@@ -278,6 +402,14 @@ def validate_ci_gate(
             "run_attempt": FIRST_JOB_ATTEMPT,
             "run_id": run_id,
         }
+    if github_required_job is not None:
+        if github_required_job != "Build extracted offline release sdist":
+            raise CIGateError("Required GitHub Actions job is not allowlisted")
+        evidence[f"GitHub CI / {github_required_job} (push)"] = _validate_github_offline_image(
+            source_sha=source_sha,
+            trusted_actor=trusted_actor,
+            required_job=github_required_job,
+        )
     return evidence
 
 
@@ -288,6 +420,7 @@ def main() -> None:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--required-context", action="append", required=True)
     parser.add_argument("--trusted-actor", required=True)
+    parser.add_argument("--github-required-job", required=True)
     args = parser.parse_args()
     evidence = validate_ci_gate(
         owner=args.owner,
@@ -296,6 +429,7 @@ def main() -> None:
         required_contexts=args.required_context,
         trusted_actor=args.trusted_actor,
         token=os.getenv("GITEA_API_TOKEN", ""),
+        github_required_job=args.github_required_job,
     )
     print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
 

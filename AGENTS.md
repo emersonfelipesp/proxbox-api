@@ -163,7 +163,7 @@ The official release pipeline for proxbox-api runs in this order:
 
 1. **Activation gate** — do not merge the target cutover until the private control repository has a positive policy-pinned ID and its protected workflows, host boundaries, sockets, and repository-scoped runners pass readiness. Leave the existing publisher active until then.
 2. **Gitea tag push** — annotated `vX.Y.ZrcN` or `vX.Y.Z` tag is pushed to Gitea.
-3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` builds and uploads the exact signed six-file request: wheel, sdist, manifest, canonical request, supervisor completion statement, and detached signature. It has no package or mirror credential and cannot publish or push tags.
+3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` first requires the exact successful GitHub-hosted offline-image job for the same canonical `develop` SHA, then builds and uploads the exact signed six-file request: wheel, sdist, manifest, canonical request, supervisor completion statement, and detached signature. That statement binds the supervisor-derived repository-registration scope digest, and the target client requires it to match the pinned acceptance record. The workflow has no package or mirror credential and cannot publish or push tags.
 4. **Locked validation and publication** — dispatch `validate.yml` first, then the separate irreversible `publish.yml`, each with exactly the repository name, first-attempt target run ID, and request SHA-256. Its isolated builder verifies and seals the bytes; its isolated publisher uploads the exact package and promotes only RC tags to GitHub.
 5. **RC validation** — GitHub `push: tags: v*rc*` validates the exact Gitea bytes through TestPyPI.
 6. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
@@ -173,7 +173,8 @@ The proxbox-api request build must first generate the release-only offline
 Docker context from `Dockerfile.release`: a hash-locked wheelhouse, canonical
 schema-2 inventory, CPython 3.13 `musllinux_1_2_x86_64` plus backward-compatible
 `musllinux_1_1_x86_64` target tags, and
-full-digest prior runtime/uv image pins. Keep the local
+exact literal full-digest prior runtime/uv image sources and declared-stage-only
+`COPY --from`. Keep the local
 development `Dockerfile` separate. The locked control must independently reject
 inventory drift, networked/mutable Docker inputs, and any build path other than
 `uv sync --frozen --offline` before signing.

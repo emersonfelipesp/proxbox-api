@@ -38,10 +38,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            97f1e83d496262f868509904281eb1c73a8568c8cc5f6c4c4cc63f8f6363b214 \
+            9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107 \
+            317aa748f53b1972870246c475dbb70df6d43bc9466a4e75b04ed0a032ce6c4b \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \
@@ -88,11 +88,12 @@ jobs:
           test -f scripts/gitea_ci_gate.py
           test ! -L scripts/gitea_ci_gate.py
           printf '%s  %s\n' \
-            20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c \
+            f01cd075fc27beb6cab53ba26c559aa4ba8ac0d3b1afa8ed8af066151cfe19b9 \
             scripts/gitea_ci_gate.py | sha256sum --check --strict
           python3 -I scripts/gitea_ci_gate.py \
             --owner emersonfelipesp --repository proxbox-api \
             --source-sha "$SOURCE_SHA" --trusted-actor emersonfelipesp \
+            --github-required-job "Build extracted offline release sdist" \
             --required-context "CI / Lint, smoke, and core coverage (push)"
           printf 'tag=%s\nversion=%s\nsource_sha=%s\n' \
             "$TAG" "$VERSION" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
@@ -119,10 +120,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            97f1e83d496262f868509904281eb1c73a8568c8cc5f6c4c4cc63f8f6363b214 \
+            9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107 \
+            317aa748f53b1972870246c475dbb70df6d43bc9466a4e75b04ed0a032ce6c4b \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \
@@ -238,7 +239,7 @@ jobs:
                   or (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
                   != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
                   or hashlib.sha256(raw).hexdigest()
-                  != "05bcef2befff595d403b59b8258a75583bc44d2dfe39cc5b9bc919167725c3f3"
+                  != "2b0bee25d755f284b5e8eee3b8a84536825328913040c8757374efe51c57f75f"
               ):
                   raise SystemExit("Release attestation client metadata or digest is unsafe")
               flags = getattr(os, "MFD_CLOEXEC", 0x0001) | getattr(

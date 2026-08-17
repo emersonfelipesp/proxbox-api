@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, testing, "v*"]
+    branches: [main, develop, testing]
+    tags: ["v*"]
   pull_request:
-    branches: [main, testing, "v*"]
+    branches: [main, develop, testing]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:

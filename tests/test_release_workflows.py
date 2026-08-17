@@ -418,22 +418,23 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 1
     assert workflow.count("sha256sum --check --strict") == 8
     assert "python3 -I scripts/gitea_ci_gate.py" in workflow
-    assert gate_sha256 == "20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c"
+    assert gate_sha256 == "f01cd075fc27beb6cab53ba26c559aa4ba8ac0d3b1afa8ed8af066151cfe19b9"
     assert gate_sha256 in workflow
     assert runner_gate_sha256 == (
-        "97f1e83d496262f868509904281eb1c73a8568c8cc5f6c4c4cc63f8f6363b214"
+        "9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b"
     )
     assert build_boundary_sha256 == (
         "68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
-    assert acceptance_sha256 == ("acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107")
+    assert acceptance_sha256 == ("317aa748f53b1972870246c475dbb70df6d43bc9466a4e75b04ed0a032ce6c4b")
     assert workflow.count(runner_gate_sha256) == 2
     assert workflow.count(build_boundary_sha256) == 1
     assert workflow.count(handoff_sha256) == 1
     assert workflow.count(acceptance_sha256) == 2
     assert acceptance["runner_id"] == 0
     assert acceptance["runner_name"] == ""
+    assert acceptance["runner_scope_sha256"] == "0" * 64
     assert acceptance["runtime_attestation_sha256"] == "0" * 64
     assert acceptance["network_attestation_sha256"] == "0" * 64
     assert acceptance["attestation_public_key_sha256"] == "0" * 64
@@ -473,7 +474,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert "/nmc-build/proxbox-api-" in workflow
     assert "docker run" not in yaml.safe_dump(parsed["jobs"]["build-request"])
     assert "/usr/local/bin/nmc-release-attestation-client" in workflow
-    assert "05bcef2befff595d403b59b8258a75583bc44d2dfe39cc5b9bc919167725c3f3" in workflow
+    assert "2b0bee25d755f284b5e8eee3b8a84536825328913040c8757374efe51c57f75f" in workflow
     assert "os.O_NOFOLLOW" in workflow
     assert "pass_fds=(snapshot,)" in workflow
     assert 'os.memfd_create("nmc-release-client", flags)' in workflow
@@ -586,15 +587,16 @@ def test_release_handoff_copies_only_exact_regular_bytes(
 def test_release_sdist_uses_a_pinned_network_free_docker_contract():
     dockerfile = _read(REPO_ROOT / "Dockerfile.release")
     manifest = _read(REPO_ROOT / "MANIFEST.in")
-    preparer = _read(REPO_ROOT / "scripts/prepare_offline_release.py")
+    preparer_source = _read(REPO_ROOT / "scripts/prepare_offline_release.py")
+    preparer = _load_offline_release_preparer()
 
     assert "\\\n" not in dockerfile
     assert dockerfile.count("@sha256:") == 2
-    assert "FROM ${UV_IMAGE} AS uv-source" in dockerfile
-    assert "FROM ${RUNTIME_BASE_IMAGE} AS raw" in dockerfile
+    assert f"FROM {preparer.PINNED_IMAGES[1]} AS uv-source" in dockerfile
+    assert f"FROM {preparer.PINNED_IMAGES[0]} AS raw" in dockerfile
     assert "COPY --from=uv-source /uv /usr/local/bin/uv" in dockerfile
     verifier = _load_offline_sdist_verifier()
-    assert verifier.VARIABLE_COPY_FROM_RE.search(dockerfile) is None
+    assert verifier.validate_dockerfile(dockerfile) == sorted(verifier.PINNED_IMAGES)
     assert "COPY docker/build-cache /root/.cache/uv" in dockerfile
     assert "uv sync --frozen --offline --no-index --find-links" in dockerfile
     assert not any(
@@ -603,9 +605,9 @@ def test_release_sdist_uses_a_pinned_network_free_docker_contract():
     )
     assert "include docker/offline-build-inputs.json" in manifest
     assert "recursive-include docker/build-cache *.whl" in manifest
-    assert "sort_keys=True" in preparer
-    assert '"schema": 2' in preparer
-    assert "PINNED_IMAGES" in preparer
+    assert "sort_keys=True" in preparer_source
+    assert '"schema": 2' in preparer_source
+    assert "PINNED_IMAGES" in preparer_source
 
 
 def test_release_offline_sdist_job_builds_the_extracted_context_without_network():
@@ -628,6 +630,8 @@ def test_release_offline_sdist_job_builds_the_extracted_context_without_network(
     assert source.count("docker pull") == 2
     assert "docker build --network=none --pull=false --target raw" in source
     assert "$RUNNER_TEMP/proxbox-release-context" in source
+    assert "branches: [main, develop, testing]" in workflow
+    assert 'tags: ["v*"]' in workflow
 
 
 def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
@@ -648,7 +652,7 @@ def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members
                     "size": len(wheel),
                 }
             ],
-            "images": sorted(set(verifier.PINNED_IMAGE_RE.findall(dockerfile.decode()))),
+            "images": sorted(verifier.PINNED_IMAGES),
             "schema": 2,
             "uv_lock_sha256": hashlib.sha256(uv_lock).hexdigest(),
         }
@@ -679,28 +683,41 @@ def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members
     accepted = tmp_path / "accepted.tar.gz"
     make_sdist(
         accepted,
-        b"FROM registry.invalid/uv@sha256:"
-        + b"b" * 64
-        + b" AS uv-source\nFROM registry.invalid/runtime@sha256:"
-        + b"a" * 64
-        + b" AS raw\n",
+        (
+            f"FROM {verifier.PINNED_IMAGES[1]} AS uv-source\n"
+            f"FROM {verifier.PINNED_IMAGES[0]} AS raw\n"
+            "COPY --from=uv-source /uv /usr/local/bin/uv\n"
+            "COPY docker/build-cache /root/.cache/uv\n"
+            "RUN uv sync --frozen --offline --no-index --find-links "
+            "/root/.cache/uv --no-dev --no-editable\n"
+        ).encode(),
     )
     output = verifier.extract_and_verify(accepted, tmp_path / "accepted", version)
     assert (output / "docker/offline-build-inputs.json").is_file()
 
-    for index, syntax in enumerate((b"$UV_IMAGE", b"${UV_IMAGE}"), start=1):
+    base = (
+        f"FROM {verifier.PINNED_IMAGES[1]} AS uv-source\nFROM {verifier.PINNED_IMAGES[0]} AS raw\n"
+    ).encode()
+    hostile_dockerfiles = (
+        base + b"COPY --from=$UV_IMAGE /uv /usr/local/bin/uv\n",
+        base + b"COPY --from=${UV_IMAGE:-alpine:latest} /uv /usr/local/bin/uv\n",
+        base + b"COPY --from=${UV_IMAGE+uv-source} /uv /usr/local/bin/uv\n",
+        base + b"COPY --from=alpine:latest /uv /usr/local/bin/uv\n",
+        base + b"ADD https://example.invalid/payload /tmp/payload\n",
+        b"# syntax=docker/dockerfile:1\n" + base,
+        base + b"COPY --from=uv-source \\\n /uv /usr/local/bin/uv\n",
+        (
+            b"# emersonfelipesp/proxbox-api:0.0.19.post5@sha256:"
+            + b"f" * 64
+            + b"\n# ghcr.io/astral-sh/uv:0.11.28@sha256:"
+            + b"e" * 64
+            + b"\nFROM alpine:latest AS raw\n"
+        ),
+    )
+    for index, dockerfile in enumerate(hostile_dockerfiles, start=1):
         hostile = tmp_path / f"variable-{index}.tar.gz"
-        make_sdist(
-            hostile,
-            b"FROM registry.invalid/uv@sha256:"
-            + b"b" * 64
-            + b" AS uv-source\nFROM registry.invalid/runtime@sha256:"
-            + b"a" * 64
-            + b" AS raw\nCOPY --from="
-            + syntax
-            + b" /uv /usr/local/bin/uv\n",
-        )
-        with pytest.raises(verifier.OfflineSdistError, match="cannot use a variable"):
+        make_sdist(hostile, dockerfile)
+        with pytest.raises(verifier.OfflineSdistError, match="Dockerfile"):
             verifier.extract_and_verify(hostile, tmp_path / f"variable-{index}", version)
 
     linked = tmp_path / "linked.tar.gz"
@@ -717,7 +734,14 @@ def test_offline_release_preparer_binds_exact_inputs(tmp_path: Path, monkeypatch
     cache_root = tmp_path / "docker" / "build-cache"
     lock_output = tmp_path / "docker" / "offline-build-inputs.json"
     cache_root.mkdir(parents=True)
-    dockerfile = "\n".join(f"FROM {image}" for image in preparer.PINNED_IMAGES) + "\n"
+    dockerfile = (
+        f"FROM {preparer.PINNED_IMAGES[1]} AS uv-source\n"
+        f"FROM {preparer.PINNED_IMAGES[0]} AS raw\n"
+        "COPY --from=uv-source /uv /usr/local/bin/uv\n"
+        "COPY docker/build-cache /root/.cache/uv\n"
+        "RUN uv sync --frozen --offline --no-index --find-links "
+        "/root/.cache/uv --no-dev --no-editable\n"
+    )
     dockerfile_source.write_text(dockerfile, encoding="utf-8")
     uv_lock.write_text("version = 1\n", encoding="utf-8")
     wheel = cache_root / "dependency-1.0-py3-none-any.whl"
@@ -1272,6 +1296,108 @@ def test_ci_gate_binds_latest_actions_run_to_authenticated_jobs(
         )
 
 
+def test_ci_gate_requires_exact_github_offline_image_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = _load_ci_gate()
+    sha = "a" * 40
+    context = "CI / Lint, smoke, and core coverage (push)"
+    gitea_runs_path = (
+        "/repos/emersonfelipesp/proxbox-api/actions/runs?"
+        f"branch=develop&event=push&head_sha={sha}&limit=100&page=1"
+    )
+    gitea_jobs_path = "/repos/emersonfelipesp/proxbox-api/actions/runs/12/jobs"
+    gitea_run = {
+        "actor": {"login": "emersonfelipesp"},
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "develop",
+        "head_sha": sha,
+        "id": 12,
+        "path": "ci.yml@refs/heads/develop",
+        "run_attempt": 1,
+        "status": "completed",
+    }
+    gitea_job = {
+        "conclusion": "success",
+        "head_sha": sha,
+        "html_url": "https://git.nmulti.cloud/emersonfelipesp/proxbox-api/actions/runs/12/jobs/34",
+        "id": 34,
+        "labels": ["ci-untrusted-python312"],
+        "name": "Lint, smoke, and core coverage",
+        "run_attempt": 1,
+        "run_id": 12,
+        "runner_name": "ci-untrusted-proxbox-api",
+        "status": "completed",
+    }
+    github_runs_path = (
+        "/repos/emersonfelipesp/proxbox-api/actions/runs?"
+        f"branch=develop&event=push&head_sha={sha}&page=1&per_page=100"
+    )
+    github_jobs_path = "/repos/emersonfelipesp/proxbox-api/actions/runs/56/jobs?per_page=100&page=1"
+    github_run = {
+        "actor": {"login": "emersonfelipesp"},
+        "conclusion": "success",
+        "event": "push",
+        "head_branch": "develop",
+        "head_repository": {"full_name": "emersonfelipesp/proxbox-api"},
+        "head_sha": sha,
+        "id": 56,
+        "path": ".github/workflows/ci.yml",
+        "repository": {"full_name": "emersonfelipesp/proxbox-api"},
+        "run_attempt": 1,
+        "status": "completed",
+    }
+    github_job = {
+        "conclusion": "success",
+        "head_sha": sha,
+        "html_url": "https://github.com/emersonfelipesp/proxbox-api/actions/runs/56/job/78",
+        "id": 78,
+        "labels": ["ubuntu-latest"],
+        "name": "Build extracted offline release sdist",
+        "run_attempt": 1,
+        "run_id": 56,
+        "runner_group_name": "GitHub Actions",
+        "status": "completed",
+    }
+    gitea_responses = {
+        gitea_runs_path: {"workflow_runs": [gitea_run], "total_count": 1},
+        gitea_jobs_path: {"jobs": [gitea_job], "total_count": 1},
+    }
+    github_responses = {
+        github_runs_path: {"workflow_runs": [github_run], "total_count": 1},
+        github_jobs_path: {"jobs": [github_job], "total_count": 1},
+    }
+    monkeypatch.setattr(gate, "_request_json", lambda path, *, token: gitea_responses[path])
+    monkeypatch.setattr(gate, "_request_github_json", lambda path: github_responses[path])
+
+    evidence = gate.validate_ci_gate(
+        owner="emersonfelipesp",
+        repository="proxbox-api",
+        source_sha=sha,
+        required_contexts=[context],
+        trusted_actor="emersonfelipesp",
+        token="test-token",
+        github_required_job="Build extracted offline release sdist",
+    )
+    assert evidence["GitHub CI / Build extracted offline release sdist (push)"] == {
+        "job_id": 78,
+        "run_attempt": 1,
+        "run_id": 56,
+    }
+    github_job["runner_group_name"] = "untrusted"
+    with pytest.raises(gate.CIGateError, match="job identity is invalid"):
+        gate.validate_ci_gate(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            source_sha=sha,
+            required_contexts=[context],
+            trusted_actor="emersonfelipesp",
+            token="test-token",
+            github_required_job="Build extracted offline release sdist",
+        )
+
+
 def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -> None:
     gate = _load_runner_gate()
     with pytest.raises(gate.RunnerGateError, match="not activated"):
@@ -1297,6 +1423,7 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "runner_id": 41,
         "runner_label": "ci-release-proxbox-api",
         "runner_name": "ci-release-proxbox-api-runner",
+        "runner_scope_sha256": "e" * 64,
         "runtime_attestation_sha256": "a" * 64,
         "runtime_image_digest": "c" * 64,
         "schema": 1,
@@ -1381,6 +1508,7 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "run_id": 12,
         "runner_id": 41,
         "runner_name": "ci-release-proxbox-api-runner",
+        "runner_scope_sha256": acceptance["runner_scope_sha256"],
         "runtime_attestation_sha256": acceptance["runtime_attestation_sha256"],
         "runtime_image_digest": acceptance["runtime_image_digest"],
         "schema": 1,
@@ -1442,6 +1570,7 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         ("stale", {"issued_at": 800, "expires_at": 1000}),
         ("runtime", {"runtime_image_digest": "e" * 64}),
         ("network", {"network_attestation_sha256": "f" * 64}),
+        ("repository-scope", {"runner_scope_sha256": "f" * 64}),
         (
             "labels",
             {

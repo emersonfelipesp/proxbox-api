@@ -142,9 +142,12 @@ sequenceDiagram
   resulting active image ID.
 - Required GitHub CI reproduces the real CPython 3.13 musllinux wheelhouse,
   builds the release sdist, safely extracts and rehashes its canonical schema-2
-  inventory, rejects braced and unbraced variable `COPY --from` sources, and
+  inventory, permits only the two literal pinned base images and declared-stage
+  `COPY --from` sources, and
   builds that extracted context with the exact bases preloaded and Docker build
-  networking disabled.
+  networking disabled. The Gitea tag gate queries GitHub Actions for this exact
+  successful first-attempt job on the same canonical `develop` SHA; a missing,
+  failed, retried, differently scoped, or different-SHA job blocks the handoff.
 - Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
   migrations/search indexing and require `/api/status/` readiness before
   configuring tokens or backend endpoints.
