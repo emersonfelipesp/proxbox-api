@@ -56,7 +56,7 @@ sequenceDiagram
     participant E2E as Stack E2E
 
     Tag->>TargetWF: vX.Y.ZrcN
-    TargetWF->>Control: wheel + sdist + manifesto + solicitacao canonica
+    TargetWF->>Control: wheel + sdist + release-manifest.json + release-request.json + runner-completion-attestation.json + runner-completion-attestation.sig
     Control->>Control: Validar run, workflow, solicitacao e bytes selados
     Control->>GP: Publicar bytes exatos do pacote selado
     Control->>WF: Promover a tag RC exata
@@ -83,8 +83,10 @@ sequenceDiagram
   controlados por escritores sao ignorados; o run Actions autenticado mais
   recente de `ci.yml` e seus jobs obrigatorios devem comprovar a primeira
   tentativa `push` bem-sucedida no SHA exato, ator confiavel, nome de job e
-  classe de runner esperados. Os dois jobs de release usam
-  `ci-release-proxbox-api` e, antes de executar codigo candidato, exigem que ID,
+  classe de runner esperados. Os dois jobs de release usam registros efemeros
+  distintos e vinculados aos jobs de validacao/build; cada registro anuncia
+  apenas `ci-release-proxbox-api`, aceita uma atribuicao autorizada pelo
+  supervisor e termina. Antes de executar codigo candidato, exigem que ID,
   nome e unico label do runner correspondam ao registro de aceitacao fixado por
   checksum e a uma atestacao recente e assinada pelo supervisor externo,
   vinculada a repositorio/run/job/fonte, labels registrados completos, imagem
@@ -94,9 +96,9 @@ sequenceDiagram
   para Python/cache e gera wheel e sdist no limite UID/Landlock sem token e sem
   acesso ao socket Docker. Depois da limpeza dos processos candidatos, o
   supervisor externo root-only assina o inventario exato. O job envia exatamente
-  seis arquivos de dados: wheel, sdist, manifesto canonico,
-  `release-request.json` canonico, `runner-completion-attestation.json` canonico
-  e sua assinatura destacada. A solicitacao vincula o ID 37 do
+  seis arquivos de dados: wheel, sdist, `release-manifest.json`,
+  `release-request.json`, `runner-completion-attestation.json` e
+  `runner-completion-attestation.sig`. A solicitacao vincula o ID 37 do
   repositorio, fonte/tag/versao, identidade do primeiro run, digest do workflow
   alvo, digest do manifesto e inventario ordenado. O repositorio alvo nao possui
   credencial de pacote ou espelho GitHub e nao pode publicar nem enviar tags. O

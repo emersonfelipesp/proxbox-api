@@ -56,7 +56,7 @@ sequenceDiagram
     participant E2E as E2E stack
 
     Tag->>TargetWF: vX.Y.ZrcN
-    TargetWF->>Control: wheel + sdist + manifest + canonical request
+    TargetWF->>Control: wheel + sdist + release-manifest.json + release-request.json + runner-completion-attestation.json + runner-completion-attestation.sig
     Control->>Control: Verify run, workflow, request, and sealed bytes
     Control->>GP: Publish exact sealed package bytes
     Control->>WF: Promote the exact RC tag
@@ -82,9 +82,11 @@ sequenceDiagram
 - The Gitea tag must equal current canonical `develop`. Writer-controlled
   commit statuses are ignored; the newest authenticated `ci.yml` Actions run
   and its required jobs must prove a successful first push attempt for the
-  exact SHA, trusted actor, job name, and untrusted runner class. Both release
-  jobs use a dedicated ephemeral registration whose only advertised label is
-  `ci-release-proxbox-api` and, before candidate execution, require
+  exact SHA, trusted actor, job name, and untrusted runner class. The two
+  release jobs use distinct job-bound ephemeral validation/build registrations.
+  Each advertises only `ci-release-proxbox-api`, accepts one
+  supervisor-authorized assignment, and terminates; before candidate execution
+  the jobs require
   their live runner ID/name/sole label to match the checksum-pinned acceptance
   record plus a fresh signed external-supervisor attestation bound to the
   repository/run/job/source, complete registered labels, runtime image, and
@@ -94,9 +96,10 @@ sequenceDiagram
   disposable target job builds one wheel and one sdist behind the bounded
   token-free UID/Landlock boundary after verifying the pinned uv archive and
   selecting fresh per-run managed-Python and cache roots. It uploads exactly
-  six data files: wheel, sdist, canonical manifest, canonical
-  `release-request.json`, canonical `runner-completion-attestation.json`, and
-  its detached signature. The external root-only supervisor creates that
+  six data files: the package wheel, package sdist,
+  `release-manifest.json`, `release-request.json`,
+  `runner-completion-attestation.json`, and
+  `runner-completion-attestation.sig`. The external root-only supervisor creates that
   completion evidence only after candidate process cleanup and binds the exact
   request/artifact bytes plus live runner policy. The request binds repository
   ID 37, source/tag/version, first-attempt run identity, target workflow digest,

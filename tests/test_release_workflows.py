@@ -419,23 +419,25 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 1
     assert workflow.count("sha256sum --check --strict") == 8
     assert "python3 -I scripts/gitea_ci_gate.py" in workflow
-    assert gate_sha256 == "b49a374d2089fa000326a057a6f8f3dc6b3783dfd4fe6131a5ec6d56122d8363"
+    assert gate_sha256 == "ac39691b607ab40665026d5c1d2b49f985ea1b3778a393fd24d7710006ad30a5"
     assert gate_sha256 in workflow
     assert "1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad" in workflow
     assert runner_gate_sha256 == (
-        "d541d40b7fb1c5fb8b373e67ee8b89ebf9e1c8e63379cd80ec336a64380acf5b"
+        "cb7405d05571e4f1d1b8d114651ca03be8171b1ba6bc40fe83faba83fb49b7bb"
     )
     assert build_boundary_sha256 == (
         "68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
-    assert acceptance_sha256 == ("ecdde2436af78c4ccf7d7ae02ebe6fe5e4b3f1994338ddfa823045682ec1ccdc")
+    assert acceptance_sha256 == ("1142500c698571b6bb62b5509709876a9f97a5bf528ed50d1658bbfd9577eb93")
     assert workflow.count(runner_gate_sha256) == 2
     assert workflow.count(build_boundary_sha256) == 1
     assert workflow.count(handoff_sha256) == 1
     assert workflow.count(acceptance_sha256) == 2
     assert acceptance["runner_id"] == 0
     assert acceptance["runner_name"] == ""
+    assert acceptance["validation_runner_id"] == 0
+    assert acceptance["validation_runner_name"] == ""
     assert acceptance["runner_scope_sha256"] == "0" * 64
     assert acceptance["runtime_attestation_sha256"] == "0" * 64
     assert acceptance["network_attestation_sha256"] == "0" * 64
@@ -853,14 +855,24 @@ def test_operator_docs_match_the_locked_control_dispatch_contract() -> None:
             assert phrase in documentation, (path, phrase)
 
     for path in SIGNED_HANDOFF_DOC_PATHS:
-        documentation = _read(path).lower()
-        assert "four-file" not in documentation, path
-        assert "quatro arquivos" not in documentation, path
-        assert (
-            "six-file" in documentation
-            or "six data files" in documentation
-            or "seis arquivos" in documentation
-        ), path
+        documentation = _read(path)
+        lowered = documentation.lower()
+        assert "four-file" not in lowered, path
+        assert "quatro arquivos" not in lowered, path
+        assert "six-file" in lowered or "six data files" in lowered or "seis arquivos" in lowered, (
+            path
+        )
+        for filename in (
+            "release-manifest.json",
+            "release-request.json",
+            "runner-completion-attestation.json",
+            "runner-completion-attestation.sig",
+        ):
+            assert filename in documentation, (path, filename)
+        if path in RELEASE_CONTROL_DOC_PATHS:
+            assert "job-bound ephemeral" in lowered or "efêmer" in lowered or "efemer" in lowered, (
+                path
+            )
 
 
 def test_gitea_job_token_is_confined_to_trusted_evidence_steps():
@@ -1474,6 +1486,8 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "runtime_image_digest": "c" * 64,
         "schema": 1,
         "supervisor_policy_sha256": "d" * 64,
+        "validation_runner_id": 42,
+        "validation_runner_name": "ci-release-proxbox-api-validate",
     }
     private_key = tmp_path / "private.pem"
     public_key = tmp_path / "public.pem"
@@ -1643,6 +1657,96 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
                 now=1100,
                 trusted_external_uid=os.geteuid(),
             )
+
+
+def test_release_jobs_require_distinct_job_bound_ephemeral_identities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _load_runner_gate()
+    acceptance = {
+        "attestation_public_key_sha256": "a" * 64,
+        "network_attestation_sha256": "b" * 64,
+        "registered_labels": ["ci-release-proxbox-api"],
+        "runner_id": 41,
+        "runner_label": "ci-release-proxbox-api",
+        "runner_name": "ci-release-proxbox-api-build",
+        "runner_scope_sha256": "c" * 64,
+        "runtime_attestation_sha256": "d" * 64,
+        "runtime_image_digest": "e" * 64,
+        "schema": 1,
+        "supervisor_policy_sha256": "f" * 64,
+        "validation_runner_id": 42,
+        "validation_runner_name": "ci-release-proxbox-api-validate",
+    }
+    acceptance_path = tmp_path / "acceptance.json"
+    acceptance_path.write_bytes(gate._canonical_json(acceptance))
+    monkeypatch.setattr(gate, "_verify_live_attestation", lambda **_kwargs: "0" * 64)
+    jobs = (
+        (
+            gate.VALIDATION_JOB_NAME,
+            acceptance["validation_runner_id"],
+            acceptance["validation_runner_name"],
+        ),
+        (
+            gate.BUILD_JOB_NAMES["proxbox-api"],
+            acceptance["runner_id"],
+            acceptance["runner_name"],
+        ),
+    )
+    for index, (job_name, runner_id, runner_name) in enumerate(jobs, start=1):
+        job = {
+            "conclusion": None,
+            "head_sha": "a" * 40,
+            "id": 30 + index,
+            "labels": [acceptance["runner_label"]],
+            "name": job_name,
+            "run_attempt": 1,
+            "run_id": 12,
+            "runner_id": runner_id,
+            "runner_name": runner_name,
+            "status": "in_progress",
+        }
+        evidence = gate.validate_release_runner(
+            acceptance_path=acceptance_path,
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            run_id=12,
+            job_name=job_name,
+            source_sha="a" * 40,
+            token="",
+            jobs_payload={"jobs": [job], "total_count": 1},
+        )
+        assert evidence["runner_id"] == runner_id
+    acceptance["validation_runner_id"] = acceptance["runner_id"]
+    acceptance_path.write_bytes(gate._canonical_json(acceptance))
+    with pytest.raises(gate.RunnerGateError, match="not activated"):
+        gate.validate_release_runner(
+            acceptance_path=acceptance_path,
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            run_id=12,
+            job_name=gate.BUILD_JOB_NAMES["proxbox-api"],
+            source_sha="a" * 40,
+            token="",
+            jobs_payload={"jobs": [], "total_count": 0},
+        )
+
+
+def test_authenticated_release_evidence_rejects_ambient_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ci_gate = _load_ci_gate()
+    runner_gate = _load_runner_gate()
+    for name in tuple(os.environ):
+        if name.casefold() in ci_gate.PROXY_ENVIRONMENT_NAMES:
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "https://proxy.invalid")
+    with pytest.raises(ci_gate.CIGateError, match="ambient proxy"):
+        ci_gate._request_json("/repos/owner/repository/actions/runs", token="token")
+    with pytest.raises(ci_gate.CIGateError, match="ambient proxy"):
+        ci_gate._request_github_json("/repos/emersonfelipesp/proxbox-api/actions/runs")
+    with pytest.raises(runner_gate.RunnerGateError, match="ambient proxy"):
+        runner_gate._request_jobs("owner", "repository", 1, "token")
 
 
 def test_registry_fetch_rejects_rebinding_original_artifacts_to_moved_tag(

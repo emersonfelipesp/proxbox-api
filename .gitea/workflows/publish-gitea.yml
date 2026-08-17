@@ -38,10 +38,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            d541d40b7fb1c5fb8b373e67ee8b89ebf9e1c8e63379cd80ec336a64380acf5b \
+            cb7405d05571e4f1d1b8d114651ca03be8171b1ba6bc40fe83faba83fb49b7bb \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            ecdde2436af78c4ccf7d7ae02ebe6fe5e4b3f1994338ddfa823045682ec1ccdc \
+            1142500c698571b6bb62b5509709876a9f97a5bf528ed50d1658bbfd9577eb93 \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \
@@ -88,7 +88,7 @@ jobs:
           test -f scripts/gitea_ci_gate.py
           test ! -L scripts/gitea_ci_gate.py
           printf '%s  %s\n' \
-            b49a374d2089fa000326a057a6f8f3dc6b3783dfd4fe6131a5ec6d56122d8363 \
+            ac39691b607ab40665026d5c1d2b49f985ea1b3778a393fd24d7710006ad30a5 \
             scripts/gitea_ci_gate.py | sha256sum --check --strict
           python3 -I scripts/gitea_ci_gate.py \
             --owner emersonfelipesp --repository proxbox-api \
@@ -121,10 +121,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            d541d40b7fb1c5fb8b373e67ee8b89ebf9e1c8e63379cd80ec336a64380acf5b \
+            cb7405d05571e4f1d1b8d114651ca03be8171b1ba6bc40fe83faba83fb49b7bb \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            ecdde2436af78c4ccf7d7ae02ebe6fe5e4b3f1994338ddfa823045682ec1ccdc \
+            1142500c698571b6bb62b5509709876a9f97a5bf528ed50d1658bbfd9577eb93 \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \

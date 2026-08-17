@@ -150,9 +150,10 @@ Open the nearest scoped guide for the code you are changing.
   the newest authenticated `ci.yml` Actions run and required jobs for that SHA,
   fetches that exact source-SHA GitHub workflow through the Contents API and
   verifies both its Git object ID and reviewed SHA-256, pins the reviewed
-  gate-helper bytes before isolated execution, and schedules
-  both release jobs only on a dedicated ephemeral registration advertising the
-  sole `ci-release-proxbox-api` label. Before candidate
+  gate-helper bytes before isolated execution, and schedules the two release
+  jobs on distinct job-bound ephemeral validation/build registrations. Each
+  advertises only the sole `ci-release-proxbox-api` label, accepts one
+  supervisor-authorized assignment, and terminates. Before candidate
   execution, each job must match its live runner ID/name/sole label to the
   checksum-pinned acceptance record plus a fresh signed external-supervisor
   attestation bound to repository/run/job/source, complete registered labels,
@@ -161,8 +162,9 @@ Open the nearest scoped guide for the code you are changing.
   offline-wheel preparation run behind the bounded token-free UID/Landlock
   boundary without Docker-socket access. After cleanup, the root-only external
   supervisor signs the exact request and artifact inventory. The workflow
-  uploads exactly wheel, sdist, manifest, canonical `release-request.json`,
-  canonical `runner-completion-attestation.json`, and its detached signature.
+  uploads exactly the package wheel, package sdist, `release-manifest.json`,
+  `release-request.json`, `runner-completion-attestation.json`, and
+  `runner-completion-attestation.sig`.
   The request binds repository ID 37, source/tag/version,
   first-attempt run identity, target-workflow digest, manifest digest, and
   artifact inventory. The target repository has no package or RC-mirror
