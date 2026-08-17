@@ -171,7 +171,8 @@ The official release pipeline for proxbox-api runs in this order:
 
 The proxbox-api request build must first generate the release-only offline
 Docker context from `Dockerfile.release`: a hash-locked wheelhouse, canonical
-schema-2 inventory, and full-digest prior runtime/uv image pins. Keep the local
+schema-2 inventory, CPython 3.13 `musllinux_1_2_x86_64` target tags, and
+full-digest prior runtime/uv image pins. Keep the local
 development `Dockerfile` separate. The locked control must independently reject
 inventory drift, networked/mutable Docker inputs, and any build path other than
 `uv sync --frozen --offline` before signing.

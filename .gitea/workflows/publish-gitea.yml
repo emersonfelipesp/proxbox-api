@@ -157,7 +157,7 @@ jobs:
             "$BOOTSTRAP_UV_ROOT/uv" "$BOOTSTRAP_PYTHON_ROOT" >> "$GITHUB_ENV"
           "$BOOTSTRAP_UV_ROOT/uv" python install \
             --no-config --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
-            --install-dir "$BOOTSTRAP_PYTHON_ROOT" --managed-python --no-bin 3.12.13
+            --install-dir "$BOOTSTRAP_PYTHON_ROOT" --managed-python --no-bin 3.13.14
 
       - name: Build artifacts across a token-free UID boundary
         env:
@@ -172,7 +172,7 @@ jobs:
           test ! -e "$BUILD_ROOT"
           test ! -L "$BUILD_ROOT"
           printf '%s  %s\n' \
-            5c7575a3b20ae9ca924f59feaf38000d5af29941f7cf1c5674f0b7605301019d \
+            a341691b6f7298d43c517f027b31fe4a783e009810b17f8e7be34f0ae2bf7868 \
             scripts/gitea_release_build_boundary.py | sha256sum --check --strict
           python3 -I scripts/gitea_release_build_boundary.py \
             --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \

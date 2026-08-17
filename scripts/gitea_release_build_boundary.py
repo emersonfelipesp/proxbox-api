@@ -299,10 +299,11 @@ test ! -r "/proc/$BOUNDARY_PARENT_PID/environ"
 cd "$BUILD_ROOT/source"
 UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
   "$UV_BIN" sync --no-config --cache-dir "$BUILD_ROOT/uv-cache" \
-  --managed-python --no-python-downloads --python 3.12.13 \
+  --managed-python --no-python-downloads --python 3.13.14 \
   --locked --only-group publish --no-install-project
 "$UV_BIN" export --no-config --frozen --no-dev --group publish \
   --no-emit-project --format requirements-txt \
+  --python "$BUILD_ROOT/venv/bin/python" \
   --output-file "$BUILD_ROOT/runtime-requirements.txt"
 test ! -e docker/build-cache
 test ! -e docker/offline-build-inputs.json
@@ -310,6 +311,8 @@ mkdir -m 0700 -p docker/build-cache
 "$BUILD_ROOT/venv/bin/python" -m ensurepip --default-pip
 "$BUILD_ROOT/venv/bin/python" -m pip download \
   --disable-pip-version-check --require-hashes --only-binary=:all: \
+  --platform musllinux_1_2_x86_64 --python-version 3.13 \
+  --implementation cp --abi cp313 --abi abi3 --abi none \
   --dest docker/build-cache --requirement "$BUILD_ROOT/runtime-requirements.txt"
 find docker/build-cache -mindepth 1 -maxdepth 1 -type f -name '*.whl' \
   -exec chmod 0444 {} +

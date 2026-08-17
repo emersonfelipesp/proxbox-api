@@ -170,9 +170,10 @@ Open the nearest scoped guide for the code you are changing.
   isolated publisher invoke fixed digest-locked tooling with publication
   credentials. It anonymously re-downloads and verifies every registry byte.
   Before the sdist build, the target generates the release-only context from
-  `Dockerfile.release`, downloads only hash-locked compatible wheels inside the
-  full-digest prior raw runtime, and writes the canonical schema-2 cache/image
-  inventory. The locked control independently rejects mutable/networked Docker
+  `Dockerfile.release`, exports for CPython 3.13, downloads only hash-locked
+  `musllinux_1_2_x86_64` CPython 3.13/ABI3/pure-Python wheels compatible with
+  the full-digest prior Alpine raw runtime, and writes the canonical schema-2
+  cache/image inventory. The locked control independently rejects mutable/networked Docker
   inputs and hash drift before sealing; the ordinary development `Dockerfile`
   is not the package-deploy contract.
   The control publisher pushes RC tags to GitHub for TestPyPI validation. Final tags stay private until the

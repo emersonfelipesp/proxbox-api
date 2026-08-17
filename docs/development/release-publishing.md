@@ -127,9 +127,10 @@ sequenceDiagram
   opt-in aliases (`experimental`, `pyo3-rust`, and HTTPS variant suffixes).
 - The package-carried release Dockerfile pins the last reviewed raw runtime
   (`0.0.19.post5`) and uv 0.11.28 source image by full digest. The target build
-  exports hash-locked runtime requirements, downloads only compatible wheels in
-  the pinned runtime, and embeds their exact canonical schema-2 inventory under
-  `docker/build-cache`. The locked control independently rejects hash drift,
+  exports hash-locked runtime requirements with CPython 3.13, downloads only
+  `musllinux_1_2_x86_64` CPython 3.13/ABI3/pure-Python wheels compatible with
+  the pinned Alpine runtime, and embeds their exact canonical schema-2 inventory
+  under `docker/build-cache`. The locked control independently rejects hash drift,
   mutable images, networked Docker instructions, parser directives, `ADD`, or a
   missing `uv sync --frozen --offline` path before sealing. Change either image
   digest only through a reviewed release update; production receipts bind the
