@@ -151,8 +151,10 @@ Open the nearest scoped guide for the code you are changing.
   pins the reviewed gate-helper bytes before isolated execution, and schedules
   both release jobs only on `ci-release-proxbox-api`. Before candidate
   execution, each job must match its live runner ID/name/sole label to the
-  checksum-pinned acceptance record; zero/empty identity and all-zero
-  runtime/network attestation digests keep tag releases disabled. It uploads exactly wheel, sdist, manifest, and canonical
+  checksum-pinned acceptance record plus a fresh signed external-supervisor
+  attestation bound to repository/run/job/source, complete registered labels,
+  runtime image, and network/runtime policy. Zero/empty identity and all-zero
+  key/image/policy digests keep tag releases disabled. It uploads exactly wheel, sdist, manifest, and canonical
   `release-request.json`. The request binds repository ID 37, source/tag/version,
   first-attempt run identity, target-workflow digest, manifest digest, and
   artifact inventory. The target repository has no package or RC-mirror

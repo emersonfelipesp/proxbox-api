@@ -378,15 +378,23 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert gate_sha256 == "20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c"
     assert gate_sha256 in workflow
     assert runner_gate_sha256 == (
-        "03119e612b12d13c49ba494e2577defa1e255d7591d73f5a81827f85370c9b91"
+        "e176cf3e5b4d356e48acde558b60d7a6843e75169068cd8e545ccca05d4b2122"
     )
-    assert acceptance_sha256 == ("3134250c0952276c5cc5c7cf4e04e11729445fe464990f92ae2b933ffed602d7")
+    assert acceptance_sha256 == ("acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107")
     assert workflow.count(runner_gate_sha256) == 2
     assert workflow.count(acceptance_sha256) == 2
     assert acceptance["runner_id"] == 0
     assert acceptance["runner_name"] == ""
     assert acceptance["runtime_attestation_sha256"] == "0" * 64
     assert acceptance["network_attestation_sha256"] == "0" * 64
+    assert acceptance["attestation_public_key_sha256"] == "0" * 64
+    assert acceptance["runtime_image_digest"] == "0" * 64
+    assert acceptance["supervisor_policy_sha256"] == "0" * 64
+    assert acceptance["registered_labels"] == [
+        "ci-release-proxbox-api",
+        "ci-untrusted-netbox46",
+        "ci-untrusted-python312",
+    ]
     build_steps = parsed["jobs"]["build-request"]["steps"]
     gate_index = next(
         index
@@ -991,13 +999,55 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         )
 
     acceptance = {
+        "attestation_public_key_sha256": "",
         "network_attestation_sha256": "b" * 64,
+        "registered_labels": [
+            "ci-release-proxbox-api",
+            "ci-untrusted-netbox46",
+            "ci-untrusted-python312",
+        ],
         "runner_id": 41,
         "runner_label": "ci-release-proxbox-api",
         "runner_name": "ci-release-proxbox-api-runner",
         "runtime_attestation_sha256": "a" * 64,
+        "runtime_image_digest": "c" * 64,
         "schema": 1,
+        "supervisor_policy_sha256": "d" * 64,
     }
+    private_key = tmp_path / "private.pem"
+    public_key = tmp_path / "public.pem"
+    subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "genpkey",
+            "-algorithm",
+            "RSA",
+            "-pkeyopt",
+            "rsa_keygen_bits:2048",
+            "-out",
+            str(private_key),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "pkey",
+            "-in",
+            str(private_key),
+            "-pubout",
+            "-out",
+            str(public_key),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    acceptance["attestation_public_key_sha256"] = hashlib.sha256(
+        public_key.read_bytes()
+    ).hexdigest()
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_bytes(gate._canonical_json(acceptance))
     job = {
@@ -1012,6 +1062,46 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "runner_name": "ci-release-proxbox-api-runner",
         "status": "in_progress",
     }
+    attestation_root = tmp_path / "attestations"
+    attestation_root.mkdir()
+    attestation_path = attestation_root / "run-12-job-34.json"
+    signature_path = attestation_root / "run-12-job-34.sig"
+    attestation = {
+        "expires_at": 1200,
+        "issued_at": 1000,
+        "job_id": 34,
+        "network_attestation_sha256": acceptance["network_attestation_sha256"],
+        "registered_labels": acceptance["registered_labels"],
+        "repository": "emersonfelipesp/proxbox-api",
+        "run_id": 12,
+        "runner_id": 41,
+        "runner_name": "ci-release-proxbox-api-runner",
+        "runtime_attestation_sha256": acceptance["runtime_attestation_sha256"],
+        "runtime_image_digest": acceptance["runtime_image_digest"],
+        "schema": 1,
+        "source_sha": "a" * 40,
+        "supervisor_policy_sha256": acceptance["supervisor_policy_sha256"],
+    }
+
+    def sign(value: dict[str, object]) -> None:
+        attestation_path.write_bytes(gate._canonical_json(value))
+        subprocess.run(
+            [
+                "/usr/bin/openssl",
+                "dgst",
+                "-sha256",
+                "-sign",
+                str(private_key),
+                "-out",
+                str(signature_path),
+                str(attestation_path),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    sign(attestation)
     assert (
         gate.validate_release_runner(
             acceptance_path=acceptance_path,
@@ -1022,6 +1112,9 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
             source_sha="a" * 40,
             token="",
             jobs_payload={"jobs": [job], "total_count": 1},
+            attestation_root=attestation_root,
+            public_key_path=public_key,
+            now=1100,
         )["runner_id"]
         == 41
     )
@@ -1035,7 +1128,39 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
             source_sha="a" * 40,
             token="",
             jobs_payload={"jobs": [{**job, "runner_id": 42}], "total_count": 1},
+            attestation_root=attestation_root,
+            public_key_path=public_key,
+            now=1100,
         )
+    for label, changed in (
+        ("stale", {"issued_at": 800, "expires_at": 1000}),
+        ("runtime", {"runtime_image_digest": "e" * 64}),
+        ("network", {"network_attestation_sha256": "f" * 64}),
+        (
+            "labels",
+            {
+                "registered_labels": [
+                    *acceptance["registered_labels"],
+                    "ci-untrusted-extra",
+                ]
+            },
+        ),
+    ):
+        sign({**attestation, **changed})
+        with pytest.raises(gate.RunnerGateError, match="differs"):
+            gate.validate_release_runner(
+                acceptance_path=acceptance_path,
+                owner="emersonfelipesp",
+                repository="proxbox-api",
+                run_id=12,
+                job_name=job["name"],
+                source_sha="a" * 40,
+                token="",
+                jobs_payload={"jobs": [job], "total_count": 1},
+                attestation_root=attestation_root,
+                public_key_path=public_key,
+                now=1100,
+            )
 
 
 def test_registry_fetch_rejects_rebinding_original_artifacts_to_moved_tag(

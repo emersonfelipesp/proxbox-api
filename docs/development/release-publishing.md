@@ -85,8 +85,11 @@ sequenceDiagram
   exact SHA, trusted actor, job name, and untrusted runner class. Both release
   jobs use `ci-release-proxbox-api` and, before candidate execution, require
   their live runner ID/name/sole label to match the checksum-pinned acceptance
-  record. Its zero/empty identity and all-zero runtime/network attestation
-  digests intentionally disable tag releases until live acceptance. A
+  record plus a fresh signed external-supervisor attestation bound to the
+  repository/run/job/source, complete registered labels, runtime image, and
+  network/runtime policy. Its zero/empty identity and all-zero key/image/policy
+  digests intentionally disable tag releases until live acceptance. Missing,
+  stale, invalidly signed, or mismatched evidence fails before candidate code. A
   disposable target job builds one wheel and one sdist after
   verifying the pinned uv archive and selecting fresh per-run managed-Python
   and cache roots. It uploads exactly four data files: wheel, sdist, canonical

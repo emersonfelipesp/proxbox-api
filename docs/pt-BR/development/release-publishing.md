@@ -86,8 +86,11 @@ sequenceDiagram
   classe de runner esperados. Os dois jobs de release usam
   `ci-release-proxbox-api` e, antes de executar codigo candidato, exigem que ID,
   nome e unico label do runner correspondam ao registro de aceitacao fixado por
-  checksum. ID/nome vazios e digests zerados de runtime/rede desativam releases
-  por tag ate a aceitacao ao vivo. Um job alvo descartavel valida
+  checksum e a uma atestacao recente e assinada pelo supervisor externo,
+  vinculada a repositorio/run/job/fonte, labels registrados completos, imagem
+  runtime e politicas de rede/runtime. ID/nome vazios e digests zerados de
+  chave/imagem/politica desativam releases por tag ate a aceitacao ao vivo. Um
+  job alvo descartavel valida
   o arquivo uv fixado, usa raizes novas por run para Python/cache e gera wheel e
   sdist. Ele envia exatamente quatro arquivos de dados: wheel, sdist, manifesto
   canonico e `release-request.json` canonico. A solicitacao vincula o ID 37 do
