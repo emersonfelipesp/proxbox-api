@@ -129,7 +129,8 @@ sequenceDiagram
 - O Dockerfile de release incluido no pacote fixa por digest completo o ultimo
   runtime raw revisado (`0.0.19.post5`) e a imagem uv 0.11.28. O build alvo
   exporta requisitos com hashes usando CPython 3.13, baixa apenas wheels
-  `musllinux_1_2_x86_64` CPython 3.13/ABI3/Python puro compativeis com o runtime
+  `musllinux_1_2_x86_64` ou `musllinux_1_1_x86_64` retrocompativeis para
+  CPython 3.13/ABI3/Python puro compativeis com o runtime
   Alpine fixado e inclui o inventario canonico schema-2 exato em
   `docker/build-cache`. O controle travado rejeita independentemente divergencia
   de hash, imagens mutaveis, instrucoes Docker com rede, diretivas do parser,

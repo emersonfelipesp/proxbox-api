@@ -311,7 +311,8 @@ mkdir -m 0700 -p docker/build-cache
 "$BUILD_ROOT/venv/bin/python" -m ensurepip --default-pip
 "$BUILD_ROOT/venv/bin/python" -m pip download \
   --disable-pip-version-check --require-hashes --only-binary=:all: \
-  --platform musllinux_1_2_x86_64 --python-version 3.13 \
+  --platform musllinux_1_2_x86_64 --platform musllinux_1_1_x86_64 \
+  --python-version 3.13 \
   --implementation cp --abi cp313 --abi abi3 --abi none \
   --dest docker/build-cache --requirement "$BUILD_ROOT/runtime-requirements.txt"
 find docker/build-cache -mindepth 1 -maxdepth 1 -type f -name '*.whl' \

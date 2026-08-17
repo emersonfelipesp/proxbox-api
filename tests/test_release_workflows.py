@@ -403,7 +403,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
         "7a4ca5d6c81161ec97459ca0e597d91c7219780b9aeada7741c838f320058dc0"
     )
     assert build_boundary_sha256 == (
-        "a341691b6f7298d43c517f027b31fe4a783e009810b17f8e7be34f0ae2bf7868"
+        "68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
     assert acceptance_sha256 == ("acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107")
@@ -460,6 +460,7 @@ def test_release_build_boundary_is_token_free_bounded_and_dockerless():
     assert "--python 3.13.14" in command
     assert '--python "$BUILD_ROOT/venv/bin/python"' in command
     assert "--platform musllinux_1_2_x86_64" in command
+    assert "--platform musllinux_1_1_x86_64" in command
     assert "--python-version 3.13" in command
     assert "--implementation cp" in command
     for abi in ("cp313", "abi3", "none"):

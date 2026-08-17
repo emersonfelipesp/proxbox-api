@@ -172,7 +172,7 @@ jobs:
           test ! -e "$BUILD_ROOT"
           test ! -L "$BUILD_ROOT"
           printf '%s  %s\n' \
-            a341691b6f7298d43c517f027b31fe4a783e009810b17f8e7be34f0ae2bf7868 \
+            68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad \
             scripts/gitea_release_build_boundary.py | sha256sum --check --strict
           python3 -I scripts/gitea_release_build_boundary.py \
             --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \

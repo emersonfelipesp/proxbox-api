@@ -171,7 +171,8 @@ Open the nearest scoped guide for the code you are changing.
   credentials. It anonymously re-downloads and verifies every registry byte.
   Before the sdist build, the target generates the release-only context from
   `Dockerfile.release`, exports for CPython 3.13, downloads only hash-locked
-  `musllinux_1_2_x86_64` CPython 3.13/ABI3/pure-Python wheels compatible with
+  `musllinux_1_2_x86_64` or backward-compatible `musllinux_1_1_x86_64`
+  CPython 3.13/ABI3/pure-Python wheels compatible with
   the full-digest prior Alpine raw runtime, and writes the canonical schema-2
   cache/image inventory. The locked control independently rejects mutable/networked Docker
   inputs and hash drift before sealing; the ordinary development `Dockerfile`
