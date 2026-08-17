@@ -32,6 +32,8 @@ RELEASE_ARTIFACTS_PATH = REPO_ROOT / "scripts" / "release_artifacts.py"
 PREPARE_OFFLINE_RELEASE_PATH = REPO_ROOT / "scripts" / "prepare_offline_release.py"
 CI_MATRIX_PATH = REPO_ROOT / "scripts" / "ci_e2e_matrix.py"
 CI_GATE_PATH = REPO_ROOT / "scripts" / "gitea_ci_gate.py"
+RUNNER_GATE_PATH = REPO_ROOT / "scripts" / "gitea_release_runner_gate.py"
+RUNNER_ACCEPTANCE_PATH = REPO_ROOT / ".gitea" / "release-runner-acceptance.json"
 RELEASE_CONTROL_DOC_PATHS = (
     REPO_ROOT / "AGENTS.md",
     REPO_ROOT / "CLAUDE.md",
@@ -60,6 +62,14 @@ def _load_offline_release_preparer():
 
 def _load_ci_gate():
     spec = importlib.util.spec_from_file_location("gitea_ci_gate", CI_GATE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_runner_gate():
+    spec = importlib.util.spec_from_file_location("gitea_release_runner_gate", RUNNER_GATE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -328,10 +338,14 @@ def test_publish_workflow_routes_rc_tags_to_testpypi_and_releases_to_pypi():
 def test_gitea_tag_workflow_builds_only_a_release_control_request():
     workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
     parsed = yaml.safe_load(workflow)
+    gate_sha256 = hashlib.sha256(CI_GATE_PATH.read_bytes()).hexdigest()
+    runner_gate_sha256 = hashlib.sha256(RUNNER_GATE_PATH.read_bytes()).hexdigest()
+    acceptance_sha256 = hashlib.sha256(RUNNER_ACCEPTANCE_PATH.read_bytes()).hexdigest()
+    acceptance = json.loads(RUNNER_ACCEPTANCE_PATH.read_bytes())
 
     assert "  create:" not in workflow
     assert set(parsed["jobs"]) == {"validate-source", "build-request"}
-    assert all(job["runs-on"] == "ci-untrusted-python312" for job in parsed["jobs"].values())
+    assert all(job["runs-on"] == "ci-release-proxbox-api" for job in parsed["jobs"].values())
     assert "refs/heads/develop:refs/remotes/gitea/release-develop" in workflow
     assert "release-manifest.json" in workflow
     assert "scripts/gitea_ci_gate.py" in workflow
@@ -359,7 +373,32 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
         == 1
     )
     assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 1
-    assert workflow.count("sha256sum --check --strict") == 1
+    assert workflow.count("sha256sum --check --strict") == 6
+    assert "python3 -I scripts/gitea_ci_gate.py" in workflow
+    assert gate_sha256 == "20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c"
+    assert gate_sha256 in workflow
+    assert runner_gate_sha256 == (
+        "03119e612b12d13c49ba494e2577defa1e255d7591d73f5a81827f85370c9b91"
+    )
+    assert acceptance_sha256 == ("3134250c0952276c5cc5c7cf4e04e11729445fe464990f92ae2b933ffed602d7")
+    assert workflow.count(runner_gate_sha256) == 2
+    assert workflow.count(acceptance_sha256) == 2
+    assert acceptance["runner_id"] == 0
+    assert acceptance["runner_name"] == ""
+    assert acceptance["runtime_attestation_sha256"] == "0" * 64
+    assert acceptance["network_attestation_sha256"] == "0" * 64
+    build_steps = parsed["jobs"]["build-request"]["steps"]
+    gate_index = next(
+        index
+        for index, step in enumerate(build_steps)
+        if step["name"].startswith("Prove exact accepted release runner")
+    )
+    candidate_index = next(
+        index
+        for index, step in enumerate(build_steps)
+        if step["name"] == "Build and bind exact artifacts"
+    )
+    assert gate_index < candidate_index
     assert workflow.count("UV_PYTHON_INSTALL_DIR=%s") == 1
     assert workflow.count("--no-config") == 3
     assert workflow.count("--managed-python") == 2
@@ -483,7 +522,7 @@ def test_release_control_request_binds_exact_repository_run_and_artifacts():
         'test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 4' in workflow
     )
     assert "secrets." not in build_source
-    assert "github.token" not in build_source
+    assert build_source.count("github.token") == 1
 
 
 def test_operator_docs_match_the_locked_control_dispatch_contract() -> None:
@@ -499,15 +538,23 @@ def test_operator_docs_match_the_locked_control_dispatch_contract() -> None:
     assert "existing publisher" in documentation.lower()
 
 
-def test_gitea_job_token_is_confined_to_source_validation():
+def test_gitea_job_token_is_confined_to_trusted_evidence_steps():
     parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
     validate_source = yaml.safe_dump(parsed["jobs"]["validate-source"])
     build_source = yaml.safe_dump(parsed["jobs"]["build-request"])
 
-    assert validate_source.count("github.token") == 1
-    assert "GITEA_API_TOKEN" in validate_source
-    assert "github.token" not in build_source
-    assert "GITEA_API_TOKEN" not in build_source
+    assert validate_source.count("github.token") == 2
+    assert validate_source.count("GITEA_API_TOKEN") == 2
+    assert build_source.count("github.token") == 1
+    assert build_source.count("GITEA_API_TOKEN") == 1
+    candidate_step = next(
+        step
+        for step in parsed["jobs"]["build-request"]["steps"]
+        if step["name"] == "Build and bind exact artifacts"
+    )
+    candidate_source = yaml.safe_dump(candidate_step)
+    assert "github.token" not in candidate_source
+    assert "GITEA_API_TOKEN" not in candidate_source
     assert "persist-credentials: false" in validate_source
     assert "persist-credentials: false" in build_source
 
@@ -817,44 +864,43 @@ def test_release_manifest_binds_exact_artifact_bytes(tmp_path: Path) -> None:
         )
 
 
-def test_ci_gate_binds_status_to_authenticated_run_and_job(
+def test_ci_gate_binds_latest_actions_run_to_authenticated_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = _load_ci_gate()
     sha = "a" * 40
     context = "CI / Lint, smoke, and core coverage (push)"
+    runs_path = (
+        "/repos/emersonfelipesp/proxbox-api/actions/runs?"
+        f"branch=develop&event=push&head_sha={sha}&limit=100&page=1"
+    )
+    jobs_path = "/repos/emersonfelipesp/proxbox-api/actions/runs/12/jobs"
+    run = {
+        "id": 12,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": sha,
+        "head_branch": "develop",
+        "path": "ci.yml@refs/heads/develop",
+        "run_attempt": 0,
+        "actor": {"login": "emersonfelipesp"},
+    }
+    job = {
+        "id": 34,
+        "run_id": 12,
+        "run_attempt": 1,
+        "name": "Lint, smoke, and core coverage",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": sha,
+        "runner_name": "ci-untrusted-proxbox-api",
+        "labels": ["ci-untrusted-python312"],
+        "html_url": "https://git.nmulti.cloud/emersonfelipesp/proxbox-api/actions/runs/12/jobs/34",
+    }
     responses = {
-        f"/repos/emersonfelipesp/proxbox-api/commits/{sha}/statuses?limit=100": [
-            {
-                "id": 8,
-                "context": context,
-                "status": "success",
-                "target_url": "/emersonfelipesp/proxbox-api/actions/runs/12/jobs/34",
-            }
-        ],
-        "/repos/emersonfelipesp/proxbox-api/actions/runs/12": {
-            "id": 12,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-            "head_sha": sha,
-            "head_branch": "develop",
-            "path": "ci.yml@refs/heads/develop",
-            "run_attempt": 0,
-            "actor": {"login": "emersonfelipesp"},
-        },
-        "/repos/emersonfelipesp/proxbox-api/actions/jobs/34": {
-            "id": 34,
-            "run_id": 12,
-            "run_attempt": 1,
-            "name": "Lint, smoke, and core coverage",
-            "status": "completed",
-            "conclusion": "success",
-            "head_sha": sha,
-            "runner_name": "ci-untrusted-proxbox-api",
-            "labels": ["ci-untrusted-python312"],
-            "html_url": "https://git.nmulti.cloud/emersonfelipesp/proxbox-api/actions/runs/12/jobs/34",
-        },
+        runs_path: {"workflow_runs": [run], "total_count": 1},
+        jobs_path: {"jobs": [job], "total_count": 1},
     }
     monkeypatch.setattr(gate, "_request_json", lambda path, *, token: responses[path])
 
@@ -868,7 +914,23 @@ def test_ci_gate_binds_status_to_authenticated_run_and_job(
     )
     assert evidence == {context: {"job_id": 34, "run_attempt": 1, "run_id": 12}}
 
-    responses["/repos/emersonfelipesp/proxbox-api/actions/runs/12"]["run_attempt"] = 1
+    runs = responses[runs_path]["workflow_runs"]
+    assert isinstance(runs, list)
+    runs.insert(0, {**run, "id": 13, "conclusion": "failure"})
+    responses[runs_path]["total_count"] = 2
+    with pytest.raises(gate.CIGateError, match="run does not match"):
+        gate.validate_ci_gate(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            source_sha=sha,
+            required_contexts=[context],
+            trusted_actor="emersonfelipesp",
+            token="test-token",
+        )
+    runs.pop(0)
+    responses[runs_path]["total_count"] = 1
+
+    run["run_attempt"] = 1
     assert gate.validate_ci_gate(
         owner="emersonfelipesp",
         repository="proxbox-api",
@@ -878,7 +940,7 @@ def test_ci_gate_binds_status_to_authenticated_run_and_job(
         token="test-token",
     ) == {context: {"job_id": 34, "run_attempt": 1, "run_id": 12}}
 
-    responses["/repos/emersonfelipesp/proxbox-api/actions/runs/12"]["run_attempt"] = 2
+    run["run_attempt"] = 2
     with pytest.raises(gate.CIGateError, match="run attempt is invalid"):
         gate.validate_ci_gate(
             owner="emersonfelipesp",
@@ -888,9 +950,9 @@ def test_ci_gate_binds_status_to_authenticated_run_and_job(
             trusted_actor="emersonfelipesp",
             token="test-token",
         )
-    responses["/repos/emersonfelipesp/proxbox-api/actions/runs/12"]["run_attempt"] = 0
+    run["run_attempt"] = 0
 
-    responses["/repos/emersonfelipesp/proxbox-api/actions/jobs/34"]["run_attempt"] = 2
+    job["run_attempt"] = 2
     with pytest.raises(gate.CIGateError, match="job does not match"):
         gate.validate_ci_gate(
             owner="emersonfelipesp",
@@ -900,10 +962,10 @@ def test_ci_gate_binds_status_to_authenticated_run_and_job(
             trusted_actor="emersonfelipesp",
             token="test-token",
         )
-    responses["/repos/emersonfelipesp/proxbox-api/actions/jobs/34"]["run_attempt"] = 1
+    job["run_attempt"] = 1
 
-    responses["/repos/emersonfelipesp/proxbox-api/actions/runs/12"]["event"] = "pull_request"
-    with pytest.raises(gate.CIGateError, match="run does not match"):
+    run["event"] = "pull_request"
+    with pytest.raises(gate.CIGateError, match="workflow run is missing"):
         gate.validate_ci_gate(
             owner="emersonfelipesp",
             repository="proxbox-api",
@@ -911,6 +973,68 @@ def test_ci_gate_binds_status_to_authenticated_run_and_job(
             required_contexts=[context],
             trusted_actor="emersonfelipesp",
             token="test-token",
+        )
+
+
+def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -> None:
+    gate = _load_runner_gate()
+    with pytest.raises(gate.RunnerGateError, match="not activated"):
+        gate.validate_release_runner(
+            acceptance_path=RUNNER_ACCEPTANCE_PATH,
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            run_id=12,
+            job_name="Build exact credential-free release-control request",
+            source_sha="a" * 40,
+            token="",
+            jobs_payload={"jobs": [], "total_count": 0},
+        )
+
+    acceptance = {
+        "network_attestation_sha256": "b" * 64,
+        "runner_id": 41,
+        "runner_label": "ci-release-proxbox-api",
+        "runner_name": "ci-release-proxbox-api-runner",
+        "runtime_attestation_sha256": "a" * 64,
+        "schema": 1,
+    }
+    acceptance_path = tmp_path / "acceptance.json"
+    acceptance_path.write_bytes(gate._canonical_json(acceptance))
+    job = {
+        "conclusion": None,
+        "head_sha": "a" * 40,
+        "id": 34,
+        "labels": ["ci-release-proxbox-api"],
+        "name": "Build exact credential-free release-control request",
+        "run_attempt": 1,
+        "run_id": 12,
+        "runner_id": 41,
+        "runner_name": "ci-release-proxbox-api-runner",
+        "status": "in_progress",
+    }
+    assert (
+        gate.validate_release_runner(
+            acceptance_path=acceptance_path,
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            run_id=12,
+            job_name=job["name"],
+            source_sha="a" * 40,
+            token="",
+            jobs_payload={"jobs": [job], "total_count": 1},
+        )["runner_id"]
+        == 41
+    )
+    with pytest.raises(gate.RunnerGateError, match="exact accepted"):
+        gate.validate_release_runner(
+            acceptance_path=acceptance_path,
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            run_id=12,
+            job_name=job["name"],
+            source_sha="a" * 40,
+            token="",
+            jobs_payload={"jobs": [{**job, "runner_id": 42}], "total_count": 1},
         )
 
 

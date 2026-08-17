@@ -146,9 +146,13 @@ Open the nearest scoped guide for the code you are changing.
   keeps v4 because it runs on GitHub-hosted runners that support it.
 - `.gitea/workflows/publish-gitea.yml`: data-only release-control request
   workflow committed to `main`. Handles `push: tags:` only, requires the tag to
-  equal current `develop`, resolves each latest required status to authenticated
-  successful `ci.yml` push-run/job evidence for that exact SHA and trusted
-  runner class, and uploads exactly wheel, sdist, manifest, and canonical
+  equal current `develop`, ignores writer-controlled commit statuses, selects
+  the newest authenticated `ci.yml` Actions run and required jobs for that SHA,
+  pins the reviewed gate-helper bytes before isolated execution, and schedules
+  both release jobs only on `ci-release-proxbox-api`. Before candidate
+  execution, each job must match its live runner ID/name/sole label to the
+  checksum-pinned acceptance record; zero/empty identity and all-zero
+  runtime/network attestation digests keep tag releases disabled. It uploads exactly wheel, sdist, manifest, and canonical
   `release-request.json`. The request binds repository ID 37, source/tag/version,
   first-attempt run identity, target-workflow digest, manifest digest, and
   artifact inventory. The target repository has no package or RC-mirror

@@ -185,7 +185,10 @@ inventory drift, networked/mutable Docker inputs, and any build path other than
 ### Secrets required
 
 - The target repository uses no Gitea package or RC-promotion secret. Its
-  disposable `ci-untrusted-python312` jobs emit only wheel, sdist, manifest, and
+  disposable repository-scoped `ci-release-proxbox-api` jobs first require the
+  live runner ID, name, and sole label to match the checksum-pinned acceptance
+  record; zero/empty identity and all-zero runtime/network attestation digests
+  keep tag releases disabled. The jobs emit only wheel, sdist, manifest, and
   canonical request. The separately administered control plane owns the package
   and GitHub-mirror credentials, with distinct builder/publisher identities and
   fixed digest-locked tooling.

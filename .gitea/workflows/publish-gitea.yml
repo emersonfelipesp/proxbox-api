@@ -16,7 +16,7 @@ concurrency:
 jobs:
   validate-source:
     name: Validate canonical release source
-    runs-on: ci-untrusted-python312
+    runs-on: ci-release-proxbox-api
     outputs:
       source_sha: ${{ steps.policy.outputs.source_sha }}
       tag: ${{ steps.policy.outputs.tag }}
@@ -27,6 +27,28 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Prove exact accepted release runner before source validation
+        env:
+          GITEA_API_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -f scripts/gitea_release_runner_gate.py
+          test ! -L scripts/gitea_release_runner_gate.py
+          test -f .gitea/release-runner-acceptance.json
+          test ! -L .gitea/release-runner-acceptance.json
+          printf '%s  %s\n' \
+            03119e612b12d13c49ba494e2577defa1e255d7591d73f5a81827f85370c9b91 \
+            scripts/gitea_release_runner_gate.py | sha256sum --check --strict
+          printf '%s  %s\n' \
+            3134250c0952276c5cc5c7cf4e04e11729445fe464990f92ae2b933ffed602d7 \
+            .gitea/release-runner-acceptance.json | sha256sum --check --strict
+          python3 -I scripts/gitea_release_runner_gate.py \
+            --acceptance .gitea/release-runner-acceptance.json \
+            --owner emersonfelipesp --repository proxbox-api \
+            --run-id "$GITHUB_RUN_ID" \
+            --job-name "Validate canonical release source" \
+            --source-sha "$(git rev-parse HEAD^{commit})"
 
       - name: Bind tag, version, canonical develop, and successful CI
         id: policy
@@ -63,7 +85,12 @@ jobs:
           if project["project"]["version"] != version:
               raise SystemExit("Tag and pyproject version differ")
           PY
-          python3 scripts/gitea_ci_gate.py \
+          test -f scripts/gitea_ci_gate.py
+          test ! -L scripts/gitea_ci_gate.py
+          printf '%s  %s\n' \
+            20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c \
+            scripts/gitea_ci_gate.py | sha256sum --check --strict
+          python3 -I scripts/gitea_ci_gate.py \
             --owner emersonfelipesp --repository proxbox-api \
             --source-sha "$SOURCE_SHA" --trusted-actor emersonfelipesp \
             --required-context "CI / Lint, smoke, and core coverage (push)"
@@ -73,13 +100,36 @@ jobs:
   build-request:
     name: Build exact credential-free release-control request
     needs: validate-source
-    runs-on: ci-untrusted-python312
+    runs-on: ci-release-proxbox-api
     steps:
       - name: Checkout validated source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.validate-source.outputs.source_sha }}
           persist-credentials: false
+
+      - name: Prove exact accepted release runner before candidate execution
+        env:
+          GITEA_API_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test -f scripts/gitea_release_runner_gate.py
+          test ! -L scripts/gitea_release_runner_gate.py
+          test -f .gitea/release-runner-acceptance.json
+          test ! -L .gitea/release-runner-acceptance.json
+          printf '%s  %s\n' \
+            03119e612b12d13c49ba494e2577defa1e255d7591d73f5a81827f85370c9b91 \
+            scripts/gitea_release_runner_gate.py | sha256sum --check --strict
+          printf '%s  %s\n' \
+            3134250c0952276c5cc5c7cf4e04e11729445fe464990f92ae2b933ffed602d7 \
+            .gitea/release-runner-acceptance.json | sha256sum --check --strict
+          python3 -I scripts/gitea_release_runner_gate.py \
+            --acceptance .gitea/release-runner-acceptance.json \
+            --owner emersonfelipesp --repository proxbox-api \
+            --run-id "$GITHUB_RUN_ID" \
+            --job-name "Build exact credential-free release-control request" \
+            --source-sha "$SOURCE_SHA"
 
       - name: Install checksum-verified uv and managed Python
         env:

@@ -79,10 +79,15 @@ sequenceDiagram
 - `rcN` tag pushes publish to TestPyPI for release-candidate validation.
 - Final/post packages publish privately to Gitea, deploy through NMS, and reach
   PyPI only after an operator publishes the corresponding GitHub Release.
-- The Gitea tag must equal current canonical `develop`. Each latest required CI
-  status must resolve through authenticated Gitea API records to a successful
-  `ci.yml` push run for that exact SHA, trusted actor, job name, and untrusted
-  runner class. A disposable target job builds one wheel and one sdist after
+- The Gitea tag must equal current canonical `develop`. Writer-controlled
+  commit statuses are ignored; the newest authenticated `ci.yml` Actions run
+  and its required jobs must prove a successful first push attempt for the
+  exact SHA, trusted actor, job name, and untrusted runner class. Both release
+  jobs use `ci-release-proxbox-api` and, before candidate execution, require
+  their live runner ID/name/sole label to match the checksum-pinned acceptance
+  record. Its zero/empty identity and all-zero runtime/network attestation
+  digests intentionally disable tag releases until live acceptance. A
+  disposable target job builds one wheel and one sdist after
   verifying the pinned uv archive and selecting fresh per-run managed-Python
   and cache roots. It uploads exactly four data files: wheel, sdist, canonical
   manifest, and canonical `release-request.json`. The request binds repository

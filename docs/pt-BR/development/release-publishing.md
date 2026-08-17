@@ -79,10 +79,15 @@ sequenceDiagram
 - Push de tags `rcN` publica no TestPyPI para validacao de release candidate.
 - Pacotes finais/post sao publicados primeiro no Gitea, implantados pelo NMS e
   chegam ao PyPI somente quando o operador publica a GitHub Release correspondente.
-- A tag do Gitea deve ser o `develop` canonico atual. Cada status CI obrigatorio
-  mais recente precisa resolver, via registros autenticados da API Gitea, para
-  um run `push` bem-sucedido de `ci.yml` no SHA exato, ator confiavel, nome de
-  job e classe de runner nao confiavel esperados. Um job alvo descartavel valida
+- A tag do Gitea deve ser o `develop` canonico atual. Status de commit
+  controlados por escritores sao ignorados; o run Actions autenticado mais
+  recente de `ci.yml` e seus jobs obrigatorios devem comprovar a primeira
+  tentativa `push` bem-sucedida no SHA exato, ator confiavel, nome de job e
+  classe de runner esperados. Os dois jobs de release usam
+  `ci-release-proxbox-api` e, antes de executar codigo candidato, exigem que ID,
+  nome e unico label do runner correspondam ao registro de aceitacao fixado por
+  checksum. ID/nome vazios e digests zerados de runtime/rede desativam releases
+  por tag ate a aceitacao ao vivo. Um job alvo descartavel valida
   o arquivo uv fixado, usa raizes novas por run para Python/cache e gera wheel e
   sdist. Ele envia exatamente quatro arquivos de dados: wheel, sdist, manifesto
   canonico e `release-request.json` canonico. A solicitacao vincula o ID 37 do
