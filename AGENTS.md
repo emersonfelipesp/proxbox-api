@@ -163,7 +163,7 @@ The official release pipeline for proxbox-api runs in this order:
 
 1. **Activation gate** — do not merge the target cutover until the private control repository has a positive policy-pinned ID and its protected workflows, host boundaries, sockets, and repository-scoped runners pass readiness. Leave the existing publisher active until then.
 2. **Gitea tag push** — annotated `vX.Y.ZrcN` or `vX.Y.Z` tag is pushed to Gitea.
-3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` first requires the exact successful GitHub-hosted offline-image job for the same canonical `develop` SHA and verifies the source-SHA GitHub workflow bytes against the reviewed SHA-256 before trusting that job. The offline job pins every external action by immutable commit. It then builds and uploads the exact signed six-file request: the package wheel, package sdist, `release-manifest.json`, `release-request.json`, `runner-completion-attestation.json`, and `runner-completion-attestation.sig`. That statement binds the supervisor-derived repository-registration scope digest, and the target client requires it to match the pinned acceptance record. The workflow has no package or mirror credential and cannot publish or push tags.
+3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` first requires the exact successful GitHub-hosted offline-image job for the same canonical `develop` SHA and verifies the source-SHA GitHub workflow bytes against the reviewed SHA-256 before trusting that job. The offline job pins every external action by immutable commit. It then builds and uploads the exact signed six-file request: the package wheel, package sdist, `release-manifest.json`, `release-request.json`, `runner-completion-attestation.json`, and `runner-completion-attestation.sig`. Workflow concurrency is global per repository. Validation and build have independent pinned repository-registration scope digests, and the completion statement binds the supervisor-derived build digest; the target client requires each role's evidence to match its pinned acceptance value. The workflow has no package or mirror credential and cannot publish or push tags.
 4. **Locked validation and publication** — dispatch `validate.yml` first, then the separate irreversible `publish.yml`, each with exactly the repository name, first-attempt target run ID, and request SHA-256. Its isolated builder verifies and seals the bytes; its isolated publisher uploads the exact package and promotes only RC tags to GitHub.
 5. **RC validation** — GitHub `push: tags: v*rc*` validates the exact Gitea bytes through TestPyPI.
 6. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
@@ -191,11 +191,14 @@ inventory drift, networked/mutable Docker inputs, and any build path other than
   disposable repository-scoped `ci-release-proxbox-api` jobs use distinct
   job-bound ephemeral validation/build registrations. Each advertises only that
   release label, accepts one supervisor-authorized assignment, and terminates;
+  every RC, final, or post request therefore requires a freshly registered and
+  reviewed identity pair;
   the jobs then require the
   live runner ID, name, and sole label to match the checksum-pinned acceptance
   record plus a fresh signed external-supervisor attestation bound to
   repository/run/job/source, complete registered labels, runtime image, and
-  network/runtime policy. Zero/empty identity and all-zero key/image/policy
+  network/runtime policy plus its role-specific repository-registration scope
+  digest. Zero/empty identity and all-zero key/image/policy
   digests keep tag releases disabled. Candidate build and wheel preparation run
   behind the bounded token-free UID/Landlock boundary without Docker-socket
   access. After cleanup, the root-only external supervisor signs the exact

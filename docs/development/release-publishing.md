@@ -85,12 +85,16 @@ sequenceDiagram
   exact SHA, trusted actor, job name, and untrusted runner class. The two
   release jobs use distinct job-bound ephemeral validation/build registrations.
   Each advertises only `ci-release-proxbox-api`, accepts one
-  supervisor-authorized assignment, and terminates; before candidate execution
+  supervisor-authorized assignment, and terminates. Workflow concurrency is
+  global to this repository so different release refs cannot race the sole
+  release label. Every RC, final, or post request requires a freshly registered
+  and reviewed identity pair. Before candidate execution
   the jobs require
   their live runner ID/name/sole label to match the checksum-pinned acceptance
   record plus a fresh signed external-supervisor attestation bound to the
   repository/run/job/source, complete registered labels, runtime image, and
-  network/runtime policy. Its zero/empty identity and all-zero key/image/policy
+  network/runtime policy. Validation and build have independent pinned
+  repository-registration scope digests. Its zero/empty identity and all-zero key/image/policy
   digests intentionally disable tag releases until live acceptance. Missing,
   stale, invalidly signed, or mismatched evidence fails before candidate code. A
   disposable target job builds one wheel and one sdist behind the bounded

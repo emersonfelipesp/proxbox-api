@@ -86,11 +86,15 @@ sequenceDiagram
   classe de runner esperados. Os dois jobs de release usam registros efemeros
   distintos e vinculados aos jobs de validacao/build; cada registro anuncia
   apenas `ci-release-proxbox-api`, aceita uma atribuicao autorizada pelo
-  supervisor e termina. Antes de executar codigo candidato, exigem que ID,
+  supervisor e termina. A concorrencia do workflow e global neste repositorio,
+  impedindo que refs de release diferentes disputem o unico label. Cada pedido
+  RC, final ou post exige um novo par de identidades registrado e revisado.
+  Antes de executar codigo candidato, exigem que ID,
   nome e unico label do runner correspondam ao registro de aceitacao fixado por
   checksum e a uma atestacao recente e assinada pelo supervisor externo,
   vinculada a repositorio/run/job/fonte, labels registrados completos, imagem
-  runtime e politicas de rede/runtime. ID/nome vazios e digests zerados de
+  runtime e politicas de rede/runtime. Validacao e build tem digests de escopo
+  de registro independentes. ID/nome vazios e digests zerados de
   chave/imagem/politica desativam releases por tag ate a aceitacao ao vivo. Um
   job alvo descartavel valida o arquivo uv fixado, usa raizes novas por run
   para Python/cache e gera wheel e sdist no limite UID/Landlock sem token e sem

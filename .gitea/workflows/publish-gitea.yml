@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-request-${{ github.repository }}-${{ github.ref }}
+  group: release-request-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -38,10 +38,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            cb7405d05571e4f1d1b8d114651ca03be8171b1ba6bc40fe83faba83fb49b7bb \
+            9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027 \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            1142500c698571b6bb62b5509709876a9f97a5bf528ed50d1658bbfd9577eb93 \
+            b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \
@@ -121,10 +121,10 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            cb7405d05571e4f1d1b8d114651ca03be8171b1ba6bc40fe83faba83fb49b7bb \
+            9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027 \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
-            1142500c698571b6bb62b5509709876a9f97a5bf528ed50d1658bbfd9577eb93 \
+            b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e \
             .gitea/release-runner-acceptance.json | sha256sum --check --strict
           python3 -I scripts/gitea_release_runner_gate.py \
             --acceptance .gitea/release-runner-acceptance.json \

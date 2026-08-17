@@ -153,11 +153,14 @@ Open the nearest scoped guide for the code you are changing.
   gate-helper bytes before isolated execution, and schedules the two release
   jobs on distinct job-bound ephemeral validation/build registrations. Each
   advertises only the sole `ci-release-proxbox-api` label, accepts one
-  supervisor-authorized assignment, and terminates. Before candidate
+  supervisor-authorized assignment, and terminates. Workflow concurrency is
+  global to this repository so different release refs cannot race the sole
+  release label. Before candidate
   execution, each job must match its live runner ID/name/sole label to the
   checksum-pinned acceptance record plus a fresh signed external-supervisor
   attestation bound to repository/run/job/source, complete registered labels,
-  runtime image, and network/runtime policy. Zero/empty identity and all-zero
+  runtime image, and network/runtime policy. Validation and build have
+  independent pinned repository-registration scope digests. Zero/empty identity and all-zero
   key/image/policy digests keep tag releases disabled. Candidate build and
   offline-wheel preparation run behind the bounded token-free UID/Landlock
   boundary without Docker-socket access. After cleanup, the root-only external
@@ -165,6 +168,8 @@ Open the nearest scoped guide for the code you are changing.
   uploads exactly the package wheel, package sdist, `release-manifest.json`,
   `release-request.json`, `runner-completion-attestation.json`, and
   `runner-completion-attestation.sig`.
+  Every RC, final, or post request consumes its validation/build identity pair;
+  the next request requires freshly registered and reviewed identities.
   The request binds repository ID 37, source/tag/version,
   first-attempt run identity, target-workflow digest, manifest digest, and
   artifact inventory. The target repository has no package or RC-mirror
