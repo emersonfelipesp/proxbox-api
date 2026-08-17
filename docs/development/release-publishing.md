@@ -15,7 +15,7 @@ flowchart TD
     Start([Choose target release\nX.Y.Z])
     Bump[Bump package version\npyproject.toml + uv.lock]
     RCTag[Create release-candidate tag\nvX.Y.ZrcN]
-    RCCI[Target CI builds a four-file\ncredential-free control request]
+    RCCI[Target CI builds a six-file\ncredential-free signed control request]
     Control[Locked release control verifies\nand publishes exact sealed bytes]
     RCUpload[Upload vX.Y.ZrcN to TestPyPI\nwithout --skip-existing]
     RCValidate[Install rcN from TestPyPI\non Python 3.12 and 3.13]
@@ -90,15 +90,19 @@ sequenceDiagram
   network/runtime policy. Its zero/empty identity and all-zero key/image/policy
   digests intentionally disable tag releases until live acceptance. Missing,
   stale, invalidly signed, or mismatched evidence fails before candidate code. A
-  disposable target job builds one wheel and one sdist after
-  verifying the pinned uv archive and selecting fresh per-run managed-Python
-  and cache roots. It uploads exactly four data files: wheel, sdist, canonical
-  manifest, and canonical `release-request.json`. The request binds repository
+  disposable target job builds one wheel and one sdist behind the bounded
+  token-free UID/Landlock boundary after verifying the pinned uv archive and
+  selecting fresh per-run managed-Python and cache roots. It uploads exactly
+  six data files: wheel, sdist, canonical manifest, canonical
+  `release-request.json`, canonical `runner-completion-attestation.json`, and
+  its detached signature. The external root-only supervisor creates that
+  completion evidence only after candidate process cleanup and binds the exact
+  request/artifact bytes plus live runner policy. The request binds repository
   ID 37, source/tag/version, first-attempt run identity, target workflow digest,
   manifest digest, and sorted artifact inventory. The target repository has no
   package or GitHub-mirror credential and cannot publish or push tags. The
   separately administered release-control repository fetches that exact run,
-  verifies the policy-pinned workflow and every byte on its isolated builder,
+  verifies the policy-pinned workflow, supervisor signature, and every byte on its isolated builder,
   then seals the handoff. Only its isolated publisher can read publication
   credentials and invoke fixed digest-locked tooling. Public no-authority
   downloads must match the manifest before the durable ledger advances.

@@ -90,15 +90,19 @@ sequenceDiagram
   vinculada a repositorio/run/job/fonte, labels registrados completos, imagem
   runtime e politicas de rede/runtime. ID/nome vazios e digests zerados de
   chave/imagem/politica desativam releases por tag ate a aceitacao ao vivo. Um
-  job alvo descartavel valida
-  o arquivo uv fixado, usa raizes novas por run para Python/cache e gera wheel e
-  sdist. Ele envia exatamente quatro arquivos de dados: wheel, sdist, manifesto
-  canonico e `release-request.json` canonico. A solicitacao vincula o ID 37 do
+  job alvo descartavel valida o arquivo uv fixado, usa raizes novas por run
+  para Python/cache e gera wheel e sdist no limite UID/Landlock sem token e sem
+  acesso ao socket Docker. Depois da limpeza dos processos candidatos, o
+  supervisor externo root-only assina o inventario exato. O job envia exatamente
+  seis arquivos de dados: wheel, sdist, manifesto canonico,
+  `release-request.json` canonico, `runner-completion-attestation.json` canonico
+  e sua assinatura destacada. A solicitacao vincula o ID 37 do
   repositorio, fonte/tag/versao, identidade do primeiro run, digest do workflow
   alvo, digest do manifesto e inventario ordenado. O repositorio alvo nao possui
   credencial de pacote ou espelho GitHub e nao pode publicar nem enviar tags. O
   repositorio de controle administrado separadamente busca o run exato, valida
-  workflow fixado e todos os bytes no builder isolado e sela a transferencia.
+  workflow fixado, assinatura de conclusao e todos os bytes no builder isolado
+  e sela a transferencia.
   Somente o publisher isolado pode ler credenciais e executar ferramentas de
   publicacao fixas por digest. Downloads publicos sem autoridade precisam
   coincidir com o manifesto antes do avanco do ledger duravel.

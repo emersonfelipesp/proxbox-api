@@ -190,8 +190,12 @@ inventory drift, networked/mutable Docker inputs, and any build path other than
   record plus a fresh signed external-supervisor attestation bound to
   repository/run/job/source, complete registered labels, runtime image, and
   network/runtime policy. Zero/empty identity and all-zero key/image/policy
-  digests keep tag releases disabled. The jobs emit only wheel, sdist, manifest, and
-  canonical request. The separately administered control plane owns the package
+  digests keep tag releases disabled. Candidate build and wheel preparation run
+  behind the bounded token-free UID/Landlock boundary without Docker-socket
+  access. After cleanup, the root-only external supervisor signs the exact
+  request/artifact inventory. The jobs emit only wheel, sdist, manifest,
+  canonical request, canonical completion attestation, and detached signature.
+  The separately administered control plane verifies that signature and owns the package
   and GitHub-mirror credentials, with distinct builder/publisher identities and
   fixed digest-locked tooling.
 - `PYPI_TOKEN` / `PYPI_USERNAME`: PyPI credentials for GitHub Actions upload.

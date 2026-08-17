@@ -33,6 +33,8 @@ PREPARE_OFFLINE_RELEASE_PATH = REPO_ROOT / "scripts" / "prepare_offline_release.
 CI_MATRIX_PATH = REPO_ROOT / "scripts" / "ci_e2e_matrix.py"
 CI_GATE_PATH = REPO_ROOT / "scripts" / "gitea_ci_gate.py"
 RUNNER_GATE_PATH = REPO_ROOT / "scripts" / "gitea_release_runner_gate.py"
+BUILD_BOUNDARY_PATH = REPO_ROOT / "scripts" / "gitea_release_build_boundary.py"
+HANDOFF_PATH = REPO_ROOT / "scripts" / "gitea_release_handoff.py"
 RUNNER_ACCEPTANCE_PATH = REPO_ROOT / ".gitea" / "release-runner-acceptance.json"
 RELEASE_CONTROL_DOC_PATHS = (
     REPO_ROOT / "AGENTS.md",
@@ -70,6 +72,24 @@ def _load_ci_gate():
 
 def _load_runner_gate():
     spec = importlib.util.spec_from_file_location("gitea_release_runner_gate", RUNNER_GATE_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_build_boundary():
+    spec = importlib.util.spec_from_file_location(
+        "gitea_release_build_boundary", BUILD_BOUNDARY_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_handoff():
+    spec = importlib.util.spec_from_file_location("gitea_release_handoff", HANDOFF_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -340,6 +360,8 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     parsed = yaml.safe_load(workflow)
     gate_sha256 = hashlib.sha256(CI_GATE_PATH.read_bytes()).hexdigest()
     runner_gate_sha256 = hashlib.sha256(RUNNER_GATE_PATH.read_bytes()).hexdigest()
+    build_boundary_sha256 = hashlib.sha256(BUILD_BOUNDARY_PATH.read_bytes()).hexdigest()
+    handoff_sha256 = hashlib.sha256(HANDOFF_PATH.read_bytes()).hexdigest()
     acceptance_sha256 = hashlib.sha256(RUNNER_ACCEPTANCE_PATH.read_bytes()).hexdigest()
     acceptance = json.loads(RUNNER_ACCEPTANCE_PATH.read_bytes())
 
@@ -373,15 +395,21 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
         == 1
     )
     assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 1
-    assert workflow.count("sha256sum --check --strict") == 6
+    assert workflow.count("sha256sum --check --strict") == 8
     assert "python3 -I scripts/gitea_ci_gate.py" in workflow
     assert gate_sha256 == "20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c"
     assert gate_sha256 in workflow
     assert runner_gate_sha256 == (
-        "ed41291e274ebde38e244b08cf6ac4086390a9a1631f551e6796f1b53a588242"
+        "7a4ca5d6c81161ec97459ca0e597d91c7219780b9aeada7741c838f320058dc0"
     )
+    assert build_boundary_sha256 == (
+        "5c7575a3b20ae9ca924f59feaf38000d5af29941f7cf1c5674f0b7605301019d"
+    )
+    assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
     assert acceptance_sha256 == ("acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107")
     assert workflow.count(runner_gate_sha256) == 2
+    assert workflow.count(build_boundary_sha256) == 1
+    assert workflow.count(handoff_sha256) == 1
     assert workflow.count(acceptance_sha256) == 2
     assert acceptance["runner_id"] == 0
     assert acceptance["runner_name"] == ""
@@ -404,24 +432,104 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     candidate_index = next(
         index
         for index, step in enumerate(build_steps)
-        if step["name"] == "Build and bind exact artifacts"
+        if step["name"] == "Build artifacts across a token-free UID boundary"
     )
     assert gate_index < candidate_index
+    assert "/nmc-build/proxbox-api-" in workflow
+    assert "docker run" not in yaml.safe_dump(parsed["jobs"]["build-request"])
+    assert "/usr/local/bin/nmc-release-attestation-client complete" in workflow
+    assert "runner-completion-attestation.json" in workflow
+    assert "runner-completion-attestation.sig" in workflow
     assert workflow.count("UV_PYTHON_INSTALL_DIR=%s") == 1
-    assert workflow.count("--no-config") == 3
-    assert workflow.count("--managed-python") == 2
-    assert workflow.count("--no-python-downloads") == 1
-    assert '"$BUILD_ROOT/venv/bin/python" -m build --no-isolation' in workflow
-    assert "scripts/prepare_offline_release.py" in workflow
-    assert "pip download" in workflow
-    assert "--require-hashes" in workflow
-    assert "--only-binary=:all:" in workflow
-    assert "docker/build-cache" in workflow
+
+
+def test_release_build_boundary_is_token_free_bounded_and_dockerless():
+    boundary = _load_build_boundary()
+    command = boundary._candidate_command()
+
+    assert "docker run" not in command
+    assert "ensurepip" in command
+    assert "pip download" in command
+    assert command.count("--no-config") == 2
+    assert command.count("--managed-python") == 1
+    assert command.count("--no-python-downloads") == 1
+    assert '"$BUILD_ROOT/venv/bin/python" -m build --no-isolation' in command
+    assert "scripts/prepare_offline_release.py" in command
+    assert "--require-hashes" in command
+    assert "--only-binary=:all:" in command
+    assert "docker/build-cache" in command
+    for variable in (
+        "GITHUB_TOKEN",
+        "GITEA_TOKEN",
+        "ACTIONS_RUNTIME_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "GITHUB_ENV",
+        "GITHUB_OUTPUT",
+    ):
+        assert f'test -z "${{{variable}:-}}"' in command
     assert (
-        "emersonfelipesp/proxbox-api:0.0.19.post5@sha256:"
-        "f8b5decb8415867d2befb013f64f158d31650a974e9bc60bdf4f2e78c1808794" in workflow
+        boundary.process_cpu_ticks("123 (candidate name) R 1 2 3 4 5 6 7 8 9 10 11 12 13 14") == 50
     )
-    assert "uvx --from twine" not in workflow
+    with pytest.raises(ValueError, match="Malformed"):
+        boundary.process_cpu_ticks("malformed")
+
+
+def test_release_handoff_copies_only_exact_regular_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    handoff = _load_handoff()
+    build_root = tmp_path / "build"
+    source_root = build_root / "source"
+    dist_root = source_root / "dist"
+    dist_root.mkdir(parents=True)
+    version = "0.0.20rc1"
+    artifacts = []
+    for name, payload in (
+        (f"proxbox_api-{version}-py3-none-any.whl", b"wheel"),
+        (f"proxbox_api-{version}.tar.gz", b"sdist"),
+    ):
+        path = dist_root / name
+        path.write_bytes(payload)
+        artifacts.append(
+            {"name": name, "sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)}
+        )
+    manifest = {
+        "artifacts": sorted(artifacts, key=lambda row: row["name"]),
+        "package": "proxbox_api",
+        "schema": 1,
+        "source_sha": "a" * 40,
+        "version": version,
+    }
+    (source_root / "release-manifest.json").write_bytes(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    )
+    workflow = tmp_path / "publish-gitea.yml"
+    workflow.write_text("name: reviewed\n", encoding="utf-8")
+    transfer = tmp_path / "transfer"
+    monkeypatch.setattr(handoff.os, "geteuid", lambda: 0)
+
+    request = handoff.create_handoff(
+        build_root=build_root,
+        transfer_root=transfer,
+        source_sha="a" * 40,
+        tag=f"v{version}",
+        version=version,
+        run_id=1234,
+        run_attempt=1,
+        workflow_path=workflow,
+    )
+
+    assert request["artifacts"] == [
+        {"filename": row["name"], "sha256": row["sha256"], "size": row["size"]}
+        for row in manifest["artifacts"]
+    ]
+    assert {path.name for path in transfer.iterdir()} == {
+        f"proxbox_api-{version}-py3-none-any.whl",
+        f"proxbox_api-{version}.tar.gz",
+        "release-manifest.json",
+        "release-request.json",
+    }
+    assert all(not path.is_symlink() and path.is_file() for path in transfer.iterdir())
 
 
 def test_release_sdist_uses_a_pinned_network_free_docker_contract():
@@ -503,6 +611,7 @@ def test_offline_release_preparer_rejects_non_wheel_cache_content(
 
 def test_release_control_request_binds_exact_repository_run_and_artifacts():
     workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
+    handoff = _read(HANDOFF_PATH)
     parsed = yaml.safe_load(workflow)
     build_job = parsed["jobs"]["build-request"]
     build_source = yaml.safe_dump(build_job)
@@ -517,17 +626,17 @@ def test_release_control_request_binds_exact_repository_run_and_artifacts():
         "retention-days": 1,
         "compression-level": 0,
     }
-    assert '"repository_id": 37' in workflow
-    assert '"owner": "emersonfelipesp"' in workflow
-    assert '"repository": "proxbox-api"' in workflow
-    assert '"schema": 1' in workflow
-    assert '"workflow_sha256"' in workflow
-    assert '"release_manifest_sha256"' in workflow
-    assert '"initiating_run_id"' in workflow
-    assert '"initiating_run_attempt"' in workflow
+    assert '"repository_id": 37' in handoff
+    assert '"owner": "emersonfelipesp"' in handoff
+    assert '"repository": "proxbox-api"' in handoff
+    assert '"schema": 1' in handoff
+    assert '"workflow_sha256"' in handoff
+    assert '"release_manifest_sha256"' in handoff
+    assert '"initiating_run_id"' in handoff
+    assert '"initiating_run_attempt"' in handoff
     assert "release-request.json" in workflow
     assert (
-        'test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 4' in workflow
+        'test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6' in workflow
     )
     assert "secrets." not in build_source
     assert build_source.count("github.token") == 1
@@ -558,7 +667,7 @@ def test_gitea_job_token_is_confined_to_trusted_evidence_steps():
     candidate_step = next(
         step
         for step in parsed["jobs"]["build-request"]["steps"]
-        if step["name"] == "Build and bind exact artifacts"
+        if step["name"] == "Build artifacts across a token-free UID boundary"
     )
     candidate_source = yaml.safe_dump(candidate_step)
     assert "github.token" not in candidate_source
@@ -1050,12 +1159,21 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
     ).hexdigest()
     assert gate.TRUSTED_EXTERNAL_UID == 0
     with pytest.raises(gate.RunnerGateError, match="metadata is unsafe"):
-        gate._read_external_file(
+        gate._open_external_file(
             public_key,
             "attestation public key",
             16384,
             trusted_uid=os.geteuid() + 1,
         )
+    public_key.chmod(0o666)
+    with pytest.raises(gate.RunnerGateError, match="metadata is unsafe"):
+        gate._open_external_file(
+            public_key,
+            "attestation public key",
+            16384,
+            trusted_uid=os.geteuid(),
+        )
+    public_key.chmod(0o644)
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_bytes(gate._canonical_json(acceptance))
     job = {

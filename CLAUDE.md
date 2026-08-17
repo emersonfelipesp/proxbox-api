@@ -154,13 +154,19 @@ Open the nearest scoped guide for the code you are changing.
   checksum-pinned acceptance record plus a fresh signed external-supervisor
   attestation bound to repository/run/job/source, complete registered labels,
   runtime image, and network/runtime policy. Zero/empty identity and all-zero
-  key/image/policy digests keep tag releases disabled. It uploads exactly wheel, sdist, manifest, and canonical
-  `release-request.json`. The request binds repository ID 37, source/tag/version,
+  key/image/policy digests keep tag releases disabled. Candidate build and
+  offline-wheel preparation run behind the bounded token-free UID/Landlock
+  boundary without Docker-socket access. After cleanup, the root-only external
+  supervisor signs the exact request and artifact inventory. The workflow
+  uploads exactly wheel, sdist, manifest, canonical `release-request.json`,
+  canonical `runner-completion-attestation.json`, and its detached signature.
+  The request binds repository ID 37, source/tag/version,
   first-attempt run identity, target-workflow digest, manifest digest, and
   artifact inventory. The target repository has no package or RC-mirror
   credential and cannot publish or push tags. The separately administered
-  locked control plane independently verifies the policy-pinned target workflow
-  and exact bytes on its isolated builder, seals the handoff, and lets only its
+  locked control plane independently verifies the policy-pinned target workflow,
+  supervisor completion signature, and exact bytes on its isolated builder,
+  seals the handoff, and lets only its
   isolated publisher invoke fixed digest-locked tooling with publication
   credentials. It anonymously re-downloads and verifies every registry byte.
   Before the sdist build, the target generates the release-only context from
@@ -809,7 +815,7 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
    git push gitea vX.Y.Z
    ```
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds without publication credentials and uploads the exact four-file
+   - Builds without publication credentials and uploads the exact six-file
      `release-control-request` artifact.
    - Do not merge this target cutover until the private control repository has
      a positive policy-pinned ID and its protected workflows, host boundaries,
@@ -853,9 +859,11 @@ audited publisher with a local registry upload or push a final tag to GitHub
 before the Gitea package and NMS production gates.
 
 The target workflow verifies the pinned uv archive and uses fresh per-run
-managed-Python and cache roots. It emits only a canonical four-file request and
+managed-Python and cache roots. It emits only a canonical six-file request,
+including the external supervisor's completion statement and detached signature, and
 holds no publication credential. The separate locked control plane verifies the
-policy-pinned target workflow, run identity, request, manifest, and artifacts;
+policy-pinned target workflow, run identity, completion signature, request,
+manifest, and artifacts;
 its builder seals the bytes and only its isolated publisher can read credentials
 or invoke fixed digest-locked publication tooling. Public no-authority downloads
 must match before its durable ledger completes. Public TestPyPI/PyPI upload jobs run separately on fresh

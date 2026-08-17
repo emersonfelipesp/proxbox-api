@@ -38,7 +38,7 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            ed41291e274ebde38e244b08cf6ac4086390a9a1631f551e6796f1b53a588242 \
+            7a4ca5d6c81161ec97459ca0e597d91c7219780b9aeada7741c838f320058dc0 \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
             acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107 \
@@ -119,7 +119,7 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            ed41291e274ebde38e244b08cf6ac4086390a9a1631f551e6796f1b53a588242 \
+            7a4ca5d6c81161ec97459ca0e597d91c7219780b9aeada7741c838f320058dc0 \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
             acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107 \
@@ -159,10 +159,9 @@ jobs:
             --no-config --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
             --install-dir "$BOOTSTRAP_PYTHON_ROOT" --managed-python --no-bin 3.12.13
 
-      - name: Build and bind exact artifacts
+      - name: Build artifacts across a token-free UID boundary
         env:
-          BUILD_ROOT: ${{ runner.temp }}/proxbox-api-build-${{ github.run_id }}-${{ github.run_attempt }}
-          OFFLINE_RUNTIME_IMAGE: emersonfelipesp/proxbox-api:0.0.19.post5@sha256:f8b5decb8415867d2befb013f64f158d31650a974e9bc60bdf4f2e78c1808794
+          BUILD_ROOT: /nmc-build/proxbox-api-${{ github.run_id }}-${{ github.run_attempt }}
           SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
           TAG: ${{ needs.validate-source.outputs.tag }}
           VERSION: ${{ needs.validate-source.outputs.version }}
@@ -171,74 +170,54 @@ jobs:
           umask 077
           test "$GITHUB_RUN_ATTEMPT" = 1
           test ! -e "$BUILD_ROOT"
-          mkdir -p "$BUILD_ROOT"
-          UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
-            "$UV_BIN" sync --no-config --cache-dir "$BUILD_ROOT/uv-cache" \
-            --managed-python --no-python-downloads --python 3.12.13 \
-            --locked --only-group publish --no-install-project
-          "$UV_BIN" export --no-config --frozen --no-dev --group publish \
-            --no-emit-project --format requirements-txt \
-            --output-file "$BUILD_ROOT/runtime-requirements.txt"
-          test ! -e docker/build-cache
-          test ! -e docker/offline-build-inputs.json
-          mkdir -m 0700 -p docker/build-cache
-          docker run --rm --network bridge --entrypoint /bin/sh \
-            --volume "$BUILD_ROOT/runtime-requirements.txt:/requirements.txt:ro" \
-            --volume "$PWD/docker/build-cache:/wheelhouse" \
-            "$OFFLINE_RUNTIME_IMAGE" -ceu '
-              /usr/local/bin/python -m ensurepip
-              /usr/local/bin/python -m pip download \
-                --disable-pip-version-check --require-hashes \
-                --only-binary=:all: --dest /wheelhouse \
-                --requirement /requirements.txt
-            '
-          find docker/build-cache -mindepth 1 -maxdepth 1 -type f -name '*.whl' \
-            -exec chmod 0444 {} +
-          test "$(find docker/build-cache -mindepth 1 -maxdepth 1 -type f | wc -l)" -gt 0
-          test "$(find docker/build-cache -mindepth 1 -maxdepth 1 ! -type f | wc -l)" -eq 0
-          "$BUILD_ROOT/venv/bin/python" scripts/prepare_offline_release.py
-          "$BUILD_ROOT/venv/bin/python" -m build --no-isolation --outdir dist
-          "$BUILD_ROOT/venv/bin/python" -m twine check dist/*
-          "$BUILD_ROOT/venv/bin/python" scripts/release_artifacts.py manifest \
-            --dist dist --package proxbox_api --version "$VERSION" \
-            --source-sha "$SOURCE_SHA" --manifest release-manifest.json
-          mkdir release-transfer
-          cp dist/*.whl dist/*.tar.gz release-manifest.json release-transfer/
-          WORKFLOW_SHA256="$(sha256sum .gitea/workflows/publish-gitea.yml | cut -d' ' -f1)"
-          export WORKFLOW_SHA256
-          "$BUILD_ROOT/venv/bin/python" - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
+          test ! -L "$BUILD_ROOT"
+          printf '%s  %s\n' \
+            5c7575a3b20ae9ca924f59feaf38000d5af29941f7cf1c5674f0b7605301019d \
+            scripts/gitea_release_build_boundary.py | sha256sum --check --strict
+          python3 -I scripts/gitea_release_build_boundary.py \
+            --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \
+            --python-root "$UV_PYTHON_INSTALL_DIR" --source-sha "$SOURCE_SHA" \
+            --tag "$TAG" --version "$VERSION" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
-          manifest_raw = Path("release-manifest.json").read_bytes()
-          manifest = json.loads(manifest_raw)
-          artifacts = [
-              {"filename": row["name"], "sha256": row["sha256"], "size": row["size"]}
-              for row in manifest["artifacts"]
-          ]
-          request = {
-              "artifacts": artifacts,
-              "initiating_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-              "initiating_run_id": int(os.environ["GITHUB_RUN_ID"]),
-              "owner": "emersonfelipesp",
-              "package": manifest["package"],
-              "release_manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
-              "repository": "proxbox-api",
-              "repository_id": 37,
-              "schema": 1,
-              "source_sha": os.environ["SOURCE_SHA"],
-              "tag": os.environ["TAG"],
-              "version": os.environ["VERSION"],
-              "workflow_sha256": os.environ["WORKFLOW_SHA256"],
-          }
-          if artifacts != sorted(artifacts, key=lambda row: row["filename"]):
-              raise SystemExit("Artifact inventory is not sorted")
-          raw = json.dumps(request, sort_keys=True, separators=(",", ":")).encode() + b"\n"
-          Path("release-transfer/release-request.json").write_bytes(raw)
-          PY
-          test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 4
+      - name: Bind exact artifacts into the control request
+        env:
+          BUILD_ROOT: /nmc-build/proxbox-api-${{ github.run_id }}-${{ github.run_attempt }}
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          TAG: ${{ needs.validate-source.outputs.tag }}
+          VERSION: ${{ needs.validate-source.outputs.version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s  %s\n' \
+            4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002 \
+            scripts/gitea_release_handoff.py | sha256sum --check --strict
+          python3 -I scripts/gitea_release_handoff.py \
+            --build-root "$BUILD_ROOT" --transfer-root release-transfer \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" --version "$VERSION" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --workflow .gitea/workflows/publish-gitea.yml
+
+      - name: Obtain supervisor-signed completion evidence
+        env:
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -x /usr/local/bin/nmc-release-attestation-client
+          test ! -L /usr/local/bin/nmc-release-attestation-client
+          /usr/local/bin/nmc-release-attestation-client complete \
+            --acceptance .gitea/release-runner-acceptance.json \
+            --repository emersonfelipesp/proxbox-api \
+            --run-id "$GITHUB_RUN_ID" \
+            --job-name "Build exact credential-free release-control request" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow .gitea/workflows/publish-gitea.yml \
+            --request release-transfer/release-request.json \
+            --manifest release-transfer/release-manifest.json \
+            --artifact-root release-transfer \
+            --output-attestation release-transfer/runner-completion-attestation.json \
+            --output-signature release-transfer/runner-completion-attestation.sig
+          test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6
           test "$(find release-transfer -mindepth 1 -maxdepth 1 -type l | wc -l)" -eq 0
 
       - name: Upload exact data-only control request
