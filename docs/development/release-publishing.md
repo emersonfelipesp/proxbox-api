@@ -92,8 +92,9 @@ sequenceDiagram
   the jobs require
   their live runner ID/name/sole label to match the checksum-pinned acceptance
   record plus a fresh signed external-supervisor attestation bound to the
-  repository/run/job/source, complete registered labels, runtime image, and
-  network/runtime policy. Validation and build have independent pinned
+  repository/first-attempt run/job/source and exact workflow path/digest,
+  complete registered labels, runtime image, and network/runtime policy.
+  Validation and build have independent pinned
   repository-registration scope digests. Its zero/empty identity and all-zero key/image/policy
   digests intentionally disable tag releases until live acceptance. Missing,
   stale, invalidly signed, or mismatched evidence fails before candidate code. A
@@ -105,7 +106,8 @@ sequenceDiagram
   revalidates both exact immutable inventories in-container and performs a
   hash-required CPython 3.13 musl dry resolution against the runtime cache.
   Landlock bounds writes and an x86-64 seccomp filter denies every candidate
-  socket/network syscall before dependency or build code runs. Dependency
+  socket syscall, all `io_uring` entry points, and every x32-tagged syscall
+  before dependency or build code runs. Dependency
   resolution is offline (`--no-index`, no Python downloads). Trusted outer
   steps use image-baked Gitea checkout and artifact clients, so their only
   network authority is same-origin Gitea access. It uploads exactly

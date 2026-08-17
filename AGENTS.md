@@ -201,7 +201,8 @@ inventory drift, networked/mutable Docker inputs, and any build path other than
   digest. Zero/empty identity and all-zero key/image/policy
   digests keep tag releases disabled. Candidate build and wheel preparation run
   behind the bounded token-free UID/Landlock boundary plus a fail-closed x86-64
-  seccomp deny for every socket syscall. The outer job revalidates both exact
+  seccomp deny for every socket syscall, every `io_uring` entry point, and every
+  x32-tagged syscall. The outer job revalidates both exact
   immutable wheelhouses and dry-resolves the hash-locked CPython 3.13 musl
   runtime cache. After cleanup, the root-only external supervisor signs the exact
   request/artifact inventory. The jobs emit only the package wheel, package

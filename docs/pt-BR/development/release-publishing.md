@@ -92,15 +92,17 @@ sequenceDiagram
   Antes de executar codigo candidato, exigem que ID,
   nome e unico label do runner correspondam ao registro de aceitacao fixado por
   checksum e a uma atestacao recente e assinada pelo supervisor externo,
-  vinculada a repositorio/run/job/fonte, labels registrados completos, imagem
-  runtime e politicas de rede/runtime. Validacao e build tem digests de escopo
+  vinculada a repositorio/primeira tentativa/run/job/fonte e ao caminho/digest
+  exato do workflow, labels registrados completos, imagem runtime e politicas
+  de rede/runtime. Validacao e build tem digests de escopo
   de registro independentes. ID/nome vazios e digests zerados de
   chave/imagem/politica desativam releases por tag ate a aceitacao ao vivo. Um
   job alvo descartavel valida o arquivo uv fixado, usa raizes novas por run
   para Python/cache e gera wheel e sdist no limite UID/Landlock sem token e sem
   acesso ao socket Docker. O job revalida os inventarios imutaveis exatos dos
   dois wheelhouses, executa uma resolucao seca com hashes para CPython 3.13 musl
-  e aplica seccomp x86-64 para negar todas as syscalls de rede do candidato.
+  e aplica seccomp x86-64 para negar todas as syscalls de socket, todos os
+  pontos de entrada `io_uring` e todas as syscalls marcadas como x32.
   Depois da limpeza dos processos candidatos, o
   supervisor externo root-only assina o inventario exato. O job envia exatamente
   seis arquivos de dados: wheel, sdist, `release-manifest.json`,

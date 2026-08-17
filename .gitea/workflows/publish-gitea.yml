@@ -42,7 +42,7 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027 \
+            29bb27a4855c1a249f1862b9b87961cb530e4d33de9f8d5bb16fe7399e9d6a72 \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
             b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e \
@@ -136,7 +136,7 @@ jobs:
           test -f .gitea/release-runner-acceptance.json
           test ! -L .gitea/release-runner-acceptance.json
           printf '%s  %s\n' \
-            9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027 \
+            29bb27a4855c1a249f1862b9b87961cb530e4d33de9f8d5bb16fe7399e9d6a72 \
             scripts/gitea_release_runner_gate.py | sha256sum --check --strict
           printf '%s  %s\n' \
             b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e \
@@ -193,7 +193,7 @@ jobs:
           test ! -e "$BUILD_ROOT"
           test ! -L "$BUILD_ROOT"
           printf '%s  %s\n' \
-            fae474ac9e18f762da67bdd22240f6630631d1730bd78d64fdcd8b6f17bc03a9 \
+            33e32529f2a33d90f4cec10b3be30f16b3bd3027fe4363b2a8e4ad380db55340 \
             scripts/gitea_release_build_boundary.py | sha256sum --check --strict
           python3 -I scripts/gitea_release_build_boundary.py \
             --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \

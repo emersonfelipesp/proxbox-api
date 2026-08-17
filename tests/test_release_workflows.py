@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import ctypes
 import errno
 import hashlib
 import importlib.util
@@ -431,10 +432,10 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert gate_sha256 in workflow
     assert "1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad" in workflow
     assert runner_gate_sha256 == (
-        "9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027"
+        "29bb27a4855c1a249f1862b9b87961cb530e4d33de9f8d5bb16fe7399e9d6a72"
     )
     assert build_boundary_sha256 == (
-        "fae474ac9e18f762da67bdd22240f6630631d1730bd78d64fdcd8b6f17bc03a9"
+        "33e32529f2a33d90f4cec10b3be30f16b3bd3027fe4363b2a8e4ad380db55340"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
     assert acceptance_sha256 == ("b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e")
@@ -547,6 +548,41 @@ def test_release_build_boundary_seccomp_denies_socket() -> None:
         except BaseException:
             os._exit(3)
         os._exit(4)
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFEXITED(status)
+    assert os.WEXITSTATUS(status) == 0
+
+
+@pytest.mark.parametrize(
+    ("syscall_number", "arguments"),
+    [
+        (425, (ctypes.c_uint(1), ctypes.c_void_p())),
+        (
+            0x40000000 | 41,
+            (
+                ctypes.c_int(socket.AF_INET),
+                ctypes.c_int(socket.SOCK_STREAM),
+                ctypes.c_int(0),
+            ),
+        ),
+    ],
+)
+def test_release_build_boundary_seccomp_denies_alternate_network_paths(
+    syscall_number: int,
+    arguments: tuple[object, ...],
+) -> None:
+    boundary = _load_build_boundary()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            boundary.deny_network_syscalls()
+            libc = ctypes.CDLL(None, use_errno=True)
+            ctypes.set_errno(0)
+            result = libc.syscall(ctypes.c_long(syscall_number), *arguments)
+            error_number = ctypes.get_errno()
+        except BaseException:
+            os._exit(3)
+        os._exit(0 if result == -1 and error_number == errno.EPERM else 4)
     _, status = os.waitpid(pid, 0)
     assert os.WIFEXITED(status)
     assert os.WEXITSTATUS(status) == 0
@@ -1579,6 +1615,7 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "network_attestation_sha256": acceptance["network_attestation_sha256"],
         "registered_labels": acceptance["registered_labels"],
         "repository": "emersonfelipesp/proxbox-api",
+        "run_attempt": 1,
         "run_id": 12,
         "runner_id": 41,
         "runner_name": "ci-release-proxbox-api-runner",
@@ -1588,6 +1625,8 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         "schema": 1,
         "source_sha": "a" * 40,
         "supervisor_policy_sha256": acceptance["supervisor_policy_sha256"],
+        "workflow_path": gate.WORKFLOW_RELATIVE_PATH,
+        "workflow_sha256": hashlib.sha256(gate.WORKFLOW_PATH.read_bytes()).hexdigest(),
     }
 
     def sign(value: dict[str, object]) -> None:
@@ -1645,6 +1684,9 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
         ("runtime", {"runtime_image_digest": "e" * 64}),
         ("network", {"network_attestation_sha256": "f" * 64}),
         ("repository-scope", {"runner_scope_sha256": "f" * 64}),
+        ("run-attempt", {"run_attempt": 2}),
+        ("workflow-path", {"workflow_path": ".gitea/workflows/other.yml"}),
+        ("workflow-digest", {"workflow_sha256": "f" * 64}),
         (
             "labels",
             {

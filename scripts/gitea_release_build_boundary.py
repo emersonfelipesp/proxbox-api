@@ -202,7 +202,7 @@ def _restrict_writes_to_build_root(root: Path) -> None:
 
 
 def deny_network_syscalls() -> None:
-    """Install an x86-64 seccomp filter that denies all socket operations."""
+    """Deny x86-64 socket, io_uring, and x32-tagged syscall paths."""
     if os.uname().machine != "x86_64":
         raise OSError(errno.ENOTSUP, "Seccomp syscall mapping requires x86-64")
 
@@ -222,6 +222,7 @@ def deny_network_syscalls() -> None:
 
     load_word_absolute = 0x20
     jump_equal_constant = 0x15
+    jump_bits_set = 0x45
     return_constant = 0x06
     audit_arch_x86_64 = 0xC000003E
     seccomp_return_kill_process = 0x80000000
@@ -246,12 +247,17 @@ def deny_network_syscalls() -> None:
         288,  # accept4
         299,  # recvmmsg
         307,  # sendmmsg
+        425,  # io_uring_setup
+        426,  # io_uring_enter
+        427,  # io_uring_register
     )
     instructions = [
         SockFilter(load_word_absolute, 0, 0, 4),
         SockFilter(jump_equal_constant, 1, 0, audit_arch_x86_64),
         SockFilter(return_constant, 0, 0, seccomp_return_kill_process),
         SockFilter(load_word_absolute, 0, 0, 0),
+        SockFilter(jump_bits_set, 0, 1, 0x40000000),  # __X32_SYSCALL_BIT
+        SockFilter(return_constant, 0, 0, seccomp_return_errno),
     ]
     for syscall_number in network_syscalls:
         instructions.extend(
@@ -368,13 +374,24 @@ test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
 test -z "${GITHUB_ENV:-}"
 test -z "${GITHUB_OUTPUT:-}"
 test ! -r "/proc/$BOUNDARY_PARENT_PID/environ"
-"$UV_PYTHON" -c 'import errno, socket
+"$UV_PYTHON" -c 'import ctypes, errno, socket
 try:
     socket.socket()
 except PermissionError as exc:
     assert exc.errno == errno.EPERM
 else:
-    raise SystemExit("candidate network syscall remained available")'
+    raise SystemExit("candidate network syscall remained available")
+libc = ctypes.CDLL(None, use_errno=True)
+for syscall_number, arguments in (
+    (425, (ctypes.c_uint(1), ctypes.c_void_p())),
+    (
+        0x40000000 | 41,
+        (ctypes.c_int(socket.AF_INET), ctypes.c_int(socket.SOCK_STREAM), ctypes.c_int(0)),
+    ),
+):
+    ctypes.set_errno(0)
+    result = libc.syscall(ctypes.c_long(syscall_number), *arguments)
+    assert result == -1 and ctypes.get_errno() == errno.EPERM'
 cd "$BUILD_ROOT/source"
 UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
   "$UV_BIN" sync --no-config --cache-dir "$BUILD_ROOT/uv-cache" \
