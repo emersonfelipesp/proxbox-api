@@ -378,7 +378,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert gate_sha256 == "20ec5d0b6dae3145e5fa9f895dd2e1d702a4c12a4c6ee658c031b57f231a6f8c"
     assert gate_sha256 in workflow
     assert runner_gate_sha256 == (
-        "e176cf3e5b4d356e48acde558b60d7a6843e75169068cd8e545ccca05d4b2122"
+        "ed41291e274ebde38e244b08cf6ac4086390a9a1631f551e6796f1b53a588242"
     )
     assert acceptance_sha256 == ("acadb6249a9516cb9d6219fd21e5ffb95864810069cc9664b3f1e6dfa6147107")
     assert workflow.count(runner_gate_sha256) == 2
@@ -1048,6 +1048,14 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
     acceptance["attestation_public_key_sha256"] = hashlib.sha256(
         public_key.read_bytes()
     ).hexdigest()
+    assert gate.TRUSTED_EXTERNAL_UID == 0
+    with pytest.raises(gate.RunnerGateError, match="metadata is unsafe"):
+        gate._read_external_file(
+            public_key,
+            "attestation public key",
+            16384,
+            trusted_uid=os.geteuid() + 1,
+        )
     acceptance_path = tmp_path / "acceptance.json"
     acceptance_path.write_bytes(gate._canonical_json(acceptance))
     job = {
@@ -1115,6 +1123,7 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
             attestation_root=attestation_root,
             public_key_path=public_key,
             now=1100,
+            trusted_external_uid=os.geteuid(),
         )["runner_id"]
         == 41
     )
@@ -1160,6 +1169,7 @@ def test_release_runner_gate_rejects_sentinel_and_wrong_runner(tmp_path: Path) -
                 attestation_root=attestation_root,
                 public_key_path=public_key,
                 now=1100,
+                trusted_external_uid=os.geteuid(),
             )
 
 
