@@ -98,7 +98,10 @@ sequenceDiagram
   chave/imagem/politica desativam releases por tag ate a aceitacao ao vivo. Um
   job alvo descartavel valida o arquivo uv fixado, usa raizes novas por run
   para Python/cache e gera wheel e sdist no limite UID/Landlock sem token e sem
-  acesso ao socket Docker. Depois da limpeza dos processos candidatos, o
+  acesso ao socket Docker. O job revalida os inventarios imutaveis exatos dos
+  dois wheelhouses, executa uma resolucao seca com hashes para CPython 3.13 musl
+  e aplica seccomp x86-64 para negar todas as syscalls de rede do candidato.
+  Depois da limpeza dos processos candidatos, o
   supervisor externo root-only assina o inventario exato. O job envia exatamente
   seis arquivos de dados: wheel, sdist, `release-manifest.json`,
   `release-request.json`, `runner-completion-attestation.json` e

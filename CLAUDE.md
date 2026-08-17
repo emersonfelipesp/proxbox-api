@@ -163,7 +163,9 @@ Open the nearest scoped guide for the code you are changing.
   independent pinned repository-registration scope digests. Zero/empty identity and all-zero
   key/image/policy digests keep tag releases disabled. Candidate build and
   offline-wheel preparation run behind the bounded token-free UID/Landlock
-  boundary without Docker-socket access. After cleanup, the root-only external
+  boundary plus a fail-closed x86-64 seccomp deny for every socket syscall.
+  The outer job revalidates both immutable wheelhouse manifests and dry-resolves
+  the hash-locked CPython 3.13 musl runtime cache. After cleanup, the root-only external
   supervisor signs the exact request and artifact inventory. The workflow
   uploads exactly the package wheel, package sdist, `release-manifest.json`,
   `release-request.json`, `runner-completion-attestation.json`, and

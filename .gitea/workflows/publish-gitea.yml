@@ -152,8 +152,12 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$(python3 -I -c 'import platform; print(platform.python_version())')" = 3.12.14
-          test "$(uv --version)" = "uv 0.12.5 (x86_64-unknown-linux-gnu)"
+          test ! -L /usr/local/bin/python3
+          test ! -L /usr/local/bin/uv
+          test "$(stat -c '%u:%g:%a:%h:%F' /usr/local/bin/python3)" = '0:0:755:1:regular file'
+          test "$(stat -c '%u:%g:%a:%h:%F' /usr/local/bin/uv)" = '0:0:755:1:regular file'
+          test "$(/usr/local/bin/python3 -I -c 'import platform; print(platform.python_version())')" = 3.12.14
+          test "$(/usr/local/bin/uv --version)" = "uv 0.12.5 (x86_64-unknown-linux-gnu)"
           printf '%s  %s\n' \
             aa4c3252dd9aa62dae1f43178e0063c7f43706418d3cdfe0cee28dbb806635fd \
             uv.lock | sha256sum --check --strict
@@ -163,6 +167,12 @@ jobs:
           test -d /opt/nmc-release/proxbox-api/runtime-wheels
           test ! -L /opt/nmc-release/proxbox-api/publish-wheels
           test ! -L /opt/nmc-release/proxbox-api/runtime-wheels
+          /usr/local/bin/nmc-verify-release-wheelhouse \
+            --wheelhouse /opt/nmc-release/proxbox-api/publish-wheels \
+            --manifest /opt/nmc-release/proxbox-api/publish-wheels.sha256
+          /usr/local/bin/nmc-verify-release-wheelhouse \
+            --wheelhouse /opt/nmc-release/proxbox-api/runtime-wheels \
+            --manifest /opt/nmc-release/proxbox-api/runtime-wheels.sha256
           printf '%s\n' \
             'UV_BIN=/usr/local/bin/uv' \
             'UV_PYTHON=/usr/local/bin/python3' \
@@ -183,7 +193,7 @@ jobs:
           test ! -e "$BUILD_ROOT"
           test ! -L "$BUILD_ROOT"
           printf '%s  %s\n' \
-            dd9cd17aad595ee976355bae369bc19dcdacc894accb9a02579db07b1f8e7a41 \
+            fae474ac9e18f762da67bdd22240f6630631d1730bd78d64fdcd8b6f17bc03a9 \
             scripts/gitea_release_build_boundary.py | sha256sum --check --strict
           python3 -I scripts/gitea_release_build_boundary.py \
             --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \

@@ -201,8 +201,80 @@ def _restrict_writes_to_build_root(root: Path) -> None:
         os.close(ruleset_fd)
 
 
+def deny_network_syscalls() -> None:
+    """Install an x86-64 seccomp filter that denies all socket operations."""
+    if os.uname().machine != "x86_64":
+        raise OSError(errno.ENOTSUP, "Seccomp syscall mapping requires x86-64")
+
+    class SockFilter(ctypes.Structure):
+        _fields_ = [
+            ("code", ctypes.c_ushort),
+            ("jt", ctypes.c_ubyte),
+            ("jf", ctypes.c_ubyte),
+            ("k", ctypes.c_uint32),
+        ]
+
+    class SockFprog(ctypes.Structure):
+        _fields_ = [
+            ("length", ctypes.c_ushort),
+            ("filters", ctypes.POINTER(SockFilter)),
+        ]
+
+    load_word_absolute = 0x20
+    jump_equal_constant = 0x15
+    return_constant = 0x06
+    audit_arch_x86_64 = 0xC000003E
+    seccomp_return_kill_process = 0x80000000
+    seccomp_return_errno = 0x00050000 | errno.EPERM
+    seccomp_return_allow = 0x7FFF0000
+    network_syscalls = (
+        41,  # socket
+        42,  # connect
+        43,  # accept
+        44,  # sendto
+        45,  # recvfrom
+        46,  # sendmsg
+        47,  # recvmsg
+        48,  # shutdown
+        49,  # bind
+        50,  # listen
+        51,  # getsockname
+        52,  # getpeername
+        53,  # socketpair
+        54,  # setsockopt
+        55,  # getsockopt
+        288,  # accept4
+        299,  # recvmmsg
+        307,  # sendmmsg
+    )
+    instructions = [
+        SockFilter(load_word_absolute, 0, 0, 4),
+        SockFilter(jump_equal_constant, 1, 0, audit_arch_x86_64),
+        SockFilter(return_constant, 0, 0, seccomp_return_kill_process),
+        SockFilter(load_word_absolute, 0, 0, 0),
+    ]
+    for syscall_number in network_syscalls:
+        instructions.extend(
+            (
+                SockFilter(jump_equal_constant, 0, 1, syscall_number),
+                SockFilter(return_constant, 0, 0, seccomp_return_errno),
+            )
+        )
+    instructions.append(SockFilter(return_constant, 0, 0, seccomp_return_allow))
+    filters = (SockFilter * len(instructions))(*instructions)
+    program = SockFprog(len(instructions), filters)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+    if libc.prctl(22, 2, ctypes.byref(program), 0, 0) != 0:  # SECCOMP_MODE_FILTER
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+
+
 def _drop_privileges(build_root: Path) -> None:
     _restrict_writes_to_build_root(build_root)
+    deny_network_syscalls()
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     resource.setrlimit(resource.RLIMIT_AS, (CGROUP_MEMORY_MAX,) * 2)
     resource.setrlimit(resource.RLIMIT_CPU, (900, 900))
@@ -296,6 +368,13 @@ test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
 test -z "${GITHUB_ENV:-}"
 test -z "${GITHUB_OUTPUT:-}"
 test ! -r "/proc/$BOUNDARY_PARENT_PID/environ"
+"$UV_PYTHON" -c 'import errno, socket
+try:
+    socket.socket()
+except PermissionError as exc:
+    assert exc.errno == errno.EPERM
+else:
+    raise SystemExit("candidate network syscall remained available")'
 cd "$BUILD_ROOT/source"
 UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
   "$UV_BIN" sync --no-config --cache-dir "$BUILD_ROOT/uv-cache" \
@@ -306,6 +385,12 @@ UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
   --no-emit-project --format requirements-txt \
   --python "$BUILD_ROOT/venv/bin/python" \
   --output-file "$BUILD_ROOT/runtime-requirements.txt"
+"$UV_BIN" pip install --no-config --cache-dir "$BUILD_ROOT/runtime-preflight-cache" \
+  --offline --no-index --find-links "$NMC_RUNTIME_WHEELHOUSE" \
+  --no-python-downloads --python-version 3.13 \
+  --python-platform x86_64-unknown-linux-musl --only-binary=:all: \
+  --require-hashes --dry-run --target "$BUILD_ROOT/runtime-preflight" \
+  --requirements "$BUILD_ROOT/runtime-requirements.txt"
 test ! -e docker/build-cache
 test ! -e docker/offline-build-inputs.json
 mkdir -m 0700 -p docker/build-cache

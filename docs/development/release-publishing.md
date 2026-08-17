@@ -101,7 +101,11 @@ sequenceDiagram
   token-free UID/Landlock boundary with the runner image's exact Python 3.12.14
   and uv 0.12.5 after verifying the baked interpreter/tool versions, the
   policy-pinned `uv.lock` digest, and build-lock checksum manifests for the
-  read-only publish and CPython 3.13 musllinux runtime wheelhouses. Dependency
+  read-only publish and CPython 3.13 musllinux runtime wheelhouses. The job
+  revalidates both exact immutable inventories in-container and performs a
+  hash-required CPython 3.13 musl dry resolution against the runtime cache.
+  Landlock bounds writes and an x86-64 seccomp filter denies every candidate
+  socket/network syscall before dependency or build code runs. Dependency
   resolution is offline (`--no-index`, no Python downloads). Trusted outer
   steps use image-baked Gitea checkout and artifact clients, so their only
   network authority is same-origin Gitea access. It uploads exactly

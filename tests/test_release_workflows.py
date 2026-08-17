@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import errno
 import hashlib
 import importlib.util
 import io
@@ -15,6 +16,7 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import tarfile
 import tomllib
@@ -432,7 +434,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
         "9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027"
     )
     assert build_boundary_sha256 == (
-        "dd9cd17aad595ee976355bae369bc19dcdacc894accb9a02579db07b1f8e7a41"
+        "fae474ac9e18f762da67bdd22240f6630631d1730bd78d64fdcd8b6f17bc03a9"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
     assert acceptance_sha256 == ("b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e")
@@ -503,14 +505,16 @@ def test_release_build_boundary_is_token_free_bounded_and_dockerless():
     assert "docker run" not in command
     assert "ensurepip" not in command
     assert "pip download" not in command
-    assert command.count("--no-config") == 2
+    assert command.count("--no-config") == 3
     assert "--managed-python" not in command
-    assert command.count("--no-python-downloads") == 1
+    assert command.count("--no-python-downloads") == 2
     assert "--offline --no-index --find-links" in command
     assert '"$BUILD_ROOT/venv/bin/python" -m build --no-isolation' in command
     assert "scripts/prepare_offline_release.py" in command
-    assert "--require-hashes" not in command
-    assert "--only-binary=:all:" not in command
+    assert "--require-hashes" in command
+    assert "--only-binary=:all:" in command
+    assert "--python-platform x86_64-unknown-linux-musl" in command
+    assert "--dry-run" in command
     assert '--python "$UV_PYTHON"' in command
     assert '--python "$BUILD_ROOT/venv/bin/python"' in command
     assert 'cp "$NMC_RUNTIME_WHEELHOUSE"/*.whl docker/build-cache/' in command
@@ -529,6 +533,23 @@ def test_release_build_boundary_is_token_free_bounded_and_dockerless():
     )
     with pytest.raises(ValueError, match="Malformed"):
         boundary.process_cpu_ticks("malformed")
+
+
+def test_release_build_boundary_seccomp_denies_socket() -> None:
+    boundary = _load_build_boundary()
+    pid = os.fork()
+    if pid == 0:
+        try:
+            boundary.deny_network_syscalls()
+            socket.socket()
+        except PermissionError as exc:
+            os._exit(0 if exc.errno == errno.EPERM else 2)
+        except BaseException:
+            os._exit(3)
+        os._exit(4)
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFEXITED(status)
+    assert os.WEXITSTATUS(status) == 0
 
 
 def test_release_handoff_copies_only_exact_regular_bytes(
