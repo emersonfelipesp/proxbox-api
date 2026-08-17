@@ -145,8 +145,11 @@ sequenceDiagram
   inventory, permits only the two literal pinned base images and declared-stage
   `COPY --from` sources, and
   builds that extracted context with the exact bases preloaded and Docker build
-  networking disabled. The Gitea tag gate queries GitHub Actions for this exact
-  successful first-attempt job on the same canonical `develop` SHA; a missing,
+  networking disabled. Every external action in that offline job is pinned to
+  an immutable commit. The Gitea tag gate fetches the GitHub workflow at the
+  canonical source SHA, verifies its Git object ID and reviewed SHA-256, and
+  then queries GitHub Actions for this exact successful first-attempt job on
+  that same canonical `develop` SHA; a missing,
   failed, retried, differently scoped, or different-SHA job blocks the handoff.
 - Pre-publish and post-publish E2E jobs allow NetBox up to 20 minutes to finish
   migrations/search indexing and require `/api/status/` readiness before

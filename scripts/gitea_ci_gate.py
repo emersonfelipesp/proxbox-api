@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import json
 import os
 import re
@@ -18,6 +21,7 @@ GITHUB_API_ORIGIN = "https://api.github.com"
 GITHUB_HTML_ORIGIN = "https://github.com"
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 FIRST_JOB_ATTEMPT = 1
 FIRST_RUN_ATTEMPT_ENCODINGS = frozenset({0, 1})
 
@@ -85,9 +89,61 @@ def _request_github_json(path: str) -> Any:
         raise CIGateError("GitHub CI evidence is not valid JSON") from exc
 
 
+def _validate_github_workflow(*, source_sha: str, expected_sha256: str) -> None:
+    if SHA256_RE.fullmatch(expected_sha256) is None:
+        raise CIGateError("Reviewed GitHub workflow digest is invalid")
+    query = urllib.parse.urlencode({"ref": source_sha})
+    path = f"/repos/emersonfelipesp/proxbox-api/contents/.github/workflows/ci.yml?{query}"
+    payload = _request_github_json(path)
+    content = payload.get("content") if isinstance(payload, dict) else None
+    size = payload.get("size") if isinstance(payload, dict) else None
+    blob_sha = payload.get("sha") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("type") != "file"
+        or payload.get("name") != "ci.yml"
+        or payload.get("path") != ".github/workflows/ci.yml"
+        or payload.get("encoding") != "base64"
+        or not isinstance(content, str)
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or size <= 0
+        or size > MAX_RESPONSE_BYTES
+        or not isinstance(blob_sha, str)
+        or SHA_RE.fullmatch(blob_sha) is None
+        or payload.get("html_url")
+        != (
+            "https://github.com/emersonfelipesp/proxbox-api/blob/"
+            f"{source_sha}/.github/workflows/ci.yml"
+        )
+    ):
+        raise CIGateError("GitHub workflow content identity is invalid")
+    encoded = "".join(content.splitlines())
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise CIGateError("GitHub workflow content encoding is invalid") from exc
+    git_object = f"blob {len(raw)}\0".encode() + raw
+    observed_blob = hashlib.sha1(git_object, usedforsecurity=False).hexdigest()
+    if (
+        len(raw) != size
+        or observed_blob != blob_sha
+        or hashlib.sha256(raw).hexdigest() != expected_sha256
+    ):
+        raise CIGateError("GitHub workflow bytes differ from reviewed policy")
+
+
 def _validate_github_offline_image(
-    *, source_sha: str, trusted_actor: str, required_job: str
+    *,
+    source_sha: str,
+    trusted_actor: str,
+    required_job: str,
+    workflow_sha256: str,
 ) -> dict[str, int]:
+    _validate_github_workflow(
+        source_sha=source_sha,
+        expected_sha256=workflow_sha256,
+    )
     query = urllib.parse.urlencode(
         {
             "branch": "develop",
@@ -358,6 +414,7 @@ def validate_ci_gate(
     trusted_actor: str,
     token: str,
     github_required_job: str | None = None,
+    github_workflow_sha256: str | None = None,
 ) -> dict[str, dict[str, int]]:
     """Require the latest authenticated Actions run and its trusted CI jobs."""
     if SHA_RE.fullmatch(source_sha) is None:
@@ -405,10 +462,13 @@ def validate_ci_gate(
     if github_required_job is not None:
         if github_required_job != "Build extracted offline release sdist":
             raise CIGateError("Required GitHub Actions job is not allowlisted")
+        if github_workflow_sha256 is None:
+            raise CIGateError("Reviewed GitHub workflow digest is required")
         evidence[f"GitHub CI / {github_required_job} (push)"] = _validate_github_offline_image(
             source_sha=source_sha,
             trusted_actor=trusted_actor,
             required_job=github_required_job,
+            workflow_sha256=github_workflow_sha256,
         )
     return evidence
 
@@ -421,6 +481,7 @@ def main() -> None:
     parser.add_argument("--required-context", action="append", required=True)
     parser.add_argument("--trusted-actor", required=True)
     parser.add_argument("--github-required-job", required=True)
+    parser.add_argument("--github-workflow-sha256", required=True)
     args = parser.parse_args()
     evidence = validate_ci_gate(
         owner=args.owner,
@@ -430,6 +491,7 @@ def main() -> None:
         trusted_actor=args.trusted_actor,
         token=os.getenv("GITEA_API_TOKEN", ""),
         github_required_job=args.github_required_job,
+        github_workflow_sha256=args.github_workflow_sha256,
     )
     print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
 

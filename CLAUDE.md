@@ -148,7 +148,9 @@ Open the nearest scoped guide for the code you are changing.
   workflow committed to `main`. Handles `push: tags:` only, requires the tag to
   equal current `develop`, ignores writer-controlled commit statuses, selects
   the newest authenticated `ci.yml` Actions run and required jobs for that SHA,
-  pins the reviewed gate-helper bytes before isolated execution, and schedules
+  fetches that exact source-SHA GitHub workflow through the Contents API and
+  verifies both its Git object ID and reviewed SHA-256, pins the reviewed
+  gate-helper bytes before isolated execution, and schedules
   both release jobs only on `ci-release-proxbox-api`. Before candidate
   execution, each job must match its live runner ID/name/sole label to the
   checksum-pinned acceptance record plus a fresh signed external-supervisor

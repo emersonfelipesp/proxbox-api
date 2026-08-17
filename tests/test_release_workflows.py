@@ -7,6 +7,7 @@ TestPyPI -> PyPI release process without running a publishing workflow.
 from __future__ import annotations
 
 import ast
+import base64
 import hashlib
 import importlib.util
 import io
@@ -418,8 +419,9 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 1
     assert workflow.count("sha256sum --check --strict") == 8
     assert "python3 -I scripts/gitea_ci_gate.py" in workflow
-    assert gate_sha256 == "f01cd075fc27beb6cab53ba26c559aa4ba8ac0d3b1afa8ed8af066151cfe19b9"
+    assert gate_sha256 == "b49a374d2089fa000326a057a6f8f3dc6b3783dfd4fe6131a5ec6d56122d8363"
     assert gate_sha256 in workflow
+    assert "1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad" in workflow
     assert runner_gate_sha256 == (
         "9e7ef7d75c3c86b6821afa3932faa3e82ece2521d7af1651a5af4e7c9d94f68b"
     )
@@ -615,9 +617,14 @@ def test_release_offline_sdist_job_builds_the_extracted_context_without_network(
     parsed = yaml.safe_load(workflow)
     job = parsed["jobs"]["release-offline-image"]
     source = "\n".join(str(step.get("run", "")) for step in job["steps"])
+    actions = [step["uses"] for step in job["steps"] if "uses" in step]
 
     assert job["name"] == "Build extracted offline release sdist"
     assert job["runs-on"] == "ubuntu-latest"
+    assert actions == [
+        "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+        "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78",
+    ]
     assert "scripts/prepare_offline_release.py" in source
     assert "scripts/verify_offline_release_sdist.py" in source
     assert "python -m build --no-isolation --sdist" in source
@@ -1335,6 +1342,15 @@ def test_ci_gate_requires_exact_github_offline_image_job(
         f"branch=develop&event=push&head_sha={sha}&page=1&per_page=100"
     )
     github_jobs_path = "/repos/emersonfelipesp/proxbox-api/actions/runs/56/jobs?per_page=100&page=1"
+    workflow_raw = b"name: CI\n"
+    workflow_sha256 = hashlib.sha256(workflow_raw).hexdigest()
+    workflow_blob_sha = hashlib.sha1(
+        f"blob {len(workflow_raw)}\0".encode() + workflow_raw,
+        usedforsecurity=False,
+    ).hexdigest()
+    github_workflow_path = (
+        f"/repos/emersonfelipesp/proxbox-api/contents/.github/workflows/ci.yml?ref={sha}"
+    )
     github_run = {
         "actor": {"login": "emersonfelipesp"},
         "conclusion": "success",
@@ -1365,6 +1381,19 @@ def test_ci_gate_requires_exact_github_offline_image_job(
         gitea_jobs_path: {"jobs": [gitea_job], "total_count": 1},
     }
     github_responses = {
+        github_workflow_path: {
+            "content": base64.b64encode(workflow_raw).decode(),
+            "encoding": "base64",
+            "html_url": (
+                "https://github.com/emersonfelipesp/proxbox-api/blob/"
+                f"{sha}/.github/workflows/ci.yml"
+            ),
+            "name": "ci.yml",
+            "path": ".github/workflows/ci.yml",
+            "sha": workflow_blob_sha,
+            "size": len(workflow_raw),
+            "type": "file",
+        },
         github_runs_path: {"workflow_runs": [github_run], "total_count": 1},
         github_jobs_path: {"jobs": [github_job], "total_count": 1},
     }
@@ -1379,6 +1408,7 @@ def test_ci_gate_requires_exact_github_offline_image_job(
         trusted_actor="emersonfelipesp",
         token="test-token",
         github_required_job="Build extracted offline release sdist",
+        github_workflow_sha256=workflow_sha256,
     )
     assert evidence["GitHub CI / Build extracted offline release sdist (push)"] == {
         "job_id": 78,
@@ -1395,6 +1425,26 @@ def test_ci_gate_requires_exact_github_offline_image_job(
             trusted_actor="emersonfelipesp",
             token="test-token",
             github_required_job="Build extracted offline release sdist",
+            github_workflow_sha256=workflow_sha256,
+        )
+    github_job["runner_group_name"] = "GitHub Actions"
+    drifted = workflow_raw + b"# drift\n"
+    github_responses[github_workflow_path]["content"] = base64.b64encode(drifted).decode()
+    github_responses[github_workflow_path]["size"] = len(drifted)
+    github_responses[github_workflow_path]["sha"] = hashlib.sha1(
+        f"blob {len(drifted)}\0".encode() + drifted,
+        usedforsecurity=False,
+    ).hexdigest()
+    with pytest.raises(gate.CIGateError, match="differ from reviewed policy"):
+        gate.validate_ci_gate(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            source_sha=sha,
+            required_contexts=[context],
+            trusted_actor="emersonfelipesp",
+            token="test-token",
+            github_required_job="Build extracted offline release sdist",
+            github_workflow_sha256=workflow_sha256,
         )
 
 

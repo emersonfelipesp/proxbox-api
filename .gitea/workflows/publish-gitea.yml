@@ -88,12 +88,13 @@ jobs:
           test -f scripts/gitea_ci_gate.py
           test ! -L scripts/gitea_ci_gate.py
           printf '%s  %s\n' \
-            f01cd075fc27beb6cab53ba26c559aa4ba8ac0d3b1afa8ed8af066151cfe19b9 \
+            b49a374d2089fa000326a057a6f8f3dc6b3783dfd4fe6131a5ec6d56122d8363 \
             scripts/gitea_ci_gate.py | sha256sum --check --strict
           python3 -I scripts/gitea_ci_gate.py \
             --owner emersonfelipesp --repository proxbox-api \
             --source-sha "$SOURCE_SHA" --trusted-actor emersonfelipesp \
             --github-required-job "Build extracted offline release sdist" \
+            --github-workflow-sha256 1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad \
             --required-context "CI / Lint, smoke, and core coverage (push)"
           printf 'tag=%s\nversion=%s\nsource_sha=%s\n' \
             "$TAG" "$VERSION" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
