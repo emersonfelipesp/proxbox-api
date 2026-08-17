@@ -22,11 +22,15 @@ jobs:
       tag: ${{ steps.policy.outputs.tag }}
       version: ${{ steps.policy.outputs.version }}
     steps:
-      - name: Checkout release source without persisted credentials
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      - name: Checkout exact release source with the image-baked Gitea client
+        env:
+          GITEA_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
+          /usr/local/bin/nmc-gitea-checkout \
+            --repository "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" \
+            --sha "$GITHUB_SHA" --destination .
 
       - name: Prove exact accepted release runner before source validation
         env:
@@ -104,11 +108,22 @@ jobs:
     needs: validate-source
     runs-on: ci-release-proxbox-api
     steps:
-      - name: Checkout validated source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.validate-source.outputs.source_sha }}
-          persist-credentials: false
+      - name: Fetch validated public source with image-baked Git
+        env:
+          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test -z "${GITHUB_TOKEN:-}"
+          test -z "${GITEA_TOKEN:-}"
+          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
+          git init --quiet
+          git remote add origin https://git.nmulti.cloud/emersonfelipesp/proxbox-api.git
+          git fetch --quiet --force --no-tags --depth=1 origin "$SOURCE_SHA"
+          git -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Prove exact accepted release runner before candidate execution
         env:
@@ -133,33 +148,27 @@ jobs:
             --job-name "Build exact credential-free release-control request" \
             --source-sha "$SOURCE_SHA"
 
-      - name: Install checksum-verified uv and managed Python
-        env:
-          BOOTSTRAP_CACHE_ROOT: ${{ runner.temp }}/proxbox-api-uv-cache-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_PYTHON_ROOT: ${{ runner.temp }}/proxbox-api-python-${{ github.run_id }}-${{ github.run_attempt }}
-          BOOTSTRAP_UV_ROOT: ${{ runner.temp }}/proxbox-api-uv-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Bind the image-baked offline release toolchain
         run: |
           set -euo pipefail
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test ! -e "$BOOTSTRAP_UV_ROOT"
-          test ! -e "$BOOTSTRAP_PYTHON_ROOT"
-          test ! -e "$BOOTSTRAP_CACHE_ROOT"
-          mkdir -m 0700 "$BOOTSTRAP_UV_ROOT" "$BOOTSTRAP_PYTHON_ROOT" "$BOOTSTRAP_CACHE_ROOT"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
-            https://github.com/astral-sh/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz
+          test "$(python3 -I -c 'import platform; print(platform.python_version())')" = 3.12.14
+          test "$(uv --version)" = "uv 0.12.5 (x86_64-unknown-linux-gnu)"
           printf '%s  %s\n' \
-            e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224 \
-            "$BOOTSTRAP_UV_ROOT/uv.tar.gz" | sha256sum --check --strict
-          tar --extract --gzip --file "$BOOTSTRAP_UV_ROOT/uv.tar.gz" \
-            --directory "$BOOTSTRAP_UV_ROOT" --strip-components=1 \
-            uv-x86_64-unknown-linux-gnu/uv
-          chmod 0555 "$BOOTSTRAP_UV_ROOT/uv"
-          printf 'UV_BIN=%s\nUV_PYTHON_INSTALL_DIR=%s\n' \
-            "$BOOTSTRAP_UV_ROOT/uv" "$BOOTSTRAP_PYTHON_ROOT" >> "$GITHUB_ENV"
-          "$BOOTSTRAP_UV_ROOT/uv" python install \
-            --no-config --cache-dir "$BOOTSTRAP_CACHE_ROOT" \
-            --install-dir "$BOOTSTRAP_PYTHON_ROOT" --managed-python --no-bin 3.13.14
+            aa4c3252dd9aa62dae1f43178e0063c7f43706418d3cdfe0cee28dbb806635fd \
+            uv.lock | sha256sum --check --strict
+          test "$(cat /opt/nmc-release/proxbox-api/uv.lock.sha256)" = \
+            aa4c3252dd9aa62dae1f43178e0063c7f43706418d3cdfe0cee28dbb806635fd
+          test -d /opt/nmc-release/proxbox-api/publish-wheels
+          test -d /opt/nmc-release/proxbox-api/runtime-wheels
+          test ! -L /opt/nmc-release/proxbox-api/publish-wheels
+          test ! -L /opt/nmc-release/proxbox-api/runtime-wheels
+          printf '%s\n' \
+            'UV_BIN=/usr/local/bin/uv' \
+            'UV_PYTHON=/usr/local/bin/python3' \
+            'NMC_PUBLISH_WHEELHOUSE=/opt/nmc-release/proxbox-api/publish-wheels' \
+            'NMC_RUNTIME_WHEELHOUSE=/opt/nmc-release/proxbox-api/runtime-wheels' \
+            >> "$GITHUB_ENV"
 
       - name: Build artifacts across a token-free UID boundary
         env:
@@ -174,11 +183,14 @@ jobs:
           test ! -e "$BUILD_ROOT"
           test ! -L "$BUILD_ROOT"
           printf '%s  %s\n' \
-            68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad \
+            dd9cd17aad595ee976355bae369bc19dcdacc894accb9a02579db07b1f8e7a41 \
             scripts/gitea_release_build_boundary.py | sha256sum --check --strict
           python3 -I scripts/gitea_release_build_boundary.py \
             --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \
-            --python-root "$UV_PYTHON_INSTALL_DIR" --source-sha "$SOURCE_SHA" \
+            --python-bin "$UV_PYTHON" \
+            --publish-wheelhouse "$NMC_PUBLISH_WHEELHOUSE" \
+            --runtime-wheelhouse "$NMC_RUNTIME_WHEELHOUSE" \
+            --source-sha "$SOURCE_SHA" \
             --tag "$TAG" --version "$VERSION" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
       - name: Bind exact artifacts into the control request
@@ -299,16 +311,9 @@ jobs:
           test "$(find release-transfer -mindepth 1 -maxdepth 1 -type l | wc -l)" -eq 0
 
       - name: Upload exact data-only control request
-        uses: actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de # v3.2.2-node20
-        with:
-          name: release-control-request
-          path: |
-            release-transfer/*.whl
-            release-transfer/*.tar.gz
-            release-transfer/release-manifest.json
-            release-transfer/release-request.json
-            release-transfer/runner-completion-attestation.json
-            release-transfer/runner-completion-attestation.sig
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
+        run: |
+          set -euo pipefail
+          test -z "${GITHUB_TOKEN:-}"
+          test -z "${GITEA_TOKEN:-}"
+          /usr/local/bin/nmc-upload-gitea-artifact \
+            --root release-transfer --run-id "$GITHUB_RUN_ID"

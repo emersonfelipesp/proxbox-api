@@ -23,8 +23,12 @@ proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
   sdist, `release-manifest.json`, `release-request.json`,
   `runner-completion-attestation.json`, and
   `runner-completion-attestation.sig`.
-- Uses checksum-pinned uv in fresh per-run tool and managed-Python roots. The
-  target repository cannot publish; a separately administered control plane
+- Uses the runner image's exact Python 3.12.14 and uv 0.12.5, a policy-pinned
+  `uv.lock` digest, and build-lock checksum manifests for read-only publish and
+  CPython 3.13 musllinux runtime wheelhouses. Dependency resolution is offline
+  (`--no-index`, no Python downloads), and image-baked Gitea checkout/artifact
+  clients limit trusted outer-step networking to same-origin Gitea. The target
+  repository cannot publish; a separately administered control plane
   verifies the policy-pinned workflow, exact first-attempt run, request,
   manifest, and artifact bytes before its isolated publisher invokes fixed,
   digest-locked publication tooling.

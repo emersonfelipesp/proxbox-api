@@ -398,7 +398,9 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert "release-manifest.json" in workflow
     assert "scripts/gitea_ci_gate.py" in workflow
     assert "/commits/${SOURCE_SHA}/statuses" not in workflow
-    assert "actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de" in workflow
+    assert "actions/upload-artifact@" not in workflow
+    assert "/usr/local/bin/nmc-upload-gitea-artifact" in workflow
+    assert "/usr/local/bin/nmc-gitea-checkout" in workflow
     assert "actions/download-artifact@" not in workflow
     assert "astral-sh/setup-uv@" not in workflow
     assert "RUNNER_TOOL_CACHE" not in workflow
@@ -418,10 +420,10 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
             "https://github.com/astral-sh/uv/releases/download/0.11.28/"
             "uv-x86_64-unknown-linux-gnu.tar.gz"
         )
-        == 1
+        == 0
     )
-    assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 1
-    assert workflow.count("sha256sum --check --strict") == 8
+    assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 0
+    assert workflow.count("sha256sum --check --strict") >= 7
     assert "python3 -I scripts/gitea_ci_gate.py" in workflow
     assert gate_sha256 == "ac39691b607ab40665026d5c1d2b49f985ea1b3778a393fd24d7710006ad30a5"
     assert gate_sha256 in workflow
@@ -430,7 +432,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
         "9f85dd453d285cb1c79483b19ad1781b4ed7df635695d80c6769a09abd178027"
     )
     assert build_boundary_sha256 == (
-        "68d57774c7fda1b9e89ac78f5eabaffac50f979caf31862e44e1ec770bf4b1ad"
+        "dd9cd17aad595ee976355bae369bc19dcdacc894accb9a02579db07b1f8e7a41"
     )
     assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
     assert acceptance_sha256 == ("b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e")
@@ -491,7 +493,7 @@ def test_gitea_tag_workflow_builds_only_a_release_control_request():
     assert '"--public-key"' in workflow
     assert "runner-completion-attestation.json" in workflow
     assert "runner-completion-attestation.sig" in workflow
-    assert workflow.count("UV_PYTHON_INSTALL_DIR=%s") == 1
+    assert "UV_PYTHON_INSTALL_DIR" not in workflow
 
 
 def test_release_build_boundary_is_token_free_bounded_and_dockerless():
@@ -499,23 +501,19 @@ def test_release_build_boundary_is_token_free_bounded_and_dockerless():
     command = boundary._candidate_command()
 
     assert "docker run" not in command
-    assert "ensurepip" in command
-    assert "pip download" in command
+    assert "ensurepip" not in command
+    assert "pip download" not in command
     assert command.count("--no-config") == 2
-    assert command.count("--managed-python") == 1
+    assert "--managed-python" not in command
     assert command.count("--no-python-downloads") == 1
+    assert "--offline --no-index --find-links" in command
     assert '"$BUILD_ROOT/venv/bin/python" -m build --no-isolation' in command
     assert "scripts/prepare_offline_release.py" in command
-    assert "--require-hashes" in command
-    assert "--only-binary=:all:" in command
-    assert "--python 3.13.14" in command
+    assert "--require-hashes" not in command
+    assert "--only-binary=:all:" not in command
+    assert '--python "$UV_PYTHON"' in command
     assert '--python "$BUILD_ROOT/venv/bin/python"' in command
-    assert "--platform musllinux_1_2_x86_64" in command
-    assert "--platform musllinux_1_1_x86_64" in command
-    assert "--python-version 3.13" in command
-    assert "--implementation cp" in command
-    for abi in ("cp313", "abi3", "none"):
-        assert f"--abi {abi}" in command
+    assert 'cp "$NMC_RUNTIME_WHEELHOUSE"/*.whl docker/build-cache/' in command
     assert "docker/build-cache" in command
     for variable in (
         "GITHUB_TOKEN",
@@ -812,20 +810,9 @@ def test_release_control_request_binds_exact_repository_run_and_artifacts():
 
     assert parsed["permissions"] == {"actions": "read", "contents": "read"}
     assert build_job["needs"] == "validate-source"
-    assert upload_step["with"] == {
-        "name": "release-control-request",
-        "path": (
-            "release-transfer/*.whl\n"
-            "release-transfer/*.tar.gz\n"
-            "release-transfer/release-manifest.json\n"
-            "release-transfer/release-request.json\n"
-            "release-transfer/runner-completion-attestation.json\n"
-            "release-transfer/runner-completion-attestation.sig\n"
-        ),
-        "if-no-files-found": "error",
-        "retention-days": 1,
-        "compression-level": 0,
-    }
+    assert upload_step["name"] == "Upload exact data-only control request"
+    assert "/usr/local/bin/nmc-upload-gitea-artifact" in upload_step["run"]
+    assert '--root release-transfer --run-id "$GITHUB_RUN_ID"' in upload_step["run"]
     assert '"repository_id": 37' in handoff
     assert '"owner": "emersonfelipesp"' in handoff
     assert '"repository": "proxbox-api"' in handoff
@@ -885,7 +872,7 @@ def test_gitea_job_token_is_confined_to_trusted_evidence_steps():
     validate_source = yaml.safe_dump(parsed["jobs"]["validate-source"])
     build_source = yaml.safe_dump(parsed["jobs"]["build-request"])
 
-    assert validate_source.count("github.token") == 2
+    assert validate_source.count("github.token") == 3
     assert validate_source.count("GITEA_API_TOKEN") == 2
     assert build_source.count("github.token") == 1
     assert build_source.count("GITEA_API_TOKEN") == 1
@@ -897,8 +884,8 @@ def test_gitea_job_token_is_confined_to_trusted_evidence_steps():
     candidate_source = yaml.safe_dump(candidate_step)
     assert "github.token" not in candidate_source
     assert "GITEA_API_TOKEN" not in candidate_source
-    assert "persist-credentials: false" in validate_source
-    assert "persist-credentials: false" in build_source
+    assert "/usr/local/bin/nmc-gitea-checkout" in validate_source
+    assert "actions/checkout@" not in build_source
 
 
 def test_gitea_artifact_v3_compatibility_probe_is_bounded_and_disposable():

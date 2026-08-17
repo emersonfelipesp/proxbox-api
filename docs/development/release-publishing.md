@@ -98,8 +98,13 @@ sequenceDiagram
   digests intentionally disable tag releases until live acceptance. Missing,
   stale, invalidly signed, or mismatched evidence fails before candidate code. A
   disposable target job builds one wheel and one sdist behind the bounded
-  token-free UID/Landlock boundary after verifying the pinned uv archive and
-  selecting fresh per-run managed-Python and cache roots. It uploads exactly
+  token-free UID/Landlock boundary with the runner image's exact Python 3.12.14
+  and uv 0.12.5 after verifying the baked interpreter/tool versions, the
+  policy-pinned `uv.lock` digest, and build-lock checksum manifests for the
+  read-only publish and CPython 3.13 musllinux runtime wheelhouses. Dependency
+  resolution is offline (`--no-index`, no Python downloads). Trusted outer
+  steps use image-baked Gitea checkout and artifact clients, so their only
+  network authority is same-origin Gitea access. It uploads exactly
   six data files: the package wheel, package sdist,
   `release-manifest.json`, `release-request.json`,
   `runner-completion-attestation.json`, and

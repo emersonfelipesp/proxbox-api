@@ -299,7 +299,8 @@ test ! -r "/proc/$BOUNDARY_PARENT_PID/environ"
 cd "$BUILD_ROOT/source"
 UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
   "$UV_BIN" sync --no-config --cache-dir "$BUILD_ROOT/uv-cache" \
-  --managed-python --no-python-downloads --python 3.13.14 \
+  --offline --no-index --find-links "$NMC_PUBLISH_WHEELHOUSE" \
+  --no-python-downloads --python "$UV_PYTHON" \
   --locked --only-group publish --no-install-project
 "$UV_BIN" export --no-config --frozen --no-dev --group publish \
   --no-emit-project --format requirements-txt \
@@ -308,13 +309,7 @@ UV_PROJECT_ENVIRONMENT="$BUILD_ROOT/venv" \
 test ! -e docker/build-cache
 test ! -e docker/offline-build-inputs.json
 mkdir -m 0700 -p docker/build-cache
-"$BUILD_ROOT/venv/bin/python" -m ensurepip --default-pip
-"$BUILD_ROOT/venv/bin/python" -m pip download \
-  --disable-pip-version-check --require-hashes --only-binary=:all: \
-  --platform musllinux_1_2_x86_64 --platform musllinux_1_1_x86_64 \
-  --python-version 3.13 \
-  --implementation cp --abi cp313 --abi abi3 --abi none \
-  --dest docker/build-cache --requirement "$BUILD_ROOT/runtime-requirements.txt"
+cp "$NMC_RUNTIME_WHEELHOUSE"/*.whl docker/build-cache/
 find docker/build-cache -mindepth 1 -maxdepth 1 -type f -name '*.whl' \
   -exec chmod 0444 {} +
 test "$(find docker/build-cache -mindepth 1 -maxdepth 1 -type f | wc -l)" -gt 0
@@ -332,7 +327,9 @@ def run_boundary(  # noqa: C901
     *,
     build_root: Path,
     uv_bin: Path,
-    python_root: Path,
+    python_bin: Path,
+    publish_wheelhouse: Path,
+    runtime_wheelhouse: Path,
     source_sha: str,
     tag: str,
     version: str,
@@ -366,7 +363,10 @@ def run_boundary(  # noqa: C901
     home_root.mkdir(mode=0o700)
     temp_root.mkdir(mode=0o700)
     _hand_tree_to_build_user(build_root)
-    _expose_read_only_tree(python_root)
+    if not python_bin.is_file() or python_bin.is_symlink():
+        raise RuntimeError("Image-baked Python interpreter is unsafe")
+    _expose_read_only_tree(publish_wheelhouse)
+    _expose_read_only_tree(runtime_wheelhouse)
     os.chmod(uv_bin.parent, 0o555)  # nosec B103
     os.chmod(uv_bin, 0o555)  # nosec B103
 
@@ -383,7 +383,9 @@ def run_boundary(  # noqa: C901
         "TAG": tag,
         "TMPDIR": str(temp_root),
         "UV_BIN": str(uv_bin),
-        "UV_PYTHON_INSTALL_DIR": str(python_root),
+        "UV_PYTHON": str(python_bin),
+        "NMC_PUBLISH_WHEELHOUSE": str(publish_wheelhouse),
+        "NMC_RUNTIME_WHEELHOUSE": str(runtime_wheelhouse),
         "VERSION": version,
     }
     process = subprocess.Popen(  # noqa: S603
@@ -471,7 +473,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-root", type=Path, required=True)
     parser.add_argument("--uv-bin", type=Path, required=True)
-    parser.add_argument("--python-root", type=Path, required=True)
+    parser.add_argument("--python-bin", type=Path, required=True)
+    parser.add_argument("--publish-wheelhouse", type=Path, required=True)
+    parser.add_argument("--runtime-wheelhouse", type=Path, required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--version", required=True)
@@ -480,7 +484,9 @@ def main() -> int:
     run_boundary(
         build_root=args.build_root.resolve(),
         uv_bin=args.uv_bin.resolve(strict=True),
-        python_root=args.python_root.resolve(strict=True),
+        python_bin=args.python_bin.resolve(strict=True),
+        publish_wheelhouse=args.publish_wheelhouse.resolve(strict=True),
+        runtime_wheelhouse=args.runtime_wheelhouse.resolve(strict=True),
         source_sha=args.source_sha,
         tag=args.tag,
         version=args.version,

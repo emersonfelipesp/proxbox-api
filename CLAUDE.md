@@ -870,8 +870,13 @@ process and advance to the next immutable `rcN` or `postN`. Do not bypass the
 audited publisher with a local registry upload or push a final tag to GitHub
 before the Gitea package and NMS production gates.
 
-The target workflow verifies the pinned uv archive and uses fresh per-run
-managed-Python and cache roots. Required GitHub CI independently reproduces
+The target workflow uses the runner image's exact Python 3.12.14 and uv 0.12.5
+after verifying the baked interpreter/tool versions, the policy-pinned
+`uv.lock` digest, and build-lock checksum manifests for the read-only publish
+and CPython 3.13 musllinux runtime wheelhouses. Dependency resolution is
+offline (`--no-index`, no Python downloads). Trusted outer steps use
+image-baked Gitea checkout and artifact clients, so their only network
+authority is same-origin Gitea access. Required GitHub CI independently reproduces
 that real CPython 3.13 musllinux wheelhouse, safely extracts and rehashes the
 release sdist, permits only two literal pinned base images and declared-stage
 `COPY --from` sources, and builds the extracted Docker context with preloaded
