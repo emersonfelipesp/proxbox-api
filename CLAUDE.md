@@ -144,17 +144,54 @@ Open the nearest scoped guide for the code you are changing.
   and fails the step with `GHESNotSupportedError`, turning an otherwise-passing
   run red and blocking the CI-gated deploy. The `.github/workflows/ci.yml` twin
   keeps v4 because it runs on GitHub-hosted runners that support it.
-- `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
-  committed to `main`. Handles `push: tags:` only, requires the tag to equal
-  current `develop`, resolves each latest required status to authenticated
-  successful `ci.yml` push-run/job evidence for that exact SHA and trusted
-  runner class, builds a manifest-bound wheel/sdist without credentials, and
-  verifies and seals it in a second credential-free job. A fresh job receives
-  repository `PKG_TOKEN` only in its registry-write step: Twine reads it from
-  `TWINE_PASSWORD`, while link and manifest calls use a mode-0600 netrc and the
-  environment-aware helper. Another fresh credential-free job anonymously
-  re-hashes the registry bytes. RC tags are
-  pushed to GitHub for TestPyPI validation. Final tags stay private until the
+- `.gitea/workflows/publish-gitea.yml`: data-only release-control request
+  workflow committed to `main`. Handles `push: tags:` only, requires the tag to
+  equal current `develop`, ignores writer-controlled commit statuses, selects
+  the newest authenticated `ci.yml` Actions run and required jobs for that SHA,
+  fetches that exact source-SHA GitHub workflow through the Contents API and
+  verifies both its Git object ID and reviewed SHA-256, pins the reviewed
+  gate-helper bytes before isolated execution, and schedules the two release
+  jobs on distinct job-bound ephemeral validation/build registrations. Each
+  advertises only the sole `ci-release-proxbox-api` label, accepts one
+  supervisor-authorized assignment, and terminates. Workflow concurrency is
+  global to this repository so different release refs cannot race the sole
+  release label. Before candidate
+  execution, each job must match its live runner ID/name/sole label to the
+  checksum-pinned acceptance record plus a fresh signed external-supervisor
+  attestation bound to repository/first-attempt run/job/source and the exact
+  workflow path/digest, complete registered labels, runtime image, and
+  network/runtime policy. Validation and build have
+  independent pinned repository-registration scope digests. Zero/empty identity and all-zero
+  key/image/policy digests keep tag releases disabled. Candidate build and
+  offline-wheel preparation run behind the bounded token-free UID/Landlock
+  boundary plus a fail-closed x86-64 seccomp deny for every socket syscall,
+  every `io_uring` entry point, and every x32-tagged syscall.
+  The outer job revalidates both immutable wheelhouse manifests and dry-resolves
+  the hash-locked CPython 3.13 musl runtime cache. After cleanup, the root-only external
+  supervisor signs the exact request and artifact inventory. The workflow
+  uploads exactly the package wheel, package sdist, `release-manifest.json`,
+  `release-request.json`, `runner-completion-attestation.json`, and
+  `runner-completion-attestation.sig`.
+  Every RC, final, or post request consumes its validation/build identity pair;
+  the next request requires freshly registered and reviewed identities.
+  The request binds repository ID 37, source/tag/version,
+  first-attempt run identity, target-workflow digest, manifest digest, and
+  artifact inventory. The target repository has no package or RC-mirror
+  credential and cannot publish or push tags. The separately administered
+  locked control plane independently verifies the policy-pinned target workflow,
+  supervisor completion signature, and exact bytes on its isolated builder,
+  seals the handoff, and lets only its
+  isolated publisher invoke fixed digest-locked tooling with publication
+  credentials. It anonymously re-downloads and verifies every registry byte.
+  Before the sdist build, the target generates the release-only context from
+  `Dockerfile.release`, exports for CPython 3.13, downloads only hash-locked
+  `musllinux_1_2_x86_64` or backward-compatible `musllinux_1_1_x86_64`
+  CPython 3.13/ABI3/pure-Python wheels compatible with
+  the full-digest prior Alpine raw runtime, and writes the canonical schema-2
+  cache/image inventory. The locked control independently rejects mutable/networked Docker
+  inputs and hash drift before sealing; the ordinary development `Dockerfile`
+  is not the package-deploy contract.
+  The control publisher pushes RC tags to GitHub for TestPyPI validation. Final tags stay private until the
   NMS package-first production gate passes; canonical-main
   `promote-final-tag.yml` verifies the package and NMS attestation before
   pushing the tag to the exact authorized GitHub repository. The operator then creates the
@@ -794,10 +831,18 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
    git push gitea vX.Y.Z
    ```
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds without package credentials, verifies and seals the candidate in a
-     second credential-free job, publishes it from a fresh package-authority
-     job, then anonymously re-hashes the registry bytes in another fresh job.
-   - RC tags are pushed to GitHub and trigger the RC-only TestPyPI lane.
+   - Builds without publication credentials and uploads the exact six-file
+     `release-control-request` artifact.
+   - Do not merge this target cutover until the private control repository has
+     a positive policy-pinned ID and its protected workflows, host boundaries,
+     sockets, and repository-scoped runners pass readiness. Leave the existing
+     publisher active until then.
+   - Record the first-attempt target run ID and SHA-256 of the canonical
+     `release-request.json`; dispatch `validate.yml` with those values and
+     `repository=proxbox-api`, then dispatch the separate irreversible
+     `publish.yml` with the same three exact inputs.
+   - The control builder verifies/seals the bytes; its isolated publisher uploads
+     the Gitea package and pushes RC tags to GitHub for the RC-only TestPyPI lane.
    - Final tags are not pushed publicly and do not create a GitHub Release.
 5. **Link and verify the exact Gitea package, then deploy through NMS** with the default `latest_package` source. `main_branch` must remain an explicit operator selection.
 6. **Push the exact final tag to GitHub and create the GitHub Release with
@@ -817,9 +862,10 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
 
 ### RC flow (TestPyPI gate)
 
-1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
-2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
-3. Fix-forward with `rcN+1` if anything fails.
+1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` uploads the data-only control request.
+2. Hash its canonical request; dispatch `validate.yml`, then the separate irreversible `publish.yml`, with exactly `repository=proxbox-api`, the first-attempt target run ID, and that request SHA-256. The control publisher uploads the Gitea package and pushes only that RC tag to GitHub.
+3. GitHub Actions `push: tags: v*rc*` fires → publishes the exact Gitea bytes to TestPyPI → validates.
+4. Fix-forward with `rcN+1` if anything fails.
 
 ### Publisher recovery
 
@@ -828,15 +874,28 @@ process and advance to the next immutable `rcN` or `postN`. Do not bypass the
 audited publisher with a local registry upload or push a final tag to GitHub
 before the Gitea package and NMS production gates.
 
-The private publisher directly downloads and verifies the pinned uv archive,
-clears inherited `UV_*` state, disables discovered configuration, and uses fresh
-per-run managed-Python and cache roots. Every release stage runs as a separate
-disposable `ci-untrusted-python312` job. The candidate is sealed before the
-fresh publisher job starts; repository `PKG_TOKEN` reaches only its final
-registry-write step. Twine receives it only through `TWINE_PASSWORD`, Gitea link
-operations use a mode-0600 netrc, and the manifest helper reads it from the
-environment. The built-in Gitea Actions token is never used as a package-
-registry credential. Public TestPyPI/PyPI upload jobs run separately on fresh
+The target workflow uses the runner image's exact Python 3.12.14 and uv 0.12.5
+after verifying the baked interpreter/tool versions, the policy-pinned
+`uv.lock` digest, and build-lock checksum manifests for the read-only publish
+and CPython 3.13 musllinux runtime wheelhouses. Dependency resolution is
+offline (`--no-index`, no Python downloads). Trusted outer steps use
+image-baked Gitea checkout and artifact clients, so their only network
+authority is same-origin Gitea access. Required GitHub CI independently reproduces
+that real CPython 3.13 musllinux wheelhouse, safely extracts and rehashes the
+release sdist, permits only two literal pinned base images and declared-stage
+`COPY --from` sources, and builds the extracted Docker context with preloaded
+exact bases and networking disabled. The Gitea tag gate requires that exact
+successful first-attempt GitHub job on the same canonical `develop` SHA. It
+emits only a canonical six-file request,
+including the external supervisor's completion statement and detached signature.
+That signed statement binds the supervisor-derived repository-registration
+scope digest and must equal the pinned acceptance record. The workflow
+holds no publication credential. The separate locked control plane verifies the
+policy-pinned target workflow, run identity, completion signature, request,
+manifest, and artifacts;
+its builder seals the bytes and only its isolated publisher can read credentials
+or invoke fixed digest-locked publication tooling. Public no-authority downloads
+must match before its durable ledger completes. Public TestPyPI/PyPI upload jobs run separately on fresh
 GitHub-hosted `ubuntu-latest` runners, install the locked publisher group with
 `--no-install-project`, and likewise pass credentials only through `TWINE_*`.
 

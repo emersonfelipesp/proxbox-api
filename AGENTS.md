@@ -161,27 +161,57 @@ custom-field data while the flag exists.
 
 The official release pipeline for proxbox-api runs in this order:
 
-1. **Gitea tag push** — annotated `vX.Y.ZrcN` or `vX.Y.Z` tag is pushed to Gitea.
-2. **Gitea package** — `.gitea/workflows/publish-gitea.yml` publishes the exact immutable package. RC tags alone are pushed to GitHub for TestPyPI.
-3. **RC validation** — GitHub `push: tags: v*rc*` validates the RC through TestPyPI.
-4. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
-5. **Public promotion** — after production health validation, promote the final tag and create the GitHub Release. Its `release: published` event is the sole automatic authority for PyPI and then Docker Hub.
+1. **Activation gate** — do not merge the target cutover until the private control repository has a positive policy-pinned ID and its protected workflows, host boundaries, sockets, and repository-scoped runners pass readiness. Leave the existing publisher active until then.
+2. **Gitea tag push** — annotated `vX.Y.ZrcN` or `vX.Y.Z` tag is pushed to Gitea.
+3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` first requires the exact successful GitHub-hosted offline-image job for the same canonical `develop` SHA and verifies the source-SHA GitHub workflow bytes against the reviewed SHA-256 before trusting that job. The offline job pins every external action by immutable commit. It then builds and uploads the exact signed six-file request: the package wheel, package sdist, `release-manifest.json`, `release-request.json`, `runner-completion-attestation.json`, and `runner-completion-attestation.sig`. Workflow concurrency is global per repository. Validation and build have independent pinned repository-registration scope digests, and the completion statement binds the supervisor-derived build digest; the target client requires each role's evidence to match its pinned acceptance value. The workflow has no package or mirror credential and cannot publish or push tags.
+4. **Locked validation and publication** — dispatch `validate.yml` first, then the separate irreversible `publish.yml`, each with exactly the repository name, first-attempt target run ID, and request SHA-256. Its isolated builder verifies and seals the bytes; its isolated publisher uploads the exact package and promotes only RC tags to GitHub.
+5. **RC validation** — GitHub `push: tags: v*rc*` validates the exact Gitea bytes through TestPyPI.
+6. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
+7. **Public promotion** — after production health validation, promote the final tag and create the GitHub Release. Its `release: published` event is the sole automatic authority for PyPI and then Docker Hub.
+
+The proxbox-api request build must first generate the release-only offline
+Docker context from `Dockerfile.release`: a hash-locked wheelhouse, canonical
+schema-2 inventory, CPython 3.13 `musllinux_1_2_x86_64` plus backward-compatible
+`musllinux_1_1_x86_64` target tags, and
+exact literal full-digest prior runtime/uv image sources and declared-stage-only
+`COPY --from`. Keep the local
+development `Dockerfile` separate. The locked control must independently reject
+inventory drift, networked/mutable Docker inputs, and any build path other than
+`uv sync --frozen --offline` before signing.
 
 ### RC (release-candidate) pipeline
 
-1. Push `vX.Y.ZrcN` tag → `.gitea/workflows/publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
-2. `.github/workflows/publish-testpypi.yml` fires on `push: tags: v*rc*` → TestPyPI publish + validate.
+1. Push `vX.Y.ZrcN` and wait for `.gitea/workflows/publish-gitea.yml` to upload `release-control-request`.
+2. Hash the canonical `release-request.json`; dispatch `validate.yml`, then `publish.yml`, with exactly `repository=proxbox-api`, the target run ID, and that SHA-256. The control publisher uploads the Gitea bytes and promotes only the exact RC tag.
+3. `.github/workflows/publish-testpypi.yml` fires on `push: tags: v*rc*` → exact-byte TestPyPI publish + validate.
 
 ### Secrets required
 
-- Gitea package publication runs in separate disposable
-  `ci-untrusted-python312` jobs. Credential-free jobs build, verify, and seal
-  the candidate before a fresh publisher job starts. Repository `PKG_TOKEN`
-  reaches only that job's registry-write step, where Twine reads `TWINE_*`, the
-  link call uses a mode-0600 netrc, and the manifest helper reads the token from
-  the environment. A final fresh job anonymously verifies the registry bytes;
-  the built-in Actions token is never a package-registry credential.
-- `GH_MIRROR_TOKEN`: GitHub PAT with `repo` and `workflow` scopes for RC tag promotion.
+- The target repository uses no Gitea package or RC-promotion secret. Its two
+  disposable repository-scoped `ci-release-proxbox-api` jobs use distinct
+  job-bound ephemeral validation/build registrations. Each advertises only that
+  release label, accepts one supervisor-authorized assignment, and terminates;
+  every RC, final, or post request therefore requires a freshly registered and
+  reviewed identity pair;
+  the jobs then require the
+  live runner ID, name, and sole label to match the checksum-pinned acceptance
+  record plus a fresh signed external-supervisor attestation bound to
+  repository/run/job/source, complete registered labels, runtime image, and
+  network/runtime policy plus its role-specific repository-registration scope
+  digest. Zero/empty identity and all-zero key/image/policy
+  digests keep tag releases disabled. Candidate build and wheel preparation run
+  behind the bounded token-free UID/Landlock boundary plus a fail-closed x86-64
+  seccomp deny for every socket syscall, every `io_uring` entry point, and every
+  x32-tagged syscall. The outer job revalidates both exact
+  immutable wheelhouses and dry-resolves the hash-locked CPython 3.13 musl
+  runtime cache. After cleanup, the root-only external supervisor signs the exact
+  request/artifact inventory. The jobs emit only the package wheel, package
+  sdist, `release-manifest.json`, `release-request.json`,
+  `runner-completion-attestation.json`, and
+  `runner-completion-attestation.sig`.
+  The separately administered control plane verifies that signature and owns the package
+  and GitHub-mirror credentials, with distinct builder/publisher identities and
+  fixed digest-locked tooling.
 - `PYPI_TOKEN` / `PYPI_USERNAME`: PyPI credentials for GitHub Actions upload.
 - `TEST_PYPI_TOKEN` / `TEST_PYPI_USERNAME`: TestPyPI credentials for RC validation.
 - `DOCKERHUB_TOKEN` / `DOCKERHUB_USERNAME`: Docker Hub credentials.
