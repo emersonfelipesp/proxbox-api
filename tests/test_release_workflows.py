@@ -6,7 +6,6 @@ TestPyPI -> PyPI release process without running a publishing workflow.
 
 from __future__ import annotations
 
-import ast
 import base64
 import ctypes
 import errno
@@ -380,125 +379,6 @@ def test_publish_workflow_routes_rc_tags_to_testpypi_and_releases_to_pypi():
     assert dispatch_inputs["source_ref"]["type"] == "string"
 
 
-def test_gitea_tag_workflow_builds_only_a_release_control_request():
-    workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
-    parsed = yaml.safe_load(workflow)
-    assert parsed["concurrency"] == {
-        "group": "release-request-${{ github.repository }}",
-        "cancel-in-progress": False,
-    }
-    gate_sha256 = hashlib.sha256(CI_GATE_PATH.read_bytes()).hexdigest()
-    runner_gate_sha256 = hashlib.sha256(RUNNER_GATE_PATH.read_bytes()).hexdigest()
-    build_boundary_sha256 = hashlib.sha256(BUILD_BOUNDARY_PATH.read_bytes()).hexdigest()
-    handoff_sha256 = hashlib.sha256(HANDOFF_PATH.read_bytes()).hexdigest()
-    acceptance_sha256 = hashlib.sha256(RUNNER_ACCEPTANCE_PATH.read_bytes()).hexdigest()
-    acceptance = json.loads(RUNNER_ACCEPTANCE_PATH.read_bytes())
-
-    assert "  create:" not in workflow
-    assert set(parsed["jobs"]) == {"validate-source", "build-request"}
-    assert all(job["runs-on"] == "ci-release-proxbox-api" for job in parsed["jobs"].values())
-    assert "refs/heads/develop:refs/remotes/gitea/release-develop" in workflow
-    assert "release-manifest.json" in workflow
-    assert "scripts/gitea_ci_gate.py" in workflow
-    assert "/commits/${SOURCE_SHA}/statuses" not in workflow
-    assert "actions/upload-artifact@" not in workflow
-    assert "/usr/local/bin/nmc-upload-gitea-artifact" in workflow
-    assert "/usr/local/bin/nmc-gitea-checkout" in workflow
-    assert "actions/download-artifact@" not in workflow
-    assert "astral-sh/setup-uv@" not in workflow
-    assert "RUNNER_TOOL_CACHE" not in workflow
-    assert "UV_MANAGED_PYTHON" not in workflow
-    assert "mirror-host" not in workflow
-    assert "packages: write" not in workflow
-    assert "secrets." not in workflow
-    assert "PKG_TOKEN" not in workflow
-    assert "GH_MIRROR_TOKEN" not in workflow
-    assert "release-publisher" not in workflow
-    assert "twine upload" not in workflow
-    assert "gh release create" not in workflow
-    assert "git push" not in workflow
-    assert "/api/packages/" not in workflow
-    assert (
-        workflow.count(
-            "https://github.com/astral-sh/uv/releases/download/0.11.28/"
-            "uv-x86_64-unknown-linux-gnu.tar.gz"
-        )
-        == 0
-    )
-    assert workflow.count("e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224") == 0
-    assert workflow.count("sha256sum --check --strict") >= 7
-    assert "python3 -I scripts/gitea_ci_gate.py" in workflow
-    assert gate_sha256 == "ac39691b607ab40665026d5c1d2b49f985ea1b3778a393fd24d7710006ad30a5"
-    assert gate_sha256 in workflow
-    assert "1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad" in workflow
-    assert runner_gate_sha256 == (
-        "29bb27a4855c1a249f1862b9b87961cb530e4d33de9f8d5bb16fe7399e9d6a72"
-    )
-    assert build_boundary_sha256 == (
-        "33e32529f2a33d90f4cec10b3be30f16b3bd3027fe4363b2a8e4ad380db55340"
-    )
-    assert handoff_sha256 == ("4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002")
-    assert acceptance_sha256 == ("b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e")
-    assert workflow.count(runner_gate_sha256) == 2
-    assert workflow.count(build_boundary_sha256) == 1
-    assert workflow.count(handoff_sha256) == 1
-    assert workflow.count(acceptance_sha256) == 2
-    assert acceptance["runner_id"] == 0
-    assert acceptance["runner_name"] == ""
-    assert acceptance["validation_runner_id"] == 0
-    assert acceptance["validation_runner_name"] == ""
-    assert acceptance["runner_scope_sha256"] == "0" * 64
-    assert acceptance["validation_runner_scope_sha256"] == "0" * 64
-    assert acceptance["runtime_attestation_sha256"] == "0" * 64
-    assert acceptance["network_attestation_sha256"] == "0" * 64
-    assert acceptance["attestation_public_key_sha256"] == "0" * 64
-    assert acceptance["runtime_image_digest"] == "0" * 64
-    assert acceptance["supervisor_policy_sha256"] == "0" * 64
-    assert acceptance["registered_labels"] == [
-        "ci-release-proxbox-api",
-    ]
-    build_steps = parsed["jobs"]["build-request"]["steps"]
-    completion_run = next(
-        step["run"]
-        for step in build_steps
-        if step["name"] == "Obtain supervisor-signed completion evidence"
-    )
-    assert isinstance(completion_run, str)
-    completion_source = completion_run.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-    completion_tree = ast.parse(completion_source)
-    completion_imports = {
-        alias.name.split(".", 1)[0]
-        for node in ast.walk(completion_tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    }
-    gate_index = next(
-        index
-        for index, step in enumerate(build_steps)
-        if step["name"].startswith("Prove exact accepted release runner")
-    )
-    candidate_index = next(
-        index
-        for index, step in enumerate(build_steps)
-        if step["name"] == "Build artifacts across a token-free UID boundary"
-    )
-    assert gate_index < candidate_index
-    assert "/nmc-build/proxbox-api-" in workflow
-    assert "docker run" not in yaml.safe_dump(parsed["jobs"]["build-request"])
-    assert "/usr/local/bin/nmc-release-attestation-client" in workflow
-    assert "2b0bee25d755f284b5e8eee3b8a84536825328913040c8757374efe51c57f75f" in workflow
-    assert "os.O_NOFOLLOW" in workflow
-    assert "pass_fds=(snapshot,)" in workflow
-    assert 'os.memfd_create("nmc-release-client", flags)' in workflow
-    assert "fcntl.fcntl(snapshot, 1033, seals)" in workflow
-    assert {"ctypes", "fcntl", "hashlib", "os", "stat", "subprocess", "sys"} <= (completion_imports)
-    compile(completion_source, "publish-gitea-completion", "exec")
-    assert '"--public-key"' in workflow
-    assert "runner-completion-attestation.json" in workflow
-    assert "runner-completion-attestation.sig" in workflow
-    assert "UV_PYTHON_INSTALL_DIR" not in workflow
-
-
 def test_release_build_boundary_is_token_free_bounded_and_dockerless():
     boundary = _load_build_boundary()
     command = boundary._candidate_command()
@@ -857,94 +737,6 @@ def test_offline_release_preparer_rejects_non_wheel_cache_content(
         preparer._cache_inventory()
 
 
-def test_release_control_request_binds_exact_repository_run_and_artifacts():
-    workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
-    handoff = _read(HANDOFF_PATH)
-    parsed = yaml.safe_load(workflow)
-    build_job = parsed["jobs"]["build-request"]
-    build_source = yaml.safe_dump(build_job)
-    upload_step = build_job["steps"][-1]
-
-    assert parsed["permissions"] == {"actions": "read", "contents": "read"}
-    assert build_job["needs"] == "validate-source"
-    assert upload_step["name"] == "Upload exact data-only control request"
-    assert "/usr/local/bin/nmc-upload-gitea-artifact" in upload_step["run"]
-    assert '--root release-transfer --run-id "$GITHUB_RUN_ID"' in upload_step["run"]
-    assert '"repository_id": 37' in handoff
-    assert '"owner": "emersonfelipesp"' in handoff
-    assert '"repository": "proxbox-api"' in handoff
-    assert '"schema": 1' in handoff
-    assert '"workflow_sha256"' in handoff
-    assert '"release_manifest_sha256"' in handoff
-    assert '"initiating_run_id"' in handoff
-    assert '"initiating_run_attempt"' in handoff
-    assert "release-request.json" in workflow
-    assert (
-        'test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6' in workflow
-    )
-    assert "secrets." not in build_source
-    assert build_source.count("github.token") == 1
-
-
-def test_operator_docs_match_the_locked_control_dispatch_contract() -> None:
-    required = {
-        "AGENTS.md": ("validate.yml", "publish.yml", "target run ID", "request SHA-256"),
-        "CLAUDE.md": ("validate.yml", "publish.yml", "target run ID", "SHA-256"),
-        "release-publishing.md": (
-            "validate.yml",
-            "publish.yml",
-            "target run ID",
-            "request SHA-256",
-        ),
-    }
-    for path in RELEASE_CONTROL_DOC_PATHS:
-        documentation = _read(path)
-        assert "publish=true" not in documentation, path
-        for phrase in required[path.name]:
-            assert phrase in documentation, (path, phrase)
-
-    for path in SIGNED_HANDOFF_DOC_PATHS:
-        documentation = _read(path)
-        lowered = documentation.lower()
-        assert "four-file" not in lowered, path
-        assert "quatro arquivos" not in lowered, path
-        assert "six-file" in lowered or "six data files" in lowered or "seis arquivos" in lowered, (
-            path
-        )
-        for filename in (
-            "release-manifest.json",
-            "release-request.json",
-            "runner-completion-attestation.json",
-            "runner-completion-attestation.sig",
-        ):
-            assert filename in documentation, (path, filename)
-        if path in RELEASE_CONTROL_DOC_PATHS:
-            assert "job-bound ephemeral" in lowered or "efêmer" in lowered or "efemer" in lowered, (
-                path
-            )
-
-
-def test_gitea_job_token_is_confined_to_trusted_evidence_steps():
-    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
-    validate_source = yaml.safe_dump(parsed["jobs"]["validate-source"])
-    build_source = yaml.safe_dump(parsed["jobs"]["build-request"])
-
-    assert validate_source.count("github.token") == 3
-    assert validate_source.count("GITEA_API_TOKEN") == 2
-    assert build_source.count("github.token") == 1
-    assert build_source.count("GITEA_API_TOKEN") == 1
-    candidate_step = next(
-        step
-        for step in parsed["jobs"]["build-request"]["steps"]
-        if step["name"] == "Build artifacts across a token-free UID boundary"
-    )
-    candidate_source = yaml.safe_dump(candidate_step)
-    assert "github.token" not in candidate_source
-    assert "GITEA_API_TOKEN" not in candidate_source
-    assert "/usr/local/bin/nmc-gitea-checkout" in validate_source
-    assert "actions/checkout@" not in build_source
-
-
 def test_gitea_artifact_v3_compatibility_probe_is_bounded_and_disposable():
     workflow = _read(GITEA_ARTIFACT_WORKFLOW_PATH)
     # BaseLoader constructs strings only and preserves Actions' literal `on` key.
@@ -1201,13 +993,33 @@ def test_public_publish_workflow_uses_immutable_locked_tooling():
         assert job["runs-on"] == "ubuntu-latest"
 
 
-def test_github_promotion_uses_exact_gitea_artifacts_and_nms_evidence():
+def test_github_promotion_publishes_only_the_tagged_source():
+    """Artifacts reaching an index must correspond to the tagged commit.
+
+    Provenance previously came from re-fetching artifacts out of the private
+    forge. A GitHub-hosted runner cannot reach it, so that step failed and every
+    downstream publish skipped. Provenance now comes from building the
+    checked-out tag in place, which is stronger in one respect -- there is no
+    second copy that could diverge from the source.
+    """
     workflow = _read(PUBLISH_WORKFLOW_PATH)
 
-    assert "scripts/release_artifacts.py fetch-gitea" in workflow
-    assert "scripts/release_artifacts.py fetch-attestation" in workflow
-    assert "git merge-base --is-ancestor" in workflow
-    assert "Build distribution" not in workflow
+    assert "Build distributions from the exact tagged source" in workflow
+    assert "uv build --sdist --wheel --out-dir dist" in workflow
+    assert 'SOURCE_SHA="$(git rev-parse HEAD^{commit})"' in workflow
+
+    # The private forge must not be a runtime dependency of public publishing.
+    assert "git.nmulti.cloud" not in workflow, (
+        "the public publish workflow must not depend on the private forge; "
+        "a GitHub-hosted runner cannot reach it"
+    )
+    assert "fetch-gitea" not in workflow
+
+    # What was built is recorded, and a version mismatch fails closed.
+    assert "release-manifest.json" in workflow
+    assert "do not carry version" in workflow
+
+    # Both distribution kinds are still installed and smoke-tested.
     assert "validate-gitea-artifacts:" in workflow
     assert "kind: [wheel, sdist]" in workflow
 

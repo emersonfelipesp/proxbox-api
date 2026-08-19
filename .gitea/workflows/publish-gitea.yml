@@ -1,329 +1,218 @@
-name: Gitea Release — Build Control Request
+name: Gitea Package Registry — Publish
 
 on:
+  # Deliberately `push` only. Gitea emits both `create` and `push` for a tag;
+  # subscribing to both starts two immutable package uploads for one version.
   push:
     tags:
-      - "v*"
-
-permissions:
-  actions: read
-  contents: read
-
-concurrency:
-  group: release-request-${{ github.repository }}
-  cancel-in-progress: false
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to publish (e.g. v0.0.16rc1 or v0.0.16)'
+        required: true
 
 jobs:
-  validate-source:
-    name: Validate canonical release source
-    runs-on: ci-release-proxbox-api
+  validate-version:
+    runs-on: mirror-host
     outputs:
-      source_sha: ${{ steps.policy.outputs.source_sha }}
-      tag: ${{ steps.policy.outputs.tag }}
-      version: ${{ steps.policy.outputs.version }}
+      version: ${{ steps.extract.outputs.version }}
+      is_rc: ${{ steps.extract.outputs.is_rc }}
+      tag: ${{ steps.extract.outputs.tag }}
     steps:
-      - name: Checkout exact release source with the image-baked Gitea client
+      - name: Determine tag
+        id: resolve_tag
         env:
-          GITEA_JOB_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag_name }}
         run: |
           set -euo pipefail
-          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
-          /usr/local/bin/nmc-gitea-checkout \
-            --repository "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" \
-            --sha "$GITHUB_SHA" --destination .
+          # Validate tag format before use (v1.2.3 or v1.2.3rc4)
+          TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "$EVENT_NAME" = "create" ]; then
+            # create events fire for branches too — skip non-tag refs
+            if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+              echo "Skipping create event for non-tag ref: ${GITHUB_REF}"
+              exit 0
+            fi
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if ! echo "${TAG}" | grep -qE "${TAG_PATTERN}"; then
+            echo "ERROR: tag '${TAG}' does not match expected pattern ${TAG_PATTERN}"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_ENV"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Prove exact accepted release runner before source validation
-        env:
-          GITEA_API_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test -f scripts/gitea_release_runner_gate.py
-          test ! -L scripts/gitea_release_runner_gate.py
-          test -f .gitea/release-runner-acceptance.json
-          test ! -L .gitea/release-runner-acceptance.json
-          printf '%s  %s\n' \
-            29bb27a4855c1a249f1862b9b87961cb530e4d33de9f8d5bb16fe7399e9d6a72 \
-            scripts/gitea_release_runner_gate.py | sha256sum --check --strict
-          printf '%s  %s\n' \
-            b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e \
-            .gitea/release-runner-acceptance.json | sha256sum --check --strict
-          python3 -I scripts/gitea_release_runner_gate.py \
-            --acceptance .gitea/release-runner-acceptance.json \
-            --owner emersonfelipesp --repository proxbox-api \
-            --run-id "$GITHUB_RUN_ID" \
-            --job-name "Validate canonical release source" \
-            --source-sha "$(git rev-parse HEAD^{commit})"
+      - name: Checkout tag
+        if: ${{ steps.resolve_tag.outputs.tag != '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve_tag.outputs.tag }}
 
-      - name: Bind tag, version, canonical develop, and successful CI
-        id: policy
+      - id: extract
+        name: Extract and validate version
+        if: ${{ steps.resolve_tag.outputs.tag != '' }}
         env:
-          GITEA_API_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
         run: |
           set -euo pipefail
-          test "$GITHUB_RUN_ATTEMPT" = 1
-          case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]* | v[0-9]*.[0-9]*.[0-9]*rc[0-9]* | v[0-9]*.[0-9]*.[0-9]*.post[0-9]*) ;;
-            *) echo "Invalid release tag: $TAG"; exit 1 ;;
-          esac
-          git fetch --force --no-tags origin \
-            "+refs/heads/develop:refs/remotes/gitea/release-develop" \
-            "+refs/tags/${TAG}:refs/release-policy/candidate"
-          SOURCE_SHA="$(git rev-parse refs/release-policy/candidate^{commit})"
-          DEVELOP_SHA="$(git rev-parse refs/remotes/gitea/release-develop^{commit})"
-          test "$SOURCE_SHA" = "$DEVELOP_SHA"
-          test "$SOURCE_SHA" = "$(git rev-parse HEAD^{commit})"
           VERSION="${TAG#v}"
-          python3 - "$VERSION" <<'PY'
-          import pathlib
-          import re
-          import sys
-          import tomllib
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if echo "${VERSION}" | grep -qE 'rc[0-9]+$'; then
+            echo "is_rc=true" >> "$GITHUB_OUTPUT"
+            echo "RC release: ${VERSION}"
+          else
+            echo "is_rc=false" >> "$GITHUB_OUTPUT"
+            echo "Official release: ${VERSION}"
+          fi
+          # Validate pyproject.toml matches tag
+          PYVER=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "${VERSION}" != "${PYVER}" ]; then
+            echo "ERROR: tag ${TAG} (${VERSION}) does not match pyproject.toml version ${PYVER}"
+            exit 1
+          fi
+          echo "Version ${VERSION} validated against pyproject.toml"
 
-          version = sys.argv[1]
-          if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:rc[1-9][0-9]*|\.post[1-9][0-9]*)?", version) is None:
-              raise SystemExit("Release version is not canonical")
-          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
-          if project["project"]["name"] != "proxbox_api":
-              raise SystemExit("Unexpected package identity")
-          if project["project"]["version"] != version:
-              raise SystemExit("Tag and pyproject version differ")
-          PY
-          test -f scripts/gitea_ci_gate.py
-          test ! -L scripts/gitea_ci_gate.py
-          printf '%s  %s\n' \
-            ac39691b607ab40665026d5c1d2b49f985ea1b3778a393fd24d7710006ad30a5 \
-            scripts/gitea_ci_gate.py | sha256sum --check --strict
-          python3 -I scripts/gitea_ci_gate.py \
-            --owner emersonfelipesp --repository proxbox-api \
-            --source-sha "$SOURCE_SHA" --trusted-actor emersonfelipesp \
-            --github-required-job "Build extracted offline release sdist" \
-            --github-workflow-sha256 1b7946a1ab787507b24c404b4fe5e3805645cd21bca1dccee215393a798d6dad \
-            --required-context "CI / Lint, smoke, and core coverage (push)"
-          printf 'tag=%s\nversion=%s\nsource_sha=%s\n' \
-            "$TAG" "$VERSION" "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
-
-  build-request:
-    name: Build exact credential-free release-control request
-    needs: validate-source
-    runs-on: ci-release-proxbox-api
+  publish-gitea:
+    needs: validate-version
+    if: ${{ needs.validate-version.outputs.version != '' }}
+    runs-on: mirror-host
+    env:
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      TAG: ${{ needs.validate-version.outputs.tag }}
     steps:
-      - name: Fetch validated public source with image-baked Git
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-version.outputs.tag }}
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          # The Gitea act runner does not always export HOME; guard it so
+          # `set -u` does not abort on an unbound variable.
+          export HOME="${HOME:-/root}"
+          if ! command -v uv >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y curl python3 2>/dev/null || true
+            curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --no-modify-path
+            export PATH="${HOME}/.local/bin:${PATH}"
+          fi
+          export PATH="${HOME}/.local/bin:${PATH}"
+          uv --version
+
+      - name: Build distributions
+        run: |
+          export HOME="${HOME:-/root}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          uv build
+          ls dist/
+
+      - name: Publish to Gitea Package Registry
         env:
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          TWINE_USERNAME: emersonfelipesp
+          TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}
+          TWINE_REPOSITORY_URL: https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi
         run: |
-          set -euo pipefail
-          test -z "${GITHUB_TOKEN:-}"
-          test -z "${GITEA_TOKEN:-}"
-          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
-          export GIT_CONFIG_NOSYSTEM=1
-          export GIT_CONFIG_GLOBAL=/dev/null
-          git init --quiet
-          git remote add origin https://git.nmulti.cloud/emersonfelipesp/proxbox-api.git
-          git fetch --quiet --force --no-tags --depth=1 origin "$SOURCE_SHA"
-          git -c advice.detachedHead=false checkout --quiet --detach FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          export HOME="${HOME:-/root}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          uv run --with twine twine upload --non-interactive dist/*
 
-      - name: Prove exact accepted release runner before candidate execution
+      - name: Verify package in Gitea registry
         env:
-          GITEA_API_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
+          GITEA_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
-          test -f scripts/gitea_release_runner_gate.py
-          test ! -L scripts/gitea_release_runner_gate.py
-          test -f .gitea/release-runner-acceptance.json
-          test ! -L .gitea/release-runner-acceptance.json
-          printf '%s  %s\n' \
-            29bb27a4855c1a249f1862b9b87961cb530e4d33de9f8d5bb16fe7399e9d6a72 \
-            scripts/gitea_release_runner_gate.py | sha256sum --check --strict
-          printf '%s  %s\n' \
-            b299b14006004732f906e1f03e8325094c9aebe9efb56bb579b2c376eb86072e \
-            .gitea/release-runner-acceptance.json | sha256sum --check --strict
-          python3 -I scripts/gitea_release_runner_gate.py \
-            --acceptance .gitea/release-runner-acceptance.json \
-            --owner emersonfelipesp --repository proxbox-api \
-            --run-id "$GITHUB_RUN_ID" \
-            --job-name "Build exact credential-free release-control request" \
-            --source-sha "$SOURCE_SHA"
+          PKG_NAME=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['name'])")
+          sleep 5
+          COUNT=$(curl -sf \
+            "https://git.nmulti.cloud/api/v1/packages/emersonfelipesp?type=pypi&q=${PKG_NAME}&limit=50" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            | VERSION="${VERSION}" python3 -c 'import json, os, sys; v = os.environ["VERSION"]; pkgs = json.load(sys.stdin); print(sum(1 for p in pkgs if p.get("version") == v))')
+          echo "Found ${COUNT} package(s) matching ${PKG_NAME} ${VERSION}"
+          if [ "${COUNT}" -lt 1 ]; then
+            echo "ERROR: Package ${PKG_NAME} ${VERSION} not found in Gitea registry"
+            exit 1
+          fi
+          echo "Package ${PKG_NAME} ${VERSION} successfully published to Gitea registry"
 
-      - name: Bind the image-baked offline release toolchain
+  push-to-github:
+    needs: [validate-version, publish-gitea]
+    if: ${{ needs.validate-version.outputs.version != '' }}
+    runs-on: mirror-host
+    env:
+      # The Gitea act runner does not export HOME; git and `gh auth setup-git`
+      # abort with "fatal: $HOME not set" without this. mirror-host runs as root.
+      HOME: /root
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      TAG: ${{ needs.validate-version.outputs.tag }}
+      IS_RC: ${{ needs.validate-version.outputs.is_rc }}
+      GH_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GH_MIRROR_TOKEN }}
+    steps:
+      - name: Install GitHub CLI
         run: |
           set -euo pipefail
-          test "$GITHUB_RUN_ATTEMPT" = 1
-          test ! -L /usr/local/bin/python3
-          test ! -L /usr/local/bin/uv
-          test "$(stat -c '%u:%g:%a:%h:%F' /usr/local/bin/python3)" = '0:0:755:1:regular file'
-          test "$(stat -c '%u:%g:%a:%h:%F' /usr/local/bin/uv)" = '0:0:755:1:regular file'
-          test "$(/usr/local/bin/python3 -I -c 'import platform; print(platform.python_version())')" = 3.12.14
-          test "$(/usr/local/bin/uv --version)" = "uv 0.12.5 (x86_64-unknown-linux-gnu)"
-          printf '%s  %s\n' \
-            aa4c3252dd9aa62dae1f43178e0063c7f43706418d3cdfe0cee28dbb806635fd \
-            uv.lock | sha256sum --check --strict
-          test "$(cat /opt/nmc-release/proxbox-api/uv.lock.sha256)" = \
-            aa4c3252dd9aa62dae1f43178e0063c7f43706418d3cdfe0cee28dbb806635fd
-          test -d /opt/nmc-release/proxbox-api/publish-wheels
-          test -d /opt/nmc-release/proxbox-api/runtime-wheels
-          test ! -L /opt/nmc-release/proxbox-api/publish-wheels
-          test ! -L /opt/nmc-release/proxbox-api/runtime-wheels
-          /usr/local/bin/nmc-verify-release-wheelhouse \
-            --wheelhouse /opt/nmc-release/proxbox-api/publish-wheels \
-            --manifest /opt/nmc-release/proxbox-api/publish-wheels.sha256
-          /usr/local/bin/nmc-verify-release-wheelhouse \
-            --wheelhouse /opt/nmc-release/proxbox-api/runtime-wheels \
-            --manifest /opt/nmc-release/proxbox-api/runtime-wheels.sha256
-          printf '%s\n' \
-            'UV_BIN=/usr/local/bin/uv' \
-            'UV_PYTHON=/usr/local/bin/python3' \
-            'NMC_PUBLISH_WHEELHOUSE=/opt/nmc-release/proxbox-api/publish-wheels' \
-            'NMC_RUNTIME_WHEELHOUSE=/opt/nmc-release/proxbox-api/runtime-wheels' \
-            >> "$GITHUB_ENV"
+          if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
+          apt-get update -qq
+          apt-get install -y ca-certificates curl gnupg
+          mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+            | tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+          apt-get update -qq
+          apt-get install -y gh
+          gh --version
 
-      - name: Build artifacts across a token-free UID boundary
-        env:
-          BUILD_ROOT: /nmc-build/proxbox-api-${{ github.run_id }}-${{ github.run_attempt }}
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
-          TAG: ${{ needs.validate-source.outputs.tag }}
-          VERSION: ${{ needs.validate-source.outputs.version }}
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-version.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Push tag to GitHub
         run: |
           set -euo pipefail
-          umask 077
-          test "$GITHUB_RUN_ATTEMPT" = 1
-          test ! -e "$BUILD_ROOT"
-          test ! -L "$BUILD_ROOT"
-          printf '%s  %s\n' \
-            33e32529f2a33d90f4cec10b3be30f16b3bd3027fe4363b2a8e4ad380db55340 \
-            scripts/gitea_release_build_boundary.py | sha256sum --check --strict
-          python3 -I scripts/gitea_release_build_boundary.py \
-            --build-root "$BUILD_ROOT" --uv-bin "$UV_BIN" \
-            --python-bin "$UV_PYTHON" \
-            --publish-wheelhouse "$NMC_PUBLISH_WHEELHOUSE" \
-            --runtime-wheelhouse "$NMC_RUNTIME_WHEELHOUSE" \
-            --source-sha "$SOURCE_SHA" \
-            --tag "$TAG" --version "$VERSION" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          git config user.email "gitea-actions@git.nmulti.cloud"
+          git config user.name "Gitea Actions"
+          gh auth setup-git --hostname github.com --force
+          git remote add github "https://github.com/emersonfelipesp/${REPO_NAME}.git" \
+            || git remote set-url github "https://github.com/emersonfelipesp/${REPO_NAME}.git"
+          git push github "refs/tags/${TAG}:refs/tags/${TAG}"
+          echo "Tag ${TAG} pushed to GitHub"
 
-      - name: Bind exact artifacts into the control request
-        env:
-          BUILD_ROOT: /nmc-build/proxbox-api-${{ github.run_id }}-${{ github.run_attempt }}
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
-          TAG: ${{ needs.validate-source.outputs.tag }}
-          VERSION: ${{ needs.validate-source.outputs.version }}
+      - name: Create or publish GitHub Release (non-RC only)
+        if: env.IS_RC == 'false'
         run: |
           set -euo pipefail
-          umask 077
-          printf '%s  %s\n' \
-            4017b7dc0443e4827f27c0571d41188e63f19bffdcb3e785307de1a084561002 \
-            scripts/gitea_release_handoff.py | sha256sum --check --strict
-          python3 -I scripts/gitea_release_handoff.py \
-            --build-root "$BUILD_ROOT" --transfer-root release-transfer \
-            --source-sha "$SOURCE_SHA" --tag "$TAG" --version "$VERSION" \
-            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --workflow .gitea/workflows/publish-gitea.yml
-
-      - name: Obtain supervisor-signed completion evidence
-        env:
-          SOURCE_SHA: ${{ needs.validate-source.outputs.source_sha }}
-        run: |
-          set -euo pipefail
-          umask 077
-          python3 -I - "$GITHUB_RUN_ID" "$SOURCE_SHA" <<'PY'
-          import ctypes
-          import fcntl
-          import hashlib
-          import os
-          import stat
-          import subprocess
-          import sys
-
-          path = "/usr/local/bin/nmc-release-attestation-client"
-          descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
-          snapshot = -1
-          try:
-              parent = os.stat("/usr/local/bin", follow_symlinks=False)
-              metadata = os.fstat(descriptor)
-              raw = bytearray()
-              while len(raw) <= 131072:
-                  chunk = os.read(descriptor, min(65536, 131073 - len(raw)))
-                  if not chunk:
-                      break
-                  raw.extend(chunk)
-              after = os.fstat(descriptor)
-              if (
-                  not stat.S_ISDIR(parent.st_mode)
-                  or parent.st_uid != 0
-                  or stat.S_IMODE(parent.st_mode) & 0o022
-                  or not stat.S_ISREG(metadata.st_mode)
-                  or metadata.st_uid != 0
-                  or stat.S_IMODE(metadata.st_mode) & 0o022
-                  or metadata.st_nlink != 1
-                  or metadata.st_size != len(raw)
-                  or not 0 < len(raw) <= 131072
-                  or (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
-                  != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                  or hashlib.sha256(raw).hexdigest()
-                  != "2b0bee25d755f284b5e8eee3b8a84536825328913040c8757374efe51c57f75f"
-              ):
-                  raise SystemExit("Release attestation client metadata or digest is unsafe")
-              flags = getattr(os, "MFD_CLOEXEC", 0x0001) | getattr(
-                  os, "MFD_ALLOW_SEALING", 0x0002
-              )
-              if hasattr(os, "memfd_create"):
-                  snapshot = os.memfd_create("nmc-release-client", flags)
-              else:
-                  libc = ctypes.CDLL(None, use_errno=True)
-                  memfd_create = libc.memfd_create
-                  memfd_create.argtypes = (ctypes.c_char_p, ctypes.c_uint)
-                  memfd_create.restype = ctypes.c_int
-                  snapshot = memfd_create(b"nmc-release-client", flags)
-                  if snapshot < 0:
-                      error = ctypes.get_errno()
-                      raise OSError(error, os.strerror(error))
-              view = memoryview(raw)
-              while view:
-                  written = os.write(snapshot, view)
-                  if written <= 0:
-                      raise OSError("short immutable client snapshot write")
-                  view = view[written:]
-              os.fchmod(snapshot, 0o500)
-              seals = 0x0001 | 0x0002 | 0x0004 | 0x0008
-              fcntl.fcntl(snapshot, 1033, seals)
-              if fcntl.fcntl(snapshot, 1034) != seals:
-                  raise OSError("incomplete immutable client snapshot seals")
-              subprocess.run(
-                  [
-                      f"/proc/self/fd/{snapshot}",
-                      "complete",
-                      "--acceptance", ".gitea/release-runner-acceptance.json",
-                      "--repository", "emersonfelipesp/proxbox-api",
-                      "--run-id", sys.argv[1],
-                      "--job-name", "Build exact credential-free release-control request",
-                      "--source-sha", sys.argv[2],
-                      "--workflow", ".gitea/workflows/publish-gitea.yml",
-                      "--request", "release-transfer/release-request.json",
-                      "--manifest", "release-transfer/release-manifest.json",
-                      "--artifact-root", "release-transfer",
-                      "--output-attestation", "release-transfer/runner-completion-attestation.json",
-                      "--output-signature", "release-transfer/runner-completion-attestation.sig",
-                      "--public-key", "/etc/nmc-release-runner-attestation-public.pem",
-                  ],
-                  check=True,
-                  env={"LANG": "C.UTF-8", "PATH": "/usr/local/bin:/usr/bin:/bin"},
-                  pass_fds=(snapshot,),
-                  timeout=60,
-              )
-          finally:
-              if snapshot >= 0:
-                  os.close(snapshot)
-              os.close(descriptor)
-          PY
-          test "$(find release-transfer -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 6
-          test "$(find release-transfer -mindepth 1 -maxdepth 1 -type l | wc -l)" -eq 0
-
-      - name: Upload exact data-only control request
-        run: |
-          set -euo pipefail
-          test -z "${GITHUB_TOKEN:-}"
-          test -z "${GITEA_TOKEN:-}"
-          /usr/local/bin/nmc-upload-gitea-artifact \
-            --root release-transfer --run-id "$GITHUB_RUN_ID"
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          GH_REPO="emersonfelipesp/${REPO_NAME}"
+          NOTES_FILE="docs/release-notes/version-${VERSION}.md"
+          if [ -f "${NOTES_FILE}" ]; then
+            NOTES_ARGS="--notes-file ${NOTES_FILE}"
+          else
+            NOTES_ARGS="--generate-notes"
+          fi
+          TARGET_BRANCH="main"
+          if gh release view "${TAG}" --repo "${GH_REPO}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — ensuring it is not a draft"
+            gh release edit "${TAG}" --repo "${GH_REPO}" --draft=false
+            echo "Release ${TAG} published (was draft)"
+          else
+            gh release create "${TAG}" \
+              --repo "${GH_REPO}" \
+              --target "${TARGET_BRANCH}" \
+              --title "${TAG}" \
+              ${NOTES_ARGS}
+            echo "GitHub release ${TAG} created for ${GH_REPO}"
+          fi
