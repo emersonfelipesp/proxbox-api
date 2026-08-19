@@ -18,29 +18,34 @@ proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
 
 ## Release integrity
 
-- Builds one wheel and one sdist without credentials and binds them to a
-  canonical signed six-file request containing the package wheel, package
-  sdist, `release-manifest.json`, `release-request.json`,
-  `runner-completion-attestation.json`, and
-  `runner-completion-attestation.sig`.
-- Uses the runner image's exact Python 3.12.14 and uv 0.12.5, a policy-pinned
-  `uv.lock` digest, and build-lock checksum manifests for read-only publish and
-  CPython 3.13 musllinux runtime wheelhouses. Dependency resolution is offline
-  (`--no-index`, no Python downloads), and image-baked Gitea checkout/artifact
-  clients limit trusted outer-step networking to same-origin Gitea. The target
-  repository cannot publish; a separately administered control plane
-  verifies the policy-pinned workflow, exact first-attempt run, request,
-  manifest, and artifact bytes before its isolated publisher invokes fixed,
-  digest-locked publication tooling.
-- Embeds a release-only full-digest Docker context with a hash-locked wheelhouse
-  and canonical schema-2 inventory, allowing both the control plane and package
-  deploy gateway to reject mutable or networked build inputs before publish.
-- Requires authenticated Gitea CI run/job evidence for the exact canonical
-  `develop` commit before a tag is accepted.
-- Reuses the exact Gitea artifacts for TestPyPI, PyPI, and downstream Docker
-  publication. Consumed versions are never overwritten or skipped.
-- Requires exact-package production deployment and NMS-issued evidence before
-  final tag promotion and GitHub Release publication.
+- Builds one wheel and one sdist from the exact tagged commit and publishes them
+  to the Gitea Package Registry, which remains the artifact of record.
+- Validates the tag against a strict version pattern before anything is built,
+  and verifies the package is present in the registry after upload.
+- Subscribes to the tag `push` event only. Gitea emits both `create` and `push`
+  for a tag, and subscribing to both would start two immutable uploads for one
+  version.
+- Creates the public GitHub Release for final tags only, so a release candidate
+  never reaches PyPI as though it were final.
+- Reuses the exact Gitea bytes downstream; uploads never use `--skip-existing`,
+  so a failure always advances to a new immutable version.
+
+### Known limitation: publication hardening is deferred
+
+This release publishes through in-repository jobs on the existing shared
+runners — the same path used by `0.0.19` and every currently published version.
+The locked release control plane developed during this cycle is **not** active,
+because the isolated runner fleet it requires does not exist yet: no runner
+advertises `ci-release-proxbox-api`, and the control repository has no runners.
+
+Specifically, this version does **not** yet have: credential-free target builds,
+an exact-byte sealed handoff to a separately administered isolated publisher,
+supervisor-signed runner attestation, or egress-denied build isolation. Those
+controls are implemented and reviewed in-tree and re-land once the isolated
+runners are provisioned.
+
+This is a deliberate, tracked deferral rather than a regression: `0.0.20` ships
+at the same publication posture as every release before it.
 
 ## Upgrade
 
