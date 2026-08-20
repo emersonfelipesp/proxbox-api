@@ -122,6 +122,13 @@ sequenceDiagram
   para TestPyPI/PyPI rodam separadamente em runners GitHub-hosted
   `ubuntu-latest` novos, instalam somente o grupo travado do publicador com
   `--no-install-project` e passam credenciais ao Twine apenas por `TWINE_*`.
+- As credenciais do registro sao definidas por passo. Cada chamada de
+  `release_artifacts.py` que acessa o registro de pacotes do Gitea
+  (`fetch-gitea`, `fetch-attestation`, `publish-attestation`,
+  `publish-manifest`) define `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` no
+  proprio `env` do passo, porque o `env` do job nao guarda segredos. Um passo
+  que omite isso envia um bearer vazio e o registro responde `HTTP 401`.
+  `manifest` e `validate-attestation` sao locais e nao usam credencial.
 - Um run de producao NMS `latest_package` bem-sucedido exporta um recibo
   schema-2 emitido pelo helper root somente apos comprovar a imagem construida
   do sdist exato, a versao instalada e a saude de producao. O workflow publica
