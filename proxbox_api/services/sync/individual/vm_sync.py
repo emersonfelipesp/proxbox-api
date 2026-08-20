@@ -50,6 +50,7 @@ from proxbox_api.services.sync.sync_state_reader import (
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
+from proxbox_api.services.sync.vm_create import ensure_vm_platform
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     iter_proxmox_net_config_items,
@@ -279,6 +280,7 @@ def _build_netbox_vm_payload(
     endpoint_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
+    platform_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -354,6 +356,8 @@ def _build_netbox_vm_payload(
         payload["comments"] = comments_text
     if virtual_machine_type_id is not None:
         payload["virtual_machine_type"] = virtual_machine_type_id
+    if platform_id is not None:
+        payload["platform"] = platform_id
     return payload
 
 
@@ -536,6 +540,15 @@ async def sync_vm_individual(
         )
         merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids) | set(proxmox_tag_ids))
 
+        # Guest OS -> NetBox platform. The per-VM path has no behavior-flag plumbing of
+        # its own, so it takes the ostype-derived value only; the guest-agent refinement
+        # stays on the flag-carrying stage paths where the operator's opt-in is visible.
+        platform_id = await ensure_vm_platform(
+            nb,
+            ostype=proxmox_config.get("ostype") if isinstance(proxmox_config, dict) else None,
+            tag_refs=[],
+        )
+
         netbox_vm_payload = _build_netbox_vm_payload(
             resource=proxmox_resource,
             config=proxmox_config,
@@ -549,6 +562,7 @@ async def sync_vm_individual(
             endpoint_id=endpoint_id,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
+            platform_id=platform_id,
         )
         netbox_version = await detect_netbox_version(nb)
         supports_vm_type = supports_virtual_machine_type(netbox_version)
