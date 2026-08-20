@@ -6,7 +6,7 @@ import inspect
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, cast
 
@@ -215,6 +215,75 @@ class _VMPreparationContext:
     endpoint_id_by_cluster: dict[str, int]
     resolve_vm_type: Callable[[str], Awaitable[object | None]]
     resolve_vm_proxmox_tag_ids: Callable[[str, dict[str, object]], Awaitable[list[int]]]
+    # Both default so an existing constructor keeps working -- these are optional
+    # accelerators, not new required inputs, and a caller that omits them simply gets
+    # the ostype-derived platform and an uncached lookup.
+    #
+    # Only consulted for the opt-in guest-agent platform refinement. Absent entries are
+    # normal and simply mean the refinement is skipped for that cluster.
+    px_by_cluster: dict[str, object] = field(default_factory=dict)
+    # Run-scoped {platform name: id or None}. An estate's VMs share a handful of
+    # operating systems, so without this the sync reconciles a platform per VM.
+    platform_cache: dict[str, int | None] = field(default_factory=dict)
+
+
+async def _resolve_vm_platform_id(
+    nb: object,
+    *,
+    px_session: object | None,
+    node: str,
+    vmid: int,
+    resource: dict[str, object],
+    vm_config: dict[str, object],
+    tag_refs: list[dict[str, object]],
+    refine_from_guest_agent: bool,
+    cache: dict[str, int | None] | None = None,
+) -> int | None:
+    """Resolve the NetBox platform id for one VM's guest operating system.
+
+    Tier 1 always runs and costs nothing extra: ``ostype`` is already in the config
+    payload the sync fetched.
+
+    Tier 2 is the opt-in guest-agent refinement. It is attempted only when the caller
+    enabled it **and** the guest can plausibly answer -- QEMU, running, and already known
+    to have the agent enabled, all of which the sync knows without asking. That gating is
+    what keeps the worst case a bounded per-VM cost the operator opted into rather than an
+    open-ended fan-out across the estate.
+
+    Returns ``None`` when the guest OS cannot be identified, leaving the field unset.
+    """
+    from proxbox_api.services.sync.vm_create import ensure_vm_platform
+
+    ostype = vm_config.get("ostype") if isinstance(vm_config, dict) else None
+
+    osinfo: object = None
+    if refine_from_guest_agent and px_session is not None:
+        vm_type = str(resource.get("type") or "").strip().lower()
+        status = str(resource.get("status") or "").strip().lower()
+        agent_enabled = _parse_proxmox_kv_flag(vm_config.get("agent"))
+        if vm_type == "qemu" and status == "running" and agent_enabled:
+            from proxbox_api.services.proxmox_helpers import get_qemu_guest_agent_osinfo
+
+            try:
+                osinfo = await get_qemu_guest_agent_osinfo(px_session, node, vmid)
+            except Exception as error:  # noqa: BLE001
+                # The helper already degrades internally; this is belt-and-braces so a
+                # future change there cannot turn a nicety into a failed VM sync.
+                logger.debug(
+                    "Guest-agent osinfo unavailable for node=%s vmid=%s: %s",
+                    node,
+                    vmid,
+                    error,
+                )
+                osinfo = None
+
+    return await ensure_vm_platform(
+        nb,
+        ostype=ostype,
+        guest_agent_osinfo=osinfo,
+        tag_refs=tag_refs,
+        cache=cache,
+    )
 
 
 def _vm_identity_lookup(
@@ -357,6 +426,18 @@ async def _prepare_vm_from_config(  # noqa: C901
     proxmox_tag_ids = await context.resolve_vm_proxmox_tag_ids(str(cluster_name), vm_config)
     proxbox_tag_id = int(getattr(context.tag, "id", 0) or 0)
     merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
+    platform_id = await _resolve_vm_platform_id(
+        context.nb,
+        px_session=context.px_by_cluster.get(str(cluster_name)),
+        node=str(resource.get("node") or ""),
+        vmid=int(resource.get("vmid") or 0),
+        resource=resource,
+        vm_config=vm_config if isinstance(vm_config, dict) else {},
+        tag_refs=context.tag_refs,
+        refine_from_guest_agent=bool(context.behavior_flags.sync_vm_platform_from_guest_agent),
+        cache=context.platform_cache,
+    )
+
     desired_payload = await asyncio.to_thread(
         build_netbox_virtual_machine_payload,
         proxmox_resource=resource,
@@ -368,6 +449,7 @@ async def _prepare_vm_from_config(  # noqa: C901
         site_id=site_id,
         tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
         virtual_machine_type_id=vm_type_id,
+        platform_id=platform_id,
         last_updated=now,
         cluster_name=str(cluster_name),
         proxmox_url=context.proxmox_url_by_cluster.get(str(cluster_name)),
@@ -2117,6 +2199,10 @@ async def create_virtual_machines(  # noqa: C901
             if px_name_text:
                 px_by_cluster[px_name_text] = px
 
+    # Per-run guest-OS platform cache: an estate's VMs share a handful of operating
+    # systems, so resolving one per VM would be pure request amplification.
+    platform_cache: dict[str, int | None] = {}
+
     # Per-cluster color-map cache: fetched once on first VM that needs it.
     tag_color_map_by_cluster: dict[str, dict[str, str]] = {}
     tag_color_map_locks: dict[str, asyncio.Lock] = {}
@@ -2425,6 +2511,8 @@ async def create_virtual_machines(  # noqa: C901
         tag_refs=tag_refs,
         proxmox_url_by_cluster=proxmox_url_by_cluster,
         endpoint_id_by_cluster=endpoint_id_by_cluster,
+        px_by_cluster=px_by_cluster,
+        platform_cache=platform_cache,
         resolve_vm_type=_get_vm_type,
         resolve_vm_proxmox_tag_ids=_resolve_vm_proxmox_tag_ids,
     )
@@ -2914,6 +3002,18 @@ async def create_virtual_machines(  # noqa: C901
         proxmox_tag_ids = await _resolve_vm_proxmox_tag_ids(str(cluster_name), vm_config)
         proxbox_tag_id = int(getattr(tag, "id", 0) or 0)
         merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
+        platform_id = await _resolve_vm_platform_id(
+            nb,
+            px_session=px_by_cluster.get(str(cluster_name)),
+            node=str(resource.get("node") or ""),
+            vmid=int(resource.get("vmid") or 0),
+            resource=resource,
+            vm_config=vm_config if isinstance(vm_config, dict) else {},
+            tag_refs=tag_refs,
+            refine_from_guest_agent=bool(behavior_flags.sync_vm_platform_from_guest_agent),
+            cache=platform_cache,
+        )
+
         netbox_vm_payload = build_netbox_virtual_machine_payload(
             proxmox_resource=resource,
             proxmox_config=vm_config,
@@ -2924,6 +3024,7 @@ async def create_virtual_machines(  # noqa: C901
             site_id=site_id,
             tenant_id=int(getattr(cluster_dependencies.get("tenant"), "id", 0) or 0) or None,
             virtual_machine_type_id=vm_type_id,
+            platform_id=platform_id,
             last_updated=now,
             cluster_name=str(cluster_name),
             proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),

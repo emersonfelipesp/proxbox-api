@@ -93,6 +93,76 @@ def strip_netbox_metadata(text: str | None) -> str | None:
     return cleaned or None
 
 
+# NetBox's ``description`` is a single-line CharField capped at 200 characters, while a
+# Proxmox note is free-form and routinely multi-line. Keep the cap here so all three VM
+# payload builders share one rule; three copies of it is exactly how three different
+# behaviors arose in the first place.
+NETBOX_DESCRIPTION_MAX_CHARS = 200
+_TRUNCATION_MARKER = "\u2026"
+
+
+def derive_description_and_comments(
+    raw_description: object,
+    *,
+    fallback: str,
+) -> tuple[str, str | None]:
+    """Split a Proxmox note into a NetBox ``description`` and ``comments`` pair.
+
+    A note kept in Proxmox is operator-authored content, so a sync must not destroy it.
+    Returns ``(description, comments)`` where:
+
+    * ``description`` is the note's first non-empty line, truncated to NetBox's
+      200-character single-line limit with a visible marker, or ``fallback`` when the
+      note is absent, blank, or consists solely of ``netbox-metadata`` fences;
+    * ``comments`` is the complete cleaned note, but only when it carries more than the
+      description does -- multiple lines, or a first line that had to be truncated.
+      Otherwise it is ``None``, so a one-line note is not duplicated into two fields.
+
+    ``None`` means *do not write the field*, deliberately not *clear it*. Emitting an
+    empty string instead would wipe comments an operator wrote by hand on a VM that
+    never had a Proxmox note, which is the exact class of destruction this change
+    exists to stop. The cost is that shortening a multi-line Proxmox note to one line
+    leaves the previous full note in ``comments`` until it is edited in NetBox; that is
+    the safer side of the trade.
+
+    Fences are stripped **unconditionally**, independent of the
+    ``parse_description_metadata`` toggle. That toggle governs whether the block's PK
+    overrides are applied; it was never about whether the note survives. Before this
+    helper the raw note was simply unused when the toggle was off, so nothing leaked --
+    now that the note is written to NetBox, an unstripped fence would put raw JSON into
+    the rendered UI.
+    """
+    if not isinstance(raw_description, str):
+        return fallback, None
+
+    cleaned = strip_netbox_metadata(raw_description)
+    if not cleaned:
+        return fallback, None
+
+    # Proxmox notes arrive with either newline convention depending on how they were
+    # entered; normalize before splitting so a CRLF note does not leave a stray CR at
+    # the end of the description.
+    normalized = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.strip() for line in normalized.split("\n")]
+    non_empty = [line for line in lines if line]
+    if not non_empty:
+        return fallback, None
+
+    first_line = non_empty[0]
+    truncated = len(first_line) > NETBOX_DESCRIPTION_MAX_CHARS
+    if truncated:
+        description = (
+            first_line[: NETBOX_DESCRIPTION_MAX_CHARS - len(_TRUNCATION_MARKER)]
+            + _TRUNCATION_MARKER
+        )
+    else:
+        description = first_line
+
+    full_note = "\n".join(lines).strip()
+    has_more = truncated or len(non_empty) > 1
+    return description, (full_note if has_more else None)
+
+
 def filter_metadata_by_overwrite_flags(
     metadata: dict[str, int],
     overwrite_flags: object | None,

@@ -274,6 +274,20 @@ class SyncBehaviorFlags(ProxboxBaseModel):
             "before this feature shipped."
         ),
     )
+    sync_vm_platform_from_guest_agent: bool = Field(
+        default=False,
+        title="Refine VM Platform From The Guest Agent",
+        description=(
+            "When true, the sync asks the QEMU guest agent for `get-osinfo` and uses the "
+            "reported product (name plus version-id, never pretty-name, which embeds the "
+            "patch level) as the NetBox platform. This costs one extra Proxmox request "
+            "per eligible VM, so it is opt-in; it is attempted only for QEMU guests that "
+            "are running and already known to have the agent enabled, and any failure "
+            "falls back to the ostype-derived platform without failing the sync. When "
+            "false, the platform is derived from the VM configuration's `ostype` alone, "
+            "at no additional request cost."
+        ),
+    )
     custom_fields_enabled: bool | None = Field(
         default=None,
         title="Legacy Custom Fields Enabled",

@@ -112,6 +112,51 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## VM Platform From The Guest OS
+
+The `ostype` -> platform table in `proxmox_to_netbox/guest_os.py` is **data**: add a
+guest type there, not in code. An unmapped `ostype` returns `None`, meaning *leave the
+platform unset* — never guess an operating system onto an inventory page.
+
+The guest-agent refinement is opt-in (`sync_vm_platform_from_guest_agent`, default
+false) because it costs one Proxmox request per VM. Gate it on eligibility the sync
+already knows — QEMU, running, `agent` enabled — before spending the request. Use
+`name` + `version-id`, never `pretty-name`: the patch level would mint a new NetBox
+platform on every minor update.
+
+`platform_from_guest_agent()` reads data produced by a guest the operator may not
+control. It must stay total: non-dict payloads, missing keys, wrong types, and oversized
+strings all return `None`. `ensure_vm_platform()` is total too — it swallows upsert
+failures and returns `None`. A blank inventory field must never cost a VM its sync.
+
+Platform is set at VM **creation only** and never patched afterwards, because Proxbox
+has never owned this field. Do not add an `overwrite_vm_platform` flag to make that
+tunable: the `overwrite_*` set is a CI-enforced cross-repo contract
+(`contracts/overwrite_flags.json`, mirrored in netbox-proxbox's
+`constants.OVERWRITE_FIELDS`) and adding a flag requires both repos in the same release
+plus the plugin's settings model and per-endpoint override column. A backend-only flag
+is not an acceptable shortcut — `test_overwrite_flags_contract.py` fails on it, and
+`test_vm_platform_from_guest_os.py` asserts its absence directly.
+
+## VM Description and Comments
+
+The Proxmox VM note drives the NetBox `description`; the
+`Synced from Proxmox node {node}` string is only the fallback for a note that is
+absent, blank, or nothing but a `netbox-metadata` fence. The complete note goes to
+`comments` when it carries more than the description does. Derive both through
+`proxmox_to_netbox/description_metadata.py::derive_description_and_comments` — never
+inline the placeholder or the 200-character rule in a payload builder. All three
+builders (bulk stage, per-VM sync, VM-create service) must call it; they previously
+each had their own copy and behaved three different ways.
+
+`netbox-metadata` fences are stripped unconditionally, with
+`parse_description_metadata` on or off — that flag governs the fenced block's PK
+overrides only. Both fields ride the existing `overwrite_vm_description` gate; do not
+add a separate `overwrite_vm_comments` flag, because the plugin cannot yet send one and
+the content is the same under the same consent. When adding a field to the VM create
+body, also add it to `normalize_current_virtual_machine_payload()` or the reconciler
+diff will never patch it.
+
 ## NetBox Custom Field Lifecycle
 
 The canonical Proxbox custom-field inventory lives in
@@ -122,6 +167,29 @@ without a service restart through `POST /extras/custom-fields/reconcile`, and
 can inspect startup bootstrap warnings through `GET /extras/bootstrap-status`.
 The legacy `GET /extras/extras/custom-fields/create` route remains for older
 callers.
+
+Every sync stage route that writes NetBox objects must reconcile that inventory
+before its first write, through the route-level
+`dependencies=[Depends(ensure_netbox_sync_dependencies)]` entry — not a handler
+parameter, because only the route-level form is solved ahead of the operation's
+own data dependencies. This covers the DCIM device routes, the VM storage routes,
+the VM create routes, and `/full-update`; the device and storage routes are the
+ones a fresh stage-by-stage sync reaches first, and omitting the bootstrap there
+makes NetBox reject every write for a missing `proxmox_last_updated` custom field.
+When adding a NetBox-writing route, add the dependency and extend
+`tests/test_stage_route_bootstrap.py`.
+
+A failed custom-field reconcile raises `custom_field_sync_failed` whose
+`failed_fields` entries carry `expected_type`, `expected_object_types`, and a
+`remedy`. NetBox does not allow changing the type of an existing custom field, so
+a field pre-created with the wrong type blocks the bootstrap until it is deleted
+and recreated — the remedy says so and warns that deletion discards stored values.
+Keep that enrichment in `_custom_field_failure_entry()`; do not build failure
+dictionaries inline. The same description reaches
+`run_netbox_bootstrap()`'s per-entry warning capture through
+`describe_custom_field_failure()`, so `BootstrapStatus.warnings` entries for
+`custom_field:<name>` carry `expected_type` and `remedy` too — that log line is
+the one operators read. Non-custom-field warnings stay unchanged.
 
 During sync, `proxbox_api/services/sync/sync_state_writer.py` additively mirrors
 selected legacy custom-field payloads into the netbox-proxbox typed
@@ -328,6 +396,13 @@ receipt and cannot construct successful-production evidence itself.
 /opt/nmulticloud/deploy/bin/deploy-app-package \
   proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
 ```
+
+Every `release_artifacts.py` step that reaches the Gitea package registry
+(`fetch-gitea`, `fetch-attestation`, `publish-attestation`, `publish-manifest`)
+sets `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` in its **own** `env`; the
+job env holds no secrets, so an omission reaches the registry with an empty
+bearer and fails as an opaque `HTTP 401`. `manifest` and `validate-attestation`
+are local-only and do not take the secret.
 
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside
 the repo under `/opt/nmulticloud/deploy`, with the production image built from

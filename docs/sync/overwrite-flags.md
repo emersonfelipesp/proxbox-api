@@ -185,7 +185,12 @@ Separate from the per-field `overwrite_*` gates, `SyncBehaviorFlags` carries
 opt-in behavior toggles that compose independently:
 
 - `parse_description_metadata` — parse a fenced `netbox-metadata` block from each
-  Proxmox object's description.
+  Proxmox object's description and apply its NetBox primary-key overrides. It governs
+  **only** the overrides. It does **not** control whether the Proxmox note reaches
+  NetBox — see [VM description and comments](#vm-description-and-comments) below.
+- `sync_vm_platform_from_guest_agent` — default `false`. When true, the VM sync asks the
+  QEMU guest agent for `get-osinfo` and uses the reported product as the NetBox
+  platform. See [VM platform from the guest OS](#vm-platform-from-the-guest-os) below.
 - `custom_fields_enabled` — **deprecated legacy custom fields**, default `false`.
   When `false`, the typed `Proxbox*SyncState` sidecars are the sole source of
   truth and no legacy reflection custom fields are written, read, or reconciled.
@@ -196,6 +201,112 @@ opt-in behavior toggles that compose independently:
   `ProxboxPluginSettings.custom_fields_enabled` plugin field; an explicit
   per-request behavior flag overrides it. When enabled, every custom-field path
   emits a deprecation warning.
+
+## VM description and comments
+
+A note kept in a Proxmox VM's `description` field is operator-authored content, so the
+sync preserves it rather than overwriting it:
+
+| Proxmox note | NetBox `description` | NetBox `comments` |
+|---|---|---|
+| absent, blank, or only a `netbox-metadata` fence | `Synced from Proxmox node {node}` | not written |
+| one line, ≤ 200 characters | the note | not written |
+| multiple lines | the first non-empty line | the complete note |
+| first line > 200 characters | first line truncated to 200 with a `…` marker | the complete note |
+
+Rules that are easy to get wrong:
+
+- **This is independent of `parse_description_metadata`.** That flag is about
+  `netbox-metadata` PK overrides. Preservation used to be coupled to it, which meant an
+  operator had to enable an unrelated override feature to keep their own notes — and even
+  then it worked on only one of the three VM payload builders.
+- **`netbox-metadata` fences are stripped unconditionally**, with the flag on or off.
+  Before the note was written at all, an unstripped fence leaked nowhere; now that the
+  note reaches NetBox, leaving it in would put raw JSON into the rendered UI.
+- **`comments` is written only when it carries more than `description` does** — multiple
+  lines, or a first line that had to be truncated. A one-line note is not duplicated
+  across two fields.
+- **Proxbox writes `comments` but never clears it.** When there is nothing to write the
+  field is omitted from the payload rather than set to an empty string. Clearing it would
+  wipe comments an operator wrote by hand on a VM that never had a Proxmox note. The
+  trade-off: shortening a multi-line Proxmox note to a single line leaves the previous
+  full note in `comments` until it is edited in NetBox.
+- **`overwrite_vm_description` gates both fields.** With it `false`, neither
+  `description` nor `comments` is patched on an existing VM; both are still set when the
+  VM is created. `comments` deliberately reuses this flag rather than adding a new one:
+  it is the same operator-authored content under the same consent, and reusing the gate
+  means no plugin-side change is required.
+
+All three VM payload builders — the bulk `virtual-machines` stage, the per-VM sync path,
+and the VM-create service — share one derivation helper
+(`proxmox_to_netbox/description_metadata.py::derive_description_and_comments`). They must
+keep sharing it: three private copies of this rule is exactly how they came to behave
+three different ways.
+
+## VM platform from the guest OS
+
+NetBox virtual machines have a `platform` field, which is the natural home for the guest
+operating system. The sync populates it from data Proxmox already exposes.
+
+### Two tiers
+
+| Tier | Source | Cost | Default |
+|---|---|---|---|
+| 1 | `ostype` from the VM configuration | none — already in the config payload | always on |
+| 2 | QEMU guest agent `get-osinfo` | one extra Proxmox request per eligible VM | **opt-in** |
+
+Tier 1 is coarse (`l26` → `Linux (kernel 2.6 or newer)`) but always available. An unknown
+or absent `ostype` leaves the platform **unset** rather than guessing — a wrong operating
+system on an inventory page is worse than a blank field.
+
+Tier 2 refines it to the real product and is enabled with
+`sync_vm_platform_from_guest_agent`. Because it costs a request per VM, it is gated
+twice: by the flag, and by whether the guest can plausibly answer at all. The request is
+attempted only for a VM that is **QEMU**, **running**, and **already known to have the
+agent enabled** — all three of which the sync knows without asking, so no request is
+wasted. Any failure, timeout, or malformed response falls back to the tier-1 value; it
+never fails the VM's sync and never fails the stage. The request is bounded by the same
+`guest_agent_timeout` setting (env `PROXBOX_GUEST_AGENT_TIMEOUT`, default 15s) the
+network-interface agent call uses, so a wedged agent cannot stall the run.
+
+### Naming
+
+The refined name is the agent's `name` plus `version-id`, e.g. `Ubuntu 22.04`.
+
+**Never `pretty-name`.** That field embeds the patch level (`Ubuntu 22.04.5 LTS`), so
+every minor update would mint a new NetBox platform and the list would grow without
+bound. Platform records are **created only, never rewritten**: an existing platform is
+referenced as-is, so a record an operator named, described, or tagged themselves is never
+overwritten by a sync that merely needs it to exist. They are matched and created by slug,
+so repeated syncs converge on one record, and the platform is resolved **once per run per operating system** rather than
+once per VM — an estate's machines share a handful of operating systems, so a per-VM
+lookup would be pure request amplification. Unmapped guests are cached as such too, and a
+transient NetBox failure is deliberately *not* cached, so it cannot blank the platform for
+every remaining VM in the run.
+
+### Overwriting
+
+The platform is set **when a VM is created** and is never patched afterwards. An
+operator may well have assigned a platform by hand, and taking that over on the first
+sync after upgrading would be a regression dressed as a feature.
+
+There is deliberately **no `overwrite_vm_platform` flag**. The `overwrite_*` set is a
+CI-enforced cross-repo contract (`contracts/overwrite_flags.json`, mirrored in
+netbox-proxbox alongside `constants.OVERWRITE_FIELDS`), and adding a flag requires
+changing both repos in the same release plus the plugin's settings model and per-endpoint
+override column. That is out of scope for populating the field; making the behaviour
+operator-tunable is a separate, properly cross-repo change.
+
+So with no configuration at all, a deployment sees the platform populated on **newly
+created VMs only**, and existing platforms are left exactly as they are.
+
+A `netbox-metadata` fence may pin `platform` per VM, since it is an integer foreign key.
+That value lands on creation like any other, and is subject to the same create-only rule —
+the fence does not become a back-door overwrite gate for existing VMs.
+
+Platform **records** are likewise created but never rewritten: an existing platform is
+referenced as-is, so a record an operator named, described, or tagged themselves is never
+overwritten by a sync that merely needs it to exist.
 
 ## Related
 

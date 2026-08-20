@@ -111,8 +111,19 @@ def _compute_vm_patchable_fields(
     fields.add("custom_fields")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
         fields.add("tags")
+    # ``platform`` is deliberately absent from every branch here: it is set when a VM is
+    # created and never patched afterwards. Proxbox has never owned this field, so an
+    # operator may well have set it by hand, and taking it over on the first sync after
+    # upgrading would be a regression dressed as a feature. Making that operator-tunable
+    # would mean adding a flag, and the overwrite_* set is a CI-enforced cross-repo
+    # contract (contracts/overwrite_flags.json, mirrored in netbox-proxbox) that must be
+    # changed in both repos in the same release -- out of scope for populating the field.
     if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
         fields.add("description")
+        # ``comments`` carries the untruncated Proxmox note that ``description`` had to
+        # cut. It is the same operator-authored content under the same consent, so it
+        # rides the same gate rather than adding a flag the plugin cannot yet send.
+        fields.add("comments")
     return fields
 
 
@@ -134,7 +145,11 @@ def normalize_current_virtual_machine_payload(
         "disk": record.get("disk"),
         "tags": record.get("tags"),
         "custom_fields": record.get("custom_fields"),
+        "platform": record.get("platform"),
         "description": record.get("description"),
+        # Without this the reconciler diff cannot see the current value and would
+        # never patch ``comments`` -- the field would be write-once at creation.
+        "comments": record.get("comments"),
     }
     if supports_virtual_machine_type_field:
         payload["virtual_machine_type"] = record.get("virtual_machine_type")

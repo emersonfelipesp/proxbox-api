@@ -244,6 +244,74 @@ async def ensure_vm_type(
     )
 
 
+async def ensure_vm_platform(
+    netbox_session: object,
+    *,
+    ostype: object,
+    guest_agent_osinfo: object = None,
+    tag_refs: list[dict[str, object]] | None = None,
+    cache: dict[str, int | None] | None = None,
+) -> int | None:
+    """Resolve (creating if needed) the NetBox platform for a guest OS.
+
+    Returns the platform id, or ``None`` when the guest OS could not be identified --
+    in which case the VM's platform is left unset rather than guessed at.
+
+    ``cache`` is a run-scoped ``{platform name: id or None}`` map. Without it this does a
+    NetBox reconcile **per virtual machine**, and an estate's VMs overwhelmingly share a
+    handful of operating systems -- 500 VMs would mean 500 lookups for perhaps five
+    platforms. Negative results are cached too, so an unmapped ``ostype`` is not retried
+    once per VM either. Callers that sync a single VM can omit it.
+
+    Never raises. A platform is a nice-to-have inventory detail; failing a VM's sync
+    because NetBox would not accept a platform record would trade a blank field for a
+    broken sync.
+    """
+    from proxbox_api.proxmox_to_netbox.guest_os import platform_slug, resolve_platform_name
+    from proxbox_api.services.netbox_writers import upsert_platform
+
+    name = resolve_platform_name(ostype=ostype, guest_agent_osinfo=guest_agent_osinfo)
+    if not name:
+        return None
+
+    if cache is not None and name in cache:
+        return cache[name]
+
+    slug = platform_slug(name)
+    if not slug:
+        if cache is not None:
+            cache[name] = None
+        return None
+
+    try:
+        result = await upsert_platform(
+            netbox_session,
+            name=name,
+            slug=slug,
+            tag_refs=tag_refs or [],
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning("Could not reconcile NetBox platform %r: %s", name, error)
+        # Deliberately not cached: a transient NetBox failure should not blank the
+        # platform for every remaining VM in the run.
+        return None
+
+    record = getattr(result, "record", None)
+    serialized = record.serialize() if record is not None else None
+    platform_id = serialized.get("id") if isinstance(serialized, dict) else None
+    try:
+        resolved = int(platform_id) or None
+    except (TypeError, ValueError):
+        resolved = None
+
+    if cache is not None:
+        # A benign race is possible when VMs are prepared concurrently: two coroutines
+        # can both miss and both reconcile. The reconcile is idempotent and matched by
+        # slug, so the cost is one redundant lookup, never a duplicate record.
+        cache[name] = resolved
+    return resolved
+
+
 async def create_or_update_virtual_machine(
     netbox_session: object,
     proxmox_resource: ProxmoxVmResourceInput | dict[str, object],

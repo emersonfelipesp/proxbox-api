@@ -630,11 +630,72 @@ Test coverage:
 - `tests/test_pydantic_generator_models.py` verifies generated response models for array, scalar, `null`, and aliased object payloads.
 - `tests/test_session_and_helpers.py` verifies the typed proxmox helper layer and confirms the handcrafted sync dependencies return helper-validated payloads.
 
+## NetBox Sync-Dependency Bootstrap
+
+Every sync stage route that writes NetBox objects first reconciles the NetBox-side
+support objects Proxbox owns — the Proxbox tag, cluster type, manufacturer, generic
+device type, device role, VM roles, VM types, and the custom-field inventory
+(including `proxmox_last_updated`). This runs through
+`ensure_netbox_sync_dependencies`, declared as a **route-level** dependency
+(`dependencies=[Depends(...)]`) rather than as a handler parameter: FastAPI solves
+route-level dependencies before the path operation's own parameters, so the support
+objects exist before the route's data-producing dependencies attempt their first write.
+
+Routes that run it:
+
+- `GET /dcim/devices/create` and `/dcim/devices/create/stream`
+- `GET /virtualization/virtual-machines/storage/create` and `.../storage/create/stream`
+- `GET /virtualization/virtual-machines/create` and `.../create/stream`
+- `GET /virtualization/virtual-machines/{netbox_vm_id}/create` and its stream variant
+- `GET /full-update` and `/full-update/stream`
+
+The device and storage routes matter most: the plugin's stage order starts with
+`devices` and then `storage`, so on a fresh installation a stage-by-stage sync reaches
+them before anything else. Without the bootstrap, NetBox rejects every write with
+`Custom field 'proxmox_last_updated' does not exist for this object type`, and the
+`device_roles -> clusters -> device_types -> devices` chain then fails with misleading
+downstream errors (`manufacturer: This field is required`, `device_type/role: This
+field is required`). The startup bootstrap does not cover this on a fresh install,
+because at process start no NetBox endpoint exists yet and the pass is skipped.
+
+When a bootstrap custom field cannot be reconciled, the resulting HTTP 400
+(`{"reason": "custom_field_sync_failed"}`) names, per failed field, its
+`expected_type`, its `expected_object_types`, and a `remedy` string. NetBox refuses to
+change the type of an existing custom field, so a field pre-created with the wrong type
+blocks the bootstrap until it is deleted and recreated; the remedy says so, and warns
+that deleting a custom field discards the values stored in it.
+
+The exception `message` names every failed field but quotes each *distinct* remedy at
+most once, and at most three of them — a bad API token fails the whole inventory at
+once, and one remedy per field would put kilobytes into an SSE frame, an HTTP error
+body and a long-lived NetBox job log. When remedies are withheld the message says how
+many and points at `detail.failed_fields`, which always carries the complete per-field
+set.
+
+The same enrichment reaches the **startup bootstrap** path. `run_netbox_bootstrap()`
+captures per-entry failures into `BootstrapStatus.warnings` rather than aborting, and a
+warning for a `custom_field:<name>` entry now carries `expected_type` and `remedy`
+alongside `object` and `error`; the accompanying log line quotes the remedy. That is the
+line an operator actually reads when a wrong-typed field blocks the bootstrap, so the
+guidance has to be there and not only on the extras route. Warnings for non-custom-field
+entries (tags, cluster types, device roles) are unchanged.
+
+Each entry's `error` is capped at 2000 characters — a single NetBox error can embed a
+whole response document, and the payload travels in an SSE frame and an HTTP error
+body. A capped value says so and points at the service log, which still receives the
+untruncated text. Classification runs against the **full** error, so a type-change
+refusal buried past the cap is still recognized as one.
+
+Adding a new route that writes NetBox objects means adding the same route-level
+dependency and extending `tests/test_stage_route_bootstrap.py`.
+
 ## DCIM Routes (`/dcim`)
 
 - `GET /dcim/devices`
-- `GET /dcim/devices/create` - Create NetBox devices from Proxmox nodes.
-- `GET /dcim/devices/create/stream` - SSE streaming variant.
+- `GET /dcim/devices/create` - Create NetBox devices from Proxmox nodes. Runs the
+  NetBox sync-dependency bootstrap first.
+- `GET /dcim/devices/create/stream` - SSE streaming variant. Runs the NetBox
+  sync-dependency bootstrap first.
 - `GET /dcim/devices/{node}/interfaces/create`
 - `GET /dcim/devices/interfaces/create` - Sync all node interfaces across all clusters.
 - `GET /dcim/devices/interfaces/create/stream` - SSE streaming variant for all-node interface sync.
@@ -666,8 +727,10 @@ Test coverage:
 - `GET /virtualization/virtual-machines/virtual-disks/create`
 - `GET /virtualization/virtual-machines/virtual-disks/create/stream`
 - `GET /virtualization/virtual-machines/{netbox_vm_id}/virtual-disks/create/stream`
-- `GET /virtualization/virtual-machines/storage/create`
-- `GET /virtualization/virtual-machines/storage/create/stream`
+- `GET /virtualization/virtual-machines/storage/create` - Runs the NetBox
+  sync-dependency bootstrap first.
+- `GET /virtualization/virtual-machines/storage/create/stream` - Runs the NetBox
+  sync-dependency bootstrap first.
 - `GET /virtualization/virtual-machines/task-history/create/stream` - Dedicated
   task-history SSE stage; accepts comma-separated `netbox_vm_ids`. Omitted means
   all VMs, while an explicitly empty, malformed, or non-positive value returns
@@ -681,7 +744,7 @@ Test coverage:
 
 Every VM stream endpoint listed above (`/virtualization/virtual-machines/...create/stream`) accepts the `SyncOverwriteFlags` query parameters defined in `proxbox_api/schemas/sync.py`. They control which user-managed NetBox fields the sync may overwrite:
 
-- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
+- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
 - `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
 - `sync_vm_network` - when `false`, skips the VM-network sub-step.
 - `sync_task_history` - defaults to `true`; when `false`, skips the single

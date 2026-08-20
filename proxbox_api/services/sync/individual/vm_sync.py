@@ -15,6 +15,9 @@ from proxbox_api.netbox_rest import (
     rest_reconcile_async,
 )
 from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
+from proxbox_api.proxmox_to_netbox.description_metadata import (
+    derive_description_and_comments,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
@@ -47,6 +50,7 @@ from proxbox_api.services.sync.sync_state_reader import (
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
+from proxbox_api.services.sync.vm_create import ensure_vm_platform
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     iter_proxmox_net_config_items,
@@ -276,6 +280,7 @@ def _build_netbox_vm_payload(
     endpoint_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
+    platform_id: int | None = None,
 ) -> dict:
     """Build NetBox VM payload from Proxmox resource and config."""
     vm_type = str(resource.get("type", "qemu")).lower()
@@ -324,6 +329,15 @@ def _build_netbox_vm_payload(
         vmid = int(resource.get("vmid") or 0)
         vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
+    # Same rule as the bulk builder: the Proxmox note is the description, the
+    # placeholder is only the fallback, and the full note goes to ``comments``.
+    # Deriving it here rather than inline is what keeps the three VM payload builders
+    # from drifting apart again.
+    description_text, comments_text = derive_description_and_comments(
+        config.get("description") if isinstance(config, dict) else None,
+        fallback=f"Synced from Proxmox node {node}",
+    )
+
     payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
@@ -336,10 +350,14 @@ def _build_netbox_vm_payload(
         "disk": disk_mb,
         "tags": tag_ids,
         "custom_fields": vm_custom_fields,
-        "description": f"Synced from Proxmox node {node}",
+        "description": description_text,
     }
+    if comments_text is not None:
+        payload["comments"] = comments_text
     if virtual_machine_type_id is not None:
         payload["virtual_machine_type"] = virtual_machine_type_id
+    if platform_id is not None:
+        payload["platform"] = platform_id
     return payload
 
 
@@ -522,6 +540,15 @@ async def sync_vm_individual(
         )
         merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids) | set(proxmox_tag_ids))
 
+        # Guest OS -> NetBox platform. The per-VM path has no behavior-flag plumbing of
+        # its own, so it takes the ostype-derived value only; the guest-agent refinement
+        # stays on the flag-carrying stage paths where the operator's opt-in is visible.
+        platform_id = await ensure_vm_platform(
+            nb,
+            ostype=proxmox_config.get("ostype") if isinstance(proxmox_config, dict) else None,
+            tag_refs=[],
+        )
+
         netbox_vm_payload = _build_netbox_vm_payload(
             resource=proxmox_resource,
             config=proxmox_config,
@@ -535,6 +562,7 @@ async def sync_vm_individual(
             endpoint_id=endpoint_id,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
+            platform_id=platform_id,
         )
         netbox_version = await detect_netbox_version(nb)
         supports_vm_type = supports_virtual_machine_type(netbox_version)

@@ -514,12 +514,16 @@ def test_create_custom_fields_rejects_unverified_duplicate_refetch_miss(monkeypa
         asyncio.run(create_custom_fields(netbox_session=session))
 
     assert excinfo.value.detail["reason"] == "custom_field_sync_failed"
-    assert excinfo.value.detail["failed_fields"] == [
-        {
-            "name": "proxmox_vm_id",
-            "error": "NetBox returned an unverified custom-field record without an id.",
-        }
-    ]
+    failed_fields = excinfo.value.detail["failed_fields"]
+    assert len(failed_fields) == 1
+    failure = failed_fields[0]
+    assert failure["name"] == "proxmox_vm_id"
+    assert failure["error"] == "NetBox returned an unverified custom-field record without an id."
+    # The entry additionally carries the expected definition and a remedy so an
+    # operator can recover without reading the source.
+    assert failure["expected_type"] == "integer"
+    assert failure["expected_object_types"] == "virtualization.virtualmachine"
+    assert "integer" in failure["remedy"]
     assert custom_fields_service._CUSTOM_FIELDS_CACHE is None
 
     first_call_count = len(session.client.calls)

@@ -425,6 +425,9 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
         "role",
         "tags",
         "description",
+        # ``comments`` carries the untruncated Proxmox note that ``description`` had to
+        # cut, so it rides the same overwrite gate as ``description``.
+        "comments",
         "custom_fields",
     }
 
@@ -469,6 +472,7 @@ def test_vm_patchable_drops_vm_type_when_netbox_lacks_native_type_field() -> Non
         ("overwrite_vm_type", "virtual_machine_type"),
         ("overwrite_vm_tags", "tags"),
         ("overwrite_vm_description", "description"),
+        ("overwrite_vm_description", "comments"),
     ],
 )
 def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_key: str) -> None:
