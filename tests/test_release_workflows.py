@@ -291,7 +291,13 @@ def _publish_jobs() -> dict[str, dict]:
 
 
 def _job_text(job: dict) -> str:
-    return yaml.safe_dump(job, default_flow_style=False)
+    # json, not yaml.safe_dump: the dumper folds long lines (these very jobs
+    # produce dozens of folded continuations), so a needle could straddle a
+    # fold and vanish from the rendered text. Both callers below fail closed
+    # when that happens -- an empty match set trips their count/identity
+    # assertions rather than passing vacuously -- but json never wraps, so the
+    # confusing false failure cannot arise in the first place.
+    return json.dumps(job)
 
 
 def test_netbox_e2e_readiness_is_long_enough_for_migrations_and_api_status():
