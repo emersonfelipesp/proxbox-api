@@ -176,6 +176,15 @@ Open the nearest scoped guide for the code you are changing.
   source fetches, the dedicated `mirror-host` runner label, `gh`
   authentication, and a single triggering-branch push. Do not broaden it to
   tags, `--all`, or `--mirror`.
+- `.gitea/workflows/ci.yml` serializes full-suite runs repository-wide through
+  the constant `proxbox-api-ci` concurrency group with
+  `cancel-in-progress: false`. A per-ref group permits different pull requests
+  or a pull request and protected-branch push to collide on the capacity-2,
+  8-CPU-quota runner. Cancellation remains disabled so a pull-request run
+  cannot destroy the exact-SHA push status consumed by the deploy gate. The
+  pytest invocation pins `--max-worker-restart=0`, making a killed xdist worker
+  fail immediately instead of starting an unbounded replacement and
+  recollection loop.
 - `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
   Pushes to `develop` deploy `proxbox-api-staging`; production uses an authorized
   manual dispatch from canonical `main` through the `prod-deploy` runner.
