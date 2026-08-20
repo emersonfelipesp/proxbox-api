@@ -113,6 +113,10 @@ def _compute_vm_patchable_fields(
         fields.add("tags")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
         fields.add("description")
+        # ``comments`` carries the untruncated Proxmox note that ``description`` had to
+        # cut. It is the same operator-authored content under the same consent, so it
+        # rides the same gate rather than adding a flag the plugin cannot yet send.
+        fields.add("comments")
     return fields
 
 
@@ -135,6 +139,9 @@ def normalize_current_virtual_machine_payload(
         "tags": record.get("tags"),
         "custom_fields": record.get("custom_fields"),
         "description": record.get("description"),
+        # Without this the reconciler diff cannot see the current value and would
+        # never patch ``comments`` -- the field would be write-once at creation.
+        "comments": record.get("comments"),
     }
     if supports_virtual_machine_type_field:
         payload["virtual_machine_type"] = record.get("virtual_machine_type")

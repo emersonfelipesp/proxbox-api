@@ -112,6 +112,25 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## VM Description and Comments
+
+The Proxmox VM note drives the NetBox `description`; the
+`Synced from Proxmox node {node}` string is only the fallback for a note that is
+absent, blank, or nothing but a `netbox-metadata` fence. The complete note goes to
+`comments` when it carries more than the description does. Derive both through
+`proxmox_to_netbox/description_metadata.py::derive_description_and_comments` — never
+inline the placeholder or the 200-character rule in a payload builder. All three
+builders (bulk stage, per-VM sync, VM-create service) must call it; they previously
+each had their own copy and behaved three different ways.
+
+`netbox-metadata` fences are stripped unconditionally, with
+`parse_description_metadata` on or off — that flag governs the fenced block's PK
+overrides only. Both fields ride the existing `overwrite_vm_description` gate; do not
+add a separate `overwrite_vm_comments` flag, because the plugin cannot yet send one and
+the content is the same under the same consent. When adding a field to the VM create
+body, also add it to `normalize_current_virtual_machine_payload()` or the reconciler
+diff will never patch it.
+
 ## NetBox Custom Field Lifecycle
 
 The canonical Proxbox custom-field inventory lives in
