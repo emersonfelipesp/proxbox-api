@@ -10,6 +10,7 @@ from proxbox_api.dependencies import (
     ProxboxTagDep,
     ResolvedSyncBehaviorFlagsDep,
     ResolvedSyncOverwriteFlagsDep,
+    ensure_netbox_sync_dependencies,
 )
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -40,6 +41,14 @@ async def get_devices():
 
 @router.get(
     "/devices/create",
+    # The NetBox-side support objects (Proxbox tag, cluster type, manufacturer,
+    # device type, device role, custom fields) must exist before the first device
+    # write. Declared as a *route-level* dependency rather than a function
+    # parameter on purpose: FastAPI solves route-level dependencies ahead of the
+    # path operation's own parameters, so the bootstrap completes before
+    # ``ProxmoxCreateDevicesDep`` starts writing. A plain parameter gives no such
+    # ordering guarantee.
+    dependencies=[Depends(ensure_netbox_sync_dependencies)],
     response_model=list[dict[str, object]],
     response_model_exclude={"websocket"},
     response_model_exclude_none=True,
@@ -49,7 +58,18 @@ async def create_devices(proxmox_create_devices_dep: ProxmoxCreateDevicesDep):
     return proxmox_create_devices_dep
 
 
-@router.get("/devices/create/stream", response_model=None)
+@router.get(
+    "/devices/create/stream",
+    # ``devices`` is the first entry in the plugin's stage order, so on a fresh
+    # install this route is routinely the very first NetBox write of a
+    # stage-by-stage sync. Without the bootstrap, NetBox rejects every write with
+    # "Custom field 'proxmox_last_updated' does not exist for this object type"
+    # and the whole device_roles -> clusters -> device_types -> devices chain
+    # fails with misleading downstream errors. See the route-level ordering note
+    # on ``/devices/create`` above.
+    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+    response_model=None,
+)
 async def create_devices_stream(
     netbox_session: NetBoxSessionDep,
     clusters_status: ClusterStatusDep,
