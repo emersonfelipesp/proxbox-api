@@ -27,8 +27,10 @@ proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
   version.
 - Creates the public GitHub Release for final tags only, so a release candidate
   never reaches PyPI as though it were final.
-- Reuses the exact Gitea bytes downstream; uploads never use `--skip-existing`,
-  so a failure always advances to a new immutable version.
+- Builds the public-index distributions from the same tagged commit, so what
+  reaches TestPyPI and PyPI corresponds to the published source rather than a
+  separately fetched copy. Uploads never use `--skip-existing`, so a failure
+  always advances to a new immutable version rather than silently succeeding.
 
 ### Known limitation: publication hardening is deferred
 
