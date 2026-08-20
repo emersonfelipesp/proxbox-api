@@ -50,6 +50,7 @@ from proxbox_api.netbox_version import (
 from proxbox_api.services.custom_fields import (
     CUSTOM_FIELD_INVENTORY,
     custom_fields_enabled,
+    describe_custom_field_failure,
     reconcile_custom_field_with_status,
     warn_legacy_custom_fields,
 )
@@ -323,8 +324,24 @@ async def _safe_upsert(
     try:
         result = await call()
     except Exception as exc:  # noqa: BLE001 — orchestrator must not abort the run
-        logger.error("NetBox bootstrap failed for %s: %s", label, exc)
-        status.warnings.append({"object": label, "error": str(exc)})
+        warning: dict[str, str] = {"object": label, "error": str(exc)}
+        # NetBox refuses to change the type of an existing custom field, so a field
+        # pre-created with the wrong type blocks the bootstrap permanently. The raw
+        # NetBox message names neither the type Proxbox expects nor a remedy, and this
+        # log line is what an operator actually reads when it happens.
+        described = describe_custom_field_failure(label, str(exc))
+        if described is not None:
+            warning["expected_type"] = described["expected_type"]
+            warning["remedy"] = described["remedy"]
+            logger.error(
+                "NetBox bootstrap failed for %s: %s -- %s",
+                label,
+                exc,
+                described["remedy"],
+            )
+        else:
+            logger.error("NetBox bootstrap failed for %s: %s", label, exc)
+        status.warnings.append(warning)
         return None
 
     if result.status == "created":

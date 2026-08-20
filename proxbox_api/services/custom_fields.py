@@ -888,6 +888,125 @@ def _current_custom_field_normalizer(record: dict[str, object]) -> dict[str, obj
     }
 
 
+_TYPE_CHANGE_REFUSAL_MARKER = "changing the type of custom fields is not supported"
+
+# ``failed_fields`` is carried in an SSE frame and an HTTP error body, and a single
+# NetBox error can embed a whole response document. Detection runs against the full
+# text; only the stored copy is capped, and the untruncated text still reaches the
+# warning log.
+_MAX_STORED_ERROR_CHARS = 2000
+
+# Every failed field carries the same remedy text for a given cause, and the whole
+# inventory can fail at once (a bad token fails all of them). Concatenating one
+# remedy per field would put kilobytes into an exception message that is copied into
+# an SSE frame, an HTTP error body and a long-lived NetBox job log. Name every field,
+# but say each distinct remedy once and cap how many are quoted.
+_MAX_QUOTED_REMEDIES = 3
+
+
+def _truncate_error(error: str) -> str:
+    if len(error) <= _MAX_STORED_ERROR_CHARS:
+        return error
+    dropped = len(error) - _MAX_STORED_ERROR_CHARS
+    # Say that it was cut. A silently clipped error reads as a complete one.
+    return f"{error[:_MAX_STORED_ERROR_CHARS]}… (+{dropped} more characters; see the service log)"
+
+
+def _custom_field_failure_entry(
+    custom_field: dict[str, object],
+    error: str,
+) -> dict[str, str]:
+    """Describe one failed custom-field reconcile, naming the expected definition.
+
+    NetBox refuses to change the type of an existing custom field, so a field
+    pre-created with the wrong type blocks the bootstrap permanently. The raw
+    NetBox message says only that the change is unsupported -- it names neither
+    the type Proxbox expects nor how to recover -- which forces the operator to
+    read the source. Carry that here so the SSE frame, the HTTP error body and
+    the log all say the same actionable thing.
+    """
+    name = str(custom_field.get("name", "unknown"))
+    expected_type = str(custom_field.get("type", "unknown"))
+    object_types = custom_field.get("object_types")
+    expected_object_types = (
+        ", ".join(str(item) for item in object_types)
+        if isinstance(object_types, (list, tuple))
+        else str(object_types or "unknown")
+    )
+    entry = {
+        "name": name,
+        # Detection below runs against the full ``error``; only the stored copy is
+        # capped, so a huge NetBox response cannot bloat the SSE frame or error body.
+        "error": _truncate_error(error),
+        "expected_type": expected_type,
+        "expected_object_types": expected_object_types,
+    }
+    if _TYPE_CHANGE_REFUSAL_MARKER in error.lower():
+        # Only reachable when a field already exists with a different type;
+        # deleting and recreating is the sole remedy NetBox offers.
+        entry["remedy"] = (
+            f"NetBox will not change the type of the existing custom field "
+            f"'{name}'. Proxbox requires type '{expected_type}' on object type(s) "
+            f"{expected_object_types}. Delete the existing '{name}' custom field in "
+            f"NetBox (Customization > Custom Fields) and re-run the sync so Proxbox "
+            f"recreates it with the correct type. Deleting a custom field also "
+            f"discards the values stored in it."
+        )
+    else:
+        entry["remedy"] = (
+            f"Proxbox requires custom field '{name}' with type '{expected_type}' on "
+            f"object type(s) {expected_object_types}. Verify the NetBox API token has "
+            f"permission to create and modify custom fields, then re-run the sync."
+        )
+    return entry
+
+
+def describe_custom_field_failure(label: str, error: str) -> dict[str, str] | None:
+    """Enrich a bootstrap warning for a custom-field entry, or ``None`` if unrelated.
+
+    ``run_netbox_bootstrap()`` labels its entries ``custom_field:<name>``. That path,
+    not the extras route, is what produces the log line an operator actually sees when
+    a pre-existing wrong-typed field blocks the bootstrap, so the remedy has to reach
+    it too -- otherwise the enrichment only exists on the path nobody was reading.
+    """
+    prefix = "custom_field:"
+    if not label.startswith(prefix):
+        return None
+    name = label[len(prefix) :]
+    for field in CUSTOM_FIELD_INVENTORY:
+        if field.get("name") == name:
+            return _custom_field_failure_entry(dict(field), error)
+    return None
+
+
+def _custom_field_failure_message(failed_fields: list[dict[str, str]]) -> str:
+    """Summarize failed custom-field reconciles without unbounded repetition."""
+    named = ", ".join(
+        f"{entry.get('name', 'unknown')} (expected type '{entry.get('expected_type', 'unknown')}')"
+        for entry in failed_fields
+    )
+    distinct_remedies: list[str] = []
+    for entry in failed_fields:
+        remedy = entry.get("remedy")
+        if remedy and remedy not in distinct_remedies:
+            distinct_remedies.append(remedy)
+
+    quoted = distinct_remedies[:_MAX_QUOTED_REMEDIES]
+    suffix = ""
+    if len(distinct_remedies) > len(quoted):
+        # Never drop findings silently: say how many remedies were withheld and where
+        # the complete set lives.
+        suffix = (
+            f" {len(distinct_remedies) - len(quoted)} further distinct remedy/remedies "
+            f"are reported per field in detail.failed_fields."
+        )
+    return (
+        f"Failed to create {len(failed_fields)} NetBox custom field(s): {named}. "
+        + " ".join(quoted)
+        + suffix
+    )
+
+
 async def reconcile_custom_field_with_status(
     netbox_session: object,
     custom_field: Mapping[str, object],
@@ -946,12 +1065,7 @@ async def _reconcile_custom_fields_uncached(  # noqa: C901
             if serialized.get("id") is None:
                 had_failures = True
                 error = "NetBox returned an unverified custom-field record without an id."
-                failed_fields.append(
-                    {
-                        "name": str(custom_field.get("name", "unknown")),
-                        "error": error,
-                    }
-                )
+                failed_fields.append(_custom_field_failure_entry(custom_field, error))
                 logger.warning(
                     "Failed to create/update custom field '%s': %s",
                     custom_field.get("name", "unknown"),
@@ -962,10 +1076,10 @@ async def _reconcile_custom_fields_uncached(  # noqa: C901
         except ProxboxException as exc:
             had_failures = True
             failed_fields.append(
-                {
-                    "name": str(custom_field.get("name", "unknown")),
-                    "error": str(exc.message),
-                }
+                _custom_field_failure_entry(
+                    custom_field,
+                    f"{exc.message} {exc.detail}".strip(),
+                )
             )
             overloaded = overloaded or is_netbox_overwhelmed_error(exc)
             logger.warning(
@@ -978,12 +1092,7 @@ async def _reconcile_custom_fields_uncached(  # noqa: C901
                 break
         except Exception as exc:  # noqa: BLE001
             had_failures = True
-            failed_fields.append(
-                {
-                    "name": str(custom_field.get("name", "unknown")),
-                    "error": str(exc),
-                }
-            )
+            failed_fields.append(_custom_field_failure_entry(custom_field, str(exc)))
             overloaded = overloaded or is_netbox_overwhelmed_error(exc)
             logger.warning(
                 "Failed to create/update custom field '%s': %s",
@@ -1008,7 +1117,7 @@ async def _reconcile_custom_fields_uncached(  # noqa: C901
             )
 
         raise ProxboxException(
-            message="Failed to create all NetBox custom fields.",
+            message=_custom_field_failure_message(failed_fields),
             detail={
                 "reason": "custom_field_sync_failed",
                 "created_count": len(fields),
