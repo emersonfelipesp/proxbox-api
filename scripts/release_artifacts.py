@@ -278,6 +278,8 @@ def fetch_gitea_artifacts(
     token: str = "",
 ) -> dict[str, Any]:
     """Download and verify the exact repository-linked Gitea artifact set."""
+    if not token:
+        raise ReleaseArtifactError("Gitea package token is unavailable")
     package = canonical_name(package)
     published_manifest = fetch_gitea_manifest(
         owner=owner,
@@ -404,6 +406,8 @@ def fetch_gitea_attestation(
     *, owner: str, repository: str, manifest: dict[str, Any], token: str = ""
 ) -> dict[str, Any]:
     """Fetch immutable, repository-linked deployment completion evidence."""
+    if not token:
+        raise ReleaseArtifactError("Gitea package token is unavailable")
     package = f"{manifest['package']}-nms-attestation"
     version = str(manifest["version"])
     base = (
@@ -557,6 +561,7 @@ def main() -> None:
             owner=args.owner,
             repository=args.repository,
             manifest=manifest,
+            token=os.getenv("GITEA_PACKAGE_TOKEN", ""),
         )
     elif args.command == "publish-attestation":
         manifest = load_manifest(args.manifest)

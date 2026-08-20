@@ -142,6 +142,29 @@ can inspect startup bootstrap warnings through `GET /extras/bootstrap-status`.
 The legacy `GET /extras/extras/custom-fields/create` route remains for older
 callers.
 
+Every sync stage route that writes NetBox objects must reconcile that inventory
+before its first write, through the route-level
+`dependencies=[Depends(ensure_netbox_sync_dependencies)]` entry — not a handler
+parameter, because only the route-level form is solved ahead of the operation's
+own data dependencies. This covers the DCIM device routes, the VM storage routes,
+the VM create routes, and `/full-update`; the device and storage routes are the
+ones a fresh stage-by-stage sync reaches first, and omitting the bootstrap there
+makes NetBox reject every write for a missing `proxmox_last_updated` custom field.
+When adding a NetBox-writing route, add the dependency and extend
+`tests/test_stage_route_bootstrap.py`.
+
+A failed custom-field reconcile raises `custom_field_sync_failed` whose
+`failed_fields` entries carry `expected_type`, `expected_object_types`, and a
+`remedy`. NetBox does not allow changing the type of an existing custom field, so
+a field pre-created with the wrong type blocks the bootstrap until it is deleted
+and recreated — the remedy says so and warns that deletion discards stored values.
+Keep that enrichment in `_custom_field_failure_entry()`; do not build failure
+dictionaries inline. The same description reaches
+`run_netbox_bootstrap()`'s per-entry warning capture through
+`describe_custom_field_failure()`, so `BootstrapStatus.warnings` entries for
+`custom_field:<name>` carry `expected_type` and `remedy` too — that log line is
+the one operators read. Non-custom-field warnings stay unchanged.
+
 During sync, `proxbox_api/services/sync/sync_state_writer.py` additively mirrors
 selected legacy custom-field payloads into the netbox-proxbox typed
 `/api/plugins/proxbox/sync-state/*` sidecar API. VM identity, run ids,
@@ -347,6 +370,13 @@ receipt and cannot construct successful-production evidence itself.
 /opt/nmulticloud/deploy/bin/deploy-app-package \
   proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
 ```
+
+Every `release_artifacts.py` step that reaches the Gitea package registry
+(`fetch-gitea`, `fetch-attestation`, `publish-attestation`, `publish-manifest`)
+sets `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` in its **own** `env`; the
+job env holds no secrets, so an omission reaches the registry with an empty
+bearer and fails as an opaque `HTTP 401`. `manifest` and `validate-attestation`
+are local-only and do not take the secret.
 
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside
 the repo under `/opt/nmulticloud/deploy`, with the production image built from

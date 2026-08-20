@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,
+    ProxboxTagDep,
+    ensure_netbox_sync_dependencies,
+)
 from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.sync.storages import create_storages as sync_storages
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -25,7 +29,14 @@ def _resolve_fetch_concurrency() -> int:
     )
 
 
-@router.get("/storage/create")
+@router.get(
+    "/storage/create",
+    # ``storage`` is second in the plugin's stage order, so a stage-by-stage sync on a
+    # fresh install can reach it before any route that bootstraps. Route-level so it is
+    # solved ahead of this operation's own dependencies -- see the note on the DCIM
+    # device routes.
+    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+)
 async def create_storages(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
@@ -45,7 +56,11 @@ async def create_storages(
     )
 
 
-@router.get("/storage/create/stream", response_model=None)
+@router.get(
+    "/storage/create/stream",
+    dependencies=[Depends(ensure_netbox_sync_dependencies)],
+    response_model=None,
+)
 async def create_storages_stream(
     netbox_session: NetBoxSessionDep,
     pxs: ProxmoxSessionsDep,
