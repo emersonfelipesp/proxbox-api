@@ -39,6 +39,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxDeviceRoleSyncState,
     NetBoxDeviceTypeSyncState,
     NetBoxManufacturerSyncState,
+    NetBoxPlatformSyncState,
     NetBoxVirtualMachineTypeSyncState,
 )
 from proxbox_api.schemas.netbox.extras import TagSchema
@@ -355,6 +356,49 @@ async def upsert_vm_type(
             "description": record.get("description"),
             "tags": record.get("tags"),
         },
+    )
+    return _from_reconcile(result)
+
+
+async def upsert_platform(
+    nb: Api,
+    *,
+    name: str,
+    slug: str,
+    tag_refs: list[dict[str, object]] | None = None,
+) -> UpsertResult:
+    """Ensure a ``dcim.Platform`` exists for a synced guest operating system.
+
+    Matched by ``slug`` so repeated syncs converge on one record rather than
+    accumulating near-duplicates. ``manufacturer`` is deliberately left unset: Proxbox
+    knows the guest OS, not who ships it, and inventing a manufacturer would create
+    records an operator never asked for.
+
+    **Create-only.** An existing platform is left entirely alone -- not renamed, and not
+    re-tagged. A platform named ``Ubuntu 22.04`` very plausibly predates this sync and
+    carries an operator's own name, description, and tags; overwriting any of them would
+    be the same class of destruction this change exists to avoid, on a record Proxbox
+    merely needs to reference. The empty ``patchable_fields`` is what enforces that: the
+    reconcile still reports ``created`` versus ``unchanged``, but never patches.
+    """
+    payload: dict[str, object] = {
+        "name": name,
+        "slug": slug,
+        "tags": tag_refs or [],
+    }
+
+    result = await rest_reconcile_async_with_status(
+        nb,
+        "/api/dcim/platforms/",
+        lookup={"slug": slug},
+        payload=payload,
+        schema=NetBoxPlatformSyncState,
+        current_normalizer=lambda record: {
+            "name": record.get("name"),
+            "slug": record.get("slug"),
+            "tags": record.get("tags"),
+        },
+        patchable_fields=set(),
     )
     return _from_reconcile(result)
 

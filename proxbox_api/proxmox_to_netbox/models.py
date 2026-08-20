@@ -1118,6 +1118,11 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     # name-regex mapping; proxbox-api never sends tenant on the create body.
     virtual_machine_type: int | None = None
     role: int | None = None
+    # Guest operating system, resolved to a dcim.Platform id. Absent when the VM's
+    # ostype is unknown and the guest agent was not consulted or could not answer --
+    # leaving the field unset is better than guessing an operating system onto an
+    # inventory page.
+    platform: int | None = None
     # NetBox vcpus is a DecimalField that is null-or->=0.01; 0 is rejected.
     # Keep it Optional so a freshly-cloned VM (no resource/config CPU yet) sends
     # null instead of an invalid 0.
@@ -1253,6 +1258,16 @@ class NetBoxVirtualMachineTypeSyncState(BaseModel):
     tags: list[NetBoxTagRef] = Field(default_factory=list)
 
 
+class NetBoxPlatformSyncState(BaseModel):
+    """Validated NetBox sync body for the dcim platforms endpoint."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    name: str
+    slug: str
+    tags: list[NetBoxTagRef] = Field(default_factory=list)
+
+
 class ProxmoxToNetBoxVirtualMachine(BaseModel):
     """Schema-driven transform object for Proxmox input to NetBox VM create payload."""
 
@@ -1266,6 +1281,10 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     tenant_id: int | None = None
     role_id: int | None = None
     virtual_machine_type_id: int | None = None
+    # Resolved by the sync service, not derived here: resolving it needs a NetBox write
+    # (and optionally a Proxmox guest-agent read), and this transform stays pure over its
+    # resource/config input.
+    platform_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
     last_updated: datetime | None = None
     cluster_name: str | None = None
@@ -1452,6 +1471,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             site=self.site_id,
             virtual_machine_type=self.virtual_machine_type_id,
             role=self.role_id,
+            platform=self.platform_id,
             vcpus=int(self.resource.maxcpu or 0),
             memory=self.resource.memory_mb,
             disk=disk_value,

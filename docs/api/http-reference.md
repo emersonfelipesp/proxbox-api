@@ -744,7 +744,7 @@ dependency and extending `tests/test_stage_route_bootstrap.py`.
 
 Every VM stream endpoint listed above (`/virtualization/virtual-machines/...create/stream`) accepts the `SyncOverwriteFlags` query parameters defined in `proxbox_api/schemas/sync.py`. They control which user-managed NetBox fields the sync may overwrite:
 
-- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
+- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
 - `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
 - `sync_vm_network` - when `false`, skips the VM-network sub-step.
 - `sync_task_history` - defaults to `true`; when `false`, skips the single

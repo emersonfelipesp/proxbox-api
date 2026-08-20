@@ -112,6 +112,32 @@ npm run build
 
 Fix failures locally before finishing the task.
 
+## VM Platform From The Guest OS
+
+The `ostype` -> platform table in `proxmox_to_netbox/guest_os.py` is **data**: add a
+guest type there, not in code. An unmapped `ostype` returns `None`, meaning *leave the
+platform unset* — never guess an operating system onto an inventory page.
+
+The guest-agent refinement is opt-in (`sync_vm_platform_from_guest_agent`, default
+false) because it costs one Proxmox request per VM. Gate it on eligibility the sync
+already knows — QEMU, running, `agent` enabled — before spending the request. Use
+`name` + `version-id`, never `pretty-name`: the patch level would mint a new NetBox
+platform on every minor update.
+
+`platform_from_guest_agent()` reads data produced by a guest the operator may not
+control. It must stay total: non-dict payloads, missing keys, wrong types, and oversized
+strings all return `None`. `ensure_vm_platform()` is total too — it swallows upsert
+failures and returns `None`. A blank inventory field must never cost a VM its sync.
+
+Platform is set at VM **creation only** and never patched afterwards, because Proxbox
+has never owned this field. Do not add an `overwrite_vm_platform` flag to make that
+tunable: the `overwrite_*` set is a CI-enforced cross-repo contract
+(`contracts/overwrite_flags.json`, mirrored in netbox-proxbox's
+`constants.OVERWRITE_FIELDS`) and adding a flag requires both repos in the same release
+plus the plugin's settings model and per-endpoint override column. A backend-only flag
+is not an acceptable shortcut — `test_overwrite_flags_contract.py` fails on it, and
+`test_vm_platform_from_guest_os.py` asserts its absence directly.
+
 ## VM Description and Comments
 
 The Proxmox VM note drives the NetBox `description`; the

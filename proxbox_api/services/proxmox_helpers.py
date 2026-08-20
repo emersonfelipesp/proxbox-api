@@ -819,6 +819,59 @@ async def get_qemu_guest_agent_hostname(
 
 
 @_dual_mode
+async def get_qemu_guest_agent_osinfo(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+) -> dict[str, object] | None:
+    """Return the guest agent's ``get-osinfo`` payload, or ``None`` when unavailable.
+
+    Used to refine a VM's NetBox platform beyond what ``ostype`` can say. The caller
+    gates this on the VM being QEMU, running, and already known to have the agent
+    enabled, so no request is wasted on a guest that cannot answer.
+
+    Returns ``None`` on any failure. A platform is an inventory nicety; a guest whose
+    agent is wedged must not fail its VM's sync, and it must certainly not fail the
+    stage. Both call shapes are tried, matching the hostname helper above, because
+    Proxmox versions differ in which they accept.
+    """
+    # A wedged guest agent must not stall the VM's sync, let alone the stage. Reuse the
+    # same bounded-timeout mechanism the network-interfaces helper uses rather than
+    # relying on whatever ambient timeout the session happens to carry.
+    timeout_s = _resolve_guest_agent_timeout()
+
+    for describe, call in (
+        ("primary", lambda: session.session.nodes(node).qemu(vmid).agent("get-osinfo").get()),
+        (
+            "fallback",
+            lambda: session.session.nodes(node).qemu(vmid).agent.get(command="get-osinfo"),
+        ),
+    ):
+        try:
+            with _scoped_proxmox_backend_timeout(session, timeout_s):
+                payload = await asyncio.wait_for(resolve_async(call()), timeout=timeout_s)
+        except Exception as error:  # noqa: BLE001
+            logger.debug(
+                "%s guest-agent osinfo call failed for node=%s vmid=%s: %s",
+                describe,
+                node,
+                vmid,
+                error,
+            )
+            continue
+        if isinstance(payload, dict):
+            return payload
+        logger.debug(
+            "%s guest-agent osinfo call returned %s for node=%s vmid=%s; ignoring",
+            describe,
+            type(payload).__name__,
+            node,
+            vmid,
+        )
+    return None
+
+
+@_dual_mode
 async def get_storage_list(
     session: ProxmoxSession,
 ) -> list[generated_models.GetStorageResponseItem]:
