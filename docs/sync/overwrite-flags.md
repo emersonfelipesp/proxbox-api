@@ -185,7 +185,9 @@ Separate from the per-field `overwrite_*` gates, `SyncBehaviorFlags` carries
 opt-in behavior toggles that compose independently:
 
 - `parse_description_metadata` — parse a fenced `netbox-metadata` block from each
-  Proxmox object's description.
+  Proxmox object's description and apply its NetBox primary-key overrides. It governs
+  **only** the overrides. It does **not** control whether the Proxmox note reaches
+  NetBox — see [VM description and comments](#vm-description-and-comments) below.
 - `custom_fields_enabled` — **deprecated legacy custom fields**, default `false`.
   When `false`, the typed `Proxbox*SyncState` sidecars are the sole source of
   truth and no legacy reflection custom fields are written, read, or reconciled.
@@ -196,6 +198,47 @@ opt-in behavior toggles that compose independently:
   `ProxboxPluginSettings.custom_fields_enabled` plugin field; an explicit
   per-request behavior flag overrides it. When enabled, every custom-field path
   emits a deprecation warning.
+
+## VM description and comments
+
+A note kept in a Proxmox VM's `description` field is operator-authored content, so the
+sync preserves it rather than overwriting it:
+
+| Proxmox note | NetBox `description` | NetBox `comments` |
+|---|---|---|
+| absent, blank, or only a `netbox-metadata` fence | `Synced from Proxmox node {node}` | not written |
+| one line, ≤ 200 characters | the note | not written |
+| multiple lines | the first non-empty line | the complete note |
+| first line > 200 characters | first line truncated to 200 with a `…` marker | the complete note |
+
+Rules that are easy to get wrong:
+
+- **This is independent of `parse_description_metadata`.** That flag is about
+  `netbox-metadata` PK overrides. Preservation used to be coupled to it, which meant an
+  operator had to enable an unrelated override feature to keep their own notes — and even
+  then it worked on only one of the three VM payload builders.
+- **`netbox-metadata` fences are stripped unconditionally**, with the flag on or off.
+  Before the note was written at all, an unstripped fence leaked nowhere; now that the
+  note reaches NetBox, leaving it in would put raw JSON into the rendered UI.
+- **`comments` is written only when it carries more than `description` does** — multiple
+  lines, or a first line that had to be truncated. A one-line note is not duplicated
+  across two fields.
+- **Proxbox writes `comments` but never clears it.** When there is nothing to write the
+  field is omitted from the payload rather than set to an empty string. Clearing it would
+  wipe comments an operator wrote by hand on a VM that never had a Proxmox note. The
+  trade-off: shortening a multi-line Proxmox note to a single line leaves the previous
+  full note in `comments` until it is edited in NetBox.
+- **`overwrite_vm_description` gates both fields.** With it `false`, neither
+  `description` nor `comments` is patched on an existing VM; both are still set when the
+  VM is created. `comments` deliberately reuses this flag rather than adding a new one:
+  it is the same operator-authored content under the same consent, and reusing the gate
+  means no plugin-side change is required.
+
+All three VM payload builders — the bulk `virtual-machines` stage, the per-VM sync path,
+and the VM-create service — share one derivation helper
+(`proxmox_to_netbox/description_metadata.py::derive_description_and_comments`). They must
+keep sharing it: three private copies of this rule is exactly how they came to behave
+three different ways.
 
 ## Related
 

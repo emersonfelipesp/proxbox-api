@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from types import UnionType
+from typing import Literal, Union, get_args, get_origin
 from urllib.parse import unquote
 
 from pydantic import (
@@ -1070,6 +1071,39 @@ class ProxmoxVmConfigInput(BaseModel):
         }
 
 
+# ``X | None`` produces ``types.UnionType`` while ``Optional[X]`` produces
+# ``typing.Union``; the model uses both spellings across its history.
+_UNION_ORIGINS = (Union, UnionType)
+
+
+def _metadata_overridable_fields() -> set[str]:
+    """Create-body fields a ``netbox-metadata`` block may override.
+
+    The block is documented as carrying NetBox **primary-key integers**, and
+    ``parse_netbox_metadata()`` already rejects every non-positive-integer value. So the
+    overridable set must be the integer-typed fields only.
+
+    Accepting every model field instead let a text field be overridden with an integer,
+    which ``extra="forbid"`` + a ``str`` annotation turns into a ValidationError that
+    fails the whole VM's sync. That was already reachable through ``description`` and
+    would have widened to ``comments``. Restricting by annotation closes both, and closes
+    any future text field automatically rather than relying on someone remembering.
+    """
+    overridable: set[str] = set()
+    for name, field in NetBoxVirtualMachineCreateBody.model_fields.items():
+        annotation = field.annotation
+        if annotation is int:
+            overridable.add(name)
+            continue
+        origin = get_origin(annotation)
+        # ``int | None`` yes; ``list[int]`` no. A container annotation also has ``int``
+        # in its args, and assigning a bare integer to ``tags: list[int]`` raises the
+        # same ValidationError this function exists to prevent.
+        if origin in _UNION_ORIGINS and any(arg is int for arg in get_args(annotation)):
+            overridable.add(name)
+    return overridable
+
+
 class NetBoxVirtualMachineCreateBody(BaseModel):
     """Validated NetBox create body for virtualization virtual machine endpoint."""
 
@@ -1093,6 +1127,11 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     tags: list[int] = Field(default_factory=list)
     custom_fields: dict[str, object] = Field(default_factory=dict)
     description: str | None = None
+    # NetBox ``description`` is a single-line 200-char field; a Proxmox note is
+    # free-form and often multi-line. The full note goes here so truncating the
+    # description never loses operator-authored content. Absent when the note fits in
+    # the description, so a one-line note is not duplicated across two fields.
+    comments: str | None = None
 
     @field_validator("vcpus", mode="before")
     @classmethod
@@ -1280,42 +1319,66 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             return 0
         return sum(max(int(getattr(disk, "size", 0) or 0), 0) for disk in disks)
 
+    @property
+    def _raw_proxmox_description(self) -> str | None:
+        """The VM's Proxmox note, if the config carried one.
+
+        ``description`` is not a declared field on ``ProxmoxVmConfigInput``, so it
+        arrives in ``model_extra``.
+        """
+        if not isinstance(self.config.model_extra, dict):
+            return None
+        raw = self.config.model_extra.get("description")
+        return raw if isinstance(raw, str) else None
+
+    def _resolve_description_fields(self) -> tuple[str, str | None]:
+        """Derive the NetBox ``description``/``comments`` pair from the Proxmox note.
+
+        Unconditional: a note kept in Proxmox is operator-authored content and must
+        survive a sync. This deliberately does **not** depend on
+        ``parse_description_metadata`` -- that flag governs whether a fenced
+        ``netbox-metadata`` block's PK overrides are applied, and coupling note
+        preservation to it meant an operator had to enable an unrelated override
+        feature to keep their own notes.
+        """
+        from proxbox_api.proxmox_to_netbox.description_metadata import (
+            derive_description_and_comments,
+        )
+
+        return derive_description_and_comments(
+            self._raw_proxmox_description,
+            fallback=f"Synced from Proxmox node {self.resource.node}",
+        )
+
     def _resolve_description_metadata(
         self,
         *,
         overwrite_flags: object | None,
-    ) -> tuple[dict[str, int], str]:
+    ) -> dict[str, int]:
         """Parse and apply opt-in ``netbox-metadata`` JSON from the VM description.
 
-        Returns ``(applied_known_overrides, description_text)``. Logs applied,
-        gated, and unknown keys so operators can see why an override didn't
-        land without scanning the full sync output.
+        Returns the applied known PK overrides. Logs applied, gated, and unknown keys
+        so operators can see why an override didn't land without scanning the full sync
+        output. The description text itself is resolved separately and unconditionally
+        by :meth:`_resolve_description_fields`.
         """
         from proxbox_api.logger import logger
         from proxbox_api.proxmox_to_netbox.description_metadata import (
             filter_metadata_by_overwrite_flags,
             parse_netbox_metadata,
-            strip_netbox_metadata,
         )
 
-        default_description = f"Synced from Proxmox node {self.resource.node}"
-        raw_description = (
-            self.config.model_extra.get("description")
-            if isinstance(self.config.model_extra, dict)
-            else None
-        )
-        if not isinstance(raw_description, str):
-            return {}, default_description
+        raw_description = self._raw_proxmox_description
+        if raw_description is None:
+            return {}
 
         parsed = parse_netbox_metadata(raw_description)
         applied, dropped = filter_metadata_by_overwrite_flags(
             parsed, overwrite_flags, object_kind="vm"
         )
-        known_fields = set(NetBoxVirtualMachineCreateBody.model_fields)
+        known_fields = _metadata_overridable_fields()
         applied_known = {k: v for k, v in applied.items() if k in known_fields}
         unknown = sorted(set(applied) - known_fields)
-        stripped = strip_netbox_metadata(raw_description)
-        description_text = stripped or default_description
 
         if applied_known:
             logger.info(
@@ -1335,7 +1398,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
                 self.resource.name,
                 dropped,
             )
-        return applied_known, description_text
+        return applied_known
 
     def as_netbox_create_body(
         self,
@@ -1372,13 +1435,14 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             )
             disk_value = _NETBOX_DISK_MAX
 
-        if parse_description_metadata:
-            applied_known, description_text = self._resolve_description_metadata(
-                overwrite_flags=overwrite_flags,
-            )
-        else:
-            applied_known = {}
-            description_text = f"Synced from Proxmox node {self.resource.node}"
+        # The Proxmox note always drives the description; only the fenced
+        # ``netbox-metadata`` PK overrides are gated by the opt-in flag.
+        description_text, comments_text = self._resolve_description_fields()
+        applied_known = (
+            self._resolve_description_metadata(overwrite_flags=overwrite_flags)
+            if parse_description_metadata
+            else {}
+        )
 
         body_kwargs: dict[str, object] = dict(
             name=self.resource.name,
@@ -1395,5 +1459,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             custom_fields=self.vm_custom_fields,
             description=description_text,
         )
+        if comments_text is not None:
+            body_kwargs["comments"] = comments_text
         body_kwargs.update(applied_known)
         return NetBoxVirtualMachineCreateBody(**body_kwargs)

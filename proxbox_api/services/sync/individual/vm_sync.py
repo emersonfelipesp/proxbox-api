@@ -15,6 +15,9 @@ from proxbox_api.netbox_rest import (
     rest_reconcile_async,
 )
 from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
+from proxbox_api.proxmox_to_netbox.description_metadata import (
+    derive_description_and_comments,
+)
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
@@ -324,6 +327,15 @@ def _build_netbox_vm_payload(
         vmid = int(resource.get("vmid") or 0)
         vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
+    # Same rule as the bulk builder: the Proxmox note is the description, the
+    # placeholder is only the fallback, and the full note goes to ``comments``.
+    # Deriving it here rather than inline is what keeps the three VM payload builders
+    # from drifting apart again.
+    description_text, comments_text = derive_description_and_comments(
+        config.get("description") if isinstance(config, dict) else None,
+        fallback=f"Synced from Proxmox node {node}",
+    )
+
     payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
@@ -336,8 +348,10 @@ def _build_netbox_vm_payload(
         "disk": disk_mb,
         "tags": tag_ids,
         "custom_fields": vm_custom_fields,
-        "description": f"Synced from Proxmox node {node}",
+        "description": description_text,
     }
+    if comments_text is not None:
+        payload["comments"] = comments_text
     if virtual_machine_type_id is not None:
         payload["virtual_machine_type"] = virtual_machine_type_id
     return payload
