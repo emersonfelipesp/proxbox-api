@@ -122,6 +122,21 @@ Divergencias em compare mode incrementam `proxbox_reconcile_mismatch_total`, exp
 
 As operacoes sao executadas em ordem deterministica.
 
+Antes de gravar uma VM, o dispatch aplica a politica de propriedade da funcao
+independente do engine. Ele carrega
+`ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` uma vez por
+execucao, compara o snapshot com as funcoes atual e desejada e preserva uma
+edicao do operador, registra evidencia ausente sem alterar a funcao ou avanca
+uma funcao ainda gerenciada. Isso ocorre depois da construcao da fila
+Python/Rust, mantendo enforcement identico nos dois engines. O novo snapshot so
+e persistido depois que a operacao termina com sucesso.
+Leituras indisponiveis, com falha ou conflitantes preservam a funcao sem
+registrar um snapshot. A gravacao obrigatoria e tentada tres vezes; se todas as
+respostas falharem, uma releitura autoritativa aceita um snapshot novo ja
+confirmado. Caso contrario, o guard restaura e confirma tanto a funcao anterior
+quanto o snapshot anterior antes de marcar a VM como falha. Assim, perda de
+resposta nao vira uma falsa edicao do operador.
+
 - Tamanho da janela de batch vem de `PROXBOX_NETBOX_WRITE_CONCURRENCY`.
 - Dentro da janela, escritas continuam uma-a-uma (sequencial).
 - `GET` nao escreve no NetBox.

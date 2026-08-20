@@ -31,6 +31,13 @@ class NetBoxVMOperation:
     prepared: PreparedVMState
     existing_record: dict[str, object] | None = None
     patch_payload: dict[str, object] = field(default_factory=dict)
+    # Set by the engine-neutral dispatch policy after it compares the current
+    # role with durable sidecar evidence. The caller persists this only after
+    # the NetBox operation succeeds.
+    role_snapshot_id_to_write: int | None = None
+    role_snapshot_previous_id: int | None = None
+    role_previous_id: int | None = None
+    role_write_applied: bool = False
 
 
 VMResultKey = tuple[str, int, str]

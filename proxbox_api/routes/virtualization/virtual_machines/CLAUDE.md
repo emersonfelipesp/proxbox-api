@@ -96,6 +96,9 @@ Main synchronization endpoints for virtual machines and related resources.
   CPU validation/payload building and NetBox dependency calls out of the fetch
   semaphore so pending Proxmox HTTP responses are drained promptly and aiohttp
   wall-clock timeouts do not fire while other slots are doing CPU or NetBox work.
+  Each config request also has an independent wall-clock deadline from
+  `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` (default 30 seconds). A timed-out VM
+  is counted as failed while the remaining batch reaches a terminal summary.
 - **VM lookups are scoped by `(proxmox_endpoint_id, vmid)` first (issue #255).**
   Proxmox `vmid` values can repeat across standalone endpoints, even when those
   endpoints have no shared NetBox cluster identity. The VM snapshot index is
@@ -281,6 +284,23 @@ Main synchronization endpoints for virtual machines and related resources.
   (`test_full_update_batch_applies_proxmox_rename_when_sidecar_matches_stored_name`,
   `test_full_update_batch_preserves_operator_rename_when_sidecar_differs`,
   `test_full_update_batch_preserves_netbox_name_when_sidecar_name_is_blank`).
+
+- **VM role ownership is enforced on every write path.** The durable
+  `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` value is loaded
+  once for the full/bulk pass and compared with the current and desired roles
+  at `_dispatch_vm_operation_queue`. Because dispatch runs after the
+  Python/Rust reconciliation queue seam, both engines share the same policy.
+  GET operations may become a narrow role PATCH when a still-managed default
+  rolls forward; UPDATE operations have `role` removed when an operator edit is
+  locked; CREATE/adoption paths run the same decision. A missing snapshot
+  records the current role without changing it only when absence is verified;
+  unavailable, failed, or conflicting reads preserve the role without claiming
+  ownership. The sidecar snapshot is written only for successful operations,
+  retries three times, and marks the VM failed if all attempts fail. When the
+  operation changed the role, the persistence guard authoritatively re-reads the
+  typed snapshot, accepts a confirmed commit, or restores and verifies both the
+  previous role and snapshot. The next pass therefore retries only a genuinely
+  rolled-back change instead of treating response loss as an operator lock.
 
 ## Extension Guidance
 

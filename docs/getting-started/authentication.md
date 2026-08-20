@@ -97,6 +97,11 @@ curl -X POST http://localhost:8800/auth/keys \
 
 The `raw_key` is only returned once — store it securely.
 
+Creation is serialized with active-key reactivation and returns `409`
+(`active_api_key_limit_reached`) when it would exceed
+`PROXBOX_AUTH_MAX_ACTIVE_KEYS`. Deactivate an active key before creating
+another.
+
 ### Deactivate a Key
 
 ```bash
@@ -116,6 +121,9 @@ curl -X POST http://localhost:8800/auth/keys/1/activate \
 # {"id": 1, "label": "bootstrap-key", "is_active": true, "created_at": 1712345678.123}
 ```
 
+Reactivation returns `409` (`active_api_key_limit_reached`) when it would cross
+the configured active-key cap.
+
 ### Delete a Key
 
 ```bash
@@ -129,11 +137,184 @@ Deleting the final active key is refused with `409`
 
 ## Brute-Force Protection
 
-The backend implements IP-based lockout:
+The backend stores lockout state in SQLite under a composite, secret-free
+bucket: normalized network source/trust context plus a server-keyed HMAC
+identifier. Reaching one credential bucket's threshold therefore cannot lock a
+different key used from the same worker, reverse proxy, or client IP. A separate,
+deliberately higher source-abuse threshold still blocks every key from that
+source when exhausted. Sync and async authentication share the same state
+service. Before bcrypt, each request inserts an independent
+durable reservation row with an unguessable owner token and a renewable
+60-second lease plus a persisted absolute deadline. While bcrypt is running, an
+owner heartbeat extends that exact token only up to the deadline; the row
+therefore continues to consume per-credential, per-source, and global
+verification capacity through ordinary scheduler delays but can never retain a
+slot forever. After bcrypt, an atomic token-scoped delete finalizes that exact row
+once: a rejected key converts it to credential/source failure state in the same
+transaction, while an accepted key records no failure. Duplicate finalization
+cannot consume another request's reservation. Concurrent valid traffic therefore
+cannot manufacture a lockout. Exhausted verification capacity returns HTTP 503
+with `Retry-After: 1` or WebSocket close code 1013; it does not consume a failure
+attempt.
 
-- Maximum 5 failed attempts
-- 5-minute lockout duration
-- Lockout is cleared on successful authentication
+Rejected verifications for the same composite credential that were all admitted
+before an earlier member of that cohort completed are still counted in the
+aggregate failure metric. Only the first completion advances the credential
+bucket, but **every** consumed rejection advances the shared source-abuse
+budget. This causal coalescing works across workers and prevents a normal stale
+key burst from immediately re-arming an expired credential lockout, while the
+source threshold still places a hard bound on attacker bcrypt work. A later
+request admitted after that transition counts normally.
+
+An abandoned crash token expires 60 seconds after its owner stops renewing it.
+Only then does it stop consuming concurrency capacity. Its row remains observable
+for a one-hour cleanup horizon and is counted by the orphan-reservation metric.
+A late finalizer can update accounting exactly once only before the absolute
+deadline described below; later results are consumed and discarded. Older rows are
+compacted into a durable aggregate counter, bounding storage; reservation and
+finalization paths both enforce this horizon, so a finalizer beyond it is ignored
+even when no newer request has run compaction. One orphan cannot extend the
+expiry of another live token or release newer work.
+
+Every reservation also has an absolute lifetime of 180 seconds by default
+(`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`). At that deadline the slot is
+reclaimable regardless of heartbeats, and a result arriving later is discarded
+without recording success or failure. Python cannot preempt the bcrypt worker
+thread itself, so a timed-out verifier can retain residual CPU cost until that
+call returns; the durable admission and lockout accounting are nevertheless
+bounded.
+
+A second durable source budget bounds attacks that rotate credentials; it is
+deliberately higher than the per-credential default. Missing-key requests
+advance only that source budget and never allocate credential-partition rows.
+IPv6 sources are grouped by `/64` for lockout and rate-limit accounting, while
+IPv4 remains per address. Durable failure rows are split into independently
+bounded credential and source partitions. Expired failure windows are pruned.
+
+When a partition is full, admission first evicts its stalest expired row only
+if no pending reservation references that row. Failure-row saturation does not
+create a separate first-come verification lane: unseen sources participate in
+the same atomic per-source and global pool as every other request, so row
+pressure cannot add work above the declared global cap or monopolize a single
+fallback token. A rejected verification that cannot obtain a durable bucket
+returns a fail-closed result for that request and increments bounded aggregate,
+label-free accounting without evicting a live pre-lockout budget. Existing
+durable lockouts remain authoritative.
+
+- Default threshold: 5 failed attempts (`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, range 1-100)
+- Default source budget: 50 failed attempts (`PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, range 1-100000)
+- Default fixed window: 5 minutes (`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, range 1-86400)
+- Maximum durable bucket rows: 10000 (`PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, range 2-1000000)
+- Maximum concurrent verifications per credential/source bucket: 32
+  (`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, range 1-1024)
+- Maximum concurrent verifications across all workers and identities: 256
+  (`PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, range 1-4096)
+- Absolute lifetime of one admitted verifier: 180 seconds
+  (`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, range 0.1-3600)
+- Maximum active API-key hashes examined by one request: 32
+  (`PROXBOX_AUTH_MAX_ACTIVE_KEYS`, range 1-1024). Authenticated create and
+  reactivate operations cannot cross this ceiling. If a legacy database already
+  exceeds it, startup logs explicit recovery guidance and authentication scans
+  only the oldest bounded set. Use one of those keys to deactivate excess rows;
+  if none is available, temporarily raise the bound, restart, retire excess
+  keys, and restore the intended value.
+- An opaque identity key is atomically generated in the private sibling
+  `database.db.auth-lockout.key` file by default. Creation flushes and fsyncs a
+  same-directory temporary file, replaces the final path, and fsyncs the parent
+  directory before startup continues. `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`
+  can supply an explicit 32-byte-or-longer value instead. Keep either source
+  stable across restarts and separate from rotatable credential encryption.
+- Startup records a non-secret fingerprint and generation in SQLite. Once bound,
+  a missing/replaced file or different environment key is fatal and is never
+  regenerated silently. Every worker validates the same binding under the
+  target-specific startup lock and pins the verified key material in process
+  memory. Deleting or replacing the source after startup cannot change bucket
+  identities in that worker; recovery or rotation requires the offline procedure
+  followed by a controlled restart.
+- `PROXBOX_TRUSTED_PROXIES` explicitly controls which peer CIDRs may supply
+  `X-Forwarded-For`. Outside the bundled nginx image, no address, including
+  localhost, is trusted implicitly. Trusted proxies do not bypass authentication
+  or lockout. Uvicorn must run
+  with proxy-header processing disabled (`--no-proxy-headers`); the shipped raw
+  and nginx-backed entrypoints already enforce this so the application receives
+  the real transport peer before applying this allowlist. The single-purpose
+  nginx image prepends `127.0.0.1/32` only when it launches its bundled
+  nginx/supervisor topology, because its internal nginx hop is the only process
+  that can reach loopback Uvicorn. A custom command in that image retains the
+  empty default. Raw/Granian
+  deployments behind an external reverse proxy must explicitly list the exact
+  proxy peer CIDRs and keep the application port inaccessible to untrusted
+  callers. Granian does not
+  rewrite forwarded headers unless an application wrapper is explicitly added;
+  the shipped Granian entrypoint does not add one.
+
+The metrics endpoints expose only aggregate, label-free `proxbox_auth_*`
+counters and gauges. In addition to failure/lockout/recovery totals and active
+lockouts, the lockout service publishes:
+
+- `proxbox_auth_capacity_rejections_total`: verification admissions rejected by
+  a per-bucket or global in-flight limit plus failed identities whose bounded
+  credential or source row partition could not persist;
+- `proxbox_auth_orphan_compactions_total`: expired reservation rows compacted
+  after the supported one-hour cleanup horizon;
+- `proxbox_auth_bucket_rows`: current durable credential/source failure rows;
+- `proxbox_auth_verifications_in_flight`: unexpired reservation rows currently
+  consuming bcrypt capacity; and
+- `proxbox_auth_expired_orphan_reservations`: expired crash-token rows retained
+  within the supported cleanup horizon. They do not permit accounting changes
+  after their terminal deadline.
+
+Logs and the recovery CLI use 12-character non-authenticating HMAC identifiers;
+raw keys and dictionary-testable hashes are never rendered.
+
+### Local lockout recovery
+
+Lockout administration is deliberately local and does not traverse the HTTP
+authentication middleware, so it remains usable during an HTTP lockout:
+
+```bash
+proxbox-auth-lockout --database /data/database.db list
+proxbox-auth-lockout --database /data/database.db clear --id 4a12bc34de56
+# Emergency reset of transient lockout state only:
+proxbox-auth-lockout --database /data/database.db clear --all
+```
+
+The database path is mandatory and must already contain the complete current
+lockout schema, including reservation, metric, and key-binding tables; the CLI
+uses the same exact column, type, primary-key, nullability, and singleton-CHECK
+validator as startup, but never initializes or migrates a database. Validation
+runs under the offline maintenance lock before `rebind-key` can delete or update
+anything. `list` opens SQLite in read-only mode. Its output contains source
+IP/trust context, bucket type, short bucket and credential identifiers, attempt
+count, and lock expiry; it never contains API-key material.
+
+### Offline identity-key recovery or rotation
+
+Prefer restoring the bound key file from backup. If that is impossible, a new
+key generation necessarily invalidates all existing opaque bucket IDs. Perform
+this explicit reset only while every worker is stopped:
+
+1. Stop every proxbox-api worker and preserve a recoverable database/key backup.
+2. Create the replacement key as a regular, non-symlink UTF-8 file containing
+   at least 32 bytes and mode `0600`.
+3. Run:
+
+   ```bash
+   proxbox-auth-lockout --database /data/database.db rebind-key \
+     --key-file /data/database.db.auth-lockout.key.new \
+     --confirm-reset-lockouts
+   ```
+
+4. Configure/install that exact key source for every worker, start the service,
+   and verify readiness plus authentication.
+
+The command takes the database startup lock and an exclusive runtime lease. It
+refuses to run while any worker is active, validates the existing recovery
+schema, atomically clears incompatible lockout buckets and all outstanding
+reservation rows, advances the non-secret generation, and never prints key
+material. If the binding row itself was lost, recovery creates generation 1
+after clearing all opaque state. Do not replace the bound file and roll workers
+gradually.
 
 ## Security Best Practices
 
@@ -166,4 +347,7 @@ Check that:
 
 ### "Too many failed authentication attempts"
 
-Wait 5 minutes for the lockout to expire, or restart the backend to reset the in-memory lockout state.
+Wait for the configured fixed window to expire, or use the local
+the explicit-database `proxbox-auth-lockout list` and `clear --id` commands.
+Lockout state and aggregate counters are durable SQLite data, so restarting the
+backend is not a recovery mechanism.

@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from proxbox_api import runtime_settings
+from proxbox_api import database, runtime_settings
 from proxbox_api.app.cache_routes import (
     get_cache_metrics_json,
     get_cache_metrics_prometheus,
@@ -218,7 +218,11 @@ def test_adapter_reports_unknown_prepared_identity() -> None:
         )
 
 
-def test_reconciliation_mismatch_metric_is_exposed_through_cache_metrics() -> None:
+def test_reconciliation_mismatch_metric_is_exposed_through_cache_metrics(
+    db_engine,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(database, "engine", db_engine)
     increment_reconciliation_mismatch_total()
 
     json_metrics = asyncio.run(get_cache_metrics_json())

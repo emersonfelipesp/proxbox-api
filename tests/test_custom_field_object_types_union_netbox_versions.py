@@ -13,6 +13,8 @@ is currently identical across all certified NetBox releases:
 - NetBox 4.6.2
 - NetBox 4.6.3
 - NetBox 4.6.4
+- NetBox 4.6.5
+- NetBox 4.6.6
 
 `netbox/extras/api/serializers_/customfields.py` declares ``object_types`` as
 a ``ContentTypeField`` whose ``to_representation`` (``netbox/api/fields.py``)
@@ -43,6 +45,8 @@ SUPPORTED_NETBOX_VERSIONS = [
     "4.6.2",
     "4.6.3",
     "4.6.4",
+    "4.6.5",
+    "4.6.6",
 ]
 
 

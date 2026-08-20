@@ -1,1 +1,6 @@
+include Dockerfile
+include uv.lock
+include docker/offline-build-inputs.json
+recursive-include docker *.conf *.sh *.template
+recursive-include docker/build-cache *.whl
 recursive-include proxbox_api/packer_templates *.hcl *.sh

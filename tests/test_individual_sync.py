@@ -390,10 +390,15 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
         return []
 
     recorded_payload: dict[str, object] = {}
+    sidecar_payload: dict[str, object] = {}
 
     async def _fake_rest_reconcile_async(*args, **kwargs):
         recorded_payload.update(kwargs["payload"])
         return FakeRecord(kwargs["payload"], record_id=55)
+
+    async def _fake_write_vm_sync_state(*_args, **kwargs):
+        sidecar_payload.update(kwargs)
+        return {"id": 955}
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.base.BaseIndividualSyncService._get_or_create_vm_dependencies",
@@ -435,6 +440,10 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
         "proxbox_api.services.sync.individual.vm_sync.rest_reconcile_async",
         _fake_rest_reconcile_async,
     )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.individual.vm_sync.write_virtual_machine_sync_state",
+        _fake_write_vm_sync_state,
+    )
 
     result = await sync_vm_individual(
         nb=object(),
@@ -451,6 +460,8 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
     assert result["proxmox_resource"]["status"] == "running"
     assert recorded_payload["name"] == "db01"
     assert recorded_payload["vcpus"] == 4
+    assert sidecar_payload["virtual_machine_id"] == 55
+    assert sidecar_payload["proxmox_last_synced_role_id"] == 17
 
 
 @pytest.mark.asyncio

@@ -1893,6 +1893,166 @@ def test_typed_vm_config_wraps_model_validation_failures(monkeypatch):
         get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
 
 
+def test_typed_lxc_config_normalizes_blank_optional_boolean() -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": "abc123",
+        "description": " ",
+        "hostname": "ct01",
+        "unprivileged": " ",
+    }
+
+    class _LxcAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def lxc(self, vmid):
+            assert vmid == 102
+            return _LxcAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    config = get_typed_vm_config(session, node="pve01", vm_type="lxc", vmid=102)
+
+    assert config.unprivileged is None
+    assert config.description == " "
+    assert raw_payload["unprivileged"] == " "
+
+
+@pytest.mark.parametrize(
+    ("numeric_value", "expected"),
+    [
+        (65536, "65536"),
+        (65536.5, "65536.5"),
+    ],
+)
+def test_typed_qemu_config_normalizes_numeric_optional_string(
+    numeric_value: int | float,
+    expected: str,
+) -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": "abc123",
+        "memory": numeric_value,
+        "name": "vm01",
+    }
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert config.memory == expected
+    assert raw_payload["memory"] == numeric_value
+
+
+def test_typed_qemu_config_normalizes_alias_keyed_optional_string() -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": "abc123",
+        "amd-sev": 7,
+    }
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert config.amd_sev == "7"
+    assert raw_payload["amd-sev"] == 7
+
+
+@pytest.mark.parametrize("boolean_value", [True, False])
+def test_typed_qemu_config_does_not_normalize_boolean_as_optional_string(
+    boolean_value: bool,
+) -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": "abc123",
+        "memory": boolean_value,
+    }
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    with pytest.raises(ProxboxException, match="Error fetching Proxmox VM config"):
+        get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert raw_payload["memory"] is boolean_value
+
+
+def test_typed_qemu_config_preserves_already_valid_payload() -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": "abc123",
+        "memory": "4096",
+        "name": "vm01",
+        "onboot": True,
+    }
+    original_payload = dict(raw_payload)
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert config.memory == "4096"
+    assert config.name == "vm01"
+    assert config.onboot is True
+    assert raw_payload == original_payload
+
+
+def test_typed_qemu_config_does_not_normalize_required_string() -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {
+        "digest": 123,
+        "memory": "4096",
+    }
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    with pytest.raises(ProxboxException, match="Error fetching Proxmox VM config"):
+        get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert raw_payload["digest"] == 123
+
+
 def test_proxmox_session_supports_token_auth(monkeypatch):
     monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakeProxmoxAPI)
 

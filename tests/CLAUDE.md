@@ -26,7 +26,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
-| `test_database_startup.py` | Typed SQLite path/URL resolution, raw-query truncation refusal, inaccessible/default/explicit legacy-auth guard, canonical claim validation, single-worker audited override/marker/reuse refusal, four-process override rejection and schema serialization, fatal migration/post-schema reads, WAL/write rollback, read-only failures, import safety, and lifespan contracts |
+| `test_database_startup.py` | Typed SQLite path/URL resolution, raw-query truncation refusal, inaccessible/default/explicit legacy-auth guard, canonical claim validation, single-worker audited override/marker/reuse refusal, four-process override rejection and schema serialization, fatal migration/post-schema reads, WAL/write rollback, runtime lease, read-only failures, import safety, and lifespan contracts |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
@@ -45,6 +45,7 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_packer_execution_binding.py` | Keyed endpoint/recipe bindings and oracle canaries, signed-plan tamper/drift/expiry rejection, retained recovery blockers, expired/concurrent leases, authoritative post-preflight endpoint refresh, cancel/completion CAS, repeated-cancellation journal durability, final artifact verification, minimal session authority, and a producer-owned consumer-shaped fixture that does not claim downstream validation |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
+| `test_role_resolution.py` | VM default-role hierarchy, durable role-snapshot truth table, and verified compensation retries |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
@@ -69,16 +70,19 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 | `test_sync_active.py` | `GET /sync/active` soft probe + `sync_state` registry lifecycle (issue #71) |
 | `test_sync_error_handling.py` | `@with_retry` decorator and domain error wrapping |
 | `test_sync_overwrite_flags.py` | Behavior of `SyncOverwriteFlags` propagation through the sync pipeline |
+| `test_sync_state_reader.py` | Typed sidecar-first VM identity/name/role reads and legacy fallback contracts |
+| `test_sync_state_writer.py` | Typed sidecar writes, including best-effort reflection fields and required/retried post-success role ownership evidence with exact snapshot compensation |
 | `test_task_history_sync.py` | Task history sync workflow |
 | `test_virtual_disks_sync.py` | Virtual disk sync workflow |
 | `test_vm_backup_volids.py` | VM backup volume ID parsing and normalization |
 | `test_vm_network.py` | VM network interface mapping and IP address handling |
 | `test_netbox_version.py` | `detect_netbox_version` caching, `parse_netbox_version` parsing, `ensure_vm_type` version-gate and pre-resolved `netbox_version` short-circuit |
 | `test_vm_sync.py` | Full VM sync workflow including coordinator and dry-run |
-| `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, retry semantics, failure isolation, and empty-queue short-circuit |
+| `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, role/snapshot rollback, commit-before-response-loss recovery, retry semantics, failure isolation, and empty-queue short-circuit |
 | `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation |
-| `test_auth_lockout.py` | bcrypt API-key check, failed-attempt counting, lockout duration, and async path |
-| `test_auth_bootstrap.py` | One-shot bootstrap claim: atomic first-key registration, concurrent-claim 409, inactive-history keeps bootstrap closed, legacy backfill idempotency, final-active-key delete/deactivate guards, rotation flow |
+| `test_auth_lockout.py` | Composite credential isolation plus shared source-abuse limits, database-bound and process-pinned identity-key generations/loss/skew/post-start-mutation contracts, atomic key-file publish fault injection, renewable per-token owner leases capped by persisted terminal deadlines, wedged-verifier reclamation and late-result discard, exactly-once duplicate/late-finalizer recovery within the supported horizon, finalizer-driven orphan compaction, credential-cohort coalescing with per-rejection source charging, missing-header and rotating-identity saturation with fair valid admission, bounded active-key recovery scans, unified per-bucket/global admission limits, typed WebSocket auth frames, sync/async/HTTP/WebSocket valid bursts above failure thresholds, durable source budgets/counters, safe expired-row eviction, real ASGI/Uvicorn middleware-stack proxy spoofing and trusted-forwarding partitioning, shell-level nginx bundled/custom-command trust defaults, sync/async and multiprocess atomic races, busy-timeout-before-WAL sync/async contention, full serialized bootstrap, rollback-compatible legacy schema, strict bucket/reservation/metric/key-binding validation, and label-free capacity/row/in-flight/orphan/compaction metrics |
+| `test_auth_lockout_cli.py` | Explicit-existing-database enforcement, exact startup-equivalent recovery-schema validation (including destructive-rebind no-mutation cases for malformed PK/type/CHECK definitions), read-only secret-safe inspection/recovery while HTTP is locked, and offline runtime-lease-enforced identity-key rebind that atomically clears buckets/reservations and advances or safely recreates the generation |
+| `test_auth_bootstrap.py` | One-shot bootstrap claim: atomic first-key registration, concurrent-claim 409, inactive-history keeps bootstrap closed, legacy backfill idempotency, final-active-key delete/deactivate guards, transactional create/reactivate active-key caps, rotation flow |
 | `test_schema_cli.py` | `proxbox-schema` CLI subcommands (`list`, `status`, `generate`) via argparse |
 | `test_ensure_tag_duplicate_recovery.py` | `ensure_tag_async` concurrent-creation race recovery: slug/name fallback lookups, re-raise on miss, non-duplicate passthrough |
 | `e2e/conftest.py` | E2E fixtures: `proxmox_mock_http_published`, `proxmox_mock_backend`, `client_with_fake_netbox`, `auth_headers` |
@@ -105,7 +109,10 @@ uv run pytest tests
 # Single file
 uv run pytest tests/test_vm_sync.py
 
-# With coverage
+# With coverage (local / GitHub CI shape; the Gitea gate runs statement-only
+# coverage with COVERAGE_CORE=sysmon and -n 8 --dist worksteal to fit its
+# runner-pool timeout — see .gitea/workflows/ci.yml and
+# tests/test_release_workflows.py)
 uv run pytest tests/ -n auto \
   --ignore=tests/e2e \
   --ignore=tests/test_generated_proxmox_routes.py \
@@ -113,6 +120,11 @@ uv run pytest tests/ -n auto \
   --cov-branch \
   --cov-report=term-missing \
   --cov-report=xml:coverage.xml
+
+# Release-only unit/static contract. GitHub CI additionally prepares the real
+# CPython 3.13 musllinux wheelhouse and builds the extracted sdist context with
+# Docker build networking disabled.
+uv run pytest tests/test_release_workflows.py -q
 
 # E2E tests against in-process MockBackend
 uv run pytest tests/e2e -m mock_backend

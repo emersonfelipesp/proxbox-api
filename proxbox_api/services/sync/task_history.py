@@ -359,8 +359,9 @@ async def _resolve_vm_targets(  # noqa: C901
     vms: Sequence[object],
     *,
     explicitly_selected: bool,
+    active_scopes: set[tuple[int | None, str]] | None = None,
 ) -> tuple[list[_VMTarget], int]:
-    """Resolve owned VM identity while ignoring unmanaged rows only estate-wide."""
+    """Resolve owned VM identity within the active aggregate or explicit selection scope."""
 
     if not vms:
         return [], 0
@@ -383,14 +384,39 @@ async def _resolve_vm_targets(  # noqa: C901
         for vm in vms
         if (vm_id := normalize_positive_int(_as_mapping(vm).get("id"))) is not None
     }
+    scoped_aggregate = not explicitly_selected and bool(active_scopes)
+    active_endpoint_ids = {
+        endpoint_id
+        for endpoint_id, _cluster_name_value in active_scopes or set()
+        if endpoint_id is not None
+    }
+    active_cluster_names = {
+        cluster_name_value
+        for _endpoint_id, cluster_name_value in active_scopes or set()
+        if cluster_name_value
+    }
     sidecars_by_vm_id: dict[int, list[dict[str, object]]] = {}
     invalid_sidecar_refs: set[str] = set()
     for sidecar in identity_scan.rows:
+        sidecar_endpoint_id = normalize_positive_int(sidecar.get("proxmox_endpoint_raw_id"))
+        sidecar_cluster_name = _normalize_text(sidecar.get("proxmox_cluster_name")) or ""
+        if scoped_aggregate:
+            if sidecar_endpoint_id is not None:
+                if sidecar_endpoint_id not in active_endpoint_ids:
+                    continue
+                if (
+                    sidecar_cluster_name
+                    and (sidecar_endpoint_id, sidecar_cluster_name) not in active_scopes
+                ):
+                    continue
+            elif not sidecar_cluster_name or sidecar_cluster_name not in active_cluster_names:
+                continue
+
         parent_id = normalize_positive_int(_extract_fk_id(sidecar.get("virtual_machine")))
         if parent_id is None:
-            # An estate-wide run owns the complete VM set and therefore treats
-            # an unparented sidecar as corrupt. A selected run cannot safely
-            # attribute it to its scope, so the selected VM will instead fail
+            # An unselected run owns every sidecar left inside its active scope
+            # and therefore treats an unparented row as corrupt. A selected run
+            # cannot safely attribute it to the requested VM, which will fail
             # below if its own identity is absent.
             if not explicitly_selected:
                 sidecar_id = normalize_positive_int(sidecar.get("id"))
@@ -775,6 +801,11 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
         netbox_session,
         vms,
         explicitly_selected=netbox_vm_ids is not None,
+        active_scopes={
+            (extract_proxmox_session_endpoint_id(session), _status_name(status))
+            for session, status in zip(pxs or [], cluster_status or [])
+            if _status_name(status)
+        },
     )
     if not targets:
         return {"count": 0, "created": 0, "skipped": skipped}

@@ -4,7 +4,7 @@ Esta pagina documenta formas suportadas para executar o `proxbox-api`.
 
 ## Requisitos
 
-- Python 3.11+
+- Python 3.12 ou 3.13 (Python 3.14 ainda nao e compativel)
 - `uv` (recomendado) ou `pip`
 - Acesso de rede aos destinos NetBox e Proxmox
 
@@ -44,9 +44,45 @@ docker run -d -p 8443:8000 --name proxbox-api-nginx \
   emersonfelipesp/proxbox-api:latest-nginx
 ```
 
+Quando o entrypoint nginx inicia a topologia supervisor/nginx distribuida, ele
+adiciona `127.0.0.1/32` no inicio da politica de confianca da aplicacao. Assim,
+seu listener Uvicorn somente em loopback e confiavel, e o `X-Forwarded-For` do
+nginx cria buckets independentes de rate limit e bloqueio por cliente. O proprio
+Uvicorn nunca reescreve o peer no escopo. Valores adicionais em
+`PROXBOX_TRUSTED_PROXIES` sao aditivos e devem identificar somente proxies
+upstream realmente confiaveis. Um comando customizado pula a topologia
+distribuida e nao adiciona confianca em loopback; valor ausente permanece vazio.
+
 URL do servico:
 
 - <https://127.0.0.1:8443> (autoassinado, confiavel no host do container)
+
+#### Proxy reverso externo
+
+As imagens raw e Granian nao confiam em nenhum proxy por padrao. Coloque a
+aplicacao em rede privada, configure `PROXBOX_TRUSTED_PROXIES` com a rede ou o
+endereco exato do proxy e nao publique a porta da aplicacao:
+
+```bash
+docker network create --subnet 172.30.0.0/24 proxbox-private
+docker run -d --name proxbox-api --network proxbox-private \
+  -e PROXBOX_TRUSTED_PROXIES=172.30.0.0/24 \
+  emersonfelipesp/proxbox-api:latest
+```
+
+O location do nginx externo deve preservar a cadeia:
+
+```nginx
+location / {
+    proxy_pass http://proxbox-api:8000;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Use uma sub-rede privada sem conflito, adequada ao deployment. Nunca confie em
+uma faixa publica/de clientes e nunca exponha a porta da aplicacao fora do proxy
+confiavel. O entrypoint Uvicorn distribuido mantem `--no-proxy-headers` para que
+a aplicacao valide o peer de transporte antes de aceitar o header.
 
 #### Conectando netbox-proxbox a imagem nginx
 
@@ -103,6 +139,7 @@ Comuns a todas as imagens, incluindo as variantes experimentais PyO3/Rust:
 |----------|--------|-----------|
 | `PORT` | `8000` | Porta em que o servidor escuta |
 | `PROXBOX_BIND_HOST` | `0.0.0.0` | Endereco ao qual o servidor faz bind. Use `::` para dual-stack IPv4 + IPv6. Respeitado pelas imagens `raw` e `granian`; a imagem `nginx` escuta em ambas as pilhas incondicionalmente. |
+| `PROXBOX_TRUSTED_PROXIES` | vazio em raw/Granian/comandos customizados; a topologia nginx distribuida adiciona `127.0.0.1/32` | CIDRs no nivel da aplicacao autorizados a fornecer `X-Forwarded-For`. O preprocessamento do Uvicorn fica desabilitado. Supervisor/nginx protege e confia no hop Uvicorn loopback; comando customizado nao recebe confianca implicita. Proxies externos devem ser listados explicitamente e ser os unicos callers capazes de alcancar a porta da aplicacao. |
 
 Especificas do mkcert (apenas para as imagens `nginx` e `granian`):
 
@@ -245,7 +282,7 @@ Habilite primeiro o compare mode pela pagina `/plugins/proxbox/settings/` do
 NetBox ou use a variavel de ambiente para um processo avulso:
 
 ```bash
-PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app
+PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app --no-proxy-headers
 ```
 
 O padrao de producao continua sendo Python. Para rollback imediato, volte
@@ -255,7 +292,7 @@ se um override de ambiente foi usado.
 Inicie o servidor apos instalar:
 
 ```bash
-python -m uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 ## Opcao 3: Codigo-fonte local
@@ -288,13 +325,13 @@ uv pip install -e proxbox-reconcile-rs
 Execute a API:
 
 ```bash
-uv run fastapi run proxbox_api.main:app --host 0.0.0.0 --port 8000
+uv run fastapi run proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000
 ```
 
 Alternativa com uvicorn:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000 --reload
 ```
 
 O comando `fastapi run` nao expoe opcoes de TLS; para HTTPS no proprio processo use **uvicorn** com `--ssl-certfile` / `--ssl-keyfile`, ou **nginx/Caddy** na frente (recomendado para certificados reais).
@@ -308,7 +345,7 @@ Para HTTPS confiavel somente na sua propria maquina:
 ```bash
 mkcert -install
 mkcert proxbox.backend.local localhost 127.0.0.1 ::1
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000 --reload \
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000 --reload \
   --ssl-keyfile=./proxbox.backend.local+3-key.pem \
   --ssl-certfile=./proxbox.backend.local+3.pem
 ```
@@ -320,7 +357,7 @@ Ajuste os nomes dos arquivos conforme a saida do `mkcert`.
 **Recomendado:** terminar TLS no **nginx** ou **Caddy** e manter a API em HTTP em `127.0.0.1:8000`:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 127.0.0.1 --port 8000
 ```
 
 Configure o proxy com `fullchain.pem` e `privkey.pem` (Let's Encrypt em `/etc/letsencrypt/live/<dominio>/`) e cabecalhos `X-Forwarded-Proto` (e afins). Exemplo completo de bloco `server` do nginx no **README** do repositorio.
@@ -328,7 +365,7 @@ Configure o proxy com `fullchain.pem` e `privkey.pem` (Let's Encrypt em `/etc/le
 **Uvicorn com TLS direto** (implantacoes menores): use a **cadeia completa** em `--ssl-certfile` e a chave em `--ssl-keyfile`:
 
 ```bash
-uv run uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8443 \
+uv run uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8443 \
   --ssl-certfile=/etc/letsencrypt/live/api.exemplo.com/fullchain.pem \
   --ssl-keyfile=/etc/letsencrypt/live/api.exemplo.com/privkey.pem
 ```

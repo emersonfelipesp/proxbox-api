@@ -1,10 +1,11 @@
 name: Gitea Package Registry — Publish
 
 on:
+  # Deliberately `push` only. Gitea emits both `create` and `push` for a tag;
+  # subscribing to both starts two immutable package uploads for one version.
   push:
     tags:
       - 'v*'
-  create:
   workflow_dispatch:
     inputs:
       tag_name:

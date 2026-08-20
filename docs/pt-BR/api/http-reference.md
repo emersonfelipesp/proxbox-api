@@ -10,6 +10,8 @@ Para schemas completos de request e response, use o OpenAPI em tempo de execucao
 - `GET /version` - Versao do backend para invalidacao externa de cache.
 - `GET /cache` - Inspeciona o cache em memoria.
 - `GET /clear-cache` - Limpa caches em memoria, incluindo o cache GET do NetBox e o cache de reconcile de custom fields.
+- `GET /cache/metrics` - Snapshot JSON de metricas de cache, reconciliacao e auth-lockout agregadas, incluindo total de linhas de falha e gauges de reservas em voo/orfas.
+- `GET /cache/metrics/prometheus` - Exposicao Prometheus das mesmas familias sem labels para scrape jobs.
 
 ## Autenticacao (`/auth`)
 
@@ -17,10 +19,10 @@ Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Pro
 
 - `GET /auth/bootstrap-status` - Verifica se o registro inicial de chave ainda e necessario. Isento de autenticacao. `needs_bootstrap` e `false` assim que a reivindicacao duravel de bootstrap existe ou qualquer registro de chave (ativa ou inativa) existe.
 - `POST /auth/register-key` - Registra a primeira chave de API. Isento de autenticacao; a reivindicacao singleton duravel de bootstrap e o hash bcrypt sao gravados em uma unica transacao, entao o bootstrap so pode ser consumido uma vez por banco de dados. Qualquer chamada posterior — inclusive depois de todas as chaves serem removidas ou desativadas — retorna `409 Conflict`.
-- `POST /auth/keys` - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca.
+- `POST /auth/keys` - Cria uma nova chave de API. Retorna o valor da chave uma unica vez; armazene com seguranca. Retorna `409` (`active_api_key_limit_reached`) se a ativacao ultrapassaria `PROXBOX_AUTH_MAX_ACTIVE_KEYS`.
 - `GET /auth/keys` - Lista todas as chaves de API. Os valores sao ocultados (apenas metadados sao retornados).
 - `DELETE /auth/keys/{key_id}` - Remove uma chave de API pelo ID. Recusa remover a ultima chave ativa com `409` (`last_active_api_key_required`); crie e verifique uma substituta antes.
-- `POST /auth/keys/{key_id}/activate` - Reativa uma chave previamente desativada.
+- `POST /auth/keys/{key_id}/activate` - Reativa uma chave previamente desativada. Retorna `409` (`active_api_key_limit_reached`) se a ativacao ultrapassaria o teto configurado.
 - `POST /auth/keys/{key_id}/deactivate` - Desativa uma chave ativa sem remove-la. Recusa desativar a ultima chave ativa com `409` (`last_active_api_key_required`).
 
 ## Admin

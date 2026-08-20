@@ -143,14 +143,27 @@ def test_cache_dispatches_with_api_key(auth_test_client: TestClient) -> None:
     """/cache dispatches end-to-end (previously had no HTTP TestClient cover)."""
     resp = auth_test_client.get("/cache")
     assert resp.status_code == 200
-    assert isinstance(resp.json(), dict)
+    body = resp.json()
+    assert isinstance(body, dict)
+    assert "proxbox_auth_failures_total" in body["auth_lockout_metrics"]
 
 
 def test_cache_metrics_dispatches_with_api_key(auth_test_client: TestClient) -> None:
     """/cache/metrics dispatches end-to-end and returns a JSON object."""
     resp = auth_test_client.get("/cache/metrics")
     assert resp.status_code == 200
-    assert isinstance(resp.json(), dict)
+    body = resp.json()
+    assert isinstance(body, dict)
+    assert "proxbox_auth_failures_total" in body
+
+
+def test_cache_prometheus_metrics_dispatches_with_api_key(
+    auth_test_client: TestClient,
+) -> None:
+    """/cache/metrics/prometheus reads auth metrics from the live engine."""
+    resp = auth_test_client.get("/cache/metrics/prometheus")
+    assert resp.status_code == 200
+    assert "proxbox_auth_failures_total " in resp.text
 
 
 def test_clear_cache_dispatches_with_api_key(auth_test_client: TestClient) -> None:

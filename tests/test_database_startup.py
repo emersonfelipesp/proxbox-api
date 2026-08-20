@@ -14,11 +14,13 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import inspect
+from sqlmodel import Session
 
 from proxbox_api import database
 from proxbox_api.app import bootstrap, factory
 from proxbox_api.app.cors import DatabaseAwareCORSMiddleware
 from proxbox_api.database import (
+    ApiKey,
     DatabaseConfigurationError,
     DatabaseConfigurationSource,
     DatabaseStartupError,
@@ -237,6 +239,51 @@ def test_fresh_database_override_is_audited_before_startup_writes(
         assert str(legacy_path) in formatted
         assert "PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY" in formatted
         assert target.fresh_database_override is True
+    finally:
+        _dispose_runtime()
+
+
+def test_startup_warns_over_active_key_cap_and_keeps_bounded_recovery_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _dispose_runtime()
+    database_path = tmp_path / "over-active-key-cap.db"
+    environment = {
+        "PROXBOX_DATABASE_PATH": str(database_path),
+        "PROXBOX_AUTH_MAX_ACTIVE_KEYS": "1",
+    }
+    monkeypatch.setattr(database, "_legacy_default_database_candidates", tuple)
+
+    database.initialize_database_and_schema(environment)
+    first_key = "oldest-recovery-key-aaaaaaaaaaaaaaaaaaaaaaaa"
+    with Session(database.get_engine()) as session:
+        ApiKey.store_key(session, first_key, label="oldest-recovery")
+        ApiKey.store_key(
+            session,
+            "newer-over-limit-key-bbbbbbbbbbbbbbbbbbbbbbbb",
+            label="newer-over-limit",
+        )
+    _dispose_runtime()
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="proxbox_api.database"):
+            database.initialize_database_and_schema(environment)
+
+        warning = next(
+            record
+            for record in caplog.records
+            if getattr(record, "active_api_key_count", None) == 2
+        )
+        assert warning.active_api_key_limit == 1
+        rendered = logging.Formatter("%(levelname)s %(message)s").format(warning)
+        assert "oldest 1" in rendered
+        assert "/auth/keys/{id}/deactivate" in rendered
+        assert "temporarily raise PROXBOX_AUTH_MAX_ACTIVE_KEYS" in rendered
+
+        with Session(database.get_engine()) as session:
+            assert ApiKey.verify_any(session, first_key, max_active_keys=1) is True
     finally:
         _dispose_runtime()
 
@@ -492,6 +539,18 @@ def test_dockerfile_keeps_container_default_out_of_operator_path_variable() -> N
 
     assert "PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db" in dockerfile
     assert "PROXBOX_DATABASE_PATH=/data/database.db" not in dockerfile
+    assert (
+        "python:3.13-alpine@sha256:"
+        "540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d" in dockerfile
+    )
+    assert (
+        dockerfile.count(
+            "ghcr.io/astral-sh/uv:0.11.28@sha256:"
+            "0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa"
+        )
+        == 3
+    )
+    assert "ghcr.io/astral-sh/uv:latest" not in dockerfile
 
 
 @pytest.mark.parametrize(

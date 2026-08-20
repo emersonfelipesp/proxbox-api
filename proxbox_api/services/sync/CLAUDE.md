@@ -82,6 +82,10 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   do the same, while unrelated archive VMIDs are normal skips. Fatal
   identity/total-coverage/pagination/reconcile failures raise
   `ProxboxException`, and cancellation must propagate before reconciliation.
+  Unselected aggregates scope authoritative sidecar validation to the active
+  `(endpoint, cluster)` sessions, so retired endpoint-less rows outside those
+  clusters are ignored. Active-scope corruption and all explicitly selected VM
+  identity gaps remain fail-closed.
 - `virtual_disks.py` resolves VM config targets from live Proxmox
   `cluster/resources` VMID/type data before falling back to NetBox VM custom
   fields or `device.name`; this avoids disk sync calls against stale or FQDN
@@ -106,6 +110,11 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   IPs onto a VM and returns `assigned_to_other_object` instead of stealing an
   address owned elsewhere. This prevents the "VM interface wrongly matched to
   another server's IP" defect; both paths stay idempotent across re-syncs.
+- **Node-interface type wire invariant.**
+  `network.py::sync_node_interface_and_ip` must serialize
+  `NetBoxInterfaceType` through `.value` before REST reconciliation. NetBox
+  accepts `bridge`, `lag`, `virtual`, `loopback`, and `other`; Python enum
+  labels such as `netboxinterfacetype.bridge` are invalid API choices.
 - **Cluster/site placement invariant.** After cluster reconciliation, dependent
   device and VM writes use `device_ensure._effective_cluster_site_id()` so a
   cluster's actual `dcim.site` scope wins over a stale endpoint/default site.
@@ -185,6 +194,26 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   every VM it examines, so a per-VM lookup would be an N+1 across the fleet.
   Coverage: `tests/test_name_collision.py` (both rename directions, the blank
   fallback, self-collision, and a genuine collision still suffixing).
+
+- **VM roles use durable ownership evidence.** The typed VM sidecar field
+  `proxmox_last_synced_role_id` records the DeviceRole last written by a
+  successful sync. `role_resolution.compute_role_snapshot_decision()` is the
+  single truth table: missing evidence captures the current role without
+  changing it, a current role that differs from the snapshot is an operator
+  edit and is preserved when overwrite is disabled, and a role still matching
+  its snapshot may roll forward with a changed managed default. The full/bulk
+  path loads all snapshots once and applies the decision in dispatch after the
+  Python/Rust queue seam; `vm_create.py`, individual sync, and the network path
+  apply the same policy before `rest_reconcile_async`. The writer receives a
+  snapshot only after the corresponding reconcile succeeds and persists it
+  independently of the legacy custom-field flag. Unavailable, failed, or
+  conflicting reads preserve the role without claiming ownership. Required
+  snapshot writes retry three times. After an exhausted response, the shared
+  persistence guard authoritatively re-reads typed state, accepts a confirmed
+  commit, or restores and verifies both the previous role and snapshot before
+  surfacing VM failure. Thus response loss cannot become a false operator lock
+  on the next pass. Typed sidecar reads win; legacy custom-field reads are
+  transition fallback only.
 
 ## Extension Guidance
 

@@ -855,7 +855,7 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
     )
     monkeypatch.setattr(
         "proxbox_api.app.factory.check_auth_header_with_session",
-        lambda _session, _api_key, _client_ip: (True, None),
+        lambda _session, _api_key, _client_ip, _policy=None: (True, None),
     )
 
     register_generated_proxmox_routes(
@@ -912,7 +912,7 @@ def test_generated_proxy_route_closes_target_on_response_validation_failure(monk
     )
     monkeypatch.setattr(
         "proxbox_api.app.factory.check_auth_header_with_session",
-        lambda _session, _api_key, _client_ip: (True, None),
+        lambda _session, _api_key, _client_ip, _policy=None: (True, None),
     )
 
     register_generated_proxmox_routes(

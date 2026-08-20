@@ -68,22 +68,22 @@ def test_fallback_color_differs_per_tag() -> None:
     assert fallback_color("critical") != fallback_color("production")
 
 
-def test_fallback_color_handles_md5_without_usedforsecurity(
+def test_fallback_color_explicitly_marks_md5_as_non_security_use(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     real_md5 = tag_styles_module.hashlib.md5
     calls: list[dict[str, object]] = []
 
-    def _compat_md5(data: bytes, **kwargs: object):
+    def _capturing_md5(data: bytes, **kwargs: object):
         calls.append(kwargs)
-        if "usedforsecurity" in kwargs:
-            raise TypeError("usedforsecurity is unsupported")
-        return real_md5(data)
+        return real_md5(data, **kwargs)
 
-    monkeypatch.setattr(tag_styles_module.hashlib, "md5", _compat_md5)
+    monkeypatch.setattr(tag_styles_module.hashlib, "md5", _capturing_md5)
 
-    assert fallback_color("critical") == real_md5(b"critical").hexdigest()[:6]
-    assert calls == [{"usedforsecurity": False}, {}]
+    assert (
+        fallback_color("critical") == real_md5(b"critical", usedforsecurity=False).hexdigest()[:6]
+    )
+    assert calls == [{"usedforsecurity": False}]
 
 
 class _StubCluster:

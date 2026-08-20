@@ -25,6 +25,11 @@ Current execution order:
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 
+The node-interface stage maps Proxmox interface kinds to NetBox REST choice
+values at the write boundary: `bridge`, `lag`, `virtual`, `loopback`, or
+`other`. Python enum names are internal implementation details and must never
+be sent in a `dcim.Interface.type` payload.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:
@@ -86,6 +91,12 @@ owned degraded aggregate to HTTP 502 after retaining reconciled rows, while SSE
 publishes the degraded phase summary. Selected NetBox ID lookups use bounded
 repeated-value chunks and fail closed if any chunk cannot be read. See
 [Task History Synchronization](./task-history.md).
+
+Unselected aggregate task-history runs validate sidecar identity only within
+the active `(endpoint, cluster)` session scopes. Retired endpoint-less rows from
+unrelated clusters are unmanaged for that run and are skipped; malformed or
+duplicate identity inside an active scope still fails closed. Explicit NetBox
+VM selections remain strict regardless of scope.
 
 ### Parallelism Rules
 
@@ -239,11 +250,18 @@ Mirrored write sites:
 - Virtual disk `proxbox_storage_id` is mirrored to
   `ProxboxVirtualDiskSyncState.proxbox_storage`.
 
-Each sidecar payload is built from the same live Proxmox-derived values already
-computed for the custom-field payload. Sidecar writes are gated by the matching
-`overwrite_*_custom_fields` flag and are best-effort: older netbox-proxbox
-builds that return 404/501, or transient plugin API failures, are logged and do
-not abort the sync stage.
+Each reflection sidecar payload is built from the same live Proxmox-derived
+values already computed for the custom-field payload. Reflection fields follow
+the matching `overwrite_*_custom_fields` flag. Ownership evidence such as
+`proxmox_vm_name` and `proxmox_last_synced_role_id` is written independently of
+that flag after successful VM reconciliation. Reflection-only sidecar writes
+remain best-effort. A role snapshot that accompanies a managed role change is
+correctness-critical: it is retried three times and, if still unsuccessful,
+is authoritatively re-read. A confirmed commit is accepted despite the lost
+response; otherwise both the previous role and previous snapshot are restored
+and verified before the VM is marked failed. This prevents either half of the
+pair from misclassifying the next pass as an operator edit. Deploy the
+netbox-proxbox schema/API addition before this backend consumer.
 
 Reads are migrated in the same additive style. VM identity lookups first query
 `/api/plugins/proxbox/sync-state/virtual-machines/` by `proxmox_vm_id` and
@@ -251,11 +269,19 @@ endpoint, then fall back to the legacy `cf_proxmox_vm_id` plus endpoint/cluster
 query when no sidecar row exists. Orphan sweep reads `last_run_id` from the VM
 sidecar before trusting `proxbox_last_run_id`, so a VM touched by the current
 run is not deleted just because the legacy custom field is stale or absent.
-Role-ownership snapshots remain legacy-CF-only through
-`proxmox_last_synced_role_id`; the current VM sidecar model has no role
-ownership field. If the sidecar API is missing or errors, sync falls back to
-custom fields and continues. Removing the legacy custom fields is a separate
-retirement step.
+Role ownership is read first from
+`ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id`; the deprecated
+same-named custom field is a transition fallback only when legacy custom fields
+are enabled. Full/bulk sync loads typed role snapshots once per pass, then the
+engine-neutral dispatch policy applies the same decision after either Python or
+Rust queue construction. Individual and sidecar-adoption paths call the same
+truth table. A missing snapshot captures the current role without changing it;
+a role that differs from its snapshot is preserved when overwrite is disabled;
+and a role still matching its snapshot may roll forward with a changed managed
+default. Unavailable, transiently failed, or conflicting snapshot reads are not
+treated as a first-sync absence: the current role is preserved and no ownership
+snapshot is claimed. Removing the legacy custom fields is a separate retirement
+step.
 
 ## Backup Sync Flow
 

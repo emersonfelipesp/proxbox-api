@@ -14,6 +14,7 @@ from proxbox_api.logger import logger
 from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
+from proxbox_api.services.auth_lockout import AuthSourceContext, resolve_auth_source_context
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
@@ -22,29 +23,42 @@ websocket_router = APIRouter()
 AUTH_MESSAGE_SCHEMA = {"type": "object", "properties": {"api_key": {"type": "string"}}}
 
 
-async def _do_ws_auth(websocket: WebSocket, api_key: str | None, client_ip: str) -> bool:
-    authorized, error_message = await asyncio.to_thread(check_auth_header, api_key, client_ip)
+def _parse_api_key_message(message: str) -> str | None:
+    """Return only a string API key from one JSON-object auth frame."""
+
+    try:
+        payload = json.loads(message)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    api_key = payload.get("api_key")
+    return api_key if isinstance(api_key, str) else None
+
+
+async def _do_ws_auth(
+    websocket: WebSocket,
+    api_key: str | None,
+    client_source: AuthSourceContext,
+) -> bool:
+    authorized, error_message = await asyncio.to_thread(check_auth_header, api_key, client_source)
     if not authorized:
-        await websocket.close(code=4001, reason=error_message or "Authentication failed")
+        close_code = 1013 if "verification capacity" in (error_message or "") else 4001
+        await websocket.close(code=close_code, reason=error_message or "Authentication failed")
         return False
     return True
 
 
-def _get_client_ip(websocket: WebSocket) -> str:
+def _get_client_source(websocket: WebSocket) -> AuthSourceContext:
     # Reuse the request-side resolver for trusted-proxy semantics.
-    from proxbox_api.app.factory import _peer_is_trusted
+    from proxbox_api.app.factory import _TRUSTED_PROXIES
 
-    peer_ip = websocket.client.host if websocket.client else "unknown"
-    if not _peer_is_trusted(peer_ip):
-        return peer_ip
-    forwarded = websocket.headers.get("x-forwarded-for", "")
-    if not forwarded:
-        return peer_ip
-    candidates = [token.strip() for token in forwarded.split(",") if token.strip()]
-    for candidate in reversed(candidates):
-        if not _peer_is_trusted(candidate):
-            return candidate
-    return candidates[0] if candidates else peer_ip
+    peer_ip = websocket.client.host if websocket.client else None
+    return resolve_auth_source_context(
+        peer_ip,
+        websocket.headers.get("x-forwarded-for"),
+        _TRUSTED_PROXIES,
+    )
 
 
 @websocket_router.websocket("/")
@@ -58,16 +72,11 @@ async def base_websocket(websocket: WebSocket) -> None:
         return
 
     try:
-        try:
-            auth_msg = await websocket.receive_text()
-            auth_data = json.loads(auth_msg)
-            api_key = auth_data.get("api_key")
-        except Exception:  # noqa: BLE001
-            api_key = None
+        api_key = _parse_api_key_message(await websocket.receive_text())
 
-        client_ip = _get_client_ip(websocket)
+        client_source = _get_client_source(websocket)
 
-        if not await _do_ws_auth(websocket, api_key, client_ip):
+        if not await _do_ws_auth(websocket, api_key, client_source):
             logger.warning("WebSocket / auth failed")
             return
 
@@ -103,15 +112,10 @@ async def websocket_virtual_machines(
         return
 
     try:
-        try:
-            auth_msg = await websocket.receive_text()
-            auth_data = json.loads(auth_msg)
-            api_key = auth_data.get("api_key")
-        except Exception:  # noqa: BLE001
-            api_key = None
+        api_key = _parse_api_key_message(await websocket.receive_text())
 
-        client_ip = _get_client_ip(websocket)
-        if not await _do_ws_auth(websocket, api_key, client_ip):
+        client_source = _get_client_source(websocket)
+        if not await _do_ws_auth(websocket, api_key, client_source):
             logger.warning("WebSocket /ws/virtual-machines auth failed")
             return
 
@@ -174,15 +178,10 @@ async def websocket_sync_commands(  # noqa: C901
         return
 
     try:
-        try:
-            auth_msg = await websocket.receive_text()
-            auth_data = json.loads(auth_msg)
-            api_key = auth_data.get("api_key")
-        except Exception:  # noqa: BLE001
-            api_key = None
+        api_key = _parse_api_key_message(await websocket.receive_text())
 
-        client_ip = _get_client_ip(websocket)
-        if not await _do_ws_auth(websocket, api_key, client_ip):
+        client_source = _get_client_source(websocket)
+        if not await _do_ws_auth(websocket, api_key, client_source):
             logger.warning("WebSocket /ws auth failed")
             return
 

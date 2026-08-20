@@ -9,7 +9,7 @@ matrix, and staged package publication.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `.github/workflows/ci.yml` | Push, pull request, release, manual dispatch | Runs core checks and the NetBox + Proxmox Docker E2E matrix. |
-| `.github/workflows/publish-testpypi.yml` | Version tag, GitHub release, manual dispatch | Publishes immutable package versions through TestPyPI, PyPI release candidates, final PyPI releases, Docker images, and post-publish E2E. |
+| `.github/workflows/publish-testpypi.yml` | RC tag or RC-only manual dispatch; published GitHub Release | Publishes immutable RCs to TestPyPI and final/post releases to PyPI, followed by Docker images and post-publish E2E. |
 | `.github/workflows/docker-hub-publish.yml` | Reusable workflow / manual dispatch | Builds and publishes raw, nginx, granian, and experimental PyO3/Rust Docker image variants. |
 | `.github/workflows/release-docker-verify.yml` | Release / manual dispatch | Pulls the published Docker image tags, including experimental PyO3/Rust tags, and verifies container startup. |
 | `.github/workflows/docs.yml` | Docs changes on main / PR | Builds and publishes the MkDocs site. |
@@ -115,13 +115,13 @@ sequenceDiagram
     participant DH as Docker Hub
     participant E2E as NetBox E2E stack
 
-    Tag->>WF: vX.Y.Z or vX.Y.Z.postN
+    Tag->>WF: vX.Y.ZrcN
     WF->>WF: Validate pyproject + uv.lock + tag
     WF->>TP: Upload proxbox-api
-    WF->>TP: Reinstall exact package on Python 3.11, 3.12, 3.13
+    WF->>TP: Reinstall exact package on Python 3.12 and 3.13
     WF->>WF: Run lint, type, compile, import, schema, pytest checks
 
-    Tag->>WF: vX.Y.ZrcN, release event, or publish_target=pypi
+    Tag->>WF: published GitHub Release for vX.Y.Z or vX.Y.Z.postN
     WF->>E2E: Run pre-publish E2E with dev dependencies
     WF->>PY: Upload proxbox-api
     WF->>PY: Reinstall exact package
@@ -130,5 +130,5 @@ sequenceDiagram
 ```
 
 Package uploads intentionally omit `twine --skip-existing`. If any validation
-fails after upload, publish a fixed-forward version: `vX.Y.Z.postN` for TestPyPI
-or post-release fixes, and `vX.Y.ZrcN` for PyPI release-candidate retries.
+fails after upload, publish a fixed-forward version: `vX.Y.ZrcN` for TestPyPI
+release-candidate retries and `vX.Y.Z.postN` for post-release fixes.

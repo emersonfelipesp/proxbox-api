@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import time
 from pathlib import Path
@@ -169,6 +170,54 @@ def test_signed_plan_rejects_tamper_drift_and_expiry(mutation: str) -> None:
         )
 
     assert exc.value.code == expected_code
+
+
+def test_signed_plan_rejects_noncanonical_signature_encoding() -> None:
+    endpoint = _endpoint(token_name="automation", token_value="encrypted-token-a")
+    _plan, _digest, token = issue_packer_plan(
+        endpoint=endpoint,
+        target=_target(),
+        recipe_digest="a" * 64,
+        now=1000,
+    )
+    encoded_payload, encoded_signature = token.split(".", 1)
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    last_index = alphabet.index(encoded_signature[-1])
+    noncanonical_signature = f"{encoded_signature[:-1]}{alphabet[last_index ^ 1]}"
+
+    assert noncanonical_signature != encoded_signature
+    assert base64.urlsafe_b64decode(f"{noncanonical_signature}=") == base64.urlsafe_b64decode(
+        f"{encoded_signature}="
+    )
+    with pytest.raises(PackerPlanError, match="preflight_plan_invalid"):
+        verify_packer_plan(
+            f"{encoded_payload}.{noncanonical_signature}",
+            endpoint=endpoint,
+            target=_target(),
+            recipe_digest="a" * 64,
+            now=1001,
+        )
+
+
+@pytest.mark.parametrize("malformed_signature", ["=", "A=", "!", "A\n"])
+def test_signed_plan_rejects_malformed_signature_encoding(malformed_signature: str) -> None:
+    endpoint = _endpoint(token_name="automation", token_value="encrypted-token-a")
+    _plan, _digest, token = issue_packer_plan(
+        endpoint=endpoint,
+        target=_target(),
+        recipe_digest="a" * 64,
+        now=1000,
+    )
+    encoded_payload, _encoded_signature = token.split(".", 1)
+
+    with pytest.raises(PackerPlanError, match="preflight_plan_invalid"):
+        verify_packer_plan(
+            f"{encoded_payload}.{malformed_signature}",
+            endpoint=endpoint,
+            target=_target(),
+            recipe_digest="a" * 64,
+            now=1001,
+        )
 
 
 def test_endpoint_config_binding_uses_a_dedicated_keyed_context(

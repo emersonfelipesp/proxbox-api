@@ -130,6 +130,20 @@ Compare-mode mismatches increment `proxbox_reconcile_mismatch_total`, which is e
 
 Operations are executed in deterministic queue order.
 
+Before a VM write, dispatch applies the engine-neutral role ownership policy.
+It loads `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` once for
+the pass, compares the snapshot with the current and desired roles, and either
+preserves an operator edit, backfills missing evidence without changing the
+role, or rolls a still-managed role forward. This happens after Python/Rust
+queue construction, so both engines have identical enforcement. The resulting
+snapshot is persisted only after the operation succeeds.
+Unavailable, failed, or conflicting reads preserve the role without claiming a
+snapshot. Required snapshot persistence is retried three times and an exhausted
+write triggers an authoritative typed re-read. A confirmed new snapshot is
+accepted as committed despite the lost response; otherwise the persistence
+guard restores and verifies both the previous role and previous snapshot before
+marking the VM failed. The pair remains aligned for the next pass.
+
 - Batch window size is read from `PROXBOX_NETBOX_WRITE_CONCURRENCY`.
 - Inside each batch window, writes are still executed one-by-one (sequential).
 - `GET` operations are no-op reads from in-memory state.

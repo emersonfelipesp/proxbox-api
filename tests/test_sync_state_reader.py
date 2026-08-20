@@ -829,10 +829,10 @@ async def test_dispatch_create_proceeds_when_sidecar_404_enters_legacy_mode(
 async def test_role_snapshot_resolver_uses_legacy_custom_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _unexpected_list(*_args: Any, **_kwargs: Any):
-        raise AssertionError("VM sidecar has no role-ownership field to read")
+    async def _empty_sidecar(*_args: Any, **_kwargs: Any):
+        return []
 
-    monkeypatch.setattr(sync_state_reader, "rest_list_async", _unexpected_list)
+    monkeypatch.setattr(sync_state_reader, "rest_list_async", _empty_sidecar)
 
     result = await sync_state_reader.resolve_vm_last_synced_role_id(
         object(),
@@ -841,3 +841,100 @@ async def test_role_snapshot_resolver_uses_legacy_custom_field(
     )
 
     assert result == 11
+
+
+@pytest.mark.asyncio
+async def test_role_snapshot_resolver_prefers_typed_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_list(
+        _nb: object,
+        path: str,
+        *,
+        query: dict[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        assert path == VM_SYNC_STATE_PATH
+        assert query == {"virtual_machine_id": 77, "limit": 2}
+        return [
+            {
+                "id": 9,
+                "virtual_machine": {"id": 77},
+                "proxmox_last_synced_role_id": 22,
+            }
+        ]
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_async", _fake_list)
+
+    result = await sync_state_reader.resolve_vm_last_synced_role_id(
+        object(),
+        vm_record={"id": 77, "custom_fields": {"proxmox_last_synced_role_id": 11}},
+        custom_field_name="proxmox_last_synced_role_id",
+    )
+
+    assert result == 22
+
+
+@pytest.mark.asyncio
+async def test_role_snapshot_read_keeps_transient_failure_unverified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _failed_list(*_args: Any, **_kwargs: Any):
+        raise RuntimeError("temporary NetBox failure")
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_async", _failed_list)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    result = await sync_state_reader.read_vm_last_synced_role(
+        object(),
+        vm_record={"id": 77, "custom_fields": {}},
+        custom_field_name="proxmox_last_synced_role_id",
+    )
+
+    assert result.snapshot_id is None
+    assert not result.verified
+
+
+@pytest.mark.asyncio
+async def test_role_snapshot_read_keeps_conflicting_rows_unverified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _conflicting_list(*_args: Any, **_kwargs: Any):
+        return [
+            {"virtual_machine": {"id": 77}, "proxmox_last_synced_role_id": 11},
+            {"virtual_machine": {"id": 77}, "proxmox_last_synced_role_id": 12},
+        ]
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_async", _conflicting_list)
+
+    result = await sync_state_reader.read_vm_last_synced_role(
+        object(),
+        vm_record={"id": 77, "custom_fields": {"proxmox_last_synced_role_id": 11}},
+        custom_field_name="proxmox_last_synced_role_id",
+    )
+
+    assert result.snapshot_id is None
+    assert not result.verified
+
+
+@pytest.mark.asyncio
+async def test_load_vm_last_synced_role_ids_omits_conflicting_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_paginated(*_args: Any, **_kwargs: Any):
+        return [
+            {"virtual_machine": {"id": 71}, "proxmox_last_synced_role_id": 11},
+            {"virtual_machine": {"id": 72}, "proxmox_last_synced_role_id": 21},
+            {"virtual_machine": {"id": 72}, "proxmox_last_synced_role_id": 22},
+            {"virtual_machine": {"id": 73}, "proxmox_last_synced_role_id": None},
+        ]
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+
+    snapshots = await sync_state_reader.load_vm_last_synced_role_ids(object())
+
+    assert snapshots == {71: 11}
+    scan = await sync_state_reader.scan_vm_last_synced_role_ids(object())
+    assert scan.values == {71: 11}
+    assert scan.unverified_vm_ids == frozenset({72})
+    assert scan.for_vm(73).verified

@@ -13,10 +13,10 @@ Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code 
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
-`proxbox-api 0.0.19` ships the Proxmox SDN sync collectors, NetBox
-L2VPN/RouteTarget/Prefix reconcile, plugin inventory reconciliation, and
-VM-interface reconcile idempotency hardening.
+Current pairing: `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
+`proxbox-api 0.0.20` adds NetBox 4.6.6 certification, strict Python 3.12/3.13
+support, FIPS-safe tag hashing, bounded release matrices, and immutable
+Gitea-first release/deployment evidence.
 
 ## VM Interface Sync Strategy
 
@@ -140,9 +140,20 @@ disable sidecar writes when the flag is off. Sync reads resolve via
 `proxbox_api/services/sync/sync_state_reader.py`: sidecar-only by default, with
 the legacy `cf_*` fallback (VM identity lookup, orphan-sweep last-run checks)
 running only when `custom_fields_enabled=true`, which also emits a deprecation
-warning. Role-ownership snapshots have no sidecar field and are read only when
-the flag is enabled. Complete custom-field retirement is a separate follow-up; do
-not delete custom-field data while the flag exists.
+warning. Role ownership uses the typed VM-sidecar
+`proxmox_last_synced_role_id` field first. Full sync loads these snapshots once
+and applies the decision after the Python/Rust queue seam; individual and
+adoption paths use the same truth table. Persist ownership evidence only after
+a successful reconcile and independently of the legacy custom-field flag.
+Unavailable, failed, or conflicting reads preserve the role without claiming
+ownership. Required ownership writes retry three times. After an exhausted
+response, the backend authoritatively re-reads the typed snapshot, accepts a
+confirmed commit, or restores and verifies both the previous role and snapshot
+before surfacing VM failure. This prevents response loss from creating a false
+operator lock on the next pass. The
+same-named custom field is a transition fallback only when the flag is enabled.
+Complete custom-field retirement is a separate follow-up; do not delete
+custom-field data while the flag exists.
 
 ## CI/CD Workflows
 
@@ -150,28 +161,68 @@ not delete custom-field data while the flag exists.
 
 The official release pipeline for proxbox-api runs in this order:
 
-1. **Gitea tag push** — annotated tag `vX.Y.Z` pushed to Gitea (`git push gitea vX.Y.Z`).
-2. **Gitea Actions: `.gitea/workflows/publish-gitea.yml`** — builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes tag to GitHub, creates or publishes GitHub release (`GH_MIRROR_TOKEN`).
-3. **GitHub Actions: `push: tags: v*` trigger** — fires when Gitea workflow pushes tag to GitHub. Validates version, runs validate and E2E checks, then publishes to PyPI.
-4. **GitHub Actions: `release: published` trigger** — fires when Gitea workflow creates the GitHub release. The `publish-pypi` job has a pre-check: if the version already exists on PyPI (from the tag-push run), the upload is skipped and the run succeeds.
-5. **Docker Hub** — `publish-docker` job in `publish-testpypi.yml` calls `docker-hub-publish.yml` after PyPI validation.
+1. **Activation gate** — do not merge the target cutover until the private control repository has a positive policy-pinned ID and its protected workflows, host boundaries, sockets, and repository-scoped runners pass readiness. Leave the existing publisher active until then.
+2. **Gitea tag push** — annotated `vX.Y.ZrcN` or `vX.Y.Z` tag is pushed to Gitea.
+3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` first requires the exact successful GitHub-hosted offline-image job for the same canonical `develop` SHA and verifies the source-SHA GitHub workflow bytes against the reviewed SHA-256 before trusting that job. The offline job pins every external action by immutable commit. It then builds and uploads the exact signed six-file request: the package wheel, package sdist, `release-manifest.json`, `release-request.json`, `runner-completion-attestation.json`, and `runner-completion-attestation.sig`. Workflow concurrency is global per repository. Validation and build have independent pinned repository-registration scope digests, and the completion statement binds the supervisor-derived build digest; the target client requires each role's evidence to match its pinned acceptance value. The workflow has no package or mirror credential and cannot publish or push tags.
+4. **Locked validation and publication** — dispatch `validate.yml` first, then the separate irreversible `publish.yml`, each with exactly the repository name, first-attempt target run ID, and request SHA-256. Its isolated builder verifies and seals the bytes; its isolated publisher uploads the exact package and promotes only RC tags to GitHub.
+5. **RC validation** — GitHub `push: tags: v*rc*` validates the exact Gitea bytes through TestPyPI.
+6. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
+7. **Public promotion** — after production health validation, promote the final tag and create the GitHub Release. Its `release: published` event is the sole automatic authority for PyPI and then Docker Hub.
+
+The proxbox-api request build must first generate the release-only offline
+Docker context from `Dockerfile.release`: a hash-locked wheelhouse, canonical
+schema-2 inventory, CPython 3.13 `musllinux_1_2_x86_64` plus backward-compatible
+`musllinux_1_1_x86_64` target tags, and
+exact literal full-digest prior runtime/uv image sources and declared-stage-only
+`COPY --from`. Keep the local
+development `Dockerfile` separate. The locked control must independently reject
+inventory drift, networked/mutable Docker inputs, and any build path other than
+`uv sync --frozen --offline` before signing.
 
 ### RC (release-candidate) pipeline
 
-1. Push `vX.Y.ZrcN` tag → `.gitea/workflows/publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
-2. `.github/workflows/publish-testpypi.yml` fires on `push: tags: v*rc*` → TestPyPI publish + validate.
+1. Push `vX.Y.ZrcN` and wait for `.gitea/workflows/publish-gitea.yml` to upload `release-control-request`.
+2. Hash the canonical `release-request.json`; dispatch `validate.yml`, then `publish.yml`, with exactly `repository=proxbox-api`, the target run ID, and that SHA-256. The control publisher uploads the Gitea bytes and promotes only the exact RC tag.
+3. `.github/workflows/publish-testpypi.yml` fires on `push: tags: v*rc*` → exact-byte TestPyPI publish + validate.
 
 ### Secrets required
 
-- `PKG_TOKEN`: Gitea Personal Access Token with `write:packages` scope. Name must be exactly `PKG_TOKEN` — `GITEA_` prefix is reserved by Gitea Actions.
-- `GH_MIRROR_TOKEN`: GitHub PAT with `repo` and `workflow` scopes for tag push and release creation.
+- The target repository uses no Gitea package or RC-promotion secret. Its two
+  disposable repository-scoped `ci-release-proxbox-api` jobs use distinct
+  job-bound ephemeral validation/build registrations. Each advertises only that
+  release label, accepts one supervisor-authorized assignment, and terminates;
+  every RC, final, or post request therefore requires a freshly registered and
+  reviewed identity pair;
+  the jobs then require the
+  live runner ID, name, and sole label to match the checksum-pinned acceptance
+  record plus a fresh signed external-supervisor attestation bound to
+  repository/run/job/source, complete registered labels, runtime image, and
+  network/runtime policy plus its role-specific repository-registration scope
+  digest. Zero/empty identity and all-zero key/image/policy
+  digests keep tag releases disabled. Candidate build and wheel preparation run
+  behind the bounded token-free UID/Landlock boundary plus a fail-closed x86-64
+  seccomp deny for every socket syscall, every `io_uring` entry point, and every
+  x32-tagged syscall. The outer job revalidates both exact
+  immutable wheelhouses and dry-resolves the hash-locked CPython 3.13 musl
+  runtime cache. After cleanup, the root-only external supervisor signs the exact
+  request/artifact inventory. The jobs emit only the package wheel, package
+  sdist, `release-manifest.json`, `release-request.json`,
+  `runner-completion-attestation.json`, and
+  `runner-completion-attestation.sig`.
+  The separately administered control plane verifies that signature and owns the package
+  and GitHub-mirror credentials, with distinct builder/publisher identities and
+  fixed digest-locked tooling.
 - `PYPI_TOKEN` / `PYPI_USERNAME`: PyPI credentials for GitHub Actions upload.
 - `TEST_PYPI_TOKEN` / `TEST_PYPI_USERNAME`: TestPyPI credentials for RC validation.
 - `DOCKERHUB_TOKEN` / `DOCKERHUB_USERNAME`: Docker Hub credentials.
 
-### Idempotency
+TestPyPI and PyPI uploads use separate fresh GitHub-hosted `ubuntu-latest` jobs,
+install only the locked publisher dependency group with
+`--no-install-project`, and pass credentials to Twine only through `TWINE_*`.
 
-The `publish-pypi` job checks the PyPI API before uploading. If `proxbox-api==${VERSION}` already exists (HTTP 200), the upload step is skipped and the job succeeds. This prevents failures when `release: published` re-triggers after the tag-push run already published.
+### Immutability
+
+Package uploads never use `--skip-existing`. A consumed Gitea, TestPyPI, or PyPI version is never overwritten or retried with different bytes; advance to the next `rcN` or `postN` and record it in the release ledger. GitHub promotes the exact repository-linked Gitea wheel/sdist and requires immutable successful-NMS-deployment evidence for final publication.
 
 ## Code Quality Standards
 
@@ -266,12 +317,16 @@ Branch-tier deploys run from Gitea through
 `.gitea/workflows/deploy-production.yml` on the `prod-deploy` runner hosted by
 the Gitea server (`10.0.30.96`). Pushes to `develop` deploy
 `proxbox-api-staging` to `https://staging.backend.proxbox.nmulti.cloud`.
-Pushes to `main` deploy `proxbox-api` to
-`https://backend.proxbox.nmulti.cloud`. The workflow uses the restricted SSH
-alias `nmc-prod-207` and the allowlisted command:
+Production is an NMS-dispatched manual workflow from canonical `main`, with
+`latest_package` as the default and `main_branch` as an explicit override. The
+runner uses fixed, allowlisted deployment gateways and emits protected package-
+deployment evidence only after production health, installed version, and exact
+active image identity succeed. The workflow exports the root-issued schema-2
+receipt and cannot construct successful-production evidence itself.
 
 ```bash
-ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
+/opt/nmulticloud/deploy/bin/deploy-app-package \
+  proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
 ```
 
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside

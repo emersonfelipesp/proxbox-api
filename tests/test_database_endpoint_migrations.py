@@ -2,10 +2,97 @@
 
 from __future__ import annotations
 
+import multiprocessing
+from pathlib import Path
+from typing import Any
+
+import pytest
 from sqlalchemy import inspect, text
 from sqlmodel import create_engine
 
 from proxbox_api import database
+
+
+def _make_startup_lock_target(database_path: str) -> database.SQLiteDatabaseTarget:
+    return database.SQLiteDatabaseTarget(
+        path=Path(database_path),
+        source=database.DatabaseConfigurationSource.PROXBOX_DATABASE_PATH,
+    )
+
+
+def _hold_database_startup_lock(
+    database_path: str,
+    acquired: Any,
+    release: Any,
+) -> None:
+    with database._database_startup_advisory_lock(_make_startup_lock_target(database_path)):
+        acquired.set()
+        release.wait(timeout=5)
+
+
+def _stop_process(process: Any) -> None:
+    process.join(timeout=2)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=2)
+
+
+def test_database_startup_lock_serializes_worker_processes(tmp_path):
+    context = multiprocessing.get_context("fork")
+    database_path = str(tmp_path / "database.db")
+    first_acquired = context.Event()
+    first_release = context.Event()
+    second_acquired = context.Event()
+    second_release = context.Event()
+    first = context.Process(
+        target=_hold_database_startup_lock,
+        args=(database_path, first_acquired, first_release),
+    )
+    second = context.Process(
+        target=_hold_database_startup_lock,
+        args=(database_path, second_acquired, second_release),
+    )
+
+    try:
+        first.start()
+        assert first_acquired.wait(timeout=2)
+
+        second.start()
+        assert not second_acquired.wait(timeout=0.25)
+
+        first_release.set()
+        assert second_acquired.wait(timeout=2)
+    finally:
+        first_release.set()
+        second_release.set()
+        _stop_process(first)
+        _stop_process(second)
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+
+
+def test_database_startup_lock_releases_after_exception(tmp_path):
+    database_path = str(tmp_path / "database.db")
+    with pytest.raises(RuntimeError, match="startup failed"):
+        with database._database_startup_advisory_lock(_make_startup_lock_target(database_path)):
+            raise RuntimeError("startup failed")
+
+    context = multiprocessing.get_context("fork")
+    acquired = context.Event()
+    release = context.Event()
+    process = context.Process(
+        target=_hold_database_startup_lock,
+        args=(database_path, acquired, release),
+    )
+    try:
+        process.start()
+        assert acquired.wait(timeout=2)
+    finally:
+        release.set()
+        _stop_process(process)
+
+    assert process.exitcode == 0
 
 
 def _make_legacy_endpoint_table(engine, table: str) -> None:
