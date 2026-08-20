@@ -286,17 +286,75 @@ def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
     }
 
 
+def _publish_jobs() -> dict[str, dict]:
+    return yaml.safe_load(_read(PUBLISH_WORKFLOW_PATH))["jobs"]
+
+
+def _job_text(job: dict) -> str:
+    # json, not yaml.safe_dump: the dumper folds long lines (these very jobs
+    # produce dozens of folded continuations), so a needle could straddle a
+    # fold and vanish from the rendered text. Both callers below fail closed
+    # when that happens -- an empty match set trips their count/identity
+    # assertions rather than passing vacuously -- but json never wraps, so the
+    # confusing false failure cannot arise in the first place.
+    return json.dumps(job)
+
+
 def test_netbox_e2e_readiness_is_long_enough_for_migrations_and_api_status():
     ci_workflow = _read(CI_WORKFLOW_PATH)
-    publish_workflow = _read(PUBLISH_WORKFLOW_PATH)
 
     assert "timeout-minutes: 45" in ci_workflow
     assert "for i in $(seq 1 600); do" in ci_workflow
     assert "NetBox API did not become ready" in ci_workflow
 
-    assert publish_workflow.count("timeout-minutes: 45") >= 2
-    assert publish_workflow.count("for i in $(seq 1 900); do") >= 2
-    assert publish_workflow.count("NetBox API did not become ready") >= 2
+    # Assert the budget on the jobs that actually stand the NetBox stack up,
+    # identified by their readiness loop. The previous version counted the
+    # bare string "timeout-minutes: 45" across the whole file, so any two
+    # unrelated jobs that happened to share the number satisfied it -- and
+    # conversely, retuning an unrelated job's budget broke a test about e2e
+    # readiness.
+    e2e_jobs = {
+        name: job
+        for name, job in _publish_jobs().items()
+        if "for i in $(seq 1 900); do" in _job_text(job)
+    }
+    assert len(e2e_jobs) >= 2, f"expected the pre/post-publish e2e jobs, got {sorted(e2e_jobs)}"
+
+    for name, job in e2e_jobs.items():
+        assert job["timeout-minutes"] >= 45, (
+            f"{name} must keep at least 45 minutes for migrations plus API readiness"
+        )
+        assert "NetBox API did not become ready" in _job_text(job), name
+
+
+def test_coverage_suite_jobs_outlast_the_shared_runner_worst_case():
+    """The mocked coverage suite needs a budget sized for the slow runners.
+
+    These jobs do not stand up NetBox, so the e2e readiness budget never
+    applied to them -- they only shared the number. At 45 minutes the py3.13
+    leg of 0.0.20rc1 was killed mid-suite while its py3.12 sibling finished in
+    about 34, which is runner variance rather than a code failure. The same
+    suite gates ``publish-pypi`` through ``validate-pypi-candidate``, so an
+    under-sized budget here can strand a release between its GitHub Release
+    and PyPI.
+
+    A floor rather than an exact pin: raising the budget later must not
+    require editing this test, and a healthy run still exits when the suite
+    finishes.
+    """
+    coverage_jobs = {
+        name: job
+        for name, job in _publish_jobs().items()
+        if "tests with coverage" in _job_text(job)
+    }
+    assert set(coverage_jobs) == {"validate-testpypi", "validate-pypi-candidate"}, sorted(
+        coverage_jobs
+    )
+
+    for name, job in coverage_jobs.items():
+        assert job["timeout-minutes"] >= 90, (
+            f"{name} runs the full coverage suite; 45 minutes was observed to be too tight"
+        )
 
 
 def test_ci_e2e_loads_prepared_image_artifacts_before_stack_start():
