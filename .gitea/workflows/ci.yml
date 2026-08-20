@@ -15,9 +15,17 @@ on:
       - develop
   pull_request:
 
+# Repo-wide, not per-ref. Narrowing the push trigger above stopped a branch
+# racing its own pull-request run, but a per-ref group still let two different
+# refs land together -- PR vs PR, or a develop push vs a PR. Two jobs on the
+# capacity-2 runner put 2x8 xdist workers on its 8-CPU quota, and the resulting
+# memory pressure kills workers. cancel-in-progress stays false on purpose: a
+# global group that cancels would let a pull-request run kill a develop/main
+# push run, destroying the push status that the deploy workflow's
+# "Verify CI for the exact deployed source" gate reads.
 concurrency:
-  group: proxbox-api-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: proxbox-api-ci
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -108,6 +116,7 @@ jobs:
           set -eo pipefail
           export PATH="$HOME/.local/bin:$PATH"
           uv run pytest tests/ -n 8 --dist worksteal \
+            --max-worker-restart=0 \
             --ignore=tests/e2e \
             --ignore=tests/test_generated_proxmox_routes.py \
             --tb=short \

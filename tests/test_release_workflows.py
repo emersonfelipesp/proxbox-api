@@ -237,6 +237,52 @@ def test_primary_ci_enforces_repository_coverage_ratchet():
     }
 
 
+def test_gitea_ci_serialises_full_suite_runs_repo_wide():
+    """Only one full suite may run at a time, and pushes must never be cancelled.
+
+    The runner has capacity 2 and an 8-CPU quota, and `-n 8` is pinned to that
+    quota, so two concurrent jobs put 16 xdist workers on 8 CPUs' worth of it.
+    A per-ref group does not prevent that: two different refs are two different
+    groups. The observed result is killed workers and a 90-minute timeout with
+    no failing test.
+    """
+    workflow = yaml.safe_load(_read(GITEA_CI_WORKFLOW_PATH))
+    concurrency = workflow["concurrency"]
+
+    group = concurrency["group"]
+    assert "${{" not in group, (
+        f"concurrency group {group!r} is templated, so different refs get different "
+        "groups and two full suites can still collide on one runner"
+    )
+
+    # A global group that cancels would let a pull-request run kill a
+    # develop/main push run, destroying the push status that the deploy
+    # workflow's CI gate reads.
+    assert concurrency.get("cancel-in-progress") is False
+
+
+def test_gitea_ci_fails_fast_instead_of_respawning_killed_xdist_workers():
+    """A killed worker must end the run, not be replaced.
+
+    Without a restart cap, each replacement re-collects the whole suite, which
+    raises memory use and invites the next kill -- one OOM becomes an unbounded
+    loop that only ends at the job timeout, and the log carries no failing test
+    to explain it.
+    """
+    workflow = yaml.safe_load(_read(GITEA_CI_WORKFLOW_PATH))
+    runs = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in (job.get("steps") or [])
+        if isinstance(step.get("run"), str) and "pytest" in step["run"]
+    ]
+    assert runs, "expected a pytest step in the Gitea CI workflow"
+    for run in runs:
+        assert "--max-worker-restart=0" in run, (
+            "the xdist pytest invocation must cap worker restarts at 0"
+        )
+
+
 def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
     workflow_source = _read(GITEA_CI_WORKFLOW_PATH)
     workflow = yaml.safe_load(workflow_source)

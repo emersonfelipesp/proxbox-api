@@ -355,6 +355,14 @@ GitHub git credentials through `gh auth setup-git`, and pushes only
 
 ## Docker CI/CD
 
+CI is serialised repo-wide: `ci.yml` uses the constant concurrency group
+`proxbox-api-ci` with `cancel-in-progress: false`, and pins
+`--max-worker-restart=0` on pytest. Two concurrent full suites overwhelm the
+capacity-2 / 8-CPU-quota runner and its killed xdist workers get replaced in an
+unbounded loop, producing a 90-minute timeout with no failing test. Do not
+re-introduce a per-ref group or enable cancellation on the global group.
+
+
 Branch-tier deploys run from Gitea through
 `.gitea/workflows/deploy-production.yml` on the `prod-deploy` runner hosted by
 the Gitea server (`10.0.30.96`). Pushes to `develop` deploy

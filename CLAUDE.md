@@ -144,6 +144,16 @@ Open the nearest scoped guide for the code you are changing.
   empty bearer and surfaces as an opaque registry `HTTP 401` rather than a
   missing-credential error. `manifest` and `validate-attestation` are
   local-only and must not be made to require it.
+- CI is **serialised repo-wide**: `ci.yml`'s concurrency group is the constant
+  `proxbox-api-ci` with `cancel-in-progress: false`. A per-ref group does not
+  protect the runner — two different refs are two different groups, and two
+  full suites on the capacity-2 / 8-CPU-quota runner put 2x8 xdist workers on
+  8 CPUs of quota, which kills workers. Cancellation stays off so a
+  pull-request run can never cancel a `develop`/`main` push run and destroy the
+  push status that `Verify CI for the exact deployed source` reads. The pytest
+  invocation also pins `--max-worker-restart=0`, so a killed worker ends the
+  run immediately instead of being replaced and re-collecting the whole suite
+  in an unbounded loop that only stops at the 90-minute timeout.
 - `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
   coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
   coverage-artifact step must pin `actions/upload-artifact@v3` (SHA
