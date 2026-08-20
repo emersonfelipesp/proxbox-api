@@ -329,6 +329,13 @@ receipt and cannot construct successful-production evidence itself.
   proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
 ```
 
+Every `release_artifacts.py` step that reaches the Gitea package registry
+(`fetch-gitea`, `fetch-attestation`, `publish-attestation`, `publish-manifest`)
+sets `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` in its **own** `env`; the
+job env holds no secrets, so an omission reaches the registry with an empty
+bearer and fails as an opaque `HTTP 401`. `manifest` and `validate-attestation`
+are local-only and do not take the secret.
+
 The deployment target is `10.0.30.207`. Docker Compose metadata lives outside
 the repo under `/opt/nmulticloud/deploy`, with the production image built from
 this repo's `Dockerfile` raw uvicorn target. The container uses host networking,

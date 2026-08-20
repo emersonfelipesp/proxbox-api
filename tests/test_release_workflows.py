@@ -962,12 +962,203 @@ def test_repository_deploy_workflow_is_nms_source_aware():
     assert "deploy-app proxbox-api" in workflow
     assert "create-attestation" not in workflow
     assert "export-package-deploy-receipt" in workflow
-    assert "GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}" in workflow
+    # Per-step token wiring is enforced structurally by
+    # test_every_registry_touching_release_step_carries_the_package_token; a
+    # whole-file substring check here passed while the package-binding step had
+    # no token at all, because the string was present in a different step.
     assert "GITEA_PACKAGE_TOKEN: ${{ github.token }}" not in workflow
     assert "packages: write" not in workflow
     assert "publish-attestation" in workflow
     assert "inputs.skip_ci_gate != true" in workflow
     assert "healthcheck-app proxbox-api" in workflow
+
+
+REGISTRY_RELEASE_SUBCOMMANDS = frozenset(
+    {"fetch-gitea", "fetch-attestation", "publish-attestation", "publish-manifest"}
+)
+LOCAL_RELEASE_SUBCOMMANDS = frozenset({"manifest", "validate-attestation"})
+REGISTRY_TOKEN_EXPRESSION = "${{ secrets.PKG_TOKEN }}"
+
+
+def _release_artifacts_subcommands(run: str) -> set[str]:
+    """Every release_artifacts.py subcommand invoked by one workflow step."""
+    subcommands: set[str] = set()
+    for line in run.splitlines():
+        words = line.split()
+        for index, word in enumerate(words[:-1]):
+            if word.endswith("release_artifacts.py"):
+                subcommands.add(words[index + 1])
+    return subcommands
+
+
+def _release_artifacts_steps(path: Path) -> list[tuple[str, set[str], dict[str, str]]]:
+    """(step name, subcommands, step env) for each release_artifacts.py step."""
+    workflow = yaml.safe_load(_read(path))
+    steps: list[tuple[str, set[str], dict[str, str]]] = []
+    for job in workflow["jobs"].values():
+        for step in job.get("steps") or []:
+            run = step.get("run")
+            if not isinstance(run, str) or "release_artifacts.py" not in run:
+                continue
+            steps.append(
+                (step.get("name", ""), _release_artifacts_subcommands(run), step.get("env") or {})
+            )
+    return steps
+
+
+def test_every_registry_touching_release_step_carries_the_package_token():
+    """A step that reaches the Gitea registry must hold the token in its OWN env.
+
+    The registry rejects an empty bearer with an opaque HTTP 401, and the
+    workflow's job-level env deliberately carries no secrets, so the token has
+    to be wired per step. This walks the parsed YAML instead of grepping the
+    file: the previous substring guard was satisfied by any single step in the
+    file and stayed green while the package-binding step had no env at all.
+    """
+    paths = (GITEA_DEPLOY_WORKFLOW_PATH, GITEA_PROMOTE_WORKFLOW_PATH)
+    covered: dict[Path, int] = {}
+    for path in paths:
+        steps = _release_artifacts_steps(path)
+        assert steps, f"no release_artifacts.py step found in {path.name}"
+        required = 0
+        for name, subcommands, env in steps:
+            assert subcommands, f"{path.name}: {name!r} invokes no resolvable subcommand"
+            unknown = subcommands - REGISTRY_RELEASE_SUBCOMMANDS - LOCAL_RELEASE_SUBCOMMANDS
+            assert not unknown, (
+                f"{path.name}: {name!r} uses unclassified subcommand(s) {sorted(unknown)}"
+            )
+            if not subcommands & REGISTRY_RELEASE_SUBCOMMANDS:
+                continue
+            required += 1
+            assert env.get("GITEA_PACKAGE_TOKEN") == REGISTRY_TOKEN_EXPRESSION, (
+                f"{path.name}: {name!r} reaches the registry via "
+                f"{sorted(subcommands & REGISTRY_RELEASE_SUBCOMMANDS)} "
+                "but does not set GITEA_PACKAGE_TOKEN from secrets.PKG_TOKEN"
+            )
+        covered[path] = required
+
+    # Non-vacuity: both workflows must actually contribute a guarded step, so a
+    # rename that makes the selector match nothing fails instead of passing.
+    for path in paths:
+        assert covered[path] >= 1, f"{path.name} contributed no registry-touching step"
+
+    # Scope is deliberate, and self-checking: no GitHub workflow invokes this
+    # script today, so the walk covers every call site. If one ever does, this
+    # fails and says to widen the walk rather than leaving it silently partial.
+    github_workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+    assert github_workflows, "expected GitHub workflows to exist"
+    for path in github_workflows:
+        assert "release_artifacts.py" not in _read(path), (
+            f"{path.name} now invokes release_artifacts.py; extend this walk to cover it"
+        )
+
+
+def test_local_only_release_subcommands_are_not_required_to_hold_the_token():
+    """The token requirement covers registry access only, not local work.
+
+    `manifest` and `validate-attestation` read and check files on disk; making
+    them demand a secret would overstate the rule and push the token into steps
+    that have no use for it.
+    """
+    assert not (LOCAL_RELEASE_SUBCOMMANDS & REGISTRY_RELEASE_SUBCOMMANDS)
+    for subcommand in LOCAL_RELEASE_SUBCOMMANDS:
+        assert subcommand not in REGISTRY_RELEASE_SUBCOMMANDS
+
+    deploy_steps = _release_artifacts_steps(GITEA_DEPLOY_WORKFLOW_PATH)
+    local_only = [
+        name
+        for name, subcommands, _env in deploy_steps
+        if subcommands and not subcommands & REGISTRY_RELEASE_SUBCOMMANDS
+    ]
+    guarded = [
+        name
+        for name, subcommands, _env in deploy_steps
+        if subcommands & REGISTRY_RELEASE_SUBCOMMANDS
+    ]
+    assert guarded, "the deploy workflow must still have registry-touching steps"
+    for name in local_only:
+        assert name not in guarded
+
+
+def test_registry_reads_reject_an_empty_token_before_any_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both read paths must fail closed, not send an empty bearer and get a 401."""
+    release_artifacts = _load_release_artifacts()
+
+    def _forbidden(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("a registry request was issued without a token")
+
+    monkeypatch.setattr(release_artifacts, "_request", _forbidden)
+
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="Gitea package token is unavailable",
+    ):
+        release_artifacts.fetch_gitea_artifacts(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            package="proxbox_api",
+            version="0.0.20",
+            source_sha="a" * 40,
+            dist=tmp_path / "download",
+            token="",
+        )
+
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="Gitea package token is unavailable",
+    ):
+        release_artifacts.fetch_gitea_attestation(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            manifest={"package": "proxbox_api", "version": "0.0.20"},
+            token="",
+        )
+
+
+def test_fetch_attestation_command_forwards_the_registry_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI must pass the token through; the default argument is empty.
+
+    `fetch-attestation` reached `fetch_gitea_attestation` with no `token=` at
+    all, so wiring the workflow env alone would have left this path unauthenticated.
+    """
+    release_artifacts = _load_release_artifacts()
+    manifest_path = tmp_path / "release-manifest.json"
+    manifest_path.write_text(
+        json.dumps({"package": "proxbox_api", "version": "0.0.20", "source_sha": "a" * 40}),
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    def _capture(**kwargs: object) -> dict[str, object]:
+        observed.update(kwargs)
+        return {"package": "proxbox_api", "version": "0.0.20"}
+
+    monkeypatch.setattr(release_artifacts, "fetch_gitea_attestation", _capture)
+    monkeypatch.setattr(
+        release_artifacts, "load_manifest", lambda _path: {"package": "proxbox_api"}
+    )
+    monkeypatch.setenv("GITEA_PACKAGE_TOKEN", "registry-token")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "release_artifacts.py",
+            "fetch-attestation",
+            "--owner",
+            "emersonfelipesp",
+            "--repository",
+            "proxbox-api",
+            "--manifest",
+            str(manifest_path),
+        ],
+    )
+
+    release_artifacts.main()
+
+    assert observed.get("token") == "registry-token"
 
 
 def test_final_tag_promotion_requires_main_package_and_nms_evidence():
@@ -1716,6 +1907,7 @@ def test_registry_fetch_rejects_rebinding_original_artifacts_to_moved_tag(
             version="0.0.20",
             source_sha="b" * 40,
             dist=tmp_path / "download",
+            token="registry-token",
         )
 
 

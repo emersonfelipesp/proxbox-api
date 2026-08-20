@@ -136,6 +136,14 @@ Open the nearest scoped guide for the code you are changing.
   deployment, installed-version proof, active-image proof, and health check let
   the workflow export root-issued immutable repository-linked completion
   evidence; neither workflow code nor a bypass input can mint that evidence.
+- Registry credentials are step-scoped: every `release_artifacts.py` step whose
+  subcommand reaches the Gitea package registry (`fetch-gitea`,
+  `fetch-attestation`, `publish-attestation`, `publish-manifest`) must set
+  `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` in its own `env`. The
+  `production` job env deliberately holds no secrets, so an omission sends an
+  empty bearer and surfaces as an opaque registry `HTTP 401` rather than a
+  missing-credential error. `manifest` and `validate-attestation` are
+  local-only and must not be made to require it.
 - `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
   coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
   coverage-artifact step must pin `actions/upload-artifact@v3` (SHA

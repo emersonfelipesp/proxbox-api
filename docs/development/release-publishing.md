@@ -140,6 +140,13 @@ sequenceDiagram
   cannot create successful-production evidence. Final public promotion verifies
   its source SHA, artifact hashes, manifest digest, observed image identity,
   environment, and Gitea run identity.
+- Registry credentials are step-scoped. Each `release_artifacts.py` invocation
+  that reaches the Gitea package registry (`fetch-gitea`, `fetch-attestation`,
+  `publish-attestation`, `publish-manifest`) carries
+  `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` in its own step `env`, because
+  the deploy job env holds no secrets. A step that omits it sends an empty
+  bearer and the registry answers `HTTP 401`. `manifest` and
+  `validate-attestation` are local-only and take no credential.
 - Manual workflow dispatch is TestPyPI-only and requires an RC version.
 - Package uploads intentionally omit `twine --skip-existing`; if a version was
   consumed by any package index, fix forward with the next `.postN` or `rcN`.

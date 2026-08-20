@@ -134,6 +134,8 @@ jobs:
 
       - name: Bind exact package artifacts before deployment
         if: ${{ inputs.deploy_source == 'latest_package' }}
+        env:
+          GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
           git fetch --force --no-tags origin \
