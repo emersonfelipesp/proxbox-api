@@ -314,7 +314,12 @@ jobs:
     if: needs.prepare-release.outputs.publish_target == 'testpypi'
     needs: [prepare-release, publish-testpypi]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # This job runs the full mocked coverage suite, not the NetBox e2e stack.
+    # Observed runtime on the shared pool spans ~34 min (py3.12) to over 45
+    # (py3.13 hit the old 45-minute cap mid-suite and was killed), so the
+    # budget is sized for the slow end rather than the median. Raising it
+    # does not slow a healthy run: the job exits when the suite finishes.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -426,7 +431,12 @@ jobs:
     if: needs.prepare-release.outputs.publish_target == 'pypi'
     needs: [prepare-release, validate-gitea-artifacts]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # This job runs the full mocked coverage suite, not the NetBox e2e stack.
+    # Observed runtime on the shared pool spans ~34 min (py3.12) to over 45
+    # (py3.13 hit the old 45-minute cap mid-suite and was killed), so the
+    # budget is sized for the slow end rather than the median. Raising it
+    # does not slow a healthy run: the job exits when the suite finishes.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
