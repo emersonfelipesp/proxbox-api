@@ -1211,9 +1211,9 @@ def test_public_publish_workflow_uses_immutable_locked_tooling():
     assert project["dependency-groups"]["publish"] == [
         "build==1.5.0",
         "packaging==26.0",
-        "setuptools==80.9.0",
+        "setuptools==83.0.0",
         "twine==6.2.0",
-        "wheel==0.45.1",
+        "wheel==0.46.2",
     ]
     assert workflow.count("uv sync --only-group publish --locked") == 3
     assert workflow.count("uv sync --only-group publish --locked --no-install-project") == 2
