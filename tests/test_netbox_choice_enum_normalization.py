@@ -83,9 +83,7 @@ class TestInterfaceSyncStateEnumNormalization:
             ("eth", "other"),
         ],
     )
-    def test_enum_member_serializes_to_its_value(
-        self, proxmox_type: str, expected: str
-    ) -> None:
+    def test_enum_member_serializes_to_its_value(self, proxmox_type: str, expected: str) -> None:
         """Passing the member itself — not ``.value`` — must still be correct."""
         state = NetBoxInterfaceSyncState(
             device=1,
@@ -297,9 +295,7 @@ class TestLiveVirtualMachineStatusPath:
             NetBoxVirtualMachineCreateBody,
         )
 
-        body = NetBoxVirtualMachineCreateBody.model_validate(
-            self._payload(proxmox_status)
-        )
+        body = NetBoxVirtualMachineCreateBody.model_validate(self._payload(proxmox_status))
         status = body.model_dump()["status"]
         assert status == expected
         assert type(status) is str

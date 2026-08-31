@@ -2080,9 +2080,10 @@ def test_production_reads_early_claims_late_and_waits_on_nothing():
     assert "/claim" not in _step("Read the deployment authorization")["run"]
 
     # Zero, so the authorization is never spent waiting for CI.
-    assert _step(
-        "Require a green CI status for the deployed SHA"
-    )["env"]["CI_GATE_TIMEOUT_SECONDS"] == "0"
+    assert (
+        _step("Require a green CI status for the deployed SHA")["env"]["CI_GATE_TIMEOUT_SECONDS"]
+        == "0"
+    )
 
     # The CI-waiting job must not gate production at all any more.
     assert workflow["jobs"]["verify-ci"]["if"] == "${{ github.event_name == 'push' }}"
@@ -2112,7 +2113,7 @@ def test_the_bind_race_is_retried_and_nothing_else_is():
             line for line in script.splitlines() if not line.strip().startswith("#")
         )
         assert "--fail-with-body" not in executable, step_name
-        assert 'exit 1' in script, step_name
+        assert "exit 1" in script, step_name
 
 
 def test_every_production_step_aborts_on_the_first_failure():
@@ -2182,9 +2183,7 @@ def _stub_host_commands(stub_bin: Path, exit_code: int, argv_log: Path) -> None:
     for name in ("deploy-app-package", "proxbox-package-deploy"):
         stub = stub_bin / name
         stub.write_text(
-            "#!/bin/sh\n"
-            f'printf "%s\\n" "$(basename "$0") $*" >> "{argv_log}"\n'
-            f"exit {exit_code}\n"
+            f'#!/bin/sh\nprintf "%s\\n" "$(basename "$0") $*" >> "{argv_log}"\nexit {exit_code}\n'
         )
         stub.chmod(0o755)
 
@@ -2193,8 +2192,7 @@ def _stub_host_commands(stub_bin: Path, exit_code: int, argv_log: Path) -> None:
 # shape, so this is the trust boundary, not a formatting preference.
 EXPECTED_DEPLOY_ARGV = {
     "Deploy exact Gitea package": (
-        "deploy-app-package proxbox-api 1.2.3 "
-        f"{'0' * 32} {{proof}} {'0' * 64} 4242"
+        f"deploy-app-package proxbox-api 1.2.3 {'0' * 32} {{proof}} {'0' * 64} 4242"
     ),
     "Deploy the canonical main commit the request authorizes": (
         f"proxbox-package-deploy deploy-main proxbox-api {'a' * 40} "
@@ -2270,9 +2268,7 @@ def test_both_deploy_paths_forward_the_full_authorized_argv():
         '"$PROOF_PATH" "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID"'
     ) in package
 
-    main = _argv_text(
-        _step("Deploy the canonical main commit the request authorizes")["run"]
-    )
+    main = _argv_text(_step("Deploy the canonical main commit the request authorizes")["run"])
     assert (
         'proxbox-package-deploy deploy-main proxbox-api "$WORKFLOW_SHA" '
         '"$DEPLOY_REQUEST_ID" "$PROOF_PATH" "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID"'
@@ -2281,9 +2277,7 @@ def test_both_deploy_paths_forward_the_full_authorized_argv():
     # The exporter's own contract is <target> <version> <id> <digest> <run>.
     # It runs after the package deploy has committed, so a wrong argv leaves
     # production changed with no promotion evidence.
-    receipt = _argv_text(
-        _step("Publish host-issued successful-deployment attestation")["run"]
-    )
+    receipt = _argv_text(_step("Publish host-issued successful-deployment attestation")["run"])
     assert (
         'export-package-deploy-receipt proxbox-api "$PACKAGE_VERSION" '
         '"$DEPLOY_REQUEST_ID" "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID" '
@@ -2421,13 +2415,25 @@ def _disclosures(text: str) -> list[str]:
     return found
 
 
+# Always scanned, whatever the branch is. Resolving the file set from the diff
+# keeps a feature branch honest, but the diff is empty on the base branches
+# themselves -- and a guard that inspects nothing there is the same as no guard,
+# on exactly the refs that get published.
+ALWAYS_PUBLIC_FILES = (
+    GITEA_DEPLOY_WORKFLOW_PATH,
+    Path(__file__),
+)
+
+
 def _changed_public_files() -> list[Path]:
-    """Every file this branch changes, resolved from git rather than by hand.
+    """The always-public files, plus whatever else this branch changes.
 
     A hand-maintained list is a guard that silently stops covering the thing it
-    was added for: the previous version omitted the other test file changed by
-    this same branch.
+    was added for: an earlier version omitted the other test file changed by
+    this same branch. Resolving from the diff fixes that, but it must not be the
+    only source -- on `develop` and `main` the diff against the base is empty.
     """
+    paths: list[Path] = [path for path in ALWAYS_PUBLIC_FILES if path.is_file()]
     result = subprocess.run(
         ["git", "diff", "--name-only", "--diff-filter=d", "gitea/develop...HEAD"],
         cwd=REPO_ROOT,
@@ -2435,12 +2441,16 @@ def _changed_public_files() -> list[Path]:
         text=True,
         timeout=60,
     )
-    if result.returncode != 0:
-        pytest.skip(f"cannot resolve the changed file set: {result.stderr.strip()}")
-    paths = [REPO_ROOT / line for line in result.stdout.split() if line]
-    existing = [path for path in paths if path.is_file()]
-    assert existing, "the branch must change at least one file"
-    return existing
+    # A missing base ref is normal in a fresh clone or on a detached checkout.
+    # Fall back to the always-public set rather than skipping: skipping here
+    # would report success for a file that was never read.
+    if result.returncode == 0:
+        for line in result.stdout.split():
+            candidate = REPO_ROOT / line
+            if candidate.is_file() and candidate not in paths:
+                paths.append(candidate)
+    assert paths, "the guard must scan at least the always-public files"
+    return paths
 
 
 def test_the_disclosure_guard_catches_what_it_is_for():

@@ -62,8 +62,7 @@ def test_staging_deploy_depends_on_the_ci_gate(workflow):
     needs = jobs["staging"].get("needs")
     needs = [needs] if isinstance(needs, str) else (needs or [])
     assert "verify-ci" in needs, (
-        "the staging job must declare `needs: verify-ci`; without it the gate "
-        "and the rollout race"
+        "the staging job must declare `needs: verify-ci`; without it the gate and the rollout race"
     )
 
 
@@ -95,9 +94,7 @@ def test_production_gates_itself_between_source_resolution_and_deployment(workfl
         "Deploy exact Gitea package",
         "Deploy the canonical main commit the request authorizes",
     ):
-        assert gate < names.index(deploy_step), (
-            f"the gate must run before {deploy_step!r}"
-        )
+        assert gate < names.index(deploy_step), f"the gate must run before {deploy_step!r}"
 
     gate_step = production["steps"][gate]
     assert "require_ci_status" in gate_step["run"]
