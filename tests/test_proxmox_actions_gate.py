@@ -205,3 +205,9 @@ def test_lifecycle_routes_are_registered_with_fixed_contract_paths():
 def test_allow_writes_field_defaults_to_false():
     """The SQLModel default for allow_writes is False (gate closed by default)."""
     assert ProxmoxEndpoint.model_fields["allow_writes"].default is False
+
+
+def test_packer_template_authorization_field_defaults_to_false():
+    """The narrow template-build capability is closed in the SQLModel itself."""
+
+    assert ProxmoxEndpoint.model_fields["allow_packer_template_builds"].default is False

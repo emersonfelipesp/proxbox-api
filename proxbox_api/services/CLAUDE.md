@@ -60,6 +60,10 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   verification rejects padding, invalid characters, and alternate encodings
   whose unused padding bits decode to the same bytes, then binds the plan to
   the current endpoint authority, target, recipe, expiry, and durable lease.
+  Endpoint authority includes enabled state, broad write permission, the
+  default-off `allow_packer_template_builds` capability, API identity/secrets,
+  access methods, and the persisted SSH binding. Execution verifies this digest
+  again after host-key pinning at the last boundary before SSH mutation.
 - `hardware_discovery.py`: opt-in SSH node hardware discovery
   (`dmidecode`/`ip`/`ethtool` allowlist). `reflect_to_netbox()` writes
   chassis/NIC custom fields and, via `_reflect_nic_mac()`, the physical-NIC MAC

@@ -129,8 +129,10 @@ it. Validation rejects sensitive preview when `execute=true` or when `execute`
 is omitted, so normal execution can never return it.
 
 Executable pipeline requests derive SSH authority exclusively from the selected
-persisted `ProxmoxEndpoint`. The endpoint must be enabled, writable, use
-`access_methods="api_ssh"`, and have a complete binding:
+persisted `ProxmoxEndpoint`. The endpoint must be enabled, have both
+`allow_writes=true` and the separate
+`allow_packer_template_builds=true` capability, use `access_methods="api_ssh"`,
+and have a complete binding:
 `ssh_target_node`, `ssh_host`, `ssh_username`, `ssh_port`,
 `ssh_identity_file`, and `ssh_known_host_fingerprint`. The identity path must
 resolve under `PROXBOX_SSH_KEY_DIR`; the file must be a root/service-owned
@@ -146,6 +148,26 @@ passes the exact verified key to OpenSSH with strict host checking.
 The SSH process uses absolute client binaries, `-F none`, and explicit
 `ProxyCommand=none`, `ProxyJump=none`, and `CanonicalizeHostname=no` options,
 so ambient user/system configuration cannot redirect the connection.
+
+The gate order is stable: broad `allow_writes`, narrow
+`allow_packer_template_builds`, then SSH transport. A missing or revoked narrow
+capability returns HTTP 403 with
+`reason="packer_template_builds_disabled_for_endpoint"` before any SDK write or
+SSH subprocess. After host-key pinning, the execution boundary rechecks enabled,
+broad, narrow, and the signed endpoint digest immediately before spawning SSH;
+a denial fails the consumed operation lease durably. Direct Proxmox API
+template-image builds require the same two write capabilities, resolve enabled
+authority before opening a session, and compare the initial endpoint digest
+before download/import, VM creation, and template conversion. Read-only
+planning and preflight do not require the narrow capability.
+
+The signed endpoint-configuration binding includes the narrow capability.
+Pipeline execution refreshes and rechecks broad then narrow after preflight and
+before leasing, then revalidates enabled/broad/narrow plus the signed digest
+after host-key pinning immediately before SSH. Direct SDK execution resolves
+enabled authority before session creation and refreshes both gates plus the
+original endpoint digest before image download/import, VM creation, and
+template conversion.
 
 Execution runs inside a unique server-generated `systemd-run` unit through
 `asyncio` subprocess APIs. Stdout and stderr are continuously drained into
@@ -165,12 +187,13 @@ VM. Otherwise it preserves all possible partial artifacts and records
 
 The fixture at `tests/fixtures/netbox_packer_preflight_v1.json` is owned by
 proxbox-api. It exercises a consumer-shaped parser maintained in this producer
-repository, so it records compatibility intent only; it is not evidence that
-netbox-packer has implemented or validated the contract. Until a real
-consumer-owned contract and downstream test land, operators must leave
-`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` unset or false in staging and
-production. Planning and GET-only preflight remain available while execution
-fails closed.
+repository, so it records compatibility intent only; it is not downstream
+conformance evidence. Operators must leave
+`PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` unset or false until a compatible
+netbox-packer release with endpoint-bound authorization is deployed and
+validated against the released proxbox-api contract. Planning and GET-only
+preflight remain available while execution fails closed. After rollout, remote
+execution still requires both endpoint write gates.
 
 Rendered user-data, first-boot, metadata, and authorized-key files are
 base64-encoded into fixed write commands, so caller content cannot terminate a

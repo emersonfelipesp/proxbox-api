@@ -97,6 +97,7 @@ def _endpoint_config_payload(endpoint: ProxmoxEndpoint) -> dict[str, object]:
         "token_value": endpoint.token_value,
         "verify_ssl": endpoint.verify_ssl,
         "allow_writes": endpoint.allow_writes,
+        "allow_packer_template_builds": endpoint.allow_packer_template_builds,
         "access_methods": endpoint.access_methods,
         "enabled": endpoint.enabled,
         "ssh_target_node": endpoint.ssh_target_node,

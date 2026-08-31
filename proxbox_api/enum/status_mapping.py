@@ -45,14 +45,35 @@ class ProxmoxToNetBoxVMStatus(str, Enum):
         }
         if isinstance(raw, dict):
             raw = raw.get("value", raw.get("label"))
+        if isinstance(raw, cls):
+            # Already mapped. Without this, str() on the member resolves to
+            # Enum.__str__ ("ProxmoxToNetBoxVMStatus.offline"), matches no key,
+            # and silently returns the `active` default -- so a stopped VM is
+            # recorded as running. Normalizing twice must be a no-op.
+            return raw
+        if isinstance(raw, Enum):
+            raw = raw.value
         text = str(raw or "active").strip().lower()
         return _mapping.get(text, cls.active)
 
 
 class NetBoxInterfaceType(str, Enum):
-    """NetBox interface type values, with mapping from Proxmox interface type strings."""
+    """NetBox interface type values, with mapping from Proxmox interface type strings.
 
-    loopback = "loopback"
+    Every member must be a value NetBox accepts for ``dcim.Interface.type``.
+    There was a ``loopback`` member, and NetBox has no such interface type, so
+    it would have been rejected as an invalid choice the moment its mapping key
+    matched. It is gone.
+
+    The mapping table itself is deliberately unchanged. Widening it is a
+    migration, not a cleanup: node sync owns ``type`` and rewrites existing
+    rows, and a row that NetBox currently accepts as ``other`` while carrying a
+    cable or ``mark_connected`` becomes invalid the moment it is retyped to one
+    of NetBox's virtual kinds -- which would abort node-network sync for the
+    whole node. Any widening therefore needs to detect and preserve those rows
+    first; that is tracked separately.
+    """
+
     bridge = "bridge"
     lag = "lag"
     virtual = "virtual"
@@ -65,10 +86,14 @@ class NetBoxInterfaceType(str, Enum):
         Unknown values default to ``other``.
         """
         _mapping = {
-            "lo": cls.loopback,
             "bridge": cls.bridge,
             "bond": cls.lag,
             "vlan": cls.virtual,
         }
+        if isinstance(raw, cls):
+            # Same idempotence requirement as the status mapping above.
+            return raw
+        if isinstance(raw, Enum):
+            raw = raw.value
         text = str(raw or "").strip().lower()
         return _mapping.get(text, cls.other)

@@ -324,7 +324,11 @@ def test_named_node_interface_sync_resolves_same_name_device_by_cluster_site(
         ("bridge", "bridge"),
         ("bond", "lag"),
         ("vlan", "virtual"),
-        ("lo", "loopback"),
+        # NetBox has no `loopback` interface type, so the enum no longer has
+        # one either. Proxmox reports a loopback as `loopback`, which -- like
+        # every other unmapped type -- degrades to `other`, unchanged.
+        ("lo", "other"),
+        ("loopback", "other"),
         ("eth", "other"),
     ],
 )

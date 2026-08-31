@@ -93,6 +93,7 @@ class ProxmoxEndpointCreate(BaseModel):
     verify_ssl: bool = True
     enabled: bool = True
     allow_writes: bool = False
+    allow_packer_template_builds: bool = False
     access_methods: str = ProxmoxAccessMethod.api.value
     ssh_target_node: str | None = Field(default=None, min_length=1, max_length=255)
     ssh_host: str | None = Field(default=None, max_length=255)
@@ -159,6 +160,7 @@ class ProxmoxEndpointUpdate(BaseModel):
     verify_ssl: bool | None = None
     enabled: bool | None = None
     allow_writes: bool | None = None
+    allow_packer_template_builds: bool | None = None
     access_methods: str | None = None
     ssh_target_node: str | None = Field(default=None, min_length=1, max_length=255)
     ssh_host: str | None = Field(default=None, max_length=255)
@@ -230,6 +232,7 @@ class ProxmoxEndpointPublic(BaseModel):
     verify_ssl: bool
     enabled: bool
     allow_writes: bool
+    allow_packer_template_builds: bool = False
     access_methods: str = ProxmoxAccessMethod.api.value
     ssh_target_node: str | None = None
     ssh_host: str | None = None

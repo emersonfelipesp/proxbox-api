@@ -91,16 +91,20 @@ executable approval requires the opaque, domain-separated HMAC binding returned
 by a non-executing build plan; never expose a raw script hash. A ready response
 with that binding carries a signed five-minute `plan_token`; a separate keyed
 binding authenticates endpoint configuration alongside target, storage roles,
-VMID, and recipe without writing the database. Execution must authenticate the
-token, rerun preflight, authoritatively refresh and revalidate the endpoint
-again immediately before the write boundary, and consume the plan UUID exactly
-once into the durable operation journal and unique `endpoint_id:vmid` blocker.
+VMID, and recipe without writing the database; that binding includes the narrow
+packer capability so changing it invalidates an outstanding plan. Execution
+must authenticate the token, rerun preflight, authoritatively refresh and
+revalidate the broad gate before the narrow gate and SSH target again
+immediately before the write boundary, and consume the plan UUID exactly once
+into the durable operation journal and unique `endpoint_id:vmid` blocker.
 
 The netbox-packer-shaped fixture under `tests/fixtures/` is producer-owned
 compatibility intent, not downstream conformance evidence. Keep
 `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` unset/false in staging and production
-until netbox-packer lands and validates its own consumer contract; planning and
-GET-only preflight remain available during this rollout hold.
+until a compatible netbox-packer release with endpoint-bound authorization is
+deployed and validated against the released proxbox-api contract; planning and
+GET-only preflight remain available during this rollout hold. Enabling remote
+execution does not replace either endpoint write gate.
 
 `build_cloud_image_template()` in `template_images.py` has two paths:
 
@@ -206,17 +210,27 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
   enable-instruction is returned otherwise).
 - `endpoint_id` is required when `execute=true`; requests without it fail closed
   with 422 before the pipeline can render or run a script.
-- `execute=true` runs both endpoint gates before SSH: `_gate()` enforces
-  `ProxmoxEndpoint.allow_writes=True`, then `gate_ssh_access()` enforces
-  `ProxmoxEndpoint.access_methods="api_ssh"`. A write-disabled endpoint returns
-  403 before any SSH attempt; an API-only endpoint returns 403
+- `execute=true` runs three endpoint gates before SSH: `_gate()` enforces
+  `ProxmoxEndpoint.allow_writes=True`, `_packer_template_builds_gate()` enforces
+  the separate default-off `allow_packer_template_builds=True` capability, then
+  `gate_ssh_access()` enforces `ProxmoxEndpoint.access_methods="api_ssh"`. A
+  write-disabled endpoint or packer-disabled endpoint returns 403 before any
+  SSH attempt; the latter uses stable reason
+  `packer_template_builds_disabled_for_endpoint`. An API-only endpoint returns 403
   `reason="ssh_not_enabled_for_endpoint"`.
-- `preflight_plan_token` is mandatory after both endpoint gates. Verify its
+- `preflight_plan_token` is mandatory after all three endpoint gates. Verify its
   signature, five-minute expiry, separately keyed endpoint configuration
   binding, exact target, and domain-separated HMAC recipe binding; then rerun
-  preflight, force an authoritative endpoint refresh, and revalidate the plan
-  and SSH target immediately before atomically acquiring the operation blocker.
-  Never permit plan replay.
+  preflight, force an authoritative endpoint refresh, and revalidate broad
+  write, narrow packer, plan, and SSH target in that order immediately before
+  atomically acquiring the operation blocker. After host-key pinning, recheck
+  enabled/broad/narrow and the signed endpoint digest immediately before the
+  SSH child; denial durably fails the consumed operation. Never permit plan replay.
+- Direct SDK execution resolves enabled authority before opening its session,
+  then refreshes both write gates and compares the original endpoint digest
+  immediately before image download/import, VM creation, and template conversion;
+  an operator revocation or endpoint identity change during any awaited read or
+  task therefore wins.
 - The selected endpoint must be enabled and carry a complete persisted binding:
   `ssh_target_node`, `ssh_host`, `ssh_username`, `ssh_port`,
   `ssh_identity_file`, and `ssh_known_host_fingerprint`. The request's
@@ -234,6 +248,14 @@ Proxmox packages so cloud-init never blocks on an interactive grub prompt.
 - Invoke the absolute `/usr/bin/ssh` client with `-F none`; explicitly disable
   `ProxyCommand`, `ProxyJump`, and hostname canonicalization. Do not permit
   ambient OpenSSH configuration to redirect execution.
+
+Both pipeline execution and the direct Proxmox API build path require the broad
+and narrow write gates. The signed preflight remains GET-only and reports broad
+write readiness informationally; it does not consume or imply the narrow
+capability. Pipeline execution rechecks broad then narrow on the authoritative
+endpoint refresh immediately before its target lease/write boundary. Direct SDK
+execution refreshes both before download/import and once more before VM
+creation.
 - Run the script in a unique server-generated `systemd-run --wait --pipe`
   unit through `asyncio.create_subprocess_exec`. Drain stdout/stderr by chunks
   into byte/line counters; never retain raw output. Timeout, request

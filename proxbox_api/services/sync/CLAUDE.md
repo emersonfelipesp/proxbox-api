@@ -111,10 +111,20 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   address owned elsewhere. This prevents the "VM interface wrongly matched to
   another server's IP" defect; both paths stay idempotent across re-syncs.
 - **Node-interface type wire invariant.**
-  `network.py::sync_node_interface_and_ip` must serialize
-  `NetBoxInterfaceType` through `.value` before REST reconciliation. NetBox
-  accepts `bridge`, `lag`, `virtual`, `loopback`, and `other`; Python enum
-  labels such as `netboxinterfacetype.bridge` are invalid API choices.
+  `network.py::sync_node_interface_and_ip` serializes `NetBoxInterfaceType`
+  through `.value` before REST reconciliation. NetBox accepts `bridge`, `lag`,
+  `virtual`, and `other` for `dcim.Interface.type` — it has **no** `loopback`
+  type, which is why the enum no longer carries that value. A Proxmox loopback
+  reports its type as `loopback` and, like every other unmapped type, degrades
+  to `other`; see the enum notes for why widening that mapping is a migration
+  rather than a fix. Python enum
+  labels such as `netboxinterfacetype.bridge` are invalid API choices, and
+  NetBox rejects them with `"... is not a valid choice."`, which surfaces as a
+  stage that creates zero interfaces rather than as an obvious type error.
+  Passing `.value` explicitly is no longer load-bearing: the desired-state
+  normalizers in `proxmox_to_netbox/models.py` unwrap enum members themselves
+  (see that package's notes). Keep passing it anyway — it states the intent at
+  the call site — but a call site that forgets is now correct rather than broken.
 - **Cluster/site placement invariant.** After cluster reconciliation, dependent
   device and VM writes use `device_ensure._effective_cluster_site_id()` so a
   cluster's actual `dcim.site` scope wins over a stale endpoint/default site.

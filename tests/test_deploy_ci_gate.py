@@ -13,7 +13,11 @@ the fix: the workflow wiring, and the checker's fail-closed behaviour.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
+import subprocess
+import tempfile
+from pathlib import Path
 
 import pytest
 import yaml
@@ -46,18 +50,119 @@ def checker():
 # --------------------------------------------------------------------------- #
 
 
-def test_deploy_depends_on_the_ci_gate(workflow):
-    """Deploy must not be able to start before the gate passes."""
+def _step_names(job: dict) -> list[str]:
+    return [step.get("name", "") for step in job["steps"]]
+
+
+def test_staging_deploy_depends_on_the_ci_gate(workflow):
+    """Staging must not be able to start before the gate passes."""
     jobs = workflow["jobs"]
     assert "verify-ci" in jobs, "the deploy workflow must define a verify-ci gate job"
 
-    for job_name in ("staging", "production"):
-        needs = jobs[job_name].get("needs")
-        needs = [needs] if isinstance(needs, str) else (needs or [])
-        assert "verify-ci" in needs, (
-            f"the {job_name} job must declare `needs: verify-ci`; without it the "
-            "gate and the rollout race"
+    needs = jobs["staging"].get("needs")
+    needs = [needs] if isinstance(needs, str) else (needs or [])
+    assert "verify-ci" in needs, (
+        "the staging job must declare `needs: verify-ci`; without it the gate "
+        "and the rollout race"
+    )
+
+
+def test_production_gates_itself_between_source_resolution_and_deployment(workflow):
+    """Production runs the same gate, in-job, rather than waiting on it.
+
+    It used to declare `needs: verify-ci`. That job is allowed to poll for a CI
+    run far longer than a deployment authorization lives, and the authorization's
+    clock starts when the deployment is dispatched -- so a queued dispatch, or one
+    whose CI turned green late, reached the deploy step with an expired
+    authorization and could not deploy at all. The gate itself is not weakened:
+    it still runs before either mutation, on the exact resolved SHA.
+    """
+    production = workflow["jobs"]["production"]
+
+    needs = production.get("needs")
+    needs = [needs] if isinstance(needs, str) else (needs or [])
+    assert "verify-ci" not in needs, (
+        "production must not wait on the polling gate job; it verifies in-job so "
+        "the authorization is not spent waiting"
+    )
+
+    names = _step_names(production)
+    gate = names.index("Require a green CI status for the deployed SHA")
+    assert gate > names.index("Resolve the deployed source SHA"), (
+        "the gate must run on the resolved SHA, not before it exists"
+    )
+    for deploy_step in (
+        "Deploy exact Gitea package",
+        "Deploy the canonical main commit the request authorizes",
+    ):
+        assert gate < names.index(deploy_step), (
+            f"the gate must run before {deploy_step!r}"
         )
+
+    gate_step = production["steps"][gate]
+    assert "require_ci_status" in gate_step["run"]
+    # Zero wait: the authorization is already ticking by the time this runs.
+    assert gate_step["env"]["CI_GATE_TIMEOUT_SECONDS"] == "0"
+    # And it must gate the SHA that was resolved, not the workflow's own commit.
+    # Gating `github.sha` while deploying a package built from another commit
+    # would verify one thing and ship another, and every ordering assertion
+    # above would still pass.
+    assert gate_step["env"]["DEPLOY_SHA"] == "${{ steps.source.outputs.deploy_sha }}"
+
+
+def test_production_resolves_the_package_sha_it_gates(workflow):
+    """The resolved SHA must come from the tag, not from the workflow commit.
+
+    Exercised rather than pattern-matched: the resolution step is run with a
+    stub `git` whose `rev-parse` answers with a package SHA distinct from the
+    workflow SHA, and the value it exports is the one the gate consumes.
+    """
+    steps = workflow["jobs"]["production"]["steps"]
+    resolve = next(s for s in steps if s.get("name") == "Resolve the deployed source SHA")
+
+    workflow_sha = "a" * 40
+    package_sha = "b" * 40
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        stub_bin = tmp / "bin"
+        stub_bin.mkdir()
+        git_stub = stub_bin / "git"
+        git_stub.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            f'  rev-parse) echo "{package_sha}" ;;\n'
+            "  *) : ;;\n"
+            "esac\n"
+            "exit 0\n"
+        )
+        git_stub.chmod(0o755)
+
+        github_output = tmp / "output"
+        github_env = tmp / "env"
+        github_output.touch()
+        github_env.touch()
+
+        result = subprocess.run(
+            ["bash", "-c", resolve["run"]],
+            cwd=tmp,
+            env={
+                "PATH": f"{stub_bin}:{os.environ['PATH']}",
+                "RESOLVED_SOURCE": "latest_package",
+                "PACKAGE_VERSION": "1.2.3",
+                "WORKFLOW_SHA": workflow_sha,
+                "GITHUB_OUTPUT": str(github_output),
+                "GITHUB_ENV": str(github_env),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert f"deploy_sha={package_sha}" in github_output.read_text()
+        assert workflow_sha not in github_output.read_text()
+        assert f"VERIFIED_DEPLOY_SHA={package_sha}" in github_env.read_text()
 
 
 def test_gate_runs_on_a_trusted_runner(workflow):
@@ -84,6 +189,8 @@ def test_gate_verifies_an_exact_sha(workflow):
     )
     assert "git rev-parse refs/release-policy/candidate^{commit}" in resolve_step["run"]
     assert gate_step["env"]["DEPLOY_SHA"] == "${{ steps.source.outputs.deploy_sha }}"
+    # Production resolves and pins its own SHA now that it no longer inherits
+    # one from this job.
     assert "VERIFIED_DEPLOY_SHA" in str(workflow["jobs"]["production"])
 
 

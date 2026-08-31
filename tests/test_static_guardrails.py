@@ -122,6 +122,13 @@ def test_allow_writes_defaults_false_in_database_model():
     )
 
 
+def test_packer_template_authorization_defaults_false_in_database_model():
+    content = _read("proxbox_api/database.py")
+    assert "allow_packer_template_builds: bool = Field(default=False)" in content, (
+        "ProxmoxEndpoint.allow_packer_template_builds must default to False in the database model"
+    )
+
+
 def test_allow_writes_field_has_why_comment():
     content = _read("proxbox_api/database.py")
     assert (

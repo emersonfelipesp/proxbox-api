@@ -51,6 +51,22 @@ That means:
   nameless NetBox `VirtualMachine` is never created (a nameless record cannot be
   matched back to Proxmox by the single-VM sync route).
 
+- **The choice and status normalizers unwrap `Enum` members.** `_choice_value`,
+  `_status_value`, `_content_type_value`, and `_relation_id` all route through
+  `_enum_value()`, which returns `member.value`. This exists because every one of
+  those helpers feeds a `str(...).strip().lower()`, and `str()` on a member of a
+  `(str, Enum)` class resolves to `Enum.__str__` — yielding the class-qualified
+  name `"NetBoxInterfaceType.bridge"`, lowercased to
+  `"netboxinterfacetype.bridge"`. NetBox rejects that with
+  `"... is not a valid choice."`, and the caller sees a sync stage that created
+  nothing rather than a type error. Before these validators existed, Pydantic
+  coerced the `str`-subclassed member using its underlying string data, so the
+  behaviour was correct by accident; the validators removed that accident.
+  Keep the unwrap if you touch any of these helpers, and add new choice
+  normalizers on top of them rather than calling `str()` directly. Regression
+  coverage, including mutation-tested guards, is in
+  `tests/test_netbox_choice_enum_normalization.py`.
+
 ## Extension Guidance
 
 - Always add parsing and normalization logic to Pydantic schemas first.

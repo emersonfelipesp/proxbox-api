@@ -161,7 +161,35 @@ class TestProxmoxEndpointCRUD:
         assert data["timeout"] == 30
         assert data["max_retries"] == 2
         assert data["retry_backoff"] == 1.5
+        assert data["allow_packer_template_builds"] is False
         assert "password" not in data
+
+    def test_packer_template_authorization_round_trips_and_can_be_revoked(
+        self,
+        auth_test_client,
+    ):
+        created = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "pve-packer-authorized",
+                "ip_address": "192.168.1.124",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+                "allow_writes": True,
+                "allow_packer_template_builds": True,
+            },
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["allow_packer_template_builds"] is True
+
+        endpoint_id = created.json()["id"]
+        revoked = auth_test_client.put(
+            f"/proxmox/endpoints/{endpoint_id}",
+            json={"allow_packer_template_builds": False},
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json()["allow_packer_template_builds"] is False
 
     def test_create_proxmox_endpoint_persists_complete_cloud_image_ssh_binding(
         self,

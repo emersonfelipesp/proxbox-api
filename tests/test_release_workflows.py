@@ -14,6 +14,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -949,7 +950,7 @@ def test_source_distribution_is_a_valid_raw_docker_build_context(tmp_path: Path)
     )
 
 
-def test_repository_deploy_workflow_is_nms_source_aware():
+def test_repository_deploy_workflow_is_source_aware():
     workflow = _read(GITEA_DEPLOY_WORKFLOW_PATH)
 
     assert "deploy_source:" in workflow
@@ -959,7 +960,11 @@ def test_repository_deploy_workflow_is_nms_source_aware():
     assert "package_version:" in workflow
     assert "proxbox-api-staging" in workflow
     assert "deploy-app-package \\\n            proxbox-api" in workflow
-    assert "deploy-app proxbox-api" in workflow
+    assert "proxbox-package-deploy deploy-main" in workflow
+    # The unauthorized two-argument form is what the deploy host rejects. Its
+    # presence anywhere in the workflow means a production deploy path exists
+    # that cannot succeed.
+    assert "deploy-app proxbox-api " not in workflow
     assert "create-attestation" not in workflow
     assert "export-package-deploy-receipt" in workflow
     # Per-step token wiring is enforced structurally by
@@ -1161,7 +1166,7 @@ def test_fetch_attestation_command_forwards_the_registry_token(
     assert observed.get("token") == "registry-token"
 
 
-def test_final_tag_promotion_requires_main_package_and_nms_evidence():
+def test_final_tag_promotion_requires_main_package_and_deploy_evidence():
     workflow = _read(GITEA_PROMOTE_WORKFLOW_PATH)
 
     assert "github.ref == 'refs/heads/main'" in workflow
@@ -1911,7 +1916,7 @@ def test_registry_fetch_rejects_rebinding_original_artifacts_to_moved_tag(
         )
 
 
-def test_final_release_requires_exact_nms_promotion_evidence(tmp_path: Path) -> None:
+def test_final_release_requires_exact_promotion_evidence(tmp_path: Path) -> None:
     release_artifacts = _load_release_artifacts()
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -1993,3 +1998,492 @@ def test_pypi_package_validation_happens_before_docker_publish_and_e2e():
     )
     assert "needs: [prepare-release, validate-pypi]" in workflow
     assert "needs: [publish-docker, prepare-release]" in workflow
+
+
+# --------------------------------------------------------------------------
+# Production deployment authorization
+#
+# These parse the workflow structurally and, where the property is behavioural,
+# execute the step's own shell with stubbed host commands. Substring assertions
+# were tried first and are not oracles: appending `|| true` to both deploy
+# commands, or turning the cleanup step's condition into `if: false` while
+# leaving `# if: always()` as a comment, left every substring intact.
+# --------------------------------------------------------------------------
+
+
+def _deploy_workflow() -> dict:
+    return yaml.safe_load(_read(GITEA_DEPLOY_WORKFLOW_PATH))
+
+
+def _production_steps() -> list[dict]:
+    return _deploy_workflow()["jobs"]["production"]["steps"]
+
+
+def _step(name: str) -> dict:
+    for step in _production_steps():
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"production job has no step named {name!r}")
+
+
+def _step_index(name: str) -> int:
+    for index, step in enumerate(_production_steps()):
+        if step.get("name") == name:
+            return index
+    raise AssertionError(f"production job has no step named {name!r}")
+
+
+def _run_script(script: str, env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess:
+    """Execute one step's shell body the way the runner would."""
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=cwd,
+        env={"PATH": os.environ["PATH"], **env},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_production_reads_early_claims_late_and_waits_on_nothing():
+    """Two separate pressures, resolved in the step order.
+
+    The authorization's clock starts when the deployment is dispatched, so the
+    job must not sit behind a CI-verification job allowed to poll far longer
+    than the authorization lives. But the authorization is also single-use, so
+    claiming it before the preflight is known to pass burns it on failures that
+    would otherwise be retryable.
+
+    So: read the authorization first (read-only, no consumption), do every check
+    that could refuse the deployment, and claim last -- immediately before the
+    first thing that mutates production.
+    """
+    workflow = _deploy_workflow()
+    production = workflow["jobs"]["production"]
+
+    assert "needs" not in production
+
+    read = _step_index("Read the deployment authorization")
+    resolve = _step_index("Resolve the deployed source SHA")
+    gate = _step_index("Require a green CI status for the deployed SHA")
+    claim = _step_index("Claim the deployment authorization for this exact run")
+    deploys = [_step_index(name) for name in DEPLOY_STEPS]
+
+    assert read < resolve < gate < claim < min(deploys)
+
+    # Nothing between the claim and the first mutation may be able to refuse
+    # the deployment; otherwise the claim is spent for nothing.
+    assert claim == min(deploys) - 1
+
+    # The read must not consume anything.
+    assert "/verify" in _step("Read the deployment authorization")["run"]
+    assert "/claim" not in _step("Read the deployment authorization")["run"]
+
+    # Zero, so the authorization is never spent waiting for CI.
+    assert _step(
+        "Require a green CI status for the deployed SHA"
+    )["env"]["CI_GATE_TIMEOUT_SECONDS"] == "0"
+
+    # The CI-waiting job must not gate production at all any more.
+    assert workflow["jobs"]["verify-ci"]["if"] == "${{ github.event_name == 'push' }}"
+
+
+def test_the_bind_race_is_retried_and_nothing_else_is():
+    """The producer dispatches before it binds the run to the authorization.
+
+    A job that starts inside that window gets a 409 naming the unbound state and
+    asking for a retry. That one response is transient; treating any other
+    failure as retryable would paper over a real refusal.
+    """
+    for step_name in (
+        "Read the deployment authorization",
+        "Claim the deployment authorization for this exact run",
+    ):
+        script = _step(step_name)["run"]
+        assert "DEPLOYMENT_PROOF_NOT_BOUND" in script, step_name
+        assert '[ "$status" = "409" ]' in script, step_name
+        # Bounded, so an authorization that never binds does not hang the job.
+        assert '[ "$attempt" -lt 30 ]' in script, step_name
+        # curl must not turn a 409 into an exit status before the body is read.
+        # Checked against the executable lines only: the step's own comment
+        # explains why the flag is absent, and a whole-script substring search
+        # would trip over that explanation.
+        executable = "\n".join(
+            line for line in script.splitlines() if not line.strip().startswith("#")
+        )
+        assert "--fail-with-body" not in executable, step_name
+        assert 'exit 1' in script, step_name
+
+
+def test_every_production_step_aborts_on_the_first_failure():
+    """`set -euo pipefail` and no swallowed exit status on the deploy calls."""
+    for step in _production_steps():
+        script = step.get("run")
+        if not script or "\n" not in script:
+            continue
+        assert script.lstrip().startswith("set -euo pipefail"), step.get("name")
+
+    for deploy_step in (
+        "Deploy exact Gitea package",
+        "Deploy the canonical main commit the request authorizes",
+    ):
+        script = _step(deploy_step)["run"]
+        for swallow in ("|| true", "|| :", "; true", "set +e"):
+            assert swallow not in script, f"{deploy_step} swallows a failure with {swallow!r}"
+
+
+DEPLOY_STEPS = (
+    "Deploy exact Gitea package",
+    "Deploy the canonical main commit the request authorizes",
+)
+
+
+def _write_claimed_proof(path: Path, deploy_source: str = "main_branch") -> None:
+    """A minimal claimed proof of the shape the deploy step inspects."""
+    request = {"deploy_source": deploy_source, "artifacts": []}
+    for field in (
+        "package_name",
+        "package_type",
+        "package_version",
+        "package_source_sha",
+        "release_manifest_package",
+        "release_manifest_sha256",
+    ):
+        request[field] = None
+    path.write_text(json.dumps({"state": "claimed", "request": request}))
+
+
+def _deploy_env(tmp_path: Path, stub_bin: Path) -> dict[str, str]:
+    github_env = tmp_path / "github_env"
+    github_env.touch()
+    _write_claimed_proof(tmp_path / "claimed-proof.json")
+    return {
+        "PATH": f"{stub_bin}:{os.environ['PATH']}",
+        "GITHUB_ENV": str(github_env),
+        "PACKAGE_VERSION": "1.2.3",
+        "WORKFLOW_SHA": "a" * 40,
+        "VERIFIED_DEPLOY_SHA": "a" * 40,
+        "DEPLOY_REQUEST_ID": "0" * 32,
+        "DEPLOY_REQUEST_SHA256": "0" * 64,
+        "PROOF_PATH": str(tmp_path / "claimed-proof.json"),
+        "GITHUB_RUN_ID": "4242",
+    }
+
+
+def _stub_host_commands(stub_bin: Path, exit_code: int, argv_log: Path) -> None:
+    """Stand in for the privileged host helpers the real step invokes.
+
+    Each stub records the argv it was called with. Asserting only the exit
+    status and the completion marker is not enough: a truncated or reordered
+    real call still invokes the stub and still produces the right status, and
+    the host would reject it only after the authorization had been claimed.
+    """
+    stub_bin.mkdir(parents=True, exist_ok=True)
+    for name in ("deploy-app-package", "proxbox-package-deploy"):
+        stub = stub_bin / name
+        stub.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$(basename "$0") $*" >> "{argv_log}"\n'
+            f"exit {exit_code}\n"
+        )
+        stub.chmod(0o755)
+
+
+# The exact argv the deploy host accepts, by step. The host rejects every other
+# shape, so this is the trust boundary, not a formatting preference.
+EXPECTED_DEPLOY_ARGV = {
+    "Deploy exact Gitea package": (
+        "deploy-app-package proxbox-api 1.2.3 "
+        f"{'0' * 32} {{proof}} {'0' * 64} 4242"
+    ),
+    "Deploy the canonical main commit the request authorizes": (
+        f"proxbox-package-deploy deploy-main proxbox-api {'a' * 40} "
+        f"{'0' * 32} {{proof}} {'0' * 64} 4242"
+    ),
+}
+
+
+def _rewrite_host_paths(script: str, stub_bin: Path) -> str:
+    """Point the absolute host paths at the stubs, changing nothing else."""
+    return script.replace("/opt/nmulticloud/deploy/bin/", f"{stub_bin}/")
+
+
+def _exercise_deploy_step(deploy_step: str, tmp_path: Path, exit_code: int):
+    stub_bin = tmp_path / "bin"
+    argv_log = tmp_path / "argv.log"
+    _stub_host_commands(stub_bin, exit_code, argv_log)
+    env = _deploy_env(tmp_path, stub_bin)
+    script = _rewrite_host_paths(_step(deploy_step)["run"], stub_bin)
+    result = _run_script(script, env, tmp_path)
+    recorded = argv_log.read_text().strip() if argv_log.exists() else ""
+    return result, env, recorded
+
+
+def _expected_argv(deploy_step: str, env: dict) -> str:
+    return EXPECTED_DEPLOY_ARGV[deploy_step].format(proof=env["PROOF_PATH"])
+
+
+@pytest.mark.parametrize("deploy_step", DEPLOY_STEPS)
+def test_a_failing_deploy_fails_the_step_and_writes_no_marker(deploy_step, tmp_path):
+    """Executed against a failing helper, not matched against forbidden strings.
+
+    Substring assertions were tried and are not oracles here: wrapping the
+    unchanged helper call in `if ...; then :; fi` keeps every expected string
+    intact, and bash exempts an `if` condition from `set -e`, so the step
+    succeeded and wrote the marker after a failed deploy.
+    """
+    result, env, recorded = _exercise_deploy_step(deploy_step, tmp_path, exit_code=1)
+
+    assert result.returncode != 0, f"{deploy_step} reported success on a failed deploy"
+    assert "DEPLOY_COMPLETED" not in Path(env["GITHUB_ENV"]).read_text(), (
+        f"{deploy_step} wrote the completion marker despite a failed deploy"
+    )
+    # Even on the failure path the host must have been called correctly; a
+    # wrong argv would be rejected only after the authorization was claimed.
+    assert recorded == _expected_argv(deploy_step, env)
+
+
+@pytest.mark.parametrize("deploy_step", DEPLOY_STEPS)
+def test_a_succeeding_deploy_writes_the_marker(deploy_step, tmp_path):
+    result, env, recorded = _exercise_deploy_step(deploy_step, tmp_path, exit_code=0)
+
+    assert result.returncode == 0, result.stderr
+    assert "DEPLOY_COMPLETED=true" in Path(env["GITHUB_ENV"]).read_text()
+    assert recorded == _expected_argv(deploy_step, env)
+
+
+def _argv_text(script: str) -> str:
+    """Join line continuations and collapse whitespace.
+
+    Binds the argument *order* without binding the block indentation, which the
+    YAML loader rewrites.
+    """
+    joined = re.sub(r"\\\s*\n\s*", " ", script)
+    return re.sub(r"[ \t]+", " ", joined)
+
+
+def test_both_deploy_paths_forward_the_full_authorized_argv():
+    """The host rejects any shorter form, and the receipt exporter does too."""
+    package = _argv_text(_step("Deploy exact Gitea package")["run"])
+    assert (
+        'deploy-app-package proxbox-api "$PACKAGE_VERSION" "$DEPLOY_REQUEST_ID" '
+        '"$PROOF_PATH" "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID"'
+    ) in package
+
+    main = _argv_text(
+        _step("Deploy the canonical main commit the request authorizes")["run"]
+    )
+    assert (
+        'proxbox-package-deploy deploy-main proxbox-api "$WORKFLOW_SHA" '
+        '"$DEPLOY_REQUEST_ID" "$PROOF_PATH" "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID"'
+    ) in main
+
+    # The exporter's own contract is <target> <version> <id> <digest> <run>.
+    # It runs after the package deploy has committed, so a wrong argv leaves
+    # production changed with no promotion evidence.
+    receipt = _argv_text(
+        _step("Publish host-issued successful-deployment attestation")["run"]
+    )
+    assert (
+        'export-package-deploy-receipt proxbox-api "$PACKAGE_VERSION" '
+        '"$DEPLOY_REQUEST_ID" "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID" '
+        "> completion.json"
+    ) in receipt
+
+
+def test_the_authorization_shape_checks_run_before_the_capability_is_sent():
+    validate = _step("Validate source-aware production request")["run"]
+    read = _step("Read the deployment authorization")["run"]
+    claim = _step("Claim the deployment authorization for this exact run")["run"]
+
+    assert _step_index("Validate source-aware production request") < _step_index(
+        "Read the deployment authorization"
+    )
+    assert "grep -Eq '^[a-f0-9]{32}$'" in validate
+    assert "grep -Eq '^[a-f0-9]{64}$'" in validate
+    assert 'test "${GITHUB_RUN_ATTEMPT:-1}" = "1"' in validate
+    assert "grep -Eq '^https?://(127\\.0\\.0\\.1|localhost)(:[0-9]{1,5})?$'" in validate
+
+    # Transport pinned on every call that carries the capability; the request
+    # id and digest are the whole capability.
+    for script in (read, claim):
+        assert "--noproxy '*'" in script
+        assert "--proto '=http,https'" in script
+        assert "--max-redirs 0" in script
+        assert "--retry 0" in script
+        # Body over stdin, never argv.
+        assert "--data-binary @-" in script
+
+    # The authorized request, not the dispatch input, chooses the branch.
+    assert 'test "$resolved_source" = "$DEPLOY_SOURCE"' in read
+
+
+def test_deployed_something_guard_actually_fails_when_nothing_deployed(tmp_path):
+    """Executed, not matched: the health check alone passes against the old service."""
+    script = _step("Require that something was actually deployed")["run"]
+
+    unset = _run_script(script, {}, tmp_path)
+    assert unset.returncode != 0, "guard passed with no deploy marker set"
+
+    wrong = _run_script(script, {"DEPLOY_COMPLETED": "false"}, tmp_path)
+    assert wrong.returncode != 0, "guard passed with a falsey deploy marker"
+
+    ok = _run_script(script, {"DEPLOY_COMPLETED": "true"}, tmp_path)
+    assert ok.returncode == 0, ok.stderr
+
+
+def test_claimed_proof_cleanup_is_unconditional_and_executed(tmp_path):
+    """A signed authorization left on a root runner is readable by later jobs."""
+    step = _step("Destroy the claimed proof")
+    # The condition itself, parsed -- not a comment that merely mentions it.
+    assert step["if"] == "always()"
+
+    script = step["run"]
+    runner_temp = tmp_path / "runner"
+    proof_root = runner_temp / "deploy-proof-4242-1"
+    proof_root.mkdir(parents=True)
+    (proof_root / "claimed-proof.json").write_text("{}")
+
+    env = {"RUNNER_TEMP": str(runner_temp), "GITHUB_RUN_ID": "4242", "GITHUB_RUN_ATTEMPT": "1"}
+    removed = _run_script(script, env, tmp_path)
+    assert removed.returncode == 0, removed.stderr
+    assert not proof_root.exists()
+
+    # Idempotent: nothing left to remove is success, not an error.
+    again = _run_script(script, env, tmp_path)
+    assert again.returncode == 0, again.stderr
+
+    # A dangling symlink is invisible to `-e`; the step must still refuse.
+    proof_root.symlink_to(tmp_path / "gone")
+    dangling = _run_script(script, env, tmp_path)
+    assert dangling.returncode != 0, "cleanup reported success with a symlink left in place"
+    proof_root.unlink()
+
+    # A RUNNER_TEMP that is not absolute must abort rather than widen the target.
+    relative = _run_script(
+        script,
+        {"RUNNER_TEMP": "runner", "GITHUB_RUN_ID": "4242", "GITHUB_RUN_ATTEMPT": "1"},
+        tmp_path,
+    )
+    assert relative.returncode != 0
+
+
+# The internal stack's name must not be committed to this repository, and that
+# includes this guard. The needle is assembled rather than written out, and the
+# self-test's examples use documentation addresses (RFC 5737) rather than any
+# real one -- an earlier version reconstructed a genuine production address from
+# fragments, which republished it in a public repository while the guard, which
+# only matches contiguous literals, certified the file as clean.
+#
+# That guard was a false negative three times over. It anchored on a word
+# boundary, which does not match inside an underscored identifier, so it passed
+# while two function names in this file carried the token. It removed the
+# permitted loopback address by substring, which also neutered every longer
+# address sharing that prefix. And its camel-hump split handled only a
+# lower-to-upper transition, so an all-caps acronym run was invisible.
+_PRIVATE_STACK_TOKEN = "".join(("n", "m", "s"))
+_LOOPBACK_ADDRESS = ".".join(("127", "0", "0", "1"))
+
+# Two separator rules, because an acronym needs both: `aTokenWord` splits on the
+# lower-to-upper transition, and `TOKENWord` splits between the acronym's last
+# capital and the following capitalised word.
+_CAMEL_BOUNDARIES = (
+    re.compile(r"(?<=[a-z0-9])(?=[A-Z])"),
+    re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])"),
+)
+_STACK_PATTERN = re.compile(
+    rf"(?<![A-Za-z]){_PRIVATE_STACK_TOKEN}(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_IP_PATTERN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+# Exact addresses only. `localhost` is a name rather than an address and never
+# matches the address pattern at all.
+_ALLOWED_ADDRESSES = frozenset({_LOOPBACK_ADDRESS})
+
+
+def _split_camel(text: str) -> str:
+    for boundary in _CAMEL_BOUNDARIES:
+        text = boundary.sub("_", text)
+    return text
+
+
+def _disclosures(text: str) -> list[str]:
+    """Return the offending fragments in one line of a public file."""
+    found: list[str] = []
+    if _STACK_PATTERN.search(_split_camel(text)):
+        found.append("internal stack name")
+    # Addresses are extracted whole, then compared exactly. Removing permitted
+    # addresses by substring first would truncate a longer one into something
+    # that no longer looks like an address.
+    for address in _IP_PATTERN.findall(text):
+        if address not in _ALLOWED_ADDRESSES:
+            found.append(address)
+    return found
+
+
+def _changed_public_files() -> list[Path]:
+    """Every file this branch changes, resolved from git rather than by hand.
+
+    A hand-maintained list is a guard that silently stops covering the thing it
+    was added for: the previous version omitted the other test file changed by
+    this same branch.
+    """
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=d", "gitea/develop...HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"cannot resolve the changed file set: {result.stderr.strip()}")
+    paths = [REPO_ROOT / line for line in result.stdout.split() if line]
+    existing = [path for path in paths if path.is_file()]
+    assert existing, "the branch must change at least one file"
+    return existing
+
+
+def test_the_disclosure_guard_catches_what_it_is_for():
+    """Self-test. A guard that cannot see the thing certifies the wrong result."""
+    token = _PRIVATE_STACK_TOKEN
+    # RFC 5737 documentation range: safe to write down, and still an address.
+    documentation_address = ".".join(("192", "0", "2", "207"))
+    # Shares the loopback address as a prefix; an earlier guard lost it.
+    prefix_shadowed = _LOOPBACK_ADDRESS + "0"
+
+    for disclosing in (
+        f"{token} in prose",
+        f"a_{token}_identifier",
+        f"a{token.capitalize()}Identifier",
+        f"a{token.upper()}Identifier",
+        f"{token.upper()}Backend",
+        f"pre{token.upper()}Post",
+        f"{token}-backend",
+        f"URL_{token.upper()}_BASE",
+        documentation_address,
+        prefix_shadowed,
+        f"the host at {_LOOPBACK_ADDRESS} and also {documentation_address}",
+    ):
+        assert _disclosures(disclosing), f"guard missed {disclosing!r}"
+
+    for permitted in (
+        f"http://{_LOOPBACK_ADDRESS}:16001",
+        "bind to localhost only",
+        "the columns are aligned",
+        "transforms and normalizes",
+    ):
+        assert not _disclosures(permitted), f"guard false-positived on {permitted!r}"
+
+
+def test_public_files_name_no_private_infrastructure():
+    offenders: list[str] = []
+    for path in _changed_public_files():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            for fragment in _disclosures(line):
+                relative = path.relative_to(REPO_ROOT)
+                offenders.append(f"{relative}:{number}: {fragment}: {line.strip()}")
+    assert offenders == []

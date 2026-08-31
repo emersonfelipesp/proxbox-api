@@ -252,7 +252,7 @@ class VirtualMachine(_BaseCompat):
     @staticmethod
     def map_status(proxmox_status: str) -> str:
         """Map a Proxmox VM status string to the corresponding NetBox status value."""
-        return ProxmoxToNetBoxVMStatus.from_proxmox(proxmox_status)
+        return ProxmoxToNetBoxVMStatus.from_proxmox(proxmox_status).value
 
     def _lookup(self, payload: dict[str, object]) -> dict[str, object]:
         custom_fields = payload.get("custom_fields", {})

@@ -865,6 +865,10 @@ class ProxmoxEndpoint(SQLModel, table=True):
     verify_ssl: bool = Field(default=True)
     # WHY: deliberate safety invariant; agents must not flip this True autonomously. See AGENTS.md section "LLM Agent Safety Guardrails".
     allow_writes: bool = Field(default=False)
+    # Narrow, default-off authorization for netbox-packer cloud-init template
+    # image creation. This never grants a write by itself: allow_writes remains
+    # the broader endpoint gate and both must be true at execution time.
+    allow_packer_template_builds: bool = Field(default=False)
     # Transport access method (orthogonal to allow_writes). Values: "api"
     # (Read+Write over API only) or "api_ssh" (Read+Write over API + SSH). SSH is
     # an optional complement to API; "ssh only" is unrepresentable. NEW rows
@@ -1691,6 +1695,11 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
         stmts.append(f"ALTER TABLE {table} ADD COLUMN tenant_name VARCHAR")
     if "allow_writes" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN allow_writes BOOLEAN NOT NULL DEFAULT 0")
+    if "allow_packer_template_builds" not in existing:
+        stmts.append(
+            f"ALTER TABLE {table} ADD COLUMN "
+            "allow_packer_template_builds BOOLEAN NOT NULL DEFAULT 0"
+        )
     if "access_methods" not in existing:
         # Backfill pre-existing rows to "api_ssh" (NON-BREAKING): SSH paths were
         # previously ungated, so defaulting legacy endpoints to "api" would 403

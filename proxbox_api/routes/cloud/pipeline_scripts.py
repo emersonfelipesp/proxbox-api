@@ -15,11 +15,13 @@ import hmac
 import os
 import shlex
 import tempfile
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from proxbox_api.credentials import derive_service_signing_key
 from proxbox_api.logger import logger
@@ -694,6 +696,14 @@ class PipelineExecutionCancelled(asyncio.CancelledError):
         self.execution = execution
 
 
+class PipelineExecutionAuthorizationDenied(RuntimeError):
+    """Carry the stable authorization response across the SSH helper boundary."""
+
+    def __init__(self, response: JSONResponse) -> None:
+        super().__init__("Cloud Image Pipeline authorization was revoked")
+        self.response = response
+
+
 def _fingerprint_from_known_host_line(line: str) -> str | None:
     fields = line.split()
     if len(fields) < 3 or fields[0].startswith("#"):
@@ -1039,6 +1049,7 @@ async def _pipeline_execution_result(  # noqa: C901
     execution_allowed: bool,
     execution_target: CloudImageSSHExecutionTarget | None,
     remote_unit: str,
+    authorize_execution: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[
     str,
     int | None,
@@ -1074,6 +1085,11 @@ async def _pipeline_execution_result(  # noqa: C901
     try:
         identity = _open_ssh_identity(execution_target)
         known_hosts_file = await _pinned_known_hosts_file(execution_target)
+        # Host-key discovery is awaited and may race an operator revocation.
+        # The caller-supplied check authenticates the persisted endpoint and
+        # signed plan at the last boundary before the SSH child can mutate it.
+        if authorize_execution is not None:
+            await authorize_execution()
         process = await asyncio.create_subprocess_exec(
             *_ssh_argv(
                 execution_target,
@@ -1147,6 +1163,15 @@ async def _pipeline_execution_result(  # noqa: C901
             ],
             "ssh_host_key_unverified",
         )
+    except PipelineExecutionAuthorizationDenied:
+        # No SSH child exists yet: preserve the stable route response and let
+        # the caller durably fail the consumed operation lease.
+        raise
+    except HTTPException:
+        # Final enabled/digest checks also use FastAPI's typed errors. They run
+        # before the SSH child exists and must never enter remote cancellation,
+        # which would itself spawn SSH after authority was revoked.
+        raise
     except TimeoutError:
         cleanup, cancelled_during_cleanup = await _await_execution_cleanup(
             process=process,
@@ -1448,6 +1473,7 @@ async def execute_pipeline_response(
     execution_target: CloudImageSSHExecutionTarget,
     operation_id: str,
     remote_unit: str,
+    authorize_execution: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[CloudImageTemplateBuildResponse, str | None]:
     """Run one leased operation; completion still requires API verification."""
 
@@ -1472,6 +1498,7 @@ async def execute_pipeline_response(
         execution_allowed=execution_allowed,
         execution_target=execution_target,
         remote_unit=remote_unit,
+        authorize_execution=authorize_execution,
     )
     return (
         _pipeline_response(

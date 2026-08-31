@@ -542,14 +542,17 @@ Execution rules:
 
 - `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true` is mandatory for remote execution.
 - The checked-in netbox-packer-shaped fixture is producer-owned compatibility
-  intent, not downstream validation. Keep the execution flag unset/false in
-  staging and production until netbox-packer owns and validates its real
-  consumer contract.
+  intent, not downstream validation. Keep the execution flag unset/false until
+  a compatible netbox-packer release with endpoint-bound authorization is
+  deployed and validated against the released proxbox-api contract. Enabling
+  execution does not replace either endpoint write gate.
 - `endpoint_id` is required when `execute=true`; requests without it fail closed
   with 422 before a script is rendered or SSH is attempted.
 - The route runs `_gate()` first so `ProxmoxEndpoint.allow_writes=True` is
-  required, then `gate_ssh_access()` so `access_methods="api_ssh"` is required
-  before resolving execution authority. The endpoint must also be enabled and
+  required, then `_packer_template_builds_gate()` so the separate default-off
+  `allow_packer_template_builds=True` capability is required, then
+  `gate_ssh_access()` so `access_methods="api_ssh"` is required before
+  resolving execution authority. The endpoint must also be enabled and
   carry a complete persisted binding (`ssh_target_node`, `ssh_host`,
   `ssh_username`, `ssh_port`, `ssh_identity_file`,
   `ssh_known_host_fingerprint`). Derive execution exclusively from that row;
@@ -782,6 +785,27 @@ an operator trust assertion, not a transient configuration parameter.
 - `proxbox_api/database.py::ProxmoxEndpoint.allow_writes` — field default `False`; the database gate that blocks all writes until explicitly enabled by a human operator
 - `proxbox_api/routes/proxmox_actions.py::_gate` — 403 gate executed at the top of every destructive verb handler
 - `tests/test_static_guardrails.py` — static contract tests that pin all of the above invariants
+
+### Narrow Packer Template-Build Boundary
+
+`ProxmoxEndpoint.allow_packer_template_builds` defaults to `False` and grants
+only Cloud-Init template-image creation. It never replaces or implies the broad
+`allow_writes` gate. Pipeline execution requires broad write, narrow packer,
+then SSH transport in that order; direct SDK template-image builds require the
+first two. A missing or revoked capability returns 403 reason
+`packer_template_builds_disabled_for_endpoint` before any Proxmox write or SSH
+subprocess. The signed preflight remains read-only and may run while either
+write flag is false. The signed endpoint-configuration binding includes the
+narrow flag. After preflight, refresh and recheck broad then narrow before
+leasing, then repeat enabled/broad/narrow and signed-digest authorization after
+host-key pinning immediately before the SSH subprocess. Direct SDK builds
+resolve enabled authority before opening a session and refresh both gates plus
+the original endpoint digest before image download/import, VM creation, and
+template conversion so revocation and endpoint identity drift win.
+
+**Never autonomously set `allow_packer_template_builds=True`.** Like
+`allow_writes`, it is a human operator assertion, and both must be independently
+present for a template build.
 
 ### Transport Access Boundary: `ProxmoxEndpoint.access_methods`
 

@@ -20,6 +20,7 @@ from proxbox_api.routes.cloud.cloud_init_templates import (
 )
 from proxbox_api.routes.cloud.display import qemu_display_create_kwargs
 from proxbox_api.routes.cloud.pipeline_scripts import (
+    PipelineExecutionAuthorizationDenied,
     PipelineExecutionCancelled,
     build_pipeline_response,
     cancel_pipeline_operation,
@@ -45,6 +46,7 @@ from proxbox_api.schemas.cloud_provision import (
 from proxbox_api.services.packer_plans import (
     PackerPlanError,
     acquire_operation_lease,
+    endpoint_config_digest,
     finish_operation,
     issue_packer_plan,
     mark_operation_running,
@@ -283,6 +285,39 @@ async def _refresh_endpoint_snapshot(
     return endpoint_snapshot
 
 
+async def _authorize_direct_mutation(
+    session: SessionDep,
+    endpoint_id: int,
+    *,
+    expected_config_digest: str | None = None,
+) -> ProxmoxEndpoint | JSONResponse:
+    """Authorize one direct SDK mutation against one coherent endpoint identity."""
+
+    endpoint = await _refresh_endpoint_snapshot(session, endpoint_id)
+    write_gate = _endpoint_writes_gate(endpoint)
+    if write_gate is not None:
+        return write_gate
+    packer_gate = _packer_template_builds_gate(endpoint)
+    if packer_gate is not None:
+        return packer_gate
+    if (
+        expected_config_digest is not None
+        and endpoint_config_digest(endpoint) != expected_config_digest
+    ):
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "reason": "endpoint_configuration_changed",
+                "endpoint_id": endpoint_id,
+                "message": (
+                    "The persisted Proxmox endpoint configuration changed during "
+                    "template creation; retry against a fresh session."
+                ),
+            },
+        )
+    return endpoint
+
+
 async def _resolve_preflight_target(
     session: SessionDep,
     endpoint_id: int,
@@ -439,6 +474,48 @@ def _resolve_execution_ssh_target(
     return target
 
 
+def _packer_template_builds_gate(endpoint: ProxmoxEndpoint) -> JSONResponse | None:
+    """Require the endpoint's narrow template-build capability.
+
+    ``allow_writes`` is deliberately enforced first by ``_gate``. This second
+    default-off capability authorizes only cloud-init template-image creation;
+    it does not widen any other Proxmox mutation surface.
+    """
+
+    if endpoint.allow_packer_template_builds:
+        return None
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "reason": "packer_template_builds_disabled_for_endpoint",
+            "endpoint_id": int(endpoint.id or 0),
+            "message": (
+                "The persisted Proxmox endpoint does not explicitly allow "
+                "netbox-packer template-image builds."
+            ),
+        },
+    )
+
+
+def _endpoint_writes_gate(endpoint: ProxmoxEndpoint) -> JSONResponse | None:
+    """Reapply the broad write gate to one authoritative endpoint snapshot."""
+
+    if endpoint.allow_writes:
+        return None
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "reason": "endpoint_writes_disabled",
+            "detail": (
+                "Operational verbs are disabled on this endpoint. Enable "
+                "ProxmoxEndpoint.allow_writes on the NetBox side after "
+                "granting core.run_proxmox_action to the operator group."
+            ),
+            "endpoint_id": endpoint.id,
+        },
+    )
+
+
 @router.post(
     "/templates/images/preflight",
     response_model=CloudImageTemplatePreflightResponse,
@@ -581,7 +658,7 @@ async def _execute_bound_pipeline(
     req: CloudImageTemplateBuildRequest,
     session: SessionDep,
     endpoint: ProxmoxEndpoint,
-) -> CloudImageTemplateBuildResponse:
+) -> CloudImageTemplateBuildResponse | JSONResponse:
     """Revalidate one signed plan, lease it, execute it, and verify its artifact."""
 
     if not req.preflight_plan_token:
@@ -596,6 +673,14 @@ async def _execute_bound_pipeline(
     resolved_endpoint, proxmox = await _resolve_preflight_target(session, int(endpoint.id or 0))
     operation: CloudImageBuildOperation | None = None
     try:
+        # Return stable authorization denials before authenticating the signed
+        # plan so a concurrent revocation cannot be reported as plan mismatch.
+        write_gate = _endpoint_writes_gate(resolved_endpoint)
+        if write_gate is not None:
+            return write_gate
+        packer_gate = _packer_template_builds_gate(resolved_endpoint)
+        if packer_gate is not None:
+            return packer_gate
         # Verify exactly once against the refreshed snapshot used to construct
         # both API credentials and SSH authority. A stale object returned by
         # the earlier route gate cannot authorize execution.
@@ -636,6 +721,12 @@ async def _execute_bound_pipeline(
         # authority after it completes and authenticate the plan again directly
         # before acquiring the target lease and starting an SSH child.
         execution_endpoint = await _refresh_endpoint_snapshot(session, plan.endpoint_id)
+        write_gate = _endpoint_writes_gate(execution_endpoint)
+        if write_gate is not None:
+            return write_gate
+        packer_gate = _packer_template_builds_gate(execution_endpoint)
+        if packer_gate is not None:
+            return packer_gate
         try:
             plan, plan_digest = verify_packer_plan(
                 req.preflight_plan_token,
@@ -666,13 +757,43 @@ async def _execute_bound_pipeline(
         running_task = asyncio.create_task(mark_operation_running(session, operation))
         await await_task_through_repeated_cancellation(running_task)
 
+        async def authorize_ssh_mutation() -> None:
+            final_endpoint = await _refresh_endpoint_snapshot(session, plan.endpoint_id)
+            final_write_gate = _endpoint_writes_gate(final_endpoint)
+            if final_write_gate is not None:
+                raise PipelineExecutionAuthorizationDenied(final_write_gate)
+            final_packer_gate = _packer_template_builds_gate(final_endpoint)
+            if final_packer_gate is not None:
+                raise PipelineExecutionAuthorizationDenied(final_packer_gate)
+            try:
+                verify_packer_plan(
+                    req.preflight_plan_token or "",
+                    endpoint=final_endpoint,
+                    target=target,
+                    recipe_digest=recipe_digest,
+                )
+            except PackerPlanError as error:
+                raise _plan_error(error) from None
+
         try:
             response, execution_error = await execute_pipeline_response(
                 req,
                 execution_target=execution_target,
                 operation_id=operation.id,
                 remote_unit=operation.remote_unit,
+                authorize_execution=authorize_ssh_mutation,
             )
+        except PipelineExecutionAuthorizationDenied as denied:
+            await _finish_operation_durably(
+                session,
+                operation,
+                state="failed",
+                execution=CloudImageTemplateExecutionSummary(enabled=False),
+                verified=False,
+                recovery_required=False,
+                error_code="execution_authorization_revoked",
+            )
+            return denied.response
         except PipelineExecutionCancelled as cancelled:
             try:
                 await _finish_operation_durably(
@@ -868,8 +989,12 @@ async def build_cloud_image_template(
             gated = await _gate(session, req.endpoint_id)
             if isinstance(gated, JSONResponse):
                 return gated
-            # Remote execution writes to a Proxmox host over SSH, so enforce both
-            # the write trust gate and the orthogonal SSH-transport gate.
+            packer_gate = _packer_template_builds_gate(gated)
+            if packer_gate is not None:
+                return packer_gate
+            # Remote execution writes to a Proxmox host over SSH, so enforce the
+            # broad write gate, the narrow packer capability, and the orthogonal
+            # SSH-transport gate in that order.
             await gate_ssh_access(session, req.endpoint_id)
             return await _execute_bound_pipeline(req, session, gated)
         return build_pipeline_response(req)
@@ -883,6 +1008,9 @@ async def build_cloud_image_template(
     gated = await _gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated
+    packer_gate = _packer_template_builds_gate(gated)
+    if packer_gate is not None:
+        return packer_gate
 
     filename = _filename_from_request(req)
     image_volid = f"{req.image_storage}:import/{filename}"
@@ -923,9 +1051,17 @@ async def build_cloud_image_template(
             nameservers=req.nameservers,
         )
 
+    direct_authority = await _authorize_direct_mutation(
+        session,
+        int(req.endpoint_id),
+    )
+    if isinstance(direct_authority, JSONResponse):
+        return direct_authority
+    direct_config_digest = endpoint_config_digest(direct_authority)
+
     proxmox: ProxmoxSession | None = None
     try:
-        proxmox = await _open_proxmox_session(gated)
+        proxmox = await _open_proxmox_session(direct_authority)
         existing = await _vm_config_or_none(
             proxmox,
             node=req.target_node,
@@ -965,6 +1101,13 @@ async def build_cloud_image_template(
             storage=req.image_storage,
             volid=image_volid,
         ):
+            execution_endpoint = await _authorize_direct_mutation(
+                session,
+                int(req.endpoint_id),
+                expected_config_digest=direct_config_digest,
+            )
+            if isinstance(execution_endpoint, JSONResponse):
+                return execution_endpoint
             download_result = await _maybe_await(
                 sdk_session.nodes(req.target_node)
                 .storage(f"{req.image_storage}/download-url")
@@ -980,6 +1123,18 @@ async def build_cloud_image_template(
                 node=req.target_node,
                 response=download_result,
             )
+
+        # The image may already exist, making VM creation the first mutation.
+        # Recheck both endpoint capabilities at that exact boundary too; the
+        # second check is intentional when this request downloaded the image,
+        # because authorization can be revoked while the task is awaited.
+        execution_endpoint = await _authorize_direct_mutation(
+            session,
+            int(req.endpoint_id),
+            expected_config_digest=direct_config_digest,
+        )
+        if isinstance(execution_endpoint, JSONResponse):
+            return execution_endpoint
 
         create_kwargs: dict[str, object] = {
             "vmid": req.vmid,
@@ -1009,6 +1164,14 @@ async def build_cloud_image_template(
             sdk_session.nodes(req.target_node).qemu.post(**create_kwargs)
         )
         create_upid = await _wait_for_task(proxmox, node=req.target_node, response=create_result)
+
+        execution_endpoint = await _authorize_direct_mutation(
+            session,
+            int(req.endpoint_id),
+            expected_config_digest=direct_config_digest,
+        )
+        if isinstance(execution_endpoint, JSONResponse):
+            return execution_endpoint
 
         template_result = await _maybe_await(
             sdk_session.nodes(req.target_node).qemu(req.vmid).template.post(disk="scsi0")

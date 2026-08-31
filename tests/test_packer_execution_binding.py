@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import time
 from pathlib import Path
 from typing import Literal
@@ -12,6 +13,7 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.database import CloudImageBuildOperation, ProxmoxEndpoint
@@ -92,6 +94,7 @@ def _endpoint(**overrides: object) -> ProxmoxEndpoint:
         "username": "root@pam",
         "enabled": True,
         "allow_writes": True,
+        "allow_packer_template_builds": True,
         "access_methods": "api_ssh",
         "ssh_target_node": "pve01",
         "ssh_host": "93.184.216.34",
@@ -119,7 +122,15 @@ def _target(**overrides: object) -> CloudImageBuildTarget:
 
 @pytest.mark.parametrize(
     "mutation",
-    ["token", "endpoint", "credential", "target", "recipe", "expired"],
+    [
+        "token",
+        "endpoint",
+        "credential",
+        "packer_authorization",
+        "target",
+        "recipe",
+        "expired",
+    ],
 )
 def test_signed_plan_rejects_tamper_drift_and_expiry(mutation: str) -> None:
     endpoint = _endpoint(token_name="automation", token_value="encrypted-token-a")
@@ -151,6 +162,12 @@ def test_signed_plan_rejects_tamper_drift_and_expiry(mutation: str) -> None:
         verify_endpoint = _endpoint(
             token_name="automation",
             token_value="encrypted-token-b",
+        )
+    elif mutation == "packer_authorization":
+        verify_endpoint = _endpoint(
+            token_name="automation",
+            token_value="encrypted-token-a",
+            allow_packer_template_builds=False,
         )
     elif mutation == "target":
         verify_target = _target(vmid=9011)
@@ -753,6 +770,349 @@ async def test_bound_execution_rechecks_endpoint_after_preflight(
 
         assert exc.value.detail["code"] == "preflight_plan_mismatch"
         assert execution_called is False
+
+    await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("allow_writes", "allow_packer_template_builds", "expected_reason"),
+    (
+        (False, True, "endpoint_writes_disabled"),
+        (True, False, "packer_template_builds_disabled_for_endpoint"),
+        (False, False, "endpoint_writes_disabled"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_bound_execution_returns_ordered_stable_denial_when_authority_is_revoked_after_preflight(
+    db_engine,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_writes: bool,
+    allow_packer_template_builds: bool,
+    expected_reason: str,
+) -> None:
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    endpoint = _endpoint(id=None)
+
+    class FakeProxmox:
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_resolve(*_args: object, **_kwargs: object):
+        return endpoint, FakeProxmox()
+
+    async def revoke_during_preflight(*_args: object, **_kwargs: object):
+        async with factory() as editor:
+            current = await editor.get(ProxmoxEndpoint, endpoint.id)
+            assert current is not None
+            current.allow_writes = allow_writes
+            current.allow_packer_template_builds = allow_packer_template_builds
+            editor.add(current)
+            await editor.commit()
+        return CloudImageTemplatePreflightResponse(
+            endpoint_id=int(endpoint.id or 0),
+            target_node="pve01",
+            vmid=9010,
+            ready=True,
+            writes_enabled=True,
+            recipe_digest=recipe_digest,
+        )
+
+    async def fail_if_lease_is_acquired(*_args: object, **_kwargs: object):
+        raise AssertionError("operation lease acquired after packer authorization was revoked")
+
+    monkeypatch.setattr(template_images, "_resolve_preflight_target", fake_resolve)
+    monkeypatch.setattr(template_images, "run_packer_preflight", revoke_during_preflight)
+    monkeypatch.setattr(template_images, "acquire_operation_lease", fail_if_lease_is_acquired)
+
+    async with factory() as session:
+        session.add(endpoint)
+        await session.commit()
+        await session.refresh(endpoint)
+        request = CloudImageTemplateBuildRequest(
+            endpoint_id=endpoint.id,
+            target_node="pve01",
+            vmid=9010,
+            name="post-preflight-packer-revocation-test",
+            product_type="pfsense",
+            product_version="2.8.1",
+            provider="release_image",
+            image_storage="local",
+            vm_storage="local-zfs",
+            snippets_storage="local",
+            execute=True,
+        )
+        target, recipe_digest = pipeline_scripts.pipeline_execution_contract(request)
+        _plan, _digest, token = issue_packer_plan(
+            endpoint=endpoint,
+            target=target,
+            recipe_digest=recipe_digest,
+        )
+        request = request.model_copy(update={"preflight_plan_token": token})
+
+        response = await template_images._execute_bound_pipeline(request, session, endpoint)
+
+        assert response.status_code == 403
+        payload = json.loads(response.body)
+        assert payload["reason"] == expected_reason
+        assert payload["endpoint_id"] == endpoint.id
+
+    await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("allow_writes", "allow_packer_template_builds", "expected_reason"),
+    (
+        (False, True, "endpoint_writes_disabled"),
+        (True, False, "packer_template_builds_disabled_for_endpoint"),
+        (False, False, "endpoint_writes_disabled"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_bound_execution_gates_revocation_before_first_plan_verification(
+    db_engine,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_writes: bool,
+    allow_packer_template_builds: bool,
+    expected_reason: str,
+) -> None:
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    endpoint = _endpoint(id=None)
+
+    class FakeProxmox:
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_resolve(*_args: object, **_kwargs: object):
+        resolved = endpoint.model_copy(
+            update={
+                "allow_writes": allow_writes,
+                "allow_packer_template_builds": allow_packer_template_builds,
+            }
+        )
+        return resolved, FakeProxmox()
+
+    monkeypatch.setattr(template_images, "_resolve_preflight_target", fake_resolve)
+    monkeypatch.setattr(
+        template_images,
+        "verify_packer_plan",
+        lambda *_args, **_kwargs: pytest.fail("plan verified before authorization gate"),
+    )
+
+    async with factory() as session:
+        session.add(endpoint)
+        await session.commit()
+        await session.refresh(endpoint)
+        request = CloudImageTemplateBuildRequest(
+            endpoint_id=endpoint.id,
+            target_node="pve01",
+            vmid=9010,
+            name="pre-verification-revocation-test",
+            product_type="pfsense",
+            product_version="2.8.1",
+            provider="release_image",
+            image_storage="local",
+            vm_storage="local-zfs",
+            snippets_storage="local",
+            execute=True,
+            preflight_plan_token="x" * 64,
+        )
+
+        response = await template_images._execute_bound_pipeline(request, session, endpoint)
+
+        assert response.status_code == 403
+        assert json.loads(response.body)["reason"] == expected_reason
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_final_ssh_authorization_denial_fails_consumed_operation_lease(
+    db_engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    endpoint = _endpoint(id=None)
+
+    class FakeProxmox:
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_resolve(*_args: object, **_kwargs: object):
+        return endpoint, FakeProxmox()
+
+    async def fake_preflight(*_args: object, **_kwargs: object):
+        return CloudImageTemplatePreflightResponse(
+            endpoint_id=int(endpoint.id or 0),
+            target_node="pve01",
+            vmid=9010,
+            ready=True,
+            writes_enabled=True,
+            recipe_digest=recipe_digest,
+        )
+
+    async def revoke_at_execution_boundary(
+        _request: CloudImageTemplateBuildRequest,
+        **kwargs: object,
+    ):
+        async with factory() as editor:
+            current = await editor.get(ProxmoxEndpoint, endpoint.id)
+            assert current is not None
+            current.allow_packer_template_builds = False
+            editor.add(current)
+            await editor.commit()
+        authorize = kwargs["authorize_execution"]
+        assert callable(authorize)
+        await authorize()
+        raise AssertionError("execution continued after final authorization denial")
+
+    monkeypatch.setattr(template_images, "_resolve_preflight_target", fake_resolve)
+    monkeypatch.setattr(template_images, "run_packer_preflight", fake_preflight)
+    monkeypatch.setattr(
+        template_images,
+        "execute_pipeline_response",
+        revoke_at_execution_boundary,
+    )
+
+    async with factory() as session:
+        session.add(endpoint)
+        await session.commit()
+        await session.refresh(endpoint)
+        request = CloudImageTemplateBuildRequest(
+            endpoint_id=endpoint.id,
+            target_node="pve01",
+            vmid=9010,
+            name="final-boundary-revocation-test",
+            product_type="pfsense",
+            product_version="2.8.1",
+            provider="release_image",
+            image_storage="local",
+            vm_storage="local-zfs",
+            snippets_storage="local",
+            execute=True,
+        )
+        target, recipe_digest = pipeline_scripts.pipeline_execution_contract(request)
+        _plan, _digest, token = issue_packer_plan(
+            endpoint=endpoint,
+            target=target,
+            recipe_digest=recipe_digest,
+        )
+        request = request.model_copy(update={"preflight_plan_token": token})
+
+        response = await template_images._execute_bound_pipeline(request, session, endpoint)
+
+        assert response.status_code == 403
+        assert json.loads(response.body)["reason"] == (
+            "packer_template_builds_disabled_for_endpoint"
+        )
+        operation = (await session.exec(select(CloudImageBuildOperation))).one()
+        assert operation.state == "failed"
+        assert operation.error_code == "execution_authorization_revoked"
+        assert operation.lease_key is None
+
+    await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    (
+        ("disabled", "endpoint_disabled"),
+        ("identity_drift", "preflight_plan_mismatch"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_final_ssh_http_authorization_error_fails_and_releases_operation_lease(
+    db_engine,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
+    engine = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    endpoint = _endpoint(id=None)
+
+    class FakeProxmox:
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_resolve(*_args: object, **_kwargs: object):
+        return endpoint, FakeProxmox()
+
+    async def fake_preflight(*_args: object, **_kwargs: object):
+        return CloudImageTemplatePreflightResponse(
+            endpoint_id=int(endpoint.id or 0),
+            target_node="pve01",
+            vmid=9010,
+            ready=True,
+            writes_enabled=True,
+            recipe_digest=recipe_digest,
+        )
+
+    async def mutate_at_execution_boundary(
+        _request: CloudImageTemplateBuildRequest,
+        **kwargs: object,
+    ):
+        async with factory() as editor:
+            current = await editor.get(ProxmoxEndpoint, endpoint.id)
+            assert current is not None
+            if mutation == "disabled":
+                current.enabled = False
+            else:
+                current.ip_address = "93.184.216.35"
+            editor.add(current)
+            await editor.commit()
+        authorize = kwargs["authorize_execution"]
+        assert callable(authorize)
+        await authorize()
+        raise AssertionError("execution continued after final authorization error")
+
+    monkeypatch.setattr(template_images, "_resolve_preflight_target", fake_resolve)
+    monkeypatch.setattr(template_images, "run_packer_preflight", fake_preflight)
+    monkeypatch.setattr(
+        template_images,
+        "execute_pipeline_response",
+        mutate_at_execution_boundary,
+    )
+
+    async with factory() as session:
+        session.add(endpoint)
+        await session.commit()
+        await session.refresh(endpoint)
+        request = CloudImageTemplateBuildRequest(
+            endpoint_id=endpoint.id,
+            target_node="pve01",
+            vmid=9010,
+            name="final-http-authorization-test",
+            product_type="pfsense",
+            product_version="2.8.1",
+            provider="release_image",
+            image_storage="local",
+            vm_storage="local-zfs",
+            snippets_storage="local",
+            execute=True,
+        )
+        target, recipe_digest = pipeline_scripts.pipeline_execution_contract(request)
+        _plan, _digest, token = issue_packer_plan(
+            endpoint=endpoint,
+            target=target,
+            recipe_digest=recipe_digest,
+        )
+        request = request.model_copy(update={"preflight_plan_token": token})
+
+        with pytest.raises(template_images.HTTPException) as exc:
+            await template_images._execute_bound_pipeline(request, session, endpoint)
+
+        assert exc.value.detail["code"] == expected_code
+        operation = (await session.exec(select(CloudImageBuildOperation))).one()
+        assert operation.state == "failed"
+        assert operation.error_code == expected_code
+        assert operation.lease_key is None
 
     await engine.dispose()
 

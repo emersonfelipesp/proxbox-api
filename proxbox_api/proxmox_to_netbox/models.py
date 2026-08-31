@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from types import UnionType
 from typing import Literal, Union, get_args, get_origin
 from urllib.parse import unquote
@@ -102,22 +103,37 @@ def _mb_from_bytes(value: object) -> int:
     return as_int // (1024 * 1024)
 
 
+def _enum_value(value: object) -> object:
+    """Return the underlying value of an ``Enum`` member, or ``value`` unchanged.
+
+    These normalizers are handed either a raw scalar, a NetBox choice object, or
+    one of this package's ``(str, Enum)`` mapping members. The last shape is the
+    dangerous one: ``str()`` on such a member resolves to ``Enum.__str__`` and
+    yields the class-qualified name (``"NetBoxInterfaceType.bridge"``), which
+    NetBox rejects as an invalid choice. Unwrapping to ``.value`` here keeps
+    every downstream ``str(...).lower()`` operating on the real choice value.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
 def _relation_id(value: object) -> object:
     if isinstance(value, dict):
         return value.get("id")
-    return value
+    return _enum_value(value)
 
 
 def _status_value(value: object) -> object:
     if isinstance(value, dict):
         return value.get("value") or value.get("label")
-    return value
+    return _enum_value(value)
 
 
 def _choice_value(value: object) -> object:
     if isinstance(value, dict):
         return value.get("value") or value.get("label")
-    return value
+    return _enum_value(value)
 
 
 def _content_type_value(value: object) -> object:
@@ -127,7 +143,7 @@ def _content_type_value(value: object) -> object:
         if app_label and model:
             return f"{app_label}.{model}"
         return value.get("value") or value.get("label")
-    return value
+    return _enum_value(value)
 
 
 def _task_action_label(value: object) -> str:
@@ -1163,7 +1179,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: object) -> str:
-        return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
+        return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active").value
 
     @field_validator(
         "cluster",

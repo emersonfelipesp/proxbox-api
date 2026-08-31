@@ -7,6 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       deploy_source:
+        # An authorized dispatch MUST send this explicitly. A declared input that
+        # is not sent silently takes its default, so a dispatcher that omits it
+        # would select `latest_package` with an empty `package_version` and fail
+        # the CI gate below rather than deploying what it authorized. The
+        # dispatcher also sends `package_version`, empty for a main-branch
+        # deploy. Verified against the forge: undeclared inputs are accepted and
+        # ignored, and an unsent declared input resolves to its default.
         description: "Immutable Gitea package by default; canonical main is an explicit override"
         required: true
         default: latest_package
@@ -24,6 +31,16 @@ on:
         required: false
         default: false
         type: boolean
+      deploy_request_id:
+        description: "Injected by the management backend on an authorized dispatch; not set by hand"
+        required: false
+        default: ""
+        type: string
+      deploy_request_sha256:
+        description: "Injected by the management backend on an authorized dispatch; not set by hand"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -35,6 +52,11 @@ concurrency:
 jobs:
   verify-ci:
     name: Verify CI for the exact deployed source
+    # Staging only. The production job resolves and verifies its own source
+    # after claiming, because its authorization expires on a much shorter clock
+    # than this job is allowed to wait -- see "Claim the deployment
+    # authorization" below.
+    if: ${{ github.event_name == 'push' }}
     runs-on: prod-deploy
     outputs:
       deploy_sha: ${{ steps.source.outputs.deploy_sha }}
@@ -97,9 +119,8 @@ jobs:
           /opt/nmulticloud/deploy/bin/deploy-app proxbox-api-staging "$GITHUB_SHA"
 
   production:
-    name: Deploy service to production through NMS-selected source
+    name: Deploy service to production through the authorized source
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    needs: verify-ci
     runs-on: prod-deploy
     permissions:
       contents: read
@@ -109,7 +130,12 @@ jobs:
       PACKAGE_VERSION: ${{ inputs.package_version }}
       WORKFLOW_REF: ${{ github.ref }}
       WORKFLOW_SHA: ${{ github.sha }}
-      VERIFIED_DEPLOY_SHA: ${{ needs.verify-ci.outputs.deploy_sha }}
+      DEPLOY_REQUEST_ID: ${{ inputs.deploy_request_id }}
+      DEPLOY_REQUEST_SHA256: ${{ inputs.deploy_request_sha256 }}
+      # Loopback on the deploy host. Overridable so the runner can move without a
+      # workflow change; the proof routes carry no bearer, so this URL is not a
+      # secret.
+      DEPLOY_CONTROL_URL: ${{ vars.DEPLOY_CONTROL_URL || 'http://127.0.0.1:16001' }}
     steps:
       - name: Checkout canonical workflow source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -131,18 +157,150 @@ jobs:
               ;;
             *) exit 1 ;;
           esac
+          # Injected by the management backend on every authorized dispatch.
+          # Without them the dispatch did not come through the proof path and
+          # must not reach the deploy host, which would reject it anyway.
+          printf '%s' "$DEPLOY_REQUEST_ID" | grep -Eq '^[a-f0-9]{32}$'
+          printf '%s' "$DEPLOY_REQUEST_SHA256" | grep -Eq '^[a-f0-9]{64}$'
+          # The authorization binds to attempt 1. A re-run keeps GITHUB_RUN_ID
+          # and only increments the attempt, so it would otherwise present the
+          # first attempt's binding as its own. A re-run needs a fresh dispatch,
+          # not a replayed claim.
+          test "${GITHUB_RUN_ATTEMPT:-1}" = "1"
+          # The endpoint is operator-overridable, so pin its shape before the
+          # request id and digest are ever sent to it.
+          printf '%s' "$DEPLOY_CONTROL_URL" | grep -Eq '^https?://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?$'
+
+      - name: Read the deployment authorization
+        run: |
+          set -euo pipefail
+          umask 077
+          proof_root="${RUNNER_TEMP}/deploy-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$proof_root"
+          mkdir -m 0700 "$proof_root"
+          # Recorded before anything is written into it, so the always() cleanup
+          # can find it even if this step dies partway; traps do not survive
+          # across step shells.
+          echo "PROOF_ROOT=$proof_root" >> "$GITHUB_ENV"
+          read_path="$proof_root/verified-proof.json"
+
+          # Read-only. The claim is deliberately left until immediately before
+          # the host mutation: an authorization is single-use, so claiming it
+          # here would burn it on any preflight failure below -- a pending CI
+          # context, a missing tag, a registry error -- and each of those would
+          # then need a fresh dispatch to retry.
+          #
+          # No bearer: these routes are capability-protected, so holding the
+          # request id and its digest IS the authorization. Neither is echoed,
+          # the body goes in over stdin rather than argv, and the transport is
+          # pinned -- an ambient proxy would otherwise receive the whole
+          # capability, which a signature prevents forging but not disclosing.
+          #
+          # `--fail-with-body` is deliberately absent: the response body is the
+          # evidence for the retry decision below, and the HTTP status is
+          # asserted explicitly instead of inferred from curl's exit code.
+          attempt=0
+          while :; do
+            status="$(printf '{"request_sha256":"%s"}' "$DEPLOY_REQUEST_SHA256" \
+              | curl --disable -sS \
+                --noproxy '*' --proto '=http,https' --max-redirs 0 \
+                --max-time 30 --retry 0 \
+                -o "$read_path" -w '%{http_code}' \
+                -X POST -H 'Content-Type: application/json' --data-binary @- \
+                --url "${DEPLOY_CONTROL_URL}/git/deployment-proofs/${DEPLOY_REQUEST_ID}/verify")"
+            test -n "$status"
+            if [ "$status" = "200" ]; then
+              break
+            fi
+            # The producer creates the authorization, dispatches, and only then
+            # binds the run it got back. This job can start inside that window,
+            # where the answer is a 409 that names the not-yet-bound state and
+            # asks for a retry. That one response is transient; every other
+            # response, including any other 409, is terminal.
+            if [ "$status" = "409" ] \
+               && grep -q 'DEPLOYMENT_PROOF_NOT_BOUND' "$read_path" \
+               && [ "$attempt" -lt 30 ]; then
+              attempt=$((attempt + 1))
+              sleep 1
+              continue
+            fi
+            echo "authorization read failed with HTTP $status" >&2
+            exit 1
+          done
+
+          # Resolved in its own checked command. Folding this into `echo` would
+          # let a KeyError's exit status vanish into echo's success, leaving an
+          # empty value that matches neither branch below -- a job that deploys
+          # nothing and still reports green.
+          resolved_source="$(python3 - "$read_path" <<'RESOLVE'
+          import json, sys
+          proof = json.load(open(sys.argv[1]))
+          expected = {
+              "claimed_at_unix", "request", "retention_expires_at_unix",
+              "run", "signature", "state",
+          }
+          if set(proof) != expected:
+              raise SystemExit(f"proof schema is not exact: {sorted(proof)}")
+          if proof["state"] not in {"bound", "claimed"}:
+              raise SystemExit(f"proof is {proof['state']!r}, not bound")
+          source = proof["request"]["deploy_source"]
+          if source not in {"main_branch", "latest_package"}:
+              raise SystemExit(f"unsupported deploy source: {source!r}")
+          print(source)
+          RESOLVE
+          )"
+          test -n "$resolved_source"
+          # The authorized request and the dispatch input must agree. They come
+          # from the same dispatcher, so a mismatch means the run is not the one
+          # that was authorized -- or that the input was never sent and quietly
+          # took its default, which would also mean the CI gate verified a
+          # different source than the one about to be deployed.
+          test "$resolved_source" = "$DEPLOY_SOURCE"
+          echo "RESOLVED_SOURCE=$resolved_source" >> "$GITHUB_ENV"
+
+      - name: Resolve the deployed source SHA
+        id: source
+        run: |
+          set -euo pipefail
+          DEPLOY_SHA="$WORKFLOW_SHA"
+          if [ "$RESOLVED_SOURCE" = latest_package ]; then
+            printf '%s' "$PACKAGE_VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(rc[1-9][0-9]*|\.post[1-9][0-9]*)?$'
+            git fetch --force --no-tags origin \
+              "+refs/heads/develop:refs/remotes/gitea/release-develop" \
+              "+refs/tags/v${PACKAGE_VERSION}:refs/release-policy/candidate"
+            DEPLOY_SHA="$(git rev-parse refs/release-policy/candidate^{commit})"
+            git merge-base --is-ancestor "$DEPLOY_SHA" refs/remotes/gitea/release-develop
+          else
+            test -z "$PACKAGE_VERSION"
+          fi
+          printf '%s' "$DEPLOY_SHA" | grep -Eq '^[a-f0-9]{40}$'
+          printf 'deploy_sha=%s\n' "$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+          echo "VERIFIED_DEPLOY_SHA=$DEPLOY_SHA" >> "$GITHUB_ENV"
+
+      - name: Require a green CI status for the deployed SHA
+        env:
+          DEPLOY_SHA: ${{ steps.source.outputs.deploy_sha }}
+          REQUESTED_REF: ""
+          SKIP_CI_GATE: ${{ inputs.skip_ci_gate }}
+          REQUIRED_CI_CONTEXT: "CI / Lint, smoke, and core coverage (push)"
+          API_BASE: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          GITEA_API_TOKEN: ${{ secrets.GITEA_TOKEN || github.token }}
+          # Zero, deliberately. The authorization claimed above is short-lived
+          # and its clock started at dispatch, so any wait here is spent out of
+          # the deploy's own budget. CI for the canonical commit must already be
+          # green before a production deploy is dispatched; a still-running CI
+          # fails immediately and the operator re-dispatches once it lands.
+          CI_GATE_TIMEOUT_SECONDS: "0"
+        run: python3 .gitea/scripts/require_ci_status.py
 
       - name: Bind exact package artifacts before deployment
-        if: ${{ inputs.deploy_source == 'latest_package' }}
+        if: ${{ env.RESOLVED_SOURCE == 'latest_package' }}
         env:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
-          git fetch --force --no-tags origin \
-            "+refs/heads/develop:refs/remotes/gitea/release-develop" \
-            "+refs/tags/v${PACKAGE_VERSION}:refs/release-policy/candidate"
-          SOURCE_SHA="$(git rev-parse refs/release-policy/candidate^{commit})"
-          test "$SOURCE_SHA" = "$VERIFIED_DEPLOY_SHA"
+          SOURCE_SHA="$VERIFIED_DEPLOY_SHA"
+          printf '%s' "$SOURCE_SHA" | grep -Eq '^[a-f0-9]{40}$'
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/gitea/release-develop
           python3 scripts/release_artifacts.py fetch-gitea \
             --owner emersonfelipesp --repository proxbox-api \
@@ -150,19 +308,122 @@ jobs:
             --source-sha "$SOURCE_SHA" --dist release-dist \
             --manifest release-manifest.json
 
-      - name: Deploy exact Gitea package
-        if: ${{ inputs.deploy_source == 'latest_package' }}
+      - name: Claim the deployment authorization for this exact run
         run: |
           set -euo pipefail
-          /opt/nmulticloud/deploy/bin/deploy-app-package \
-            proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
+          umask 077
+          proof_path="${PROOF_ROOT}/claimed-proof.json"
 
-      - name: Deploy canonical main override
-        if: ${{ inputs.deploy_source == 'main_branch' }}
+          # Last step before the host mutation. Everything that could refuse this
+          # deployment -- the source resolution, the CI gate, the artifact
+          # binding -- has already run, so a claim consumed here is a claim that
+          # was going to be used.
+          claim_body="$(python3 - <<'PAYLOAD'
+          import json, os
+          owner, _, repository = os.environ["GITHUB_REPOSITORY"].partition("/")
+          print(json.dumps({
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": 1,
+              "run_head_sha": os.environ["WORKFLOW_SHA"],
+              "owner": owner,
+              "repository": repository,
+              "workflow_id": "deploy-production.yml",
+              "request_sha256": os.environ["DEPLOY_REQUEST_SHA256"],
+          }))
+          PAYLOAD
+          )"
+
+          # Same transport pinning and the same single transient response as the
+          # read above. Claiming is idempotent for the run that already holds
+          # the claim, so a retry cannot double-spend it.
+          attempt=0
+          while :; do
+            status="$(printf '%s' "$claim_body" | curl --disable -sS \
+              --noproxy '*' --proto '=http,https' --max-redirs 0 \
+              --max-time 30 --retry 0 \
+              -o "$proof_path" -w '%{http_code}' \
+              -X POST -H 'Content-Type: application/json' --data-binary @- \
+              --url "${DEPLOY_CONTROL_URL}/git/deployment-proofs/${DEPLOY_REQUEST_ID}/claim")"
+            test -n "$status"
+            if [ "$status" = "200" ]; then
+              break
+            fi
+            if [ "$status" = "409" ] \
+               && grep -q 'DEPLOYMENT_PROOF_NOT_BOUND' "$proof_path" \
+               && [ "$attempt" -lt 30 ]; then
+              attempt=$((attempt + 1))
+              sleep 1
+              continue
+            fi
+            echo "authorization claim failed with HTTP $status" >&2
+            exit 1
+          done
+
+          # The claimed proof must still say what the read said. A source that
+          # changed under us means this is not the deployment that was verified.
+          python3 - "$proof_path" "$RESOLVED_SOURCE" <<'CHECK'
+          import json, sys
+          proof = json.load(open(sys.argv[1]))
+          if proof["state"] != "claimed":
+              raise SystemExit(f"proof is {proof['state']!r}, not claimed")
+          if proof["request"]["deploy_source"] != sys.argv[2]:
+              raise SystemExit("claimed source differs from the verified source")
+          CHECK
+
+          echo "PROOF_PATH=$proof_path" >> "$GITHUB_ENV"
+
+      - name: Deploy exact Gitea package
+        if: ${{ env.RESOLVED_SOURCE == 'latest_package' }}
+        run: |
+          set -euo pipefail
+          # The runner is root on the deploy host; this is the fixed argv the
+          # sudoers grant allows and the only accepted entry point for a
+          # production deploy of this service. The request id and digest are
+          # necessarily visible in this process's arguments -- that is the
+          # host's contract, not a choice made here.
+          /opt/nmulticloud/deploy/bin/deploy-app-package \
+            proxbox-api "$PACKAGE_VERSION" "$DEPLOY_REQUEST_ID" "$PROOF_PATH" \
+            "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID"
+
+          echo "DEPLOY_COMPLETED=true" >> "$GITHUB_ENV"
+
+      - name: Deploy the canonical main commit the request authorizes
+        if: ${{ env.RESOLVED_SOURCE == 'main_branch' }}
         run: |
           set -euo pipefail
           test "$WORKFLOW_SHA" = "$VERIFIED_DEPLOY_SHA"
-          /opt/nmulticloud/deploy/bin/deploy-app proxbox-api "$WORKFLOW_SHA"
+
+          # Main mode carries no artifact identity; a request that does is not
+          # the one this step knows how to satisfy.
+          python3 - "$PROOF_PATH" <<'CHECK'
+          import json, sys
+          request = json.load(open(sys.argv[1]))["request"]
+          if request["deploy_source"] != "main_branch":
+              raise SystemExit("resolved source changed under us")
+          if request.get("artifacts"):
+              raise SystemExit("main-mode request must carry no artifacts")
+          for field in (
+              "package_name", "package_type", "package_version",
+              "package_source_sha", "release_manifest_package",
+              "release_manifest_sha256",
+          ):
+              if request.get(field) is not None:
+                  raise SystemExit(f"main-mode request must leave {field} null")
+          CHECK
+
+          /opt/nmulticloud/deploy/bin/proxbox-package-deploy deploy-main \
+            proxbox-api "$WORKFLOW_SHA" "$DEPLOY_REQUEST_ID" "$PROOF_PATH" \
+            "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID"
+
+          echo "DEPLOY_COMPLETED=true" >> "$GITHUB_ENV"
+
+      - name: Require that something was actually deployed
+        run: |
+          set -euo pipefail
+          # Belt and braces against a silent no-op: the health check below would
+          # happily pass against the service already running, so a job that
+          # deployed nothing must not be allowed to look green.
+          test "${DEPLOY_COMPLETED:-}" = "true"
 
       - name: Require healthy production status
         run: /opt/nmulticloud/deploy/bin/healthcheck-app proxbox-api
@@ -170,13 +431,19 @@ jobs:
       - name: Publish host-issued successful-deployment attestation
         # Emergency CI bypasses may restore service, but can never authorize
         # public package promotion. Missing evidence remains fail closed.
-        if: ${{ inputs.deploy_source == 'latest_package' && inputs.skip_ci_gate != true }}
+        if: ${{ env.RESOLVED_SOURCE == 'latest_package' && inputs.skip_ci_gate != true }}
         env:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
+          # Argument order is the host's: target, version, request id, request
+          # digest, run id. The three-argument form exits 2 with an invalid
+          # request identity -- and it would do so *after* the package deploy
+          # has already committed, leaving production changed and the run red
+          # with no promotion evidence published.
           /opt/nmulticloud/deploy/bin/export-package-deploy-receipt \
-            proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID" > completion.json
+            proxbox-api "$PACKAGE_VERSION" "$DEPLOY_REQUEST_ID" \
+            "$DEPLOY_REQUEST_SHA256" "$GITHUB_RUN_ID" > completion.json
           python3 scripts/release_artifacts.py validate-attestation \
             --manifest release-manifest.json --attestation completion.json \
             --repository emersonfelipesp/proxbox-api
@@ -187,3 +454,34 @@ jobs:
       - name: Report failure status
         if: failure()
         run: /opt/nmulticloud/deploy/bin/status-app proxbox-api
+
+      - name: Destroy the claimed proof
+        if: always()
+        run: |
+          set -euo pipefail
+          # Runs on every exit path -- claim failure, an unusable source,
+          # cancellation between steps -- because a signed authorization left in
+          # RUNNER_TEMP on a root self-hosted runner is readable by any later
+          # root job for the remainder of its lifetime. The path is recomputed
+          # rather than trusted so a half-written GITHUB_ENV cannot leave it
+          # behind, and the deleted target is confined to this run. Validate the
+          # inputs rather than the string built from them: a `case` against the
+          # same prefix used to construct the path always matches and proves
+          # nothing.
+          test -n "${RUNNER_TEMP:-}"
+          case "$RUNNER_TEMP" in /?*) ;; *) echo "RUNNER_TEMP is not absolute" >&2; exit 1 ;; esac
+          printf '%s' "$GITHUB_RUN_ID" | grep -Eq '^[1-9][0-9]*$'
+          printf '%s' "$GITHUB_RUN_ATTEMPT" | grep -Eq '^[1-9][0-9]*$'
+          runner_temp="$(cd "$RUNNER_TEMP" && pwd -P)"
+          test "$runner_temp" != "/"
+          proof_root="${runner_temp}/deploy-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [ -e "$proof_root" ]; then
+            # Confirm the resolved parent really is RUNNER_TEMP before removing
+            # anything, so a non-canonical value cannot widen the target.
+            test "$(cd "$(dirname "$proof_root")" && pwd -P)" = "$runner_temp"
+            rm -rf -- "$proof_root"
+          fi
+          # `-e` follows symlinks and is false for a dangling one, so it alone
+          # would report success with a link still sitting there.
+          test ! -e "$proof_root"
+          test ! -L "$proof_root"

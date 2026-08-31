@@ -79,8 +79,12 @@ def _mb_from_bytes(value: object) -> int:
 
 
 def _status_value(value: object) -> str:
-    """Normalize Proxmox VM status to NetBox VM status."""
-    return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active")
+    """Normalize Proxmox VM status to NetBox VM status.
+
+    Returns the wire value, not the Enum member: this result goes straight into
+    a NetBox payload that is normalized again downstream.
+    """
+    return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active").value
 
 
 def _as_bool(value: object) -> bool:

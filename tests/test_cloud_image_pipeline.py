@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from proxbox_api.app.factory import APIKeyAuthMiddleware
@@ -112,6 +113,7 @@ def _bound_endpoint(**overrides: object) -> ProxmoxEndpoint:
         "username": "root@pam",
         "enabled": True,
         "allow_writes": True,
+        "allow_packer_template_builds": True,
         "access_methods": "api_ssh",
         "ssh_target_node": "pve01",
         "ssh_host": "93.184.216.34",
@@ -1250,6 +1252,199 @@ async def test_execute_route_enforces_allow_writes_before_subprocess(
 
 
 @pytest.mark.asyncio
+async def test_execute_route_requires_explicit_packer_template_authorization_before_subprocess(
+    sync_route_session,
+    monkeypatch,
+):
+    monkeypatch.setenv("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "true")
+    monkeypatch.setattr(
+        "proxbox_api.routes.cloud.pipeline_scripts.asyncio.create_subprocess_exec",
+        _fail_if_subprocess_runs,
+    )
+    endpoint = ProxmoxEndpoint(
+        name="pve-packer-disabled",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=True,
+        allow_packer_template_builds=False,
+        access_methods="api_ssh",
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        _execute_route_payload(endpoint_id=endpoint.id),
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 403
+    assert payload["reason"] == "packer_template_builds_disabled_for_endpoint"
+    assert payload["endpoint_id"] == endpoint.id
+
+
+@pytest.mark.asyncio
+async def test_direct_build_requires_explicit_packer_template_authorization_before_sdk_write(
+    sync_route_session,
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        name="pve-direct-packer-disabled",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=True,
+        allow_packer_template_builds=False,
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+
+    async def fail_if_session_opens(_endpoint: ProxmoxEndpoint) -> object:
+        raise AssertionError("Proxmox session opened before the packer authorization gate")
+
+    monkeypatch.setattr(template_images, "_open_proxmox_session", fail_if_session_opens)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {
+            "endpoint_id": endpoint.id,
+            "target_node": "pve01",
+            "vmid": 9010,
+            "name": "direct-packer-disabled",
+            "image_url": PUBLIC_IMAGE_URL,
+            "product_type": "firecracker",
+        },
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 403
+    assert payload["reason"] == "packer_template_builds_disabled_for_endpoint"
+    assert payload["endpoint_id"] == endpoint.id
+
+
+@pytest.mark.asyncio
+async def test_direct_build_rejects_disabled_endpoint_before_sdk_session(
+    sync_route_session,
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        name="pve-direct-disabled",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        enabled=False,
+        allow_writes=True,
+        allow_packer_template_builds=True,
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+
+    async def fail_if_session_opens(_endpoint: ProxmoxEndpoint) -> object:
+        raise AssertionError("disabled endpoint opened a Proxmox session")
+
+    monkeypatch.setattr(template_images, "_open_proxmox_session", fail_if_session_opens)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {
+            "endpoint_id": endpoint.id,
+            "target_node": "pve01",
+            "vmid": 9010,
+            "name": "direct-disabled",
+            "image_url": PUBLIC_IMAGE_URL,
+            "product_type": "firecracker",
+        },
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 422
+    assert payload["detail"]["code"] == "endpoint_disabled"
+    assert payload["detail"]["endpoint_id"] == endpoint.id
+
+
+@pytest.mark.asyncio
+async def test_direct_build_rechecks_packer_authorization_after_reads_before_sdk_write(
+    sync_route_session,
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        name="pve-direct-packer-revoked-during-read",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=True,
+        allow_packer_template_builds=True,
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+    mutation_calls: list[str] = []
+
+    class MutatingResource:
+        async def post(self, **_kwargs: object) -> object:
+            mutation_calls.append("post")
+            raise AssertionError("SDK mutation ran after packer authorization was revoked")
+
+    class DirectNode:
+        def storage(self, _path: str) -> MutatingResource:
+            return MutatingResource()
+
+        @property
+        def qemu(self) -> MutatingResource:
+            return MutatingResource()
+
+    class DirectAPI:
+        def nodes(self, _node: str) -> DirectNode:
+            return DirectNode()
+
+    class DirectSession:
+        session = DirectAPI()
+
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_open(_endpoint: ProxmoxEndpoint) -> DirectSession:
+        return DirectSession()
+
+    async def no_existing_vm(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def revoke_while_checking_image(*_args: object, **_kwargs: object) -> bool:
+        current = sync_route_session.get(ProxmoxEndpoint, endpoint.id)
+        assert current is not None
+        current.allow_packer_template_builds = False
+        sync_route_session.add(current)
+        sync_route_session.commit()
+        return False
+
+    monkeypatch.setattr(template_images, "_open_proxmox_session", fake_open)
+    monkeypatch.setattr(template_images, "_vm_config_or_none", no_existing_vm)
+    monkeypatch.setattr(template_images, "_image_exists", revoke_while_checking_image)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {
+            "endpoint_id": endpoint.id,
+            "target_node": "pve01",
+            "vmid": 9010,
+            "name": "direct-packer-revoked-during-read",
+            "image_url": PUBLIC_IMAGE_URL,
+            "product_type": "firecracker",
+        },
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 403
+    assert payload["reason"] == "packer_template_builds_disabled_for_endpoint"
+    assert payload["endpoint_id"] == endpoint.id
+    assert mutation_calls == []
+
+
+@pytest.mark.asyncio
 async def test_execute_route_enforces_ssh_transport_gate_before_subprocess(
     sync_route_session,
     monkeypatch,
@@ -1264,6 +1459,7 @@ async def test_execute_route_enforces_ssh_transport_gate_before_subprocess(
         ip_address="93.184.216.34",
         username="root@pam",
         allow_writes=True,
+        allow_packer_template_builds=True,
         access_methods="api",
     )
     sync_route_session.add(endpoint)
@@ -1325,6 +1521,274 @@ async def test_execute_route_scrubs_unexpected_subprocess_failure(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_rechecks_authorization_after_host_key_pinning_before_ssh(
+    monkeypatch,
+    tmp_path: Path,
+):
+    events: list[str] = []
+
+    async def fake_pin(_target: object) -> Path:
+        events.append("host-key-pinned")
+        return tmp_path / "known_hosts"
+
+    async def authorize() -> None:
+        events.append("authorization-rechecked")
+        raise pipeline_scripts.PipelineExecutionAuthorizationDenied(
+            JSONResponse(
+                status_code=403,
+                content={"reason": "packer_template_builds_disabled_for_endpoint"},
+            )
+        )
+
+    monkeypatch.setattr(pipeline_scripts, "_pinned_known_hosts_file", fake_pin)
+    monkeypatch.setattr(
+        pipeline_scripts.asyncio,
+        "create_subprocess_exec",
+        _fail_if_subprocess_runs,
+    )
+
+    with pytest.raises(pipeline_scripts.PipelineExecutionAuthorizationDenied):
+        await pipeline_scripts._pipeline_execution_result(
+            CloudImageTemplateBuildRequest(product_type="pfsense", execute=True),
+            "true\n",
+            execution_allowed=True,
+            execution_target=CloudImageSSHExecutionTarget(
+                host="93.184.216.34",
+                user="root",
+                port=22,
+                identity_file=_trusted_identity(monkeypatch, tmp_path),
+                known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
+            remote_unit="proxbox-cloud-image-00000000-0000-0000-0000-000000000001",
+            authorize_execution=authorize,
+        )
+
+    assert events == ["host-key-pinned", "authorization-rechecked"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_http_authorization_error_after_host_key_never_cancels_or_spawns_ssh(
+    monkeypatch,
+    tmp_path: Path,
+):
+    events: list[str] = []
+
+    async def fake_pin(_target: object) -> Path:
+        events.append("host-key-pinned")
+        return tmp_path / "known_hosts"
+
+    async def authorize() -> None:
+        events.append("authorization-rechecked")
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "preflight_plan_mismatch"},
+        )
+
+    async def fail_cancel(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("authorization denial attempted remote SSH cancellation")
+
+    monkeypatch.setattr(pipeline_scripts, "_pinned_known_hosts_file", fake_pin)
+    monkeypatch.setattr(pipeline_scripts, "_cancel_remote_unit", fail_cancel)
+    monkeypatch.setattr(
+        pipeline_scripts.asyncio,
+        "create_subprocess_exec",
+        _fail_if_subprocess_runs,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_scripts._pipeline_execution_result(
+            CloudImageTemplateBuildRequest(product_type="pfsense", execute=True),
+            "true\n",
+            execution_allowed=True,
+            execution_target=CloudImageSSHExecutionTarget(
+                host="93.184.216.34",
+                user="root",
+                port=22,
+                identity_file=_trusted_identity(monkeypatch, tmp_path),
+                known_host_fingerprint="SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
+            remote_unit="proxbox-cloud-image-00000000-0000-0000-0000-000000000001",
+            authorize_execution=authorize,
+        )
+
+    assert exc.value.detail["code"] == "preflight_plan_mismatch"
+    assert events == ["host-key-pinned", "authorization-rechecked"]
+
+
+@pytest.mark.asyncio
+async def test_direct_build_rejects_endpoint_identity_drift_before_sdk_mutation(
+    sync_route_session,
+    monkeypatch,
+):
+    endpoint = ProxmoxEndpoint(
+        name="pve-direct-identity-drift",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=True,
+        allow_packer_template_builds=True,
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+    mutation_calls: list[str] = []
+
+    class MutationResource:
+        async def post(self, **_kwargs: object) -> object:
+            mutation_calls.append("post")
+            raise AssertionError("SDK mutation ran through a stale endpoint session")
+
+    class DirectNode:
+        def storage(self, _path: str) -> MutationResource:
+            return MutationResource()
+
+        @property
+        def qemu(self) -> MutationResource:
+            return MutationResource()
+
+    class DirectAPI:
+        def nodes(self, _node: str) -> DirectNode:
+            return DirectNode()
+
+    class DirectSession:
+        session = DirectAPI()
+
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_open(_endpoint: ProxmoxEndpoint) -> DirectSession:
+        return DirectSession()
+
+    async def no_existing_vm(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def drift_while_checking_image(*_args: object, **_kwargs: object) -> bool:
+        current = sync_route_session.get(ProxmoxEndpoint, endpoint.id)
+        assert current is not None
+        current.ip_address = "93.184.216.35"
+        sync_route_session.add(current)
+        sync_route_session.commit()
+        return True
+
+    monkeypatch.setattr(template_images, "_open_proxmox_session", fake_open)
+    monkeypatch.setattr(template_images, "_vm_config_or_none", no_existing_vm)
+    monkeypatch.setattr(template_images, "_image_exists", drift_while_checking_image)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {
+            "endpoint_id": endpoint.id,
+            "target_node": "pve01",
+            "vmid": 9010,
+            "name": "direct-identity-drift",
+            "image_url": PUBLIC_IMAGE_URL,
+            "product_type": "firecracker",
+        },
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 409
+    assert payload["reason"] == "endpoint_configuration_changed"
+    assert mutation_calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_status", "expected_reason"),
+    (
+        ("narrow_revocation", 403, "packer_template_builds_disabled_for_endpoint"),
+        ("identity_drift", 409, "endpoint_configuration_changed"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_direct_build_rechecks_authorization_before_template_conversion(
+    sync_route_session,
+    monkeypatch,
+    mutation: str,
+    expected_status: int,
+    expected_reason: str,
+):
+    endpoint = ProxmoxEndpoint(
+        name="pve-direct-template-revocation",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=True,
+        allow_packer_template_builds=True,
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+    template_calls: list[str] = []
+
+    class QemuResource:
+        async def post(self, **_kwargs: object) -> object:
+            return "UPID:create"
+
+        def __call__(self, _vmid: int) -> "QemuResource":
+            return self
+
+        @property
+        def template(self) -> "QemuResource":
+            template_calls.append("template-access")
+            return self
+
+    class DirectNode:
+        qemu = QemuResource()
+
+    class DirectAPI:
+        def nodes(self, _node: str) -> DirectNode:
+            return DirectNode()
+
+    class DirectSession:
+        session = DirectAPI()
+
+        async def aclose(self) -> None:
+            return None
+
+    async def fake_open(_endpoint: ProxmoxEndpoint) -> DirectSession:
+        return DirectSession()
+
+    async def no_existing_vm(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    async def image_exists(*_args: object, **_kwargs: object) -> bool:
+        return True
+
+    async def mutate_during_create_task(*_args: object, **_kwargs: object) -> str:
+        current = sync_route_session.get(ProxmoxEndpoint, endpoint.id)
+        assert current is not None
+        if mutation == "narrow_revocation":
+            current.allow_packer_template_builds = False
+        else:
+            current.ip_address = "93.184.216.35"
+        sync_route_session.add(current)
+        sync_route_session.commit()
+        return "UPID:create"
+
+    monkeypatch.setattr(template_images, "_open_proxmox_session", fake_open)
+    monkeypatch.setattr(template_images, "_vm_config_or_none", no_existing_vm)
+    monkeypatch.setattr(template_images, "_image_exists", image_exists)
+    monkeypatch.setattr(template_images, "_wait_for_task", mutate_during_create_task)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {
+            "endpoint_id": endpoint.id,
+            "target_node": "pve01",
+            "vmid": 9010,
+            "name": "direct-template-revocation",
+            "image_url": PUBLIC_IMAGE_URL,
+            "product_type": "firecracker",
+        },
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == expected_status
+    assert payload["reason"] == expected_reason
+    assert template_calls == []
+
+
+@pytest.mark.asyncio
 async def test_direct_build_scrubs_sdk_failure_at_http_boundary(
     sync_route_session,
     monkeypatch,
@@ -1336,6 +1800,7 @@ async def test_direct_build_scrubs_sdk_failure_at_http_boundary(
         ip_address="93.184.216.34",
         username="root@pam",
         allow_writes=True,
+        allow_packer_template_builds=True,
     )
     sync_route_session.add(endpoint)
     sync_route_session.commit()
@@ -1409,6 +1874,7 @@ async def test_direct_build_cleanup_failure_does_not_mask_http_response(
         ip_address="93.184.216.34",
         username="root@pam",
         allow_writes=True,
+        allow_packer_template_builds=True,
     )
     sync_route_session.add(endpoint)
     sync_route_session.commit()

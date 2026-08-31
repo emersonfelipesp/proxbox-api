@@ -79,10 +79,20 @@ state fail closed as `unsupported`.
 An executable workflow first renders a non-executing build plan to obtain its
 opaque, domain-separated HMAC `recipe_digest`, submits that binding to
 preflight, and receives a signed five-minute `plan_token`. Execution must
-present the token; proxbox-api authenticates endpoint configuration with a
-separate keyed binding, reruns preflight, refreshes endpoint authority again
-immediately before the write boundary, then consumes the plan into a durable
+present the token; proxbox-api authenticates endpoint configuration (including
+the narrow packer capability) with a separate keyed binding, reruns preflight,
+refreshes broad then narrow endpoint authority again immediately before the
+write boundary, then consumes the plan into a durable
 single-owner `endpoint_id:vmid` lease.
+Executable template-image writes require two independent endpoint assertions:
+the broad `ProxmoxEndpoint.allow_writes` flag and the default-off
+`allow_packer_template_builds` capability. The latter authorizes only
+netbox-packer template creation and is rechecked after the signed preflight's
+authoritative endpoint refresh and again after host-key pinning, immediately
+before the SSH child starts. Direct SDK template-image writes resolve enabled
+authority before opening a session, then refresh both gates and compare the
+original endpoint-configuration digest before download/import, VM creation, and
+template conversion, so revocation or endpoint identity drift wins.
 Operation state is available at `GET /cloud/templates/images/operations/{id}`
 and a running unit can be stopped through the corresponding `/cancel` route.
 Build responses use the secret-safe v2 contract; raw scripts, cloud-init, URLs, and process output
@@ -113,8 +123,9 @@ Validation errors never reflect Pydantic request input or cloud-image secrets. S
 Remote Cloud Image execution is a fail-closed rollout. The checked-in
 netbox-packer-shaped fixture is producer-owned compatibility intent, not proof
 from the downstream consumer. Keep `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION`
-unset/false in staging and production until netbox-packer lands its own parser
-contract and validates it against the released proxbox-api contract.
+unset/false until a compatible netbox-packer release with endpoint-bound
+authorization is deployed and validated against the released proxbox-api
+contract. Enabling execution does not replace either endpoint write gate.
 
 PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
 indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including
