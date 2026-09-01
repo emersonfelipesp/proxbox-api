@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import time
 from collections import defaultdict
@@ -10,17 +11,17 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
-from starlette.types import ASGIApp
 
-from proxbox_api import __version__, database
+from proxbox_api import __version__
 from proxbox_api.app import bootstrap
 from proxbox_api.app.cache_routes import register_cache_routes
-from proxbox_api.app.cors import DatabaseAwareCORSMiddleware, build_cors_origins
+from proxbox_api.app.cors import build_cors_origins
 from proxbox_api.app.exceptions import register_exception_handlers
 from proxbox_api.app.full_update import register_full_update_routes
 from proxbox_api.app.root_meta import root_meta_router
@@ -61,21 +62,13 @@ from proxbox_api.routes.proxmox.replication import router as px_replication_rout
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.proxmox.sdn import router as px_sdn_router
 from proxbox_api.routes.proxmox.services import router as px_services_router
-from proxbox_api.routes.proxmox.zfs import router as px_zfs_router
 from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
+from proxbox_api.routes.proxmox_tags import router as proxmox_tags_router
 from proxbox_api.routes.ssh_terminal import router as ssh_terminal_router
 from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
-from proxbox_api.services.auth_lockout import (
-    AuthLockoutPolicy,
-    AuthSourceContext,
-    IPNetwork,
-    load_trusted_proxy_cidrs,
-    resolve_auth_source_context,
-    validate_auth_lockout_identity_key,
-)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -95,27 +88,33 @@ AUTH_EXEMPT_PATHS = frozenset(
 )
 
 
-def _load_trusted_proxies() -> tuple[IPNetwork, ...]:
-    return load_trusted_proxy_cidrs()
+def _load_trusted_proxies() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    raw = os.environ.get("PROXBOX_TRUSTED_PROXIES", "").strip()
+    if not raw:
+        return ()
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid PROXBOX_TRUSTED_PROXIES entry: %s", token)
+    return tuple(networks)
 
 
 _TRUSTED_PROXIES = _load_trusted_proxies()
 
 
 def _peer_is_trusted(peer_ip: str) -> bool:
-    context = resolve_auth_source_context(peer_ip, None, _TRUSTED_PROXIES)
-    return context.trust_context == "trusted-peer"
-
-
-def resolve_client_source(request: Request) -> AuthSourceContext:
-    """Return a normalized source and explicit trust decision for auth bucketing."""
-
-    peer_ip = request.client.host if request.client else None
-    return resolve_auth_source_context(
-        peer_ip,
-        request.headers.get("X-Forwarded-For"),
-        _TRUSTED_PROXIES,
-    )
+    if not _TRUSTED_PROXIES:
+        return False
+    try:
+        peer = ipaddress.ip_address(peer_ip)
+    except ValueError:
+        return False
+    return any(peer in net for net in _TRUSTED_PROXIES)
 
 
 def resolve_client_ip(request: Request) -> str:
@@ -125,7 +124,18 @@ def resolve_client_ip(request: Request) -> str:
     Without this env var, the peer IP is always returned, which prevents per-IP rate-limit
     and brute-force-lockout bypass via spoofed X-Forwarded-For headers.
     """
-    return resolve_client_source(request).source_ip
+    peer_ip = request.client.host if request.client else "unknown"
+    if not _peer_is_trusted(peer_ip):
+        return peer_ip
+    forwarded = request.headers.get("X-Forwarded-For")
+    if not forwarded:
+        return peer_ip
+    # Walk right-to-left, skipping trusted-proxy hops, to find the first untrusted client.
+    candidates = [token.strip() for token in forwarded.split(",") if token.strip()]
+    for candidate in reversed(candidates):
+        if not _peer_is_trusted(candidate):
+            return candidate
+    return candidates[0] if candidates else peer_ip
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -148,7 +158,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             del self._requests[ip]
 
     def _get_client_ip(self, request: Request) -> str:
-        return resolve_client_source(request).canonical
+        return resolve_client_ip(request)
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -200,10 +210,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Middleware to enforce API key authentication on protected routes."""
 
-    def __init__(self, app: ASGIApp, policy: AuthLockoutPolicy | None = None) -> None:
-        super().__init__(app)
-        self.policy = policy or AuthLockoutPolicy.from_env()
-
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
@@ -211,38 +217,26 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         api_key = request.headers.get("X-Proxbox-API-Key")
-        client_source = resolve_client_source(request)
+        client_ip = self._get_client_ip(request)
 
         session_factory = get_session_factory(request.app)
         with session_factory() as session:
             authorized, error_message = await asyncio.to_thread(
-                check_auth_header_with_session,
-                session,
-                api_key,
-                client_source,
-                self.policy,
+                check_auth_header_with_session, session, api_key, client_ip
             )
 
         if not authorized:
-            if "Too many failed" in (error_message or ""):
-                status_code = 429
-                retry_after = str(self.policy.window_seconds)
-            elif "verification capacity" in (error_message or ""):
-                status_code = 503
-                retry_after = "1"
-            else:
-                status_code = 401
-                retry_after = None
+            status_code = 429 if "Too many failed" in (error_message or "") else 401
             return JSONResponse(
                 status_code=status_code,
                 content={"detail": error_message},
-                headers={"Retry-After": retry_after} if retry_after is not None else {},
+                headers={"Retry-After": "300"} if status_code == 429 else {},
             )
 
         return await call_next(request)
 
     def _get_client_ip(self, request: Request) -> str:
-        return resolve_client_source(request).canonical
+        return resolve_client_ip(request)
 
 
 # Legacy module-level placeholders (some tooling may read these names).
@@ -256,39 +250,28 @@ PROXBOX_PLUGIN_NAME: str = "netbox_proxbox"
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
-        bootstrap.init_database_and_netbox()
-        validate_auth_lockout_identity_key()
-        try:
-            register_generated_proxmox_routes(app)
-        except ProxboxException as error:
-            logger.warning(
-                "Generated Proxmox proxy routes were not mounted: %s",
-                error.message,
-                extra={"detail": error.detail},
-            )
-            strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in (
-                "1",
-                "true",
-                "yes",
-            )
-            if strict:
-                raise
-
-        from proxbox_api.proxmox_to_netbox.proxmox_schema import (
-            available_proxmox_sdk_versions,
+        register_generated_proxmox_routes(app)
+    except ProxboxException as error:
+        logger.warning(
+            "Generated Proxmox proxy routes were not mounted: %s",
+            error.message,
+            extra={"detail": error.detail},
         )
+        strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in ("1", "true", "yes")
+        if strict:
+            raise
 
-        bundled = available_proxmox_sdk_versions()
-        logger.info(
-            "Bundled Proxmox OpenAPI schema versions available: %s",
-            ", ".join(bundled) if bundled else "(none)",
-        )
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
 
-        await _run_bootstrap_pass(app)
+    bundled = available_proxmox_sdk_versions()
+    logger.info(
+        "Bundled Proxmox OpenAPI schema versions available: %s",
+        ", ".join(bundled) if bundled else "(none)",
+    )
 
-        yield
-    finally:
-        await database.dispose_database()
+    await _run_bootstrap_pass(app)
+
+    yield
 
 
 async def _run_bootstrap_pass(app: FastAPI) -> None:
@@ -361,7 +344,8 @@ async def _run_bootstrap_pass(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:  # noqa: C901
     """Build and configure the Proxbox FastAPI application."""
-    auth_lockout_policy = AuthLockoutPolicy.from_env()
+    bootstrap.init_database_and_netbox()
+
     app = FastAPI(
         title="Proxbox Backend",
         description="## Proxbox Backend made in FastAPI framework",
@@ -409,8 +393,7 @@ def create_app() -> FastAPI:  # noqa: C901
     logger.debug("CORS allow_origins configured (%d entries)", len(origins))
 
     app.add_middleware(
-        DatabaseAwareCORSMiddleware,
-        endpoint_provider=lambda: list(bootstrap.netbox_endpoints),
+        CORSMiddleware,
         allow_origins=origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -425,7 +408,7 @@ def create_app() -> FastAPI:  # noqa: C901
     )
 
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(APIKeyAuthMiddleware, policy=auth_lockout_policy)
+    app.add_middleware(APIKeyAuthMiddleware)
 
     rate_limit_str = os.environ.get("PROXBOX_RATE_LIMIT", "300")
     try:
@@ -467,9 +450,11 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(px_datacenter_router, prefix="/proxmox", tags=["proxmox / datacenter"])
         app.include_router(px_access_router, prefix="/proxmox", tags=["proxmox / access"])
         app.include_router(px_services_router, prefix="/proxmox", tags=["proxmox / services"])
-        app.include_router(px_zfs_router, prefix="/proxmox", tags=["proxmox / zfs"])
         app.include_router(
             proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
+        )
+        app.include_router(
+            proxmox_tags_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
         )
         app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
         app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])

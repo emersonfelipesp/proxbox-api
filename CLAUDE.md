@@ -26,12 +26,12 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.24** — the NetBox plugin that consumes this backend.
+- **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
-  `proxbox-api 0.0.20` adds NetBox 4.6.6 certification, strict Python 3.12/3.13
-  support, FIPS-safe tag hashing, bounded release matrices, and immutable
-  Gitea-first release/deployment evidence. Operational-verb routes (start/stop/snapshot/migrate)
+  pairing is `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
+  `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
+  RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
+  VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
   require `proxbox-api >= 0.0.17`; firewall model scaffolding and intent tag
   helpers require `>= 0.0.13`; HA tab and runtime tunables alone require `>= 0.0.11`.
   Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
@@ -129,82 +129,29 @@ Open the nearest scoped guide for the code you are changing.
   source fetches, the dedicated `mirror-host` runner label, `gh`
   authentication, and a single triggering-branch push. Do not broaden it to
   tags, `--all`, or `--mirror`.
-- `.gitea/workflows/deploy-production.yml`: reviewed `develop` pushes deploy
-  `proxbox-api-staging`. Production is an NMS-dispatched manual run from
-  canonical `main`: the default `latest_package` input binds an exact Gitea
-  version, while `main_branch` is an explicit override. A successful package
-  deployment, installed-version proof, active-image proof, and health check let
-  the workflow export root-issued immutable repository-linked completion
-  evidence; neither workflow code nor a bypass input can mint that evidence.
-- Registry credentials are step-scoped: every `release_artifacts.py` step whose
-  subcommand reaches the Gitea package registry (`fetch-gitea`,
-  `fetch-attestation`, `publish-attestation`, `publish-manifest`) must set
-  `GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}` in its own `env`. The
-  `production` job env deliberately holds no secrets, so an omission sends an
-  empty bearer and surfaces as an opaque registry `HTTP 401` rather than a
-  missing-credential error. `manifest` and `validate-attestation` are
-  local-only and must not be made to require it.
-- `.gitea/workflows/ci.yml`: the authoritative `CI / Lint, smoke, and core
-  coverage` gate (ruff → ty → compile/import smoke → pytest+coverage). **Its
-  coverage-artifact step must pin `actions/upload-artifact@v3` (SHA
-  `a8a3f3ad30e3422c9c7b888a15615d19a852ae32`), not v4.** Gitea Actions does not
-  implement the `@actions/artifact` v2+ API that `upload-artifact@v4+` requires
-  and fails the step with `GHESNotSupportedError`, turning an otherwise-passing
-  run red and blocking the CI-gated deploy. The `.github/workflows/ci.yml` twin
-  keeps v4 because it runs on GitHub-hosted runners that support it.
-- `.gitea/workflows/publish-gitea.yml`: data-only release-control request
-  workflow committed to `main`. Handles `push: tags:` only, requires the tag to
-  equal current `develop`, ignores writer-controlled commit statuses, selects
-  the newest authenticated `ci.yml` Actions run and required jobs for that SHA,
-  fetches that exact source-SHA GitHub workflow through the Contents API and
-  verifies both its Git object ID and reviewed SHA-256, pins the reviewed
-  gate-helper bytes before isolated execution, and schedules the two release
-  jobs on distinct job-bound ephemeral validation/build registrations. Each
-  advertises only the sole `ci-release-proxbox-api` label, accepts one
-  supervisor-authorized assignment, and terminates. Workflow concurrency is
-  global to this repository so different release refs cannot race the sole
-  release label. Before candidate
-  execution, each job must match its live runner ID/name/sole label to the
-  checksum-pinned acceptance record plus a fresh signed external-supervisor
-  attestation bound to repository/first-attempt run/job/source and the exact
-  workflow path/digest, complete registered labels, runtime image, and
-  network/runtime policy. Validation and build have
-  independent pinned repository-registration scope digests. Zero/empty identity and all-zero
-  key/image/policy digests keep tag releases disabled. Candidate build and
-  offline-wheel preparation run behind the bounded token-free UID/Landlock
-  boundary plus a fail-closed x86-64 seccomp deny for every socket syscall,
-  every `io_uring` entry point, and every x32-tagged syscall.
-  The outer job revalidates both immutable wheelhouse manifests and dry-resolves
-  the hash-locked CPython 3.13 musl runtime cache. After cleanup, the root-only external
-  supervisor signs the exact request and artifact inventory. The workflow
-  uploads exactly the package wheel, package sdist, `release-manifest.json`,
-  `release-request.json`, `runner-completion-attestation.json`, and
-  `runner-completion-attestation.sig`.
-  Every RC, final, or post request consumes its validation/build identity pair;
-  the next request requires freshly registered and reviewed identities.
-  The request binds repository ID 37, source/tag/version,
-  first-attempt run identity, target-workflow digest, manifest digest, and
-  artifact inventory. The target repository has no package or RC-mirror
-  credential and cannot publish or push tags. The separately administered
-  locked control plane independently verifies the policy-pinned target workflow,
-  supervisor completion signature, and exact bytes on its isolated builder,
-  seals the handoff, and lets only its
-  isolated publisher invoke fixed digest-locked tooling with publication
-  credentials. It anonymously re-downloads and verifies every registry byte.
-  Before the sdist build, the target generates the release-only context from
-  `Dockerfile.release`, exports for CPython 3.13, downloads only hash-locked
-  `musllinux_1_2_x86_64` or backward-compatible `musllinux_1_1_x86_64`
-  CPython 3.13/ABI3/pure-Python wheels compatible with
-  the full-digest prior Alpine raw runtime, and writes the canonical schema-2
-  cache/image inventory. The locked control independently rejects mutable/networked Docker
-  inputs and hash drift before sealing; the ordinary development `Dockerfile`
-  is not the package-deploy contract.
-  The control publisher pushes RC tags to GitHub for TestPyPI validation. Final tags stay private until the
-  NMS package-first production gate passes; canonical-main
-  `promote-final-tag.yml` verifies the package and NMS attestation before
-  pushing the tag to the exact authorized GitHub repository. The operator then creates the
-  GitHub Release that authorizes PyPI and Docker Hub. A failed tag-trigger run
-  fixes forward to a new immutable version; there is no local-upload fallback.
+- `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
+  Pushes to `develop` deploy `proxbox-api-staging`; pushes to `main` deploy
+  `proxbox-api` through the `prod-deploy` runner on the Gitea server
+  (`10.0.30.96`). **Gated on CI**: a `verify-ci` job runs first and the deploy
+  job `needs` it, so a commit cannot reach staging or production unless the
+  `CI / Lint, smoke, and core coverage (push)` context is `success` for that
+  **exact SHA**. Previously CI and deploy were sibling workflows on the same
+  push -- they raced, and deploy never consulted CI
+  (N-MultiCloud/nmulticloud-context#204 requirement 6). The gate lives in
+  `.gitea/scripts/require_ci_status.py`, polls the commit-status API, and
+  **fails closed**: a missing context, an unreadable response, or a timeout all
+  block the deploy. The only bypass is the explicit, logged `skip_ci_gate`
+  dispatch input, kept so an incident rollback to a known-good older SHA is not
+  locked out. A dispatch `ref` that is not a full 40-character SHA is refused
+  rather than verified imprecisely. Contracts: `tests/test_deploy_ci_gate.py`.
+- `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
+  committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
+  events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
+  tag to GitHub, and creates/publishes the GitHub release for non-RC tags (which
+  fires `release: published` on GitHub Actions). Secret name: `PKG_TOKEN`
+  (`GITEA_` prefix is reserved by Gitea Actions and cannot be used for secrets).
+  If Gitea 1.26.2 tag triggers are not operational on this instance, use the
+  manual fallback documented in the Release Procedure section below.
 
 ## Architecture
 
@@ -212,8 +159,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
 - Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
-- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/services/auth_lockout.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` enforcement via `APIKeyAuthMiddleware`, and one shared sync/async brute-force state service. Lockout buckets combine normalized source/trust context with a server-keyed HMAC identifier, so reaching one credential threshold does not lock peer keys and persisted identifiers are not offline guessing oracles; exhausting the deliberately higher shared source threshold still blocks every key from that source. IPv4 sources remain exact while IPv6 lockout/rate-limit accounting is normalized to `/64`. Every pre-bcrypt admission has its own durable reservation token, renewable owner lease, and persisted absolute deadline. Live sync and async verifiers heartbeat only until that deadline; afterward capacity is reclaimable and the late bcrypt result is discarded without mutating lockout accounting, although the non-preemptible worker thread may continue consuming CPU until bcrypt returns. Expired crash rows remain observable for a one-hour cleanup horizon; a late finalizer can change accounting exactly once only before the absolute deadline, after which it merely consumes and discards the row. A rejected bcrypt atomically consumes that token; overlapping rejected reservations for the same credential coalesce into one credential transition, but every rejection advances source-abuse state and remains visible in aggregate metrics. Valid traffic records no failure. Missing-key traffic advances only source abuse and never allocates credential-partition rows. Durable failure rows are split into bounded credential/source partitions. Failure-row saturation never controls admission: all requests compete fairly inside the same per-source/global verification pool, with no separate attacker-claimable lane. Before bcrypt, a saturated partition evicts its stalest safe expired row; an unpersistable rejection fails closed and advances bounded aggregate accounting. Authenticated create/reactivate writes serialize and refuse to cross `PROXBOX_AUTH_MAX_ACTIVE_KEYS`; verification examines only the oldest configured number of active hashes. Startup logs recovery guidance for a legacy over-limit database instead of disabling every key. The non-secret `AuthLockoutIdentityKeyBinding` singleton binds the database to one HMAC-key generation; startup validates and pins the key material in memory, so missing/mismatched material fails startup and post-start source mutation cannot change live identities. Offline `proxbox-auth-lockout rebind-key` is the only reset/rebind path and is excluded from every live worker by the runtime lease; under that lock it reuses startup's exact column/type/PK/nullability/singleton-CHECK schema validator before mutation. SQLite `ON CONFLICT` transitions and aggregate counters are atomic and durable across workers/restarts. Sync and async production connections install a 5-second busy timeout before WAL negotiation. `PROXBOX_TRUSTED_PROXIES` is an explicit, validated CIDR list; raw/Granian and custom-command launches trust no caller by default, while only the bundled nginx/supervisor topology prepends its protected `127.0.0.1/32` Uvicorn hop. Every Uvicorn/FastAPI entrypoint disables server-level proxy-header rewriting so this application policy sees the transport peer first. Aggregate label-free capacity/row/in-flight/orphan/compaction metrics are appended to `/cache/metrics*`, and `proxbox-auth-lockout --database <existing-db>` provides local secret-safe inspection/clear while HTTP is locked. The versioned schemas leave legacy `authlockout` intact for rollback and are covered by the database lifecycle's single target-specific startup lock. The one-shot bootstrap flow is consumed atomically and permanently: `ApiKey.bootstrap_first_key_async()` commits the durable `ApiKeyBootstrapClaim` singleton (`database.py`, CHECK `id = 1`) and the first key's bcrypt hash in one transaction, a lost claim race maps to a stable HTTP 409, and `bootstrap_is_claimed_async()` treats any key row — active or inactive — as consumed, so deactivating or deleting keys never reopens unauthenticated registration. Legacy databases are backfilled on startup by `_migrate_api_key_bootstrap_claim()` (idempotent `INSERT OR IGNORE ... WHERE EXISTS`). Retiring the final active key is refused: `DELETE /auth/keys/{id}` and `POST /auth/keys/{id}/deactivate` serialize through SQLite `BEGIN IMMEDIATE` and return 409 `last_active_api_key_required` when the target is the only active key. Contracts: `tests/test_auth_lockout.py`, `tests/test_auth_lockout_cli.py`, and `tests/test_auth_bootstrap.py`.
-- Database lifecycle (`proxbox_api/database.py`, `proxbox_api/app/bootstrap.py`): resolves one absolute SQLite target from `PROXBOX_DATABASE_PATH` or a compatible query-free SQLite `DATABASE_URL`, refuses ambiguity/cwd fallback/raw `?` delimiters, and fails closed when a legacy candidate cannot be verified. The auth-history guard applies to default and explicit targets. Exact `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY=1` is isolated/audited and atomically consumed by a durable sibling marker before database writes, so stale configuration cannot reauthorize bootstrap after target loss. A persistent `.startup.lock` serializes busy-timeout-first WAL/write probe, engine/table creation, complete auth-lockout bucket/reservation/metric/key-binding validation, fatal schema inspection, and all migrations across processes; each ready process then holds a shared `.runtime.lock` lease until engine disposal so exclusive offline recovery cannot overlap request handling. The post-schema endpoint read is mandatory before readiness. Engines do not exist at import; consumers use typed accessors after startup. Contracts: `tests/test_database_startup.py` and `tests/test_auth_lockout.py`.
+- Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and bootstrap flow for first-time key registration.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
 - Schema and enum layer (`proxbox_api/schemas/*`, `proxbox_api/enum/*`): validate payloads, normalize data, and define contract-safe choice values.
@@ -223,8 +169,8 @@ Open the nearest scoped guide for the code you are changing.
 
 ### Runtime flow
 
-1. `proxbox_api.app.factory.create_app()` assembles middleware, routers, and exception handlers without resolving or opening the database.
-2. Lifespan startup resolves and verifies the SQLite target, builds engines/tables and the default NetBox session, then registers generated Proxmox proxy routes and records bootstrap status.
+1. `proxbox_api.app.factory.create_app()` initializes database state, builds the default NetBox session, and records bootstrap status.
+2. The app registers generated Proxmox proxy routes during lifespan startup and wires shared middleware, routers, and exception handlers.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
@@ -239,25 +185,18 @@ For the complete HTTP route reference including schemas and error shapes, see [`
 Key route groups mounted in `proxbox_api/app/factory.py`:
 
 - **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`): start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for QEMU and LXC guests. All gated by `ProxmoxEndpoint.allow_writes`.
+- **Proxmox config tags** (`proxbox_api/routes/proxmox_tags.py`, mounted at `/proxmox`): `PUT/PATCH /proxmox/{qemu|lxc}/{vmid}/tags?endpoint_id=` replace or merge Proxmox guest config tags via `config.put(tags=...)`. Reuses `_gate` from `proxmox_actions` and tag helpers from `routes/intent/vm_tags.py`. Body: replace `{ "node", "tags" }`; merge `{ "node", "add"?, "remove"? }`.
 - **High-Availability** (`routes/proxmox/ha.py`, `/proxmox/cluster/ha/*`): status, resources, groups, rules, summary, disarm, arm, manager-status, CRS config.
 - **Firewall** (`routes/proxmox/firewall.py`, `/proxmox/firewall/*`): datacenter, node, and VM-level rules, security groups, IP sets, aliases, and options. Write endpoints gated by `allow_writes`.
 - **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): controllers, zones, VNets, VNet subnets, fabrics, route-maps, prefix-lists, node runtime rows, read-only `create/stream` NetBox reconciliation, and optional `netbox_bgp` projection when `sync_mode_sdn_bgp` is enabled. Unsupported older clusters and missing optional BGP plugin APIs are skipped with warnings instead of failing the stream.
 - **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
 - **Service monitoring** (`routes/proxmox/services.py`, `/proxmox/services/*`): `GET /proxmox/services/systemd` reads systemd unit status (`Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `MainPID`, `ExecMainCode`, `ExecMainStatus`, `NRestarts`, `ActiveEnterTimestamp`, `UnitFileState`) for a Proxmox endpoint over SSH, using the endpoint's own registered SSH credential (agentless — no Proxmox-side agent required). Gated on: NetBox `ProxmoxEndpoint` enabled, `service_monitoring_enabled`, `allow_writes`, `access_methods=api_ssh`, complete SSH credentials, and netbox-rpc not disabled for the endpoint. Bounded 10s SSH command timeout; unit names are validated (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, no `..`, ≤100 chars, ≤32 units/request) and `shlex.quote`'d as defense in depth before the fixed-argv `systemctl show` command runs. `reachable=False` (SSH unreachable) is returned as HTTP 200 — a legitimate monitoring result — while unknown endpoint id / missing or disabled SSH credential / malformed unit request surface as 4xx. Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure, not meant to be called directly by end users. See `routes/proxmox/CLAUDE.md`.
-- **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, an enabled `ProxmoxEndpoint`, both `allow_writes=True` and the separate default-off `allow_packer_template_builds=True` capability, `access_methods="api_ssh"`, and a complete persisted endpoint/node SSH binding. Host, user, port, key path, and host fingerprint are derived from that row, caller mismatches fail, and the exact scanned server key is fingerprint-verified before strict OpenSSH execution. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the NMS route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
-- **Cloud Image Pipeline hardening**: derive snippet/storage readiness from the resolved provider; all providers stage in randomized private `/var/tmp` directories, while ISO/snippet destinations use exact `pvesm path` volume IDs. Source builds use server-owned root-verified recipes, canonical roots, and fixed root-contained artifacts; caller paths are assertions only. Encode generated file content rather than interpolating it into shell delimiters, preserve omitted-storage `local-lvm`, reject explicit-null endpoint `ssh_port`, and isolate `/usr/bin/ssh` from ambient config/proxies. Request-validation 422 responses must never reflect Pydantic input or cloud-image secrets. SSH normalization lives in route-neutral `schemas/cloud_image_security.py` to keep imports acyclic.
+- **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the NMS route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
 - **Intent** (`routes/intent/`, `/intent/*`): plan, apply, deletion-requests, tag/untag pending-deletion.
 - **SSH Terminal** (`routes/ssh_terminal.py`, `/ssh/*`): `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges the PTY. `GET /ssh/host-key-fingerprint?host=&port=` scans a host's SSH key (no auth — public key only) and returns its canonical `SHA256:<base64>` fingerprint for pinned-fingerprint auto-fill in the NetBox plugin; the scan mirrors the terminal connect args so the value matches what the session later verifies. The terminal's `endpoint_id` is the **NetBox-side** `ProxmoxEndpoint` id, not the proxbox-api SQLite id, so the per-endpoint SSH access-method gate (`access_methods=api_ssh`) for the terminal is enforced in the `netbox-proxbox` plugin at the SSH-credential-serving endpoint — this route is intentionally not SQLite-gated. `POST /ssh/sessions` also accepts an **optional `one_shot_credential`** object (`username`, `port`, `known_host_fingerprint`, `password?`, `private_key?`) for **one-shot (unstored) sessions**: the NetBox plugin supplies inline credentials the operator typed into the Terminal modal for a single connection. The material lives only in the in-memory `TerminalSession` for the ticket TTL, is redacted from `repr()`/logs, and is **never persisted** — `fetch_terminal_credential` builds the credential from it and skips the netbox-proxbox stored-credential fetch entirely (the shared `hardware_discovery.fetch_credential` used by background discovery is untouched). A pinned `known_host_fingerprint` remains mandatory (an empty fingerprint canonicalizes to `SHA256:` and never matches). The field is additive/optional; older callers that omit it are unaffected. Requests without inline creds still fetch stored `NodeSSHCredential` / endpoint-fallback credentials as before.
-- **Packer preflight + response privacy** (`POST /cloud/templates/images/preflight`): v1 resolves the exact enabled persisted `endpoint_id` to exactly one database-backed minimal session (never first-session fallback or broad post-connect discovery), then uses GET-only node/storage/VMID checks and remains available with `allow_writes=False`. VMID authority is `cluster/nextid?vmid=`; resource enumeration is supplemental. Malformed collections and absent storage health state fail closed as `unsupported`; normalized readiness requires ISO `image_storage` only for `proxmox_iso`, VM `images`, and conditional `snippets`, while `content=import` is only the separate `download-url` POST request value. Executable approvals use a domain-separated HMAC `recipe_digest`, not a raw script hash; the signed five-minute plan uses a separate keyed endpoint-configuration binding and covers target/storage/VMID/recipe state. Execution reruns preflight, authoritatively refreshes and revalidates endpoint authority before leasing, consumes the plan once, acquires a durable unique target blocker, then rechecks enabled/broad/narrow and the signed endpoint digest after host-key pinning immediately before spawning SSH. A final denial durably fails the consumed operation. SSH identities are `O_NOFOLLOW`/`fstat`-verified root/service-owned private regular files inherited through `/proc/self/fd`, closing pathname-swap races. Repeated cancellation cannot interrupt mandatory local/remote cleanup, journal persistence, or session close. Completion/cancel updates use compare-and-swap ordering, and `completed` requires final API artifact verification. Recovery, cancellation, unknown state, and expiry preserve `lease_key` as `recovery_required` until a future explicit reconciliation flow; no destructive recovery is exposed here. Findings are fixed `{code,severity,target,message}` objects and session/upstream exceptions never reach responses or logs. `POST /cloud/templates/images` returns secret-safe response v2: URLs, cloud-init, scripts, commands, stdout, and stderr are omitted by default and during execution; unexpected execution/direct-SDK errors are normalized to fixed diagnostics and type-only logs. Raw material is available only under the explicitly sensitive preview with `execute=false` plus `include_sensitive_preview=true`. Preflight v1 and build response v2 are supported through `0.0.21.x`; `storage` remains an input-only alias of `vm_storage` during that window, and a breaking replacement is no earlier than `0.0.22.0`. See `routes/cloud/CLAUDE.md` and `docs/architecture/overview.md` for lifecycle evidence.
-- **Cloud Image consumer rollout hold**: the checked-in netbox-packer-shaped fixture is producer-owned compatibility intent, not downstream validation. Keep `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION` unset/false until a compatible netbox-packer release with endpoint-bound authorization is deployed and validated against the released proxbox-api contract; planning and GET-only preflight remain available, and enabling execution does not replace either endpoint write gate.
 - **Transport access method** (`ProxmoxEndpoint.access_methods`, enum `proxbox_api/enum/proxmox.py::ProxmoxAccessMethod`): per-endpoint axis orthogonal to `allow_writes`. `api` (default, new endpoints) = Read+Write over API only; `api_ssh` = API + SSH. SSH-only is unrepresentable (two-value enum; create/update reject any other value with 422). Existing rows are backfilled to `api_ssh` on upgrade (non-breaking). Gates proxbox-api's own SQLite-id SSH paths (Cloud Image Build Pipeline, Azure VHD import) via `routes/proxmox/access_gate.py`. The value is pushed from the NetBox plugin and accepted on `POST/PUT /proxmox/endpoints`.
-- **Packer template-build capability** (`ProxmoxEndpoint.allow_packer_template_builds`): default-off, persisted and exposed by endpoint CRUD, with legacy SQLite rows repaired to false. It authorizes only `/cloud/templates/images` writes and remains subordinate to `allow_writes`. Pipeline gate order is broad write → narrow packer → SSH; direct SDK builds require the first two. The signed endpoint-configuration binding covers the narrow value. Pipeline execution rechecks broad then narrow on its authoritative post-preflight refresh before leasing and rechecks enabled/broad/narrow plus that signed digest after host-key pinning immediately before SSH. Direct SDK execution resolves enabled authority before session creation and refreshes both gates plus the original endpoint digest before image download/import, VM creation, and template conversion. A denial returns stable reason `packer_template_builds_disabled_for_endpoint` before side effects; GET-only planning/preflight remains available.
 - **Extras custom fields** (`routes/extras/`, `/extras/*`): legacy Proxbox reflection custom fields are deprecated and gated by `custom_fields_enabled` (default `false`), so typed `Proxbox*SyncState` sidecars are the standard source of truth. `POST /extras/custom-fields/reconcile` and legacy `GET /extras/extras/custom-fields/create` are no-ops unless the flag is enabled; when enabled, they reconcile from the canonical inventory in `services/custom_fields.py`, bypass the process-local cache, and emit deprecation warnings. `GET /extras/bootstrap-status` exposes startup bootstrap warnings.
-- **VM role ownership invariant**: `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id` is the durable DeviceRole ownership snapshot. A verified-missing snapshot preserves and captures an existing role; an unavailable, failed, or conflicting read preserves the role without claiming ownership; a current role that differs from its snapshot is an operator edit and remains untouched when `overwrite_vm_role=false`; a still-managed role may roll forward with a changed default. Full/bulk dispatch applies this after the Python/Rust queue seam, and individual/adoption paths use the same truth table. Persist snapshots only after successful VM reconciliation and retry required writes three times. After an exhausted response, authoritatively re-read the typed snapshot: accept a confirmed commit, otherwise restore and verify both the previous role and previous snapshot before surfacing VM failure. This prevents response loss from inventing an operator lock. Use the deprecated same-named custom field only as an enabled transition fallback.
-- **NetBox sync-dependency bootstrap** (`dependencies.py::ensure_netbox_sync_dependencies` -> `services/netbox_bootstrap.py::run_netbox_bootstrap`): every stage route that writes NetBox objects reconciles Proxbox's NetBox-side support objects (tag, cluster type, manufacturer, generic device type, device role, VM roles, VM types, custom-field inventory) before its first write. Declared as a **route-level** `dependencies=[Depends(...)]` entry, never as a handler parameter — FastAPI solves route-level dependencies ahead of the path operation's own parameters, and that ordering is the whole point. Covers `/dcim/devices/create[/stream]`, `/virtualization/virtual-machines/storage/create[/stream]`, `/virtualization/virtual-machines/create[/stream]`, `/virtualization/virtual-machines/{netbox_vm_id}/create[/stream]`, and `/full-update[/stream]`. The device and storage routes are the ones the plugin's stage order reaches first on a fresh install (`_SYNC_STAGE_ORDER` = devices, storage, …); missing the bootstrap there made NetBox reject every write with `Custom field 'proxmox_last_updated' does not exist for this object type` and surfaced only misleading downstream `field is required` errors. The startup bootstrap does not cover it, because on a fresh install no NetBox endpoint exists at process start and the pass is skipped. A failed reconcile raises `custom_field_sync_failed` whose `failed_fields` entries carry `expected_type`, `expected_object_types`, and an actionable `remedy` (NetBox refuses custom-field type changes, so a wrong-typed pre-existing field must be deleted and recreated — which discards its stored values). `describe_custom_field_failure()` carries the same guidance into `run_netbox_bootstrap()`'s `BootstrapStatus.warnings` (and its log line), which is the path an operator actually reads. The exception message names every failed field but quotes each distinct remedy at most once, capped at three, and says how many it withheld — the complete set is always in `detail.failed_fields`. New NetBox-writing routes must add the dependency and extend `tests/test_stage_route_bootstrap.py`.
-- **VM description/comments derivation** (`proxmox_to_netbox/description_metadata.py::derive_description_and_comments`): the Proxmox VM note is the NetBox `description`; `Synced from Proxmox node {node}` is only the fallback for an absent, blank, or fence-only note. First non-empty line becomes `description`, truncated to NetBox's 200-char single-line limit with a visible `…` marker; the complete note goes to `comments`, but only when it carries more than the description does (multi-line, or a truncated first line). `netbox-metadata` fences are stripped **unconditionally** — independent of `parse_description_metadata`, which governs only the fenced block's PK overrides. Both fields ride the existing `overwrite_vm_description` gate in `_compute_vm_patchable_fields()`, and `comments` is in `normalize_current_virtual_machine_payload()` so the reconciler diff can see the current value (without it the field would be write-once at creation). All three VM payload builders — `models.py::as_netbox_create_body`, `services/sync/individual/vm_sync.py::_build_netbox_vm_payload`, and `services/sync/virtual_machines.py::build_netbox_virtual_machine_payload` — must call the shared helper; three private copies of this rule is how they previously came to behave three different ways. Contract: `tests/test_vm_description_preservation.py`.
-- **VM platform from the guest OS** (`proxmox_to_netbox/guest_os.py`, `services/sync/vm_create.py::ensure_vm_platform`, `services/netbox_writers.py::upsert_platform`): NetBox `virtualization.VirtualMachine.platform` is populated from Proxmox guest-OS data. Tier 1 is a declarative `ostype` -> (name, slug) table and costs nothing — `ostype` is already in the fetched config; unknown/absent leaves the field unset rather than guessing. Tier 2 is the QEMU guest agent's `get-osinfo`, gated by the `sync_vm_platform_from_guest_agent` behavior flag (default **false**, one extra Proxmox request per VM) **and** by eligibility the sync already knows — QEMU, running, `agent` enabled — so no request is wasted on a guest that cannot answer. The refined name is `name` + `version-id`, **never** `pretty-name`, which embeds the patch level and would mint a platform per minor update. Platforms are matched/created by slug through `upsert_platform`, which is **create-only** (`patchable_fields=set()`): an existing platform is referenced as-is and never renamed, re-described, or re-tagged, because a record named `Ubuntu 22.04` very plausibly predates the sync and belongs to the operator. Every degradation path (request failure, timeout, non-dict payload, missing/wrong-typed keys, oversized strings) falls back to the tier-1 value and raises nothing — `ensure_vm_platform()` is total by contract, because a blank inventory field must never cost a VM its sync. Platform is set **at VM creation only** and never patched afterwards — Proxbox has never owned this field, so an operator may have assigned it by hand. There is deliberately **no `overwrite_vm_platform` flag**: the `overwrite_*` set is a CI-enforced cross-repo contract (`contracts/overwrite_flags.json` + the plugin's `constants.OVERWRITE_FIELDS`, checked by `tests/test_overwrite_flags_contract.py`) that must change in both repos in the same release, along with the plugin's settings model and per-endpoint override column. Do not add a backend-only flag to work around that; `tests/test_vm_platform_from_guest_os.py` asserts the flag's absence so the shortcut fails fast. Contract: `tests/test_vm_platform_from_guest_os.py`.
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
 - **Optional sidecars** (conditionally mounted): `/pbs/*`, `/ceph/*`, `/pdm/*` when the corresponding `proxmox-sdk` extras are installed and `PROXBOX_FEATURES` includes them.
 
@@ -265,18 +204,13 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 
 Branch-tier deploys are Gitea-first. A push to Gitea `develop` deploys the
 staging backend at `https://staging.backend.proxbox.nmulti.cloud` via
-`proxbox-api-staging`. Production is an NMS-dispatched manual workflow on
-canonical `main`, using `latest_package` by default or `main_branch` only as an
-explicit override. The fixed root-owned package helper builds from the exact
-manifest-bound sdist and emits schema-2 evidence only after health, installed
-version, and active image identity are proven. Workflow code may export and
-publish that receipt but cannot construct production evidence itself.
+`proxbox-api-staging`. A push to Gitea `main` deploys production at
+`https://backend.proxbox.nmulti.cloud` via `proxbox-api`.
 
 The workflow resolves the app from the triggering branch and calls:
 
 ```bash
-/opt/nmulticloud/deploy/bin/deploy-app-package \
-  proxbox-api "$PACKAGE_VERSION" "$GITHUB_RUN_ID"
+ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
 ```
 
 The production host is `10.0.30.207`. Deploy host state is kept outside the
@@ -287,12 +221,6 @@ repository under `/opt/nmulticloud/deploy`:
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
 - Runtime secrets: `/etc/nms/proxbox-api-production.env`
 - SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
-- SQLite schema bootstrap is process-safe: all Uvicorn workers serialize the
-  WAL/write probe, `create_all()`, auth-lockout validation, and every migration
-  through the adjacent `database.db.startup.lock` advisory lock (each ready
-  worker then holds a shared `database.db.runtime.lock` lease). The lock files
-  carry no state and are kernel-released on worker exit; they must share the
-  SQLite filesystem.
 - Staging compose project: `nmc-proxbox-api-staging`
 - Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
 - Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`
@@ -331,11 +259,10 @@ while the Docker container is healthy on port `18800`.
 ## Entry Points
 
 - ASGI app: `proxbox_api.main:app`
-- Typical server command: `uvicorn proxbox_api.main:app --no-proxy-headers --host 0.0.0.0 --port 8000`
+- Typical server command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000`
 - Docker entrypoint: the `Dockerfile` uses the same app module path.
 - CLI: `proxbox-proxmox-codegen` (`proxbox_api.proxmox_codegen.cli:main`) — Proxmox crawler/generator pipeline.
 - CLI: `proxbox-schema` (`proxbox_api.schema_cli:main`) — list, status, and generate NetBox-versioned schema artifacts.
-- CLI: `proxbox-auth-lockout` (`proxbox_api.auth_lockout_cli:main`) — local secret-safe lockout inspection and recovery that does not traverse HTTP auth.
 - Smoke tests live under `tests/` (for example `tests/test_main_smoke.py` and `tests/test_endpoint_crud.py`)
 
 ## Dependencies
@@ -359,15 +286,7 @@ resolves **env var (override) → `ProxboxPluginSettings` → built-in default**
 
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
-`PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`,
-`PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`,
-`PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`,
-`PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`,
-`PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`,
-`PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`,
-`PROXBOX_AUTH_MAX_ACTIVE_KEYS`,
-`PROXBOX_AUTH_LOCKOUT_HMAC_KEY`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`,
-`PROXBOX_TRUSTED_PROXIES`,
+`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_CORS_EXTRA_ORIGINS`, `PROXBOX_SSH_KEY_DIR`. Anything that controls sync behavior, batching,
@@ -383,21 +302,8 @@ the `netbox-proxbox` side, do all five — the existing fields in
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
 - `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
-- `PROXBOX_DATABASE_PATH`: optional absolute SQLite database path. Outside containers the default is `$XDG_DATA_HOME/proxbox/database.db` or `~/.local/share/proxbox/database.db`; published images provide an internal `/data/database.db` fallback without populating this operator variable, so a custom `DATABASE_URL` works alone. Production systemd deployments should set `/var/lib/proxbox-api/database.db` and grant the service account write/search permission on its parent. Relative paths are refused; there is no current-working-directory fallback. Startup requires WAL and serializes the complete schema boundary with a sibling advisory lock.
-- `DATABASE_URL`: compatibility input for an absolute local `sqlite`, `sqlite+pysqlite`, or `sqlite+aiosqlite` URL. In-memory/relative/non-SQLite URLs, URL credentials, every raw `?` delimiter/query, and conflicting dual configuration are fatal. When both database variables are set, their normalized paths must match. See `docs/operations/database.md`.
-- `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`: security-sensitive exact-value `1` override for one audited startup of a deliberately fresh target while a legacy implicit database remains. Stop all workers, set exact `UVICORN_WORKERS=1`, isolate traffic, register the first API key, preserve the path-rendered warning and durable marker, then remove the override and restore normal workers. Multi-worker/unspecified recovery is rejected before writes. Never delete the marker to re-arm bootstrap.
+- `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Default is `/data/database.db` (a Docker volume mount point). Docker volumes should be mounted at `/data` to persist the database across container restarts and image upgrades. Production deployments can override this to `/var/lib/proxbox-api/database.db` if needed.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 300). Read at app construction.
-- `PROXBOX_AUTH_LOCKOUT_THRESHOLD`: failed attempts per composite source/credential bucket (default 5, validated range 1-100). Read before NetBox bootstrap.
-- `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`: failed attempts across rotating credentials for one normalized source (default 50, validated range 1-100000). Read before NetBox bootstrap.
-- `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`: fixed lockout window (default 300 seconds, validated range 1-86400). Read before NetBox bootstrap.
-- `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`: maximum durable failure rows (default 10000, validated range 2-1000000), split into independent credential/source partitions. Missing-key failures allocate only source rows. Admission always uses the normal per-source/global verification pool and does not depend on a free failure row. At saturation, the stalest safe expired row is evicted first; an unpersistable rejection fails closed and advances bounded aggregate accounting.
-- `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`: separate per-bucket bcrypt verification concurrency (default 32, validated range 1-1024). Exhaustion is transient capacity pressure, never a failed attempt or lockout.
-- `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`: shared global bcrypt verification concurrency across all workers/identities (default 256, validated range 1-4096). It prevents high-cardinality source/key pairs from bypassing resource control.
-- `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`: absolute lifetime of one admitted bcrypt verifier (default 180 seconds, validated range 0.1-3600). Heartbeats cap `expires_at` at the persisted deadline. Capacity is reclaimable at the deadline and any later result is discarded without changing lockout state; Python threads cannot preempt the underlying bcrypt call, so residual CPU work may continue until it returns.
-- `PROXBOX_AUTH_MAX_ACTIVE_KEYS`: maximum active API-key hashes examined by one request (default 32, validated range 1-1024). Authenticated create/reactivate calls return `409 active_api_key_limit_reached` rather than crossing it. A legacy over-limit database logs recovery guidance and scans only the oldest bounded set; use one of those keys to deactivate excess rows, or temporarily raise the bound and restart if none is available.
-- `PROXBOX_AUTH_LOCKOUT_HMAC_KEY`: optional explicit secret (minimum 32 bytes) used for opaque lockout identities. When absent, proxbox-api atomically creates a private sibling key file so clean environments still start safely.
-- `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`: optional identity-key path; defaults beside the SQLite database as `<database>.auth-lockout.key`. It must share durable storage with the database and have no group/other permissions. The database binds its non-secret fingerprint and startup pins the verified material in memory; loss/replacement is fatal on restart and post-start file mutation does not change live identities. Use the documented offline `rebind-key` procedure for deliberate recovery.
-- `PROXBOX_TRUSTED_PROXIES`: comma-separated explicit proxy CIDRs allowed to supply `X-Forwarded-For`. Empty trusts no caller in raw/Granian deployments or when the nginx image is launched with a custom command; invalid entries fail startup. Only the bundled nginx/supervisor topology prepends its protected `127.0.0.1/32` Uvicorn hop. External proxy deployments must list exact proxy peer CIDRs and keep the application port private. Uvicorn/FastAPI entrypoints must use `--no-proxy-headers` so the application resolves trust from the real transport peer.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
 - `PROXBOX_STRICT_STARTUP`: turns generated-route startup failures into fatal startup errors.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
@@ -405,7 +311,7 @@ the `netbox-proxbox` side, do all five — the existing fields in
 - `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. Resolution order: env var > `ProxboxPluginSettings.encryption_key` (configurable from the NetBox plugin settings page) > local key file (default `<repo_root>/data/encryption.key`, managed via the `/admin/encryption/*` endpoints) > none. Startup never aborts; instead, when no key is configured, **credential writes are refused at the write sink** (`encrypt_value`) unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` is set — a deny-by-default guard that keeps the service running (reads and non-credential writes work) while preventing silent plaintext secret storage.
 - `PROXBOX_ENCRYPTION_KEY_FILE`: optional override for the local key file path used when neither the env var nor the plugin settings provide a key. Defaults to `<repo_root>/data/encryption.key`.
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: explicit opt-in for plaintext credential storage. With no encryption key configured, credential **writes** (endpoint create/update that store a secret) are refused unless this is set to `1`/`true`/`yes`; reads and the rest of the service keep working. Use only in dev/tests.
-- `PROXBOX_SSH_KEY_DIR`: directory prefix for private keys accepted in the persisted Cloud Image Pipeline endpoint/node binding (`ssh_identity_file`). Defaults to `/etc/proxbox/ssh_keys`; persisted paths must resolve under this directory before strict pinned-host-key SSH execution is constructed. Caller request fields are assertions only and cannot select another identity.
+- `PROXBOX_SSH_KEY_DIR`: directory prefix for private keys accepted by Cloud Image Build Pipeline remote execution (`ssh_identity_file`). Defaults to `/etc/proxbox/ssh_keys`; request paths must resolve under this directory before `ssh -i` is constructed.
 - `PROXBOX_LOG_LEVEL`: console log verbosity (default `INFO`). Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Controls only the console handler; the in-memory buffer always receives DEBUG+ and the rotating file handler always writes WARNING+. Setting `DEBUG` also enables full `netbox_sdk.client` per-request tracing which is suppressed at all other levels to prevent INFO-level flooding.
 ### Plugin-managed (env override optional, defaults shown)
 
@@ -420,7 +326,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `proxbox_fetch_max_concurrency` | 8 |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 (4 in task-history) |
-| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in snapshots) |
+| `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in task-history/snapshots) |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `backup_batch_size` | 5 |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `backup_batch_delay_ms` | 200 ms |
 | `PROXBOX_BULK_BATCH_SIZE` | `bulk_batch_size` | 50 |
@@ -436,44 +342,6 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
 | `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `custom_fields_request_delay` | 0.0 s |
 | n/a | `custom_fields_enabled` | false (deprecated legacy reflection custom fields; sidecars are standard. No env override.) |
-| n/a | `hardware_discovery_sync_nic_macs` | false (plugin-only; requires `hardware_discovery_enabled=true`; missing/older plugin field is false.) |
-
-### Task-history sync ownership
-
-VM create routes expose `sync_task_history` with a backward-compatible default
-of `true`. Standalone and targeted VM syncs run one task-history aggregate after
-the successful VM IDs are known. Full-update is the single-owner exception: it
-passes `sync_task_history=false` into its VM stage, then runs the dedicated
-task-history stage exactly once. Deploy this backend behavior before changing an
-orchestrating plugin to send `false`; older callers that omit the flag continue
-to work.
-
-The task-history service walks each selected Proxmox node archive with
-`start`/`limit=500` pagination and one fixed `until`, under one global fetch
-semaphore. It loads the typed VM sync-state sidecar once and treats its endpoint,
-cluster, VMID, and VM type as authoritative. A present malformed/duplicate
-sidecar for a relevant VM fails closed; successful estate scans skip genuinely
-unmanaged VMs, while explicitly selected VMs without identity remain fatal.
-Legacy custom-field identity is used only for an absent or unreadable sidecar
-when `custom_fields_enabled=true`. Selected NetBox IDs are deduplicated and sent
-in bounded groups of 100 using repeated `id` values, as required by NetBox's
-`MultiValueNumberFilter`. The service deduplicates UPIDs and performs one NetBox
-bulk reconcile without per-UPID status reads or per-item write fallback. Partial
-collection, missing target scopes, ownership conflicts, and archive no-progress
-guards return `degraded=true`; standalone REST converts that result to HTTP 502
-after retaining reconciled rows, while SSE exposes the degraded phase summary.
-Identity verification failure, unsafe NetBox pagination, VM-list failure, no
-usable nodes, total node failure, or global reconcile failure raises
-`ProxboxException` so REST/SSE cannot report success.
-
-All NetBox list helpers follow the server `next` URL and preserve repeated query
-values. Reject malformed pagination objects/links, empty+next pages, and any
-cross-page record overlap. Exhaustive traversal is bounded at 10,000 pages and
-1,000,000 records; explicit offset/record caps raise HTTP 502 before an
-over-bound request and partial collections are never returned or cached.
-Across VM/backup/snapshot/disk selectors, omitted `netbox_vm_ids` means all,
-while present empty/malformed input is HTTP 422. Resolve valid IDs as repeated
-values in deduplicated chunks of at most 100 and fail closed on lookup errors.
 
 ### VM interface sync strategy
 
@@ -814,12 +682,12 @@ All checks MUST pass before committing.
 
 ## Release Procedure
 
-The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only `push: tags: v*rc*`, `release: published`, and `workflow_dispatch`. The Gitea-first pipeline publishes every candidate/final version privately. RC tags are promoted to GitHub for TestPyPI; a final tag is promoted and published as a GitHub Release only after the NMS package-first production deployment succeeds.
+The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: tags: v*` (RC and final), `release: published`, and `workflow_dispatch`. The **Gitea-first** pipeline (introduced in v0.0.16) uses `.gitea/workflows/publish-gitea.yml` to publish to the Gitea Package Registry, push the tag to GitHub, and create the GitHub release — which fires the `release: published` event and triggers the PyPI publish.
 
 | Trigger | Use for | Publishes to |
 |---------|---------|--------------|
 | `push: tags: v*rc*` (plain Gitea tag push to Gitea mirrored to GitHub) | RC `vX.Y.ZrcN` | TestPyPI via GitHub Actions |
-| `release: published` (operator-created after production validation) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
+| `release: published` (created by `publish-gitea.yml`) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
 | Docker Hub publish | Called after PyPI validation | Docker Hub (raw/nginx/granian images) |
 
 ### Gitea-first release flow (standard — vX.Y.Z)
@@ -828,116 +696,81 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on RC-only
    ```bash
    uv run ruff check . && uv run python -m compileall proxbox_api tests && uv run pytest tests
    ```
-2. **Merge the reviewed release line to `develop`, then promote the reviewed
-   workflow/source to `main`** on Gitea. The release tag remains bound to the
-   exact green `develop` SHA; the NMS production workflow runs from canonical
-   `main`. Verify both refs explicitly:
+2. **Merge to `main`** on Gitea (normal merge or PR merge). Verify:
    ```bash
-   git log --oneline origin/develop | head -5
    git log --oneline origin/main | head -5
    grep '^version' pyproject.toml
    ```
-3. **Push the reviewed annotated tag to Gitea:**
+3. **Push annotated tag to Gitea:**
    ```bash
    git tag -a vX.Y.Z -m "Release vX.Y.Z"
    git push gitea vX.Y.Z
    ```
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds without publication credentials and uploads the exact six-file
-     `release-control-request` artifact.
-   - Do not merge this target cutover until the private control repository has
-     a positive policy-pinned ID and its protected workflows, host boundaries,
-     sockets, and repository-scoped runners pass readiness. Leave the existing
-     publisher active until then.
-   - Record the first-attempt target run ID and SHA-256 of the canonical
-     `release-request.json`; dispatch `validate.yml` with those values and
-     `repository=proxbox-api`, then dispatch the separate irreversible
-     `publish.yml` with the same three exact inputs.
-   - The control builder verifies/seals the bytes; its isolated publisher uploads
-     the Gitea package and pushes RC tags to GitHub for the RC-only TestPyPI lane.
-   - Final tags are not pushed publicly and do not create a GitHub Release.
-5. **Link and verify the exact Gitea package, then deploy through NMS** with the default `latest_package` source. `main_branch` must remain an explicit operator selection.
-6. **Push the exact final tag to GitHub and create the GitHub Release with
-   `--verify-tag`** only after the production health gate passes. The release
-   event verifies protected deployment evidence and then authorizes the exact
-   Gitea bytes for PyPI and Docker Hub.
-7. **Monitor both CI runs:**
+   - Builds dist, publishes to Gitea Package Registry (`PKG_TOKEN` secret).
+   - Pushes tag to GitHub. This fires `push: tags: v*` on GitHub Actions.
+   - For non-RC tags: creates (or publishes draft) GitHub release, which fires `release: published`.
+   - The PyPI idempotency check in `publish-pypi` handles the `release: published` re-trigger gracefully (skips upload if already on PyPI).
+5. **Monitor both CI runs:**
    ```bash
    gh run list --repo emersonfelipesp/proxbox-api --event push --limit 3
    gh run list --repo emersonfelipesp/proxbox-api --event release --limit 3
    ```
-8. **Verify dist is live on PyPI and Docker Hub:**
+6. **Verify dist is live on PyPI:**
    ```bash
    pip index versions proxbox-api
    ```
-9. **Cleanup**: delete the release branch locally and on both remotes.
+7. **Cleanup**: delete the release branch locally and on both remotes.
 
 ### RC flow (TestPyPI gate)
 
-1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` uploads the data-only control request.
-2. Hash its canonical request; dispatch `validate.yml`, then the separate irreversible `publish.yml`, with exactly `repository=proxbox-api`, the first-attempt target run ID, and that request SHA-256. The control publisher uploads the Gitea package and pushes only that RC tag to GitHub.
-3. GitHub Actions `push: tags: v*rc*` fires → publishes the exact Gitea bytes to TestPyPI → validates.
-4. Fix-forward with `rcN+1` if anything fails.
+1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
+2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
+3. Fix-forward with `rcN+1` if anything fails.
 
-### Publisher recovery
+### Manual fallback (if Gitea Actions unavailable)
 
-If the Gitea publisher fails, fix the workflow through the issue-backed feature
-process and advance to the next immutable `rcN` or `postN`. Do not bypass the
-audited publisher with a local registry upload or push a final tag to GitHub
-before the Gitea package and NMS production gates.
+If Gitea Actions tag triggers are not operational on this instance (Gitea 1.26.2 limitation — confirm with `git.nmulti.cloud` admin), use the following direct-upload path:
 
-The target workflow uses the runner image's exact Python 3.12.14 and uv 0.12.5
-after verifying the baked interpreter/tool versions, the policy-pinned
-`uv.lock` digest, and build-lock checksum manifests for the read-only publish
-and CPython 3.13 musllinux runtime wheelhouses. Dependency resolution is
-offline (`--no-index`, no Python downloads). Trusted outer steps use
-image-baked Gitea checkout and artifact clients, so their only network
-authority is same-origin Gitea access. Required GitHub CI independently reproduces
-that real CPython 3.13 musllinux wheelhouse, safely extracts and rehashes the
-release sdist, permits only two literal pinned base images and declared-stage
-`COPY --from` sources, and builds the extracted Docker context with preloaded
-exact bases and networking disabled. The Gitea tag gate requires that exact
-successful first-attempt GitHub job on the same canonical `develop` SHA. It
-emits only a canonical six-file request,
-including the external supervisor's completion statement and detached signature.
-That signed statement binds the supervisor-derived repository-registration
-scope digest and must equal the pinned acceptance record. The workflow
-holds no publication credential. The separate locked control plane verifies the
-policy-pinned target workflow, run identity, completion signature, request,
-manifest, and artifacts;
-its builder seals the bytes and only its isolated publisher can read credentials
-or invoke fixed digest-locked publication tooling. Public no-authority downloads
-must match before its durable ledger completes. Public TestPyPI/PyPI upload jobs run separately on fresh
-GitHub-hosted `ubuntu-latest` runners, install the locked publisher group with
-`--no-install-project`, and likewise pass credentials only through `TWINE_*`.
+```bash
+# Build and publish to Gitea registry directly
+uv build
+uv run --with twine twine upload \
+  --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
+  --username emersonfelipesp --password $PKG_TOKEN \
+  --non-interactive dist/*
+
+# Push tag directly to GitHub (fires push: tags: v* on GitHub Actions)
+git push origin vX.Y.Z
+
+# Watch the tag-push publish run
+gh run watch <run-id> --repo emersonfelipesp/proxbox-api
+
+# Then create the GitHub release manually
+gh release create vX.Y.Z --repo emersonfelipesp/proxbox-api --title vX.Y.Z --generate-notes
+# The release: published run will fire; the PyPI idempotency check will skip the upload (already done)
+```
+
+Note: `PKG_TOKEN` is the secret name for Gitea package uploads. The `GITEA_` prefix is reserved by Gitea Actions and cannot be used as a secret name.
 
 ### What was done for v0.0.16
-
-The bullets below are historical evidence only. They describe the former
-publisher and must not be used as the current release procedure.
 
 - Bumped versions, merged to main on Gitea.
 - Pushed tag `v0.0.16` to Gitea. `publish-gitea.yml` was present but Gitea 1.26.2 tag triggers were not fully operational at time of release.
 - Manual fallback path was used: built dist locally, uploaded to Gitea registry directly, pushed tag to GitHub → GitHub Actions `push: tags: v*` fired → proxbox-api 0.0.16 published to PyPI.
 - GitHub draft release `v0.0.16` was created in a prior session but left as Draft. One-time cleanup: `gh release edit v0.0.16 --repo emersonfelipesp/proxbox-api --draft=false`.
-- `release: published` re-triggered the former workflow, whose historical PyPI
-  existence check skipped the duplicate upload. Current releases fail closed
-  on consumed versions and fix forward.
+- `release: published` re-triggered the workflow; the new PyPI idempotency check (added in this PR) skips the upload cleanly.
 - Paired plugin: `netbox-proxbox 0.0.22`.
 
 ### What was done for v0.0.17.post2
 
 - Root cause: the published `0.0.17.post1` (PyPI, tag `ac0514a`) shipped `proxmox-sdk==0.0.11.post1` / `netbox-sdk==0.0.9.post1`. Four commits then landed on `main` re-pinning the SDKs to `proxmox-sdk==0.0.11.post2` / `netbox-sdk==0.0.9.post2` and adding independent IP/MAC gating to the inline + standalone VM-interface sync streams, but the `version` field stayed at `0.0.17.post1` — already immutable on PyPI.
 - Fix-forward to `0.0.17.post2` (PEP 440; never republish `post1`) carrying the validated `.post2` SDK pins and the IP/MAC gating fix. Bumped `pyproject.toml` + `uv.lock`, updated the pairing line.
-- Historical release note: `v0.0.17.post2` used the former publisher that pushed
-  final tags and created the GitHub Release automatically. Current releases use
-  the package-first NMS gate documented above; this legacy behavior must not be
-  copied into a new release.
+- Released via the standard Gitea-first flow: tag `v0.0.17.post2` pushed to Gitea → `publish-gitea.yml` publishes to the Gitea registry, pushes the tag to GitHub, and creates the GitHub release → GitHub Actions publishes to PyPI (idempotency check absorbs the `release: published` re-trigger).
 - Paired plugin: `netbox-proxbox 0.0.20.post1`.
 
 ### Don't
 
-- Don't add `twine --skip-existing` or a PyPI existence-skip path. Existing
-  versions fail closed; fix forward with `.postN` per PEP 440.
+- Don't add `twine --skip-existing`. The `publish-pypi` job has a PyPI existence pre-check; fix forward with `.postN` per PEP 440 for new versions.
 - Don't force-push a published tag. Tags on the remote are immutable.
 - Don't create a GitHub release before Gitea Actions has pushed the tag — the release `--target` branch needs the tag commit reachable.
