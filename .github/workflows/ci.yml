@@ -919,7 +919,10 @@ jobs:
               raise SystemExit(f"NetBox status check failed: {payload}")
           PY
 
-      - name: Create Proxbox custom fields in NetBox
+      - name: Reconcile Proxbox custom fields in NetBox
+        # Smoke-checks the legacy extras route. It is a documented no-op while
+        # custom_fields_enabled=false (the default), so the E2E writes must not
+        # depend on these definitions existing.
         run: |
           set -eux
           PROXBOX_API_KEY="proxbox-e2e-api-key-proxbox-e2e-api-key-1234567890"
