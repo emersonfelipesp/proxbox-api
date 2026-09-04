@@ -21,6 +21,7 @@ class PreparedVMState:
     lookup: dict[str, object]
     now: datetime
     vm_type: str
+    sync_state_fields: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

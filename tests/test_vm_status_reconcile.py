@@ -72,7 +72,6 @@ def test_offline_vm_turning_active_produces_a_status_diff():
         "name": "node57-k8s",
         # As returned by NetBox's REST API for a choice field.
         "status": {"value": "offline", "label": "Offline"},
-        "custom_fields": {"proxmox_vm_id": 254},
     }
     current = normalize_current_virtual_machine_payload(existing_record)
     current_status = ProxmoxToNetBoxVMStatus.from_proxmox(current["status"]).value

@@ -96,8 +96,6 @@ PROTECTED_ROUTES: list[tuple[str, str]] = [
     ("GET", "/clear-cache"),
     ("GET", "/ceph/status"),
     ("GET", "/dcim/devices"),
-    ("GET", "/extras/extras/custom-fields/create"),
-    ("POST", "/extras/custom-fields/reconcile"),
     ("GET", "/extras/bootstrap-status"),
     ("POST", "/intent/apply"),
     ("GET", "/netbox/status"),

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
-from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
 from proxbox_api.services.sync.sync_state_reader import load_vm_sync_state_identities
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
@@ -119,16 +118,13 @@ def _overlay_selected_sidecar_identity(
         )
 
     hydrated = dict(vm)
-    custom_fields = vm.get("custom_fields")
-    hydrated_custom_fields = dict(custom_fields) if isinstance(custom_fields, dict) else {}
-    hydrated_custom_fields.update(
+    hydrated.update(
         {
             "proxmox_endpoint_id": endpoint_id,
             "proxmox_vm_id": vmid,
             "proxmox_vm_type": vm_type,
         }
     )
-    hydrated["custom_fields"] = hydrated_custom_fields
     cluster = vm.get("cluster")
     cluster_id = relation_id(cluster)
     hydrated["cluster"] = {
@@ -142,7 +138,6 @@ def _hydrate_selected_vm_identity(
     vm: dict[str, object],
     *,
     sidecars_by_vm_id: dict[int, list[dict[str, object]]],
-    legacy_fallback_allowed: bool,
 ) -> dict[str, object]:
     netbox_id = relation_id(vm.get("id"))
     if netbox_id is None:
@@ -159,13 +154,7 @@ def _hydrate_selected_vm_identity(
             candidates[0],
             netbox_id=netbox_id,
         )
-    if legacy_fallback_allowed:
-        warn_legacy_custom_fields("selected VM ownership fallback")
-        return vm
-    raise _selection_error(
-        f"NetBox VM id {netbox_id} has no typed Proxbox sync-state owner "
-        "and legacy custom-field fallback is disabled."
-    )
+    raise _selection_error(f"NetBox VM id {netbox_id} has no typed Proxbox sync-state owner.")
 
 
 async def _hydrate_selected_sidecar_identities(
@@ -179,11 +168,7 @@ async def _hydrate_selected_sidecar_identities(
         return vms
 
     scan = await load_vm_sync_state_identities(netbox_session)
-    legacy_fallback_allowed = custom_fields_enabled()
     if scan.sidecar_read_failed or scan.sidecar_unavailable:
-        if legacy_fallback_allowed:
-            warn_legacy_custom_fields("selected VM ownership fallback")
-            return vms
         outcome = "failed" if scan.sidecar_read_failed else "is unavailable"
         raise _selection_error(
             "Typed Proxbox VM sync-state lookup "
@@ -202,10 +187,41 @@ async def _hydrate_selected_sidecar_identities(
         _hydrate_selected_vm_identity(
             vm,
             sidecars_by_vm_id=sidecars_by_vm_id,
-            legacy_fallback_allowed=legacy_fallback_allowed,
         )
         for vm in vms
     ]
+
+
+async def hydrate_vm_identities_from_sidecars(
+    netbox_session: NetBoxSessionDep,
+    vms: list[dict[str, object]],
+    *,
+    require_all: bool,
+) -> list[dict[str, object]]:
+    """Overlay typed ownership state and optionally skip unmanaged VMs."""
+    selected_ids = {vm_id for vm in vms if (vm_id := relation_id(vm.get("id"))) is not None}
+    if not selected_ids:
+        return [] if not require_all else vms
+
+    scan = await load_vm_sync_state_identities(netbox_session)
+    if scan.sidecar_read_failed or scan.sidecar_unavailable:
+        outcome = "failed" if scan.sidecar_read_failed else "is unavailable"
+        raise _selection_error(f"Typed Proxbox VM sync-state lookup {outcome}.")
+
+    sidecars_by_vm_id: dict[int, list[dict[str, object]]] = {}
+    for row in scan.rows:
+        parent_id = relation_id(row.get("virtual_machine"))
+        if parent_id in selected_ids:
+            sidecars_by_vm_id.setdefault(parent_id, []).append(row)
+
+    hydrated: list[dict[str, object]] = []
+    for vm in vms:
+        netbox_id = relation_id(vm.get("id"))
+        candidates = sidecars_by_vm_id.get(netbox_id, []) if netbox_id is not None else []
+        if not candidates and not require_all:
+            continue
+        hydrated.append(_hydrate_selected_vm_identity(vm, sidecars_by_vm_id=sidecars_by_vm_id))
+    return hydrated
 
 
 async def hydrate_selected_vm_identities(
@@ -216,10 +232,14 @@ async def hydrate_selected_vm_identities(
 
     Shared by selection paths outside this module (for example targeted backup
     sync) so every explicit selection resolves ownership sidecar-first with the
-    same malformed/duplicate fail-closed and gated legacy-fallback semantics.
+    same malformed/duplicate fail-closed semantics.
     """
 
-    return await _hydrate_selected_sidecar_identities(netbox_session, vms)
+    return await hydrate_vm_identities_from_sidecars(
+        netbox_session,
+        vms,
+        require_all=True,
+    )
 
 
 def _resolve_selected_owner(

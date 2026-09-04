@@ -33,7 +33,6 @@ from tests.factories.session import make_session, make_settings
 
 _TAG = SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722")
 _PROXBOX_REF = {"id": 7, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}
-_FROZEN_NOW = "2026-04-29T00:00:00+00:00"
 
 
 class _FakeRecord:
@@ -170,12 +169,6 @@ def test_discovery_tag_slug_inventory_covers_all_four_kinds() -> None:
 def empty_netbox(monkeypatch: pytest.MonkeyPatch):
     """NetBox with no cluster yet. Records POST traffic and asserts the
     create payload carries the discovery slug."""
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     posts: list[dict[str, Any]] = []
 
     async def _fake_first(_nb: object, path: str, *, query: dict[str, Any]) -> Any:
@@ -216,14 +209,7 @@ def empty_netbox(monkeypatch: pytest.MonkeyPatch):
         _fake_first,
     )
 
-    import proxbox_api.services.netbox_writers as nw
-
-    nw_original = nw._last_updated_cf
-    nw._last_updated_cf = lambda: {"proxmox_last_updated": _FROZEN_NOW}
-
     yield posts
-
-    nw._last_updated_cf = nw_original
 
 
 @pytest.mark.asyncio
@@ -259,19 +245,12 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     cluster (the baseline matches by-slug after merge) and must keep the
     discovery slug in place.
     """
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     cluster_type_record = _FakeRecord(
         {
             "name": "Cluster",
             "slug": "cluster",
             "description": "Proxmox cluster mode",
             "tags": [_PROXBOX_REF],
-            "custom_fields": {"proxmox_last_updated": _FROZEN_NOW},
         },
         record_id=7,
     )
@@ -289,7 +268,6 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
                     "color": "4caf50",
                 },
             ],
-            "custom_fields": {"proxmox_last_updated": _FROZEN_NOW},
         },
         record_id=42,
     )
@@ -329,14 +307,7 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
         _fake_first,
     )
 
-    import proxbox_api.services.netbox_writers as nw
-
-    nw_original = nw._last_updated_cf
-    nw._last_updated_cf = lambda: {"proxmox_last_updated": _FROZEN_NOW}
-
     yield {"cluster": cluster_record, "cluster_type": cluster_type_record, "posts": posts}
-
-    nw._last_updated_cf = nw_original
 
 
 @pytest.mark.asyncio
@@ -371,19 +342,12 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     """NetBox where the cluster exists from a *previous* proxbox-api version
     that pre-dates the discovery-tag scheme. The contract: an operator-style
     "apply on create only" tag must NOT be retroactively added on resync."""
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     cluster_type_record = _FakeRecord(
         {
             "name": "Cluster",
             "slug": "cluster",
             "description": "Proxmox cluster mode",
             "tags": [_PROXBOX_REF],
-            "custom_fields": {"proxmox_last_updated": _FROZEN_NOW},
         },
         record_id=7,
     )
@@ -393,7 +357,6 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
             "type": {"id": 7, "name": "Cluster", "slug": "cluster"},
             "description": "Proxmox cluster cluster.",
             "tags": [_PROXBOX_REF],
-            "custom_fields": {"proxmox_last_updated": _FROZEN_NOW},
         },
         record_id=42,
     )
@@ -433,14 +396,7 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
         _fake_first,
     )
 
-    import proxbox_api.services.netbox_writers as nw
-
-    nw_original = nw._last_updated_cf
-    nw._last_updated_cf = lambda: {"proxmox_last_updated": _FROZEN_NOW}
-
     yield {"cluster": cluster_record, "posts": posts}
-
-    nw._last_updated_cf = nw_original
 
 
 @pytest.mark.asyncio
@@ -474,12 +430,6 @@ async def test_first_cluster_sync_skips_discovery_tag_when_absent(
     """When bootstrap has NOT created the discovery tag, the first cluster sync
     must still create the cluster — just without stamping the (missing) slug,
     rather than failing with NetBox 'Related object not found'."""
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     posts: list[dict[str, Any]] = []
 
     async def _miss_first(_nb: object, _path: str, *, query: dict[str, Any]) -> Any:
@@ -504,21 +454,14 @@ async def test_first_cluster_sync_skips_discovery_tag_when_absent(
         "proxbox_api.services.sync.individual.cluster_sync.rest_first_async", _miss_first
     )
 
-    import proxbox_api.services.netbox_writers as nw
-
-    nw_original = nw._last_updated_cf
-    nw._last_updated_cf = lambda: {"proxmox_last_updated": _FROZEN_NOW}
-    try:
-        ctx = make_session(
-            nb=object(),
-            px_sessions=[SimpleNamespace(name="lab")],
-            tag=_TAG,
-            settings=make_settings(),
-            operation_id="test-discovery-first-sync-missing-tag",
-        )
-        result = await sync_cluster_individual(ctx, "lab")
-    finally:
-        nw._last_updated_cf = nw_original
+    ctx = make_session(
+        nb=object(),
+        px_sessions=[SimpleNamespace(name="lab")],
+        tag=_TAG,
+        settings=make_settings(),
+        operation_id="test-discovery-first-sync-missing-tag",
+    )
+    result = await sync_cluster_individual(ctx, "lab")
 
     assert result["action"] == "created", result
     cluster_posts = [p for p in posts if p["path"] == "/api/virtualization/clusters/"]

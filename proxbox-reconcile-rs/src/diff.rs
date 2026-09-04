@@ -45,16 +45,6 @@ pub fn apply_overwrite_rules(
     {
         patch.remove("description");
     }
-    if !flags.overwrite_vm_custom_fields
-        && existing_record
-            .get("custom_fields")
-            .and_then(Value::as_object)
-            .map(|custom_fields| !custom_fields.is_empty())
-            .unwrap_or(false)
-    {
-        patch.remove("custom_fields");
-    }
-
     if !flags.overwrite_vm_tags {
         if existing_record
             .get("tags")

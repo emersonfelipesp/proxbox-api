@@ -48,12 +48,9 @@ Per-object synchronization services that sync individual objects from Proxmox to
 `ensure_vm_record()` resolves the NetBox VM for a Proxmox `vmid` scoped by its
 NetBox cluster, because `vmid` is only unique within a single Proxmox cluster.
 Callers pass `cluster_name` (and optionally a pre-resolved `cluster_id`); the
-helper resolves the cluster id by name via
-`resolve_netbox_cluster_id_by_name` (`services/sync/vm_helpers.py`) and queries
-`virtual-machines` with both `cf_proxmox_vm_id` **and** `cluster_id`. If the
-cluster cannot be resolved, it falls back to a vmid-only match **only when it is
-globally unambiguous** (exactly one NetBox VM); an ambiguous vmid is reported as
-not-found instead of being mapped to the wrong cluster's VM. `snapshot_sync`,
+helper resolves ownership through the typed VM sync-state sidecar. Missing,
+incomplete, or ambiguous identity is reported as not found instead of being
+mapped to the wrong cluster's VM. `snapshot_sync`,
 `backup_sync`, and `task_history_sync` route their VM resolution through this
 helper so every individual sync path is cluster-safe.
 

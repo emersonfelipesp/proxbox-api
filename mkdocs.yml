@@ -79,7 +79,7 @@ nav:
       - Scheduler Container: sync/scheduler-container.md
   - Operations:
       - Database: operations/database.md
-      - Custom Field Recovery: operations/custom-fields.md
+      - Custom Field Retirement: operations/custom-fields.md
       - Hardware Discovery: operations/hardware-discovery.md
       - Firecracker Host-Agent Provisioning: operations/firecracker.md
   - Development:

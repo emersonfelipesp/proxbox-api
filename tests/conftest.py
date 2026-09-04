@@ -44,7 +44,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api import database as database_module
 from proxbox_api.database import get_async_session, get_session
-from proxbox_api.main import app
 from proxbox_api.netbox_rest import _reset_netbox_globals
 from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_route_cache,
@@ -54,7 +53,6 @@ from proxbox_api.services.auth_lockout import (
     clear_runtime_auth_lockout_identity_key,
     initialize_auth_lockout_identity_key,
 )
-from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.sync.sync_state_reader import (
     reset_sidecar_reader_availability_cache,
 )
@@ -64,8 +62,11 @@ from proxbox_api.settings_client import invalidate_settings_cache
 # The developer host can have a real legacy /data/database.db. Keep the test
 # process isolated from host control-plane state; dedicated startup tests
 # replace this candidate provider with synthetic paths when exercising the
-# legacy-database guard.
+# legacy-database guard. This must run before importing the application because
+# its factory initializes the database eagerly.
 database_module._legacy_default_database_candidates = tuple
+
+from proxbox_api.main import app  # noqa: E402
 
 _TEST_RUNTIME_DATABASE = Path(os.environ["PROXBOX_DATABASE_PATH"])
 _TEST_RUNTIME_GENERATED_DIR = Path(os.environ["PROXBOX_GENERATED_DIR"])
@@ -162,7 +163,6 @@ def reset_fastapi_state():
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
     _reset_netbox_globals()
-    invalidate_custom_fields_cache()
     invalidate_settings_cache()
     reset_sidecar_reader_availability_cache()
     yield
@@ -171,7 +171,6 @@ def reset_fastapi_state():
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
     _reset_netbox_globals()
-    invalidate_custom_fields_cache()
     invalidate_settings_cache()
     reset_sidecar_reader_availability_cache()
 

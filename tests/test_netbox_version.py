@@ -128,12 +128,6 @@ async def test_create_or_update_vm_uses_legacy_vm_type_payload_before_netbox_46(
         "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
         _skip_vm_sync_state_write,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
 
     await create_or_update_virtual_machine(
         nb,
@@ -161,7 +155,7 @@ async def test_create_or_update_vm_uses_legacy_vm_type_payload_before_netbox_46(
     payload = kwargs["payload"]
     assert payload["role"] == 3
     assert "virtual_machine_type" not in payload
-    assert payload["custom_fields"]["proxmox_vm_type"] == "qemu"
+    assert "custom_fields" not in payload
     assert "virtual_machine_type" not in kwargs["patchable_fields"]
     assert nb.client.calls == [("GET", "/api/status/")]
 
@@ -190,12 +184,6 @@ async def test_create_or_update_vm_ignores_stale_vm_type_id_before_netbox_46(
         "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
         _skip_vm_sync_state_write,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
 
     await create_or_update_virtual_machine(
         nb,
@@ -222,7 +210,7 @@ async def test_create_or_update_vm_ignores_stale_vm_type_id_before_netbox_46(
     payload = captured["kwargs"]["payload"]
     assert payload["role"] == 3
     assert "virtual_machine_type" not in payload
-    assert payload["custom_fields"]["proxmox_vm_type"] == "qemu"
+    assert "custom_fields" not in payload
     assert "virtual_machine_type" not in captured["kwargs"]["patchable_fields"]
     assert nb.client.calls == [("GET", "/api/status/")]
 
@@ -251,12 +239,6 @@ async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
         "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
         _skip_vm_sync_state_write,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
 
     await create_or_update_virtual_machine(
         nb,
@@ -284,7 +266,7 @@ async def test_create_or_update_vm_uses_native_vm_type_payload_on_netbox_46(
     payload = kwargs["payload"]
     assert payload["virtual_machine_type"] == 18
     assert "role" not in payload
-    assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
+    assert "custom_fields" not in payload
     assert "virtual_machine_type" in kwargs["patchable_fields"]
     assert nb.client.calls == [("GET", "/api/status/")]
 

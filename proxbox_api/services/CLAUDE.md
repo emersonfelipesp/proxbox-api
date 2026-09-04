@@ -16,7 +16,6 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 ## Current Modules
 
 - `__init__.py`: service package namespace.
-- `custom_fields.py`: canonical NetBox custom-field inventory, reconcile/cache helpers, force-reconcile support, and object-type union preservation.
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
 - `auth_lockout.py`: shared, request-independent authentication lockout state
@@ -65,8 +64,8 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   access methods, and the persisted SSH binding. Execution verifies this digest
   again after host-key pinning at the last boundary before SSH mutation.
 - `hardware_discovery.py`: opt-in SSH node hardware discovery
-  (`dmidecode`/`ip`/`ethtool` allowlist). `reflect_to_netbox()` writes
-  chassis/NIC custom fields and, via `_reflect_nic_mac()`, the physical-NIC MAC
+  (`dmidecode`/`ip`/`ethtool` allowlist). `reflect_to_netbox()` writes, via
+  `_reflect_nic_mac()`, the physical-NIC MAC
   as a native `dcim.MACAddress` plus `primary_mac_address`. It reuses
   `sync/mac_address.py::reconcile_mac_for_interface` so physical and
   bridge/bond MACs are stored identically and receive the same Proxbox tag.
@@ -96,15 +95,8 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 
 - Keep service functions independent from request objects where possible.
 - Prefer idempotent operations so repeated sync runs are safe.
-- Keep NetBox custom fields declared only in `custom_fields.py`; both startup bootstrap and extras routes import the same inventory object.
-- Custom-field reconcile must preserve operator-added `object_types`: use the
-  live lookup record for both the object-type union and reconcile diff, and
-  fail the field on lookup errors rather than sending a declared-only
-  `object_types` payload.
-- Custom-field reconcile must only cache records verified from NetBox. If the
-  shared REST reconciler returns an unverified/synthetic record without a
-  NetBox-assigned `id`, report that custom field as failed and leave the
-  process-local custom-field cache empty.
+- Keep Proxbox reflection state in the typed netbox-proxbox sync-state sidecars.
+  Do not add custom-field creation, reconciliation, payload, or fallback paths.
 - Surface predictable errors through `ProxboxException`.
 - Keep response payloads compatible with both JSON and stream transports when a service is reused in SSE or WebSocket paths.
 - Cloud-network helpers must use `proxbox_api.netbox_rest` with an existing

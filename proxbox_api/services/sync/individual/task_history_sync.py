@@ -146,7 +146,6 @@ async def sync_task_history_individual(  # noqa: C901
         "task_state": "stopped",
         "exitstatus": final_status,
         "tags": tag_refs,
-        "custom_fields": {},
     }
 
     target_upid = str(target_task.get("upid", ""))
@@ -236,7 +235,6 @@ async def sync_task_history_individual(  # noqa: C901
                 "task_state": record.get("task_state"),
                 "exitstatus": record.get("exitstatus"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
             },
         )
 

@@ -32,10 +32,8 @@ def _netbox_vm(
         "id": netbox_id,
         "name": f"vm-{netbox_id}",
         "cluster": {"name": cluster_name},
-        "custom_fields": {
-            "proxmox_endpoint_id": endpoint_id,
-            "proxmox_vm_id": vmid,
-        },
+        "proxmox_endpoint_id": endpoint_id,
+        "proxmox_vm_id": vmid,
     }
 
 
@@ -44,6 +42,29 @@ def _allow_dict_proxmox_rows(monkeypatch):
     """Production receives Pydantic SDK rows; focused tests use equivalent dicts."""
 
     monkeypatch.setattr(backups_vm, "dump_models", lambda items: items)
+
+
+@pytest.fixture
+def typed_vm_resolver(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    async def _resolve(_nb, *, proxmox_vm_id, endpoint_id=None, **_kwargs):
+        calls.append({"proxmox_vm_id": proxmox_vm_id, "endpoint_id": endpoint_id})
+        selected_endpoint = endpoint_id or 1
+        record_id = 8 if selected_endpoint == 2 else 7
+        cluster_name = "cluster-b" if selected_endpoint == 2 else "cluster-a"
+        return SimpleNamespace(
+            record=_netbox_vm(
+                record_id,
+                endpoint_id=selected_endpoint,
+                cluster_name=cluster_name,
+                vmid=int(proxmox_vm_id),
+            ),
+            record_id=record_id,
+        )
+
+    monkeypatch.setattr(backups_vm, "resolve_virtual_machine_by_sync_state", _resolve)
+    return calls
 
 
 def test_normalize_backup_subtype_aliases_and_volume_fallbacks():
@@ -62,14 +83,9 @@ def test_normalize_backup_format_aliases_and_volume_fallbacks():
     assert _normalize_backup_format("unexpected", "local:backup/foo") == "undefined"
 
 
-def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
+def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch, typed_vm_resolver):
     reconciled: list[tuple[dict, dict]] = []
     journal_entries: list[dict] = []
-
-    async def _fake_rest_list_async(_nb, _path, *, query=None):
-        assert _path == "/api/virtualization/virtual-machines/"
-        assert query == {"cf_proxmox_vm_id": 101}
-        return [_netbox_vm(7, endpoint_id=1, cluster_name="cluster-a")]
 
     async def _fake_reconcile_async(_nb, _path, lookup, payload, **kwargs):
         reconciled.append((lookup, payload))
@@ -83,10 +99,6 @@ def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
         journal_entries.append(payload)
         return payload
 
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_list_async",
-        _fake_rest_list_async,
-    )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_reconcile_async",
         _fake_reconcile_async,
@@ -124,12 +136,7 @@ def test_create_netbox_backups_links_storage_by_volume_prefix(monkeypatch):
     assert journal_entries[0]["assigned_object_id"] == 55
 
 
-def test_create_netbox_backups_reuses_cached_vm_lookup(monkeypatch):
-    queries: list[dict] = []
-
-    async def _fake_rest_list_async(_nb, _path, *, query=None):
-        queries.append(query or {})
-        return [_netbox_vm(7, endpoint_id=1, cluster_name="cluster-a")]
+def test_create_netbox_backups_reuses_cached_vm_lookup(monkeypatch, typed_vm_resolver):
 
     async def _fake_reconcile_async(_nb, _path, lookup, payload, **kwargs):
         return SimpleNamespace(id=55)
@@ -137,10 +144,6 @@ def test_create_netbox_backups_reuses_cached_vm_lookup(monkeypatch):
     async def _fake_rest_create_async(_nb, _path, payload):
         return payload
 
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_list_async",
-        _fake_rest_list_async,
-    )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.backups_vm.rest_reconcile_async",
         _fake_reconcile_async,
@@ -180,7 +183,7 @@ def test_create_netbox_backups_reuses_cached_vm_lookup(monkeypatch):
         )
     )
 
-    assert queries == [{"cf_proxmox_vm_id": 101}]
+    assert typed_vm_resolver == [{"proxmox_vm_id": 101, "endpoint_id": None}]
 
 
 def test_get_node_backups_enforces_vmid_filter_locally(monkeypatch):
@@ -227,15 +230,10 @@ def test_get_node_backups_enforces_vmid_filter_locally(monkeypatch):
     assert volids == {"local:vm-101-a"}
 
 
-def test_create_netbox_backups_resolves_duplicate_vmid_by_endpoint_and_cluster(monkeypatch):
+def test_create_netbox_backups_resolves_duplicate_vmid_by_endpoint_and_cluster(
+    monkeypatch, typed_vm_resolver
+):
     reconciled: list[tuple[dict, dict]] = []
-
-    async def _fake_rest_list_async(_nb, _path, *, query=None):
-        assert query == {"cf_proxmox_vm_id": 101}
-        return [
-            _netbox_vm(7, endpoint_id=1, cluster_name="cluster-a"),
-            _netbox_vm(8, endpoint_id=2, cluster_name="cluster-b"),
-        ]
 
     async def _fake_reconcile(_nb, _path, *, lookup, payload, **_kwargs):
         reconciled.append((lookup, payload))
@@ -244,7 +242,6 @@ def test_create_netbox_backups_resolves_duplicate_vmid_by_endpoint_and_cluster(m
     async def _fake_create(_nb, _path, payload):
         return payload
 
-    monkeypatch.setattr(backups_vm, "rest_list_async", _fake_rest_list_async)
     monkeypatch.setattr(backups_vm, "rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr(backups_vm, "rest_create_async", _fake_create)
 
@@ -418,10 +415,6 @@ async def test_selected_backup_scope_never_queries_same_vmid_on_another_endpoint
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _vm_sidecar_scan(7, endpoint_id=1, cluster_name="cluster-a"),
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
-    )
 
     async def _empty_storage_index(_nb):
         return {}
@@ -498,10 +491,6 @@ async def test_selected_backup_scope_resolves_sidecar_only_identity_by_default(m
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _vm_sidecar_scan(7, endpoint_id=1, cluster_name="cluster-a"),
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
     )
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vms)
     monkeypatch.setattr(backups_vm, "_load_storage_index", _empty_storage_index)

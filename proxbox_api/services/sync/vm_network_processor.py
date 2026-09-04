@@ -93,7 +93,7 @@ async def process_vm_network_interface(  # noqa: C901
         "bridge_id": None,
     }
 
-    # Create/sync bridge: dcim.Interface on node device (ID stored as proxbox_bridge custom field)
+    # Create/sync bridge: dcim.Interface on the node device.
     bridge_name = interface_config.get("bridge")
     if bridge_name:
         try:
@@ -124,7 +124,6 @@ async def process_vm_network_interface(  # noqa: C901
                     "name": f"VLAN {vlan_tag}",
                     "status": "active",
                     "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
                 },
                 schema=NetBoxVlanSyncState,
                 current_normalizer=lambda record: {
@@ -132,7 +131,6 @@ async def process_vm_network_interface(  # noqa: C901
                     "name": record.get("name"),
                     "status": record.get("status"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             )
             if vlan_record:

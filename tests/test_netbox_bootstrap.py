@@ -1,4 +1,4 @@
-"""Tests for the NetBox-side bootstrap orchestrator (issue #358).
+"""Tests for the NetBox-side bootstrap orchestrator.
 
 Exercises:
 
@@ -12,8 +12,6 @@ Exercises:
 
 Mocks operate at the ``proxbox_api.netbox_rest`` boundary using the same
 ``_FakeRecord`` / ``patch_rest`` pattern as ``tests/test_netbox_writers.py``.
-Timestamps are frozen via ``_last_updated_cf`` so the second-run-is-silent
-assertion is robust without time-mocking the clock.
 """
 
 from __future__ import annotations
@@ -24,32 +22,18 @@ from typing import Any
 import pytest
 
 from proxbox_api import netbox_rest
-from proxbox_api.services import custom_fields as custom_field_service
 from proxbox_api.services import netbox_bootstrap
-from proxbox_api.services import netbox_writers as nw
 from proxbox_api.services.netbox_bootstrap import (
     BootstrapStatus,
     run_netbox_bootstrap,
 )
 from proxbox_api.services.netbox_writers import (
     UpsertResult,
-    upsert_custom_field,
     upsert_device_role,
     upsert_manufacturer,
     upsert_tag,
     upsert_vm_type,
 )
-
-_FROZEN_TS = "2026-04-29T00:00:00+00:00"
-
-
-@pytest.fixture(autouse=True)
-def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        custom_field_service,
-        "get_plugin_bool",
-        lambda *, settings_key, default: True,
-    )
 
 
 class _FakeRecord:
@@ -79,13 +63,8 @@ class _FakeRecord:
 
 
 @pytest.fixture
-def freeze_last_updated(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin the ``proxmox_last_updated`` custom-field value used by writers."""
-
-    def _frozen() -> dict[str, str]:
-        return {"proxmox_last_updated": _FROZEN_TS}
-
-    monkeypatch.setattr(nw, "_last_updated_cf", _frozen)
+def freeze_last_updated() -> None:
+    """Retained as a no-op fixture for helper test signatures."""
 
 
 @pytest.fixture
@@ -167,7 +146,6 @@ async def test_upsert_manufacturer_unchanged_on_match(
             "name": "Proxmox",
             "slug": "proxmox",
             "tags": [],
-            "custom_fields": {"proxmox_last_updated": _FROZEN_TS},
         },
         record_id=42,
     )
@@ -192,7 +170,6 @@ async def test_upsert_device_role_patches_on_diff(
             "description": "Proxmox node",
             "vm_role": False,
             "tags": [],
-            "custom_fields": {"proxmox_last_updated": _FROZEN_TS},
         },
         record_id=7,
     )
@@ -231,38 +208,6 @@ async def test_upsert_tag_creates_on_miss(
 
 
 @pytest.mark.asyncio
-async def test_upsert_custom_field_creates_on_miss(
-    patch_rest: dict[str, Any], freeze_last_updated: None
-) -> None:
-    result = await upsert_custom_field(
-        object(),
-        name="proxbox_last_run_id",
-        type="text",
-        label="Last Run ID",
-        object_types=[
-            "dcim.device",
-            "virtualization.cluster",
-            "virtualization.virtualmachine",
-        ],
-        description="UUID of the most recent Proxbox sync run.",
-        group_name="Proxbox",
-    )
-
-    assert result.status == "created"
-    posted = patch_rest["posts"][0]["payload"]
-    assert posted["name"] == "proxbox_last_run_id"
-    assert posted["type"] == "text"
-    # object_types must be sorted-deduped per the helper contract
-    assert posted["object_types"] == sorted(
-        {
-            "dcim.device",
-            "virtualization.cluster",
-            "virtualization.virtualmachine",
-        }
-    )
-
-
-@pytest.mark.asyncio
 async def test_upsert_vm_type_creates_on_miss(
     patch_rest: dict[str, Any], freeze_last_updated: None
 ) -> None:
@@ -282,15 +227,6 @@ async def test_upsert_vm_type_creates_on_miss(
 # ---------------------------------------------------------------------------
 # Orchestrator: ``run_netbox_bootstrap``
 # ---------------------------------------------------------------------------
-
-
-def test_custom_field_inventory_is_shared_source_of_truth() -> None:
-    assert netbox_bootstrap.CUSTOM_FIELD_INVENTORY is custom_field_service.CUSTOM_FIELD_INVENTORY
-    assert len(netbox_bootstrap.CUSTOM_FIELD_INVENTORY) == 43
-    names = {str(field["name"]) for field in netbox_bootstrap.CUSTOM_FIELD_INVENTORY}
-    assert "proxmox_last_updated" in names
-    assert "hardware_chassis_serial" in names
-    assert "nic_link" in names
 
 
 @pytest.mark.asyncio
@@ -322,9 +258,8 @@ async def test_run_netbox_bootstrap_creates_full_inventory_on_empty_netbox(
     assert status.unchanged == []
 
     # 1 Proxbox tag + 4 discovery tags + 1 cluster_type + 1 manufacturer +
-    # 1 device_type + 1 device_role + 3 VM roles + 2 VM types + 43 custom fields
-    # = 57 created objects on a fresh NetBox 4.6 install.
-    assert len(status.created) == 57
+    # 1 device_type + 1 device_role + 3 VM roles + 2 VM types = 14 objects.
+    assert len(status.created) == 14
 
     # Key entries from each category must appear in the created list.
     labels = set(status.created)
@@ -342,9 +277,6 @@ async def test_run_netbox_bootstrap_creates_full_inventory_on_empty_netbox(
     assert "vm_role:unknown" in labels
     assert "vm_type:qemu-virtual-machine" in labels
     assert "vm_type:lxc-container" in labels
-    assert "custom_field:proxmox_vm_id" in labels
-    assert "custom_field:proxbox_last_run_id" in labels
-    assert "custom_field:proxmox_last_updated" in labels
 
 
 @pytest.mark.asyncio
@@ -369,7 +301,6 @@ async def test_run_netbox_bootstrap_second_run_is_noop(
         "/api/dcim/device-types/": "model",
         "/api/dcim/device-roles/": "slug",
         "/api/virtualization/virtual-machine-types/": "slug",
-        "/api/extras/custom-fields/": "name",
     }
 
     posts = patch_rest["posts"]
@@ -457,12 +388,11 @@ async def test_run_netbox_bootstrap_captures_per_entry_failures(
     warning = status.warnings[0]
     assert warning["object"] == "tag:Proxbox"
     assert "403" in warning["error"]
-    # The remaining 56 inventory entries must still have been created.
-    assert len(status.created) == 56
+    # The remaining 13 inventory entries must still have been created.
+    assert len(status.created) == 13
     assert "tag:proxbox-discovered-qemu" in status.created
     assert "tag:proxbox-discovered-lxc" in status.created
     assert "cluster_type:proxmox" in status.created
-    assert "custom_field:proxbox_last_run_id" in status.created
     assert any(
         record.levelno >= logging.ERROR
         and "NetBox bootstrap failed for tag:Proxbox" in record.message
@@ -585,5 +515,5 @@ async def test_run_netbox_bootstrap_skips_vm_types_on_old_netbox(
 
     assert status.ok is True
     assert not any(label.startswith("vm_type:") for label in status.created)
-    # The other 55 inventory entries must still be created.
-    assert len(status.created) == 55
+    # The other 12 support objects must still be created.
+    assert len(status.created) == 12

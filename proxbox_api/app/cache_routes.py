@@ -18,7 +18,6 @@ from proxbox_api.services.auth_lockout import (
     get_auth_lockout_metrics,
     get_auth_lockout_prometheus_metrics,
 )
-from proxbox_api.services.custom_fields import invalidate_custom_fields_cache
 from proxbox_api.services.sync.reconciliation.metrics import (
     get_reconciliation_metrics,
     get_reconciliation_prometheus_metrics,
@@ -69,7 +68,6 @@ async def get_cache_metrics_prometheus() -> PlainTextResponse:
 async def clear_cache() -> dict:
     global_cache.clear_cache()
     clear_rest_get_cache()
-    invalidate_custom_fields_cache()
     return {"message": "All caches cleared"}
 
 

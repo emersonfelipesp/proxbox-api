@@ -50,8 +50,8 @@ async def create_virtual_disks(
     """
     Syncs virtual disks for existing Virtual Machines in NetBox.
 
-    Queries NetBox for VMs with cf_proxmox_vm_id set, fetches their disk
-    configuration from Proxmox, and creates/updates Virtual Disk objects.
+    Resolves NetBox VMs through typed sync-state sidecars, fetches their disk
+    configuration from Proxmox, and creates or updates Virtual Disk objects.
     """
     try:
         netbox_vm_id_list = parse_selected_netbox_vm_ids(netbox_vm_ids)

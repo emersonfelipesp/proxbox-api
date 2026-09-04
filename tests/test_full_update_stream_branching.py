@@ -24,7 +24,6 @@ from unittest.mock import AsyncMock
 
 from proxbox_api.constants import DISCOVERY_TAG_NODE
 from proxbox_api.dependencies import ensure_netbox_sync_dependencies, proxbox_tag
-from proxbox_api.routes.extras import create_custom_fields
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
 
@@ -106,7 +105,6 @@ def test_stream_does_not_activate_branch_when_schema_id_missing(monkeypatch):
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=type("Tag", (), {"id": 1, "name": "Proxbox", "slug": "proxbox", "color": "ff0"})(),
         )
     )
@@ -131,7 +129,6 @@ def test_stream_bootstrap_done_uses_live_dependency_payload(auth_test_client, mo
 
     app.dependency_overrides[ensure_netbox_sync_dependencies] = _fake_bootstrap
     app.dependency_overrides[proxmox_sessions_dep] = lambda: []
-    app.dependency_overrides[create_custom_fields] = lambda: []
     app.dependency_overrides[proxbox_tag] = lambda: SimpleNamespace(
         id=1, name="Proxbox", slug="proxbox", color="ff5722"
     )
@@ -176,7 +173,6 @@ def test_stream_activates_branch_with_schema_id(monkeypatch):
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=type("Tag", (), {"id": 1, "name": "Proxbox", "slug": "proxbox", "color": "ff0"})(),
             netbox_branch_schema_id="cafef00d",
         )
@@ -203,7 +199,6 @@ def test_stream_does_not_activate_branch_when_schema_id_empty(monkeypatch):
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=type("Tag", (), {"id": 1, "name": "Proxbox", "slug": "proxbox", "color": "ff0"})(),
             netbox_branch_schema_id="",
         )

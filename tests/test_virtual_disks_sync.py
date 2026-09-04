@@ -17,12 +17,21 @@ from proxbox_api.services.sync.virtual_disks import create_virtual_disks
 
 
 @pytest.fixture(autouse=True)
-def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+def bridge_virtual_disk_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+
+    async def _inline_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
+
+    async def _typed_identity_bridge(_nb, vms, *, require_all):
+        del require_all
+        return vms
+
     monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
+        virtual_disks_module,
+        "hydrate_vm_identities_from_sidecars",
+        _typed_identity_bridge,
     )
 
     async def _legacy_list_bridge(
@@ -57,7 +66,7 @@ def test_selected_virtual_disk_vm_lookup_uses_repeated_ids_and_rest_records(monk
 
     async def _selected_list(_nb, path, *, query=None):
         queries.append(dict(query or {}))
-        return [RestRecord(SimpleNamespace(), path, {"id": 7, "custom_fields": {}})]
+        return [RestRecord(SimpleNamespace(), path, {"id": 7})]
 
     async def _other_lists(*_args, **_kwargs):
         return []
@@ -120,7 +129,7 @@ def test_partial_selected_virtual_disk_lookup_is_typed_failure(monkeypatch):
     async def _partial_selected_list(_nb, path, *, query=None):
         assert path == "/api/virtualization/virtual-machines/"
         assert query == {"id": ["7", "8"]}
-        return [{"id": 7, "custom_fields": {"proxmox_vm_id": 107}}]
+        return [{"id": 7}]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _partial_selected_list)
 
@@ -211,7 +220,6 @@ def _virtual_disk_normalizer(record):
         "storage": record.get("storage"),
         "description": record.get("description"),
         "tags": record.get("tags"),
-        "custom_fields": record.get("custom_fields"),
     }
 
 
@@ -235,7 +243,6 @@ def _make_virtual_disk_record(
         "storage": {"id": storage_id} if storage_id is not None else None,
         "description": "",
         "tags": [],
-        "custom_fields": {},
     }
     return record
 
@@ -253,19 +260,19 @@ def test_create_virtual_disks_fetches_vm_configs_with_bounded_concurrency(monkey
                     "id": 7,
                     "name": "vm-101",
                     "cluster": {"name": "cluster-a"},
-                    "custom_fields": {"proxmox_vm_id": 101},
+                    "proxmox_vm_id": 101,
                 },
                 {
                     "id": 8,
                     "name": "vm-102",
                     "cluster": {"name": "cluster-a"},
-                    "custom_fields": {"proxmox_vm_id": 102},
+                    "proxmox_vm_id": 102,
                 },
                 {
                     "id": 9,
                     "name": "vm-103",
                     "cluster": {"name": "cluster-a"},
-                    "custom_fields": {"proxmox_vm_id": 103},
+                    "proxmox_vm_id": 103,
                 },
             ]
         if _path == "/api/plugins/proxbox/storage/":
@@ -332,7 +339,7 @@ def test_create_virtual_disks_fetches_vm_configs_with_bounded_concurrency(monkey
     assert result == {"count": 3, "created": 3, "updated": 0, "skipped": 0}
 
 
-def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
+def test_create_virtual_disks_uses_typed_sidecar_proxmox_vm_id(monkeypatch):
     calls = {"resolve_vm_config": []}
     reconciled_payloads: list[dict] = []
 
@@ -343,7 +350,7 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
                     "id": 7,
                     "name": "vm-101",
                     "cluster": {"name": "cluster-a"},
-                    "custom_fields": {"proxmox_vm_id": 101},
+                    "proxmox_vm_id": 101,
                 }
             ]
         if _path == "/api/plugins/proxbox/storage/":
@@ -404,7 +411,7 @@ def test_create_virtual_disks_uses_custom_fields_proxmox_vm_id(monkeypatch):
     assert len(reconciled_payloads) == 1
     assert reconciled_payloads[0]["virtual_machine"] == 7
     assert reconciled_payloads[0]["name"] == "scsi0"
-    assert reconciled_payloads[0].get("custom_fields", {}).get("proxbox_storage_id") == 42
+    assert reconciled_payloads[0]["storage"] == 42
 
 
 def test_create_virtual_disks_scopes_config_fetch_by_endpoint(monkeypatch):
@@ -419,23 +426,19 @@ def test_create_virtual_disks_scopes_config_fetch_by_endpoint(monkeypatch):
                     "id": 7,
                     "name": "vm-105-a",
                     "cluster": {"name": "pve"},
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 1,
-                        "proxmox_vm_id": 105,
-                        "proxmox_vm_type": "qemu",
-                        "proxmox_node": "pve",
-                    },
+                    "proxmox_endpoint_id": 1,
+                    "proxmox_vm_id": 105,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_node": "pve",
                 },
                 {
                     "id": 8,
                     "name": "vm-105-b",
                     "cluster": {"name": "astro"},
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 2,
-                        "proxmox_vm_id": 105,
-                        "proxmox_vm_type": "qemu",
-                        "proxmox_node": "astro",
-                    },
+                    "proxmox_endpoint_id": 2,
+                    "proxmox_vm_id": 105,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_node": "astro",
                 },
             ]
         if _path in {"/api/plugins/proxbox/storage/", "/api/virtualization/virtual-disks/"}:
@@ -490,11 +493,9 @@ def test_create_virtual_disks_prefers_cluster_resource_node_over_vm_device(monke
             "name": "vm-101",
             "cluster": {"name": "cluster-a"},
             "device": {"name": "pve01.example.com"},
-            "custom_fields": {
-                "proxmox_vm_id": 101,
-                "proxmox_vm_type": "qemu",
-                "proxmox_node": "stale-node",
-            },
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+            "proxmox_node": "stale-node",
         },
         cluster_resources=[
             {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": 101, "node": "pve02"}]}
@@ -506,18 +507,16 @@ def test_create_virtual_disks_prefers_cluster_resource_node_over_vm_device(monke
     assert calls[0]["vm_type"] == "qemu"
 
 
-def test_create_virtual_disks_uses_proxmox_node_custom_field_when_resource_missing(monkeypatch):
+def test_create_virtual_disks_uses_sidecar_node_when_resource_missing(monkeypatch):
     result, calls = _run_virtual_disk_sync_for_vm(
         monkeypatch,
         vm={
             "id": 7,
             "name": "vm-101",
             "cluster": {"name": "cluster-a"},
-            "custom_fields": {
-                "proxmox_vm_id": 101,
-                "proxmox_vm_type": "qemu",
-                "proxmox_node": "pve03",
-            },
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+            "proxmox_node": "pve03",
         },
         cluster_resources=[],
     )
@@ -534,7 +533,8 @@ def test_create_virtual_disks_uses_device_name_as_last_resort(monkeypatch):
             "name": "vm-101",
             "cluster": {"name": "cluster-a"},
             "device": {"name": "pve04"},
-            "custom_fields": {"proxmox_vm_id": 101, "proxmox_vm_type": "qemu"},
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
         },
         cluster_resources=[],
     )
@@ -555,7 +555,7 @@ def test_create_virtual_disks_deletes_stale_disks_and_updates_vm_total(monkeypat
                     "name": "vm-101",
                     "disk": 2256,
                     "cluster": {"name": "cluster-a"},
-                    "custom_fields": {"proxmox_vm_id": 101},
+                    "proxmox_vm_id": 101,
                 }
             ]
         if _path == "/api/plugins/proxbox/storage/":
@@ -652,7 +652,7 @@ def test_cdrom_disk_is_included_with_size_zero(monkeypatch):
                     "id": 38,
                     "name": "vm-cdrom",
                     "cluster": {"name": "cluster-a"},
-                    "custom_fields": {"proxmox_vm_id": 124},
+                    "proxmox_vm_id": 124,
                 }
             ]
         if _path == "/api/plugins/proxbox/storage/":
@@ -728,7 +728,7 @@ def test_all_cdrom_vm_synced_as_zero_size(monkeypatch):
                     "id": 55,
                     "name": "vm-nodata",
                     "cluster": {"name": "cluster-b"},
-                    "custom_fields": {"proxmox_vm_id": 55},
+                    "proxmox_vm_id": 55,
                 }
             ]
         if _path == "/api/plugins/proxbox/storage/":
@@ -823,7 +823,6 @@ def test_cdrom_no_patch_storm_when_existing_has_null_size(monkeypatch):
                     "storage": None,
                     "description": "",
                     "tags": [],
-                    "custom_fields": {},
                 }
             ],
             lookup_fields=["virtual_machine", "name"],
@@ -869,7 +868,6 @@ def test_single_reconcile_nullable_field_keeps_matching_storage(monkeypatch):
                 "storage": 11,
                 "description": "",
                 "tags": [],
-                "custom_fields": {},
             },
             schema=NetBoxVirtualDiskSyncState,
             current_normalizer=_virtual_disk_normalizer,
@@ -915,7 +913,6 @@ def test_bulk_reconcile_nullable_field_keeps_matching_storage(monkeypatch):
                     "storage": 11,
                     "description": "",
                     "tags": [],
-                    "custom_fields": {},
                 }
             ],
             lookup_fields=["virtual_machine", "name"],
@@ -969,7 +966,6 @@ def test_bulk_create_fallback_forwards_nullable_fields(monkeypatch):
                     "storage": None,
                     "description": "",
                     "tags": [],
-                    "custom_fields": {},
                 }
             ],
             lookup_fields=["virtual_machine", "name"],

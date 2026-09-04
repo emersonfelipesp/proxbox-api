@@ -1,4 +1,4 @@
-"""Shared helpers for Proxmox VM identity extraction from NetBox VM payloads."""
+"""Shared helpers for Proxmox VM identity extraction from typed sync state."""
 
 from __future__ import annotations
 
@@ -47,36 +47,17 @@ def normalize_positive_int(value: object) -> int | None:
 
 
 def extract_proxmox_vmid(vm: dict[str, object]) -> str | None:
-    """Extract Proxmox VMID from NetBox VM payload across known field layouts.
+    """Extract Proxmox VMID from a typed sync-state mapping.
 
     Handles both RestRecord objects and plain dicts by detecting the interface
     and converting as needed.
     """
     vm = _coerce_mapping(vm)
 
-    top_level_keys = (
-        "cf_proxmox_vm_id",
-        "proxmox_vm_id",
-        "cf_proxmox_vmid",
-        "proxmox_vmid",
-    )
-    for key in top_level_keys:
+    for key in ("proxmox_vm_id", "proxmox_vmid"):
         normalized = normalize_vmid(vm.get(key))
         if normalized:
             return normalized
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        custom_field_keys = (
-            "proxmox_vm_id",
-            "cf_proxmox_vm_id",
-            "proxmox_vmid",
-            "cf_proxmox_vmid",
-        )
-        for key in custom_field_keys:
-            normalized = normalize_vmid(custom_fields.get(key))
-            if normalized:
-                return normalized
     return None
 
 
@@ -84,17 +65,10 @@ def extract_proxmox_endpoint_id(vm: dict[str, object]) -> int | None:
     """Extract the Proxmox endpoint identity stored on a NetBox VM record."""
     vm = _coerce_mapping(vm)
 
-    for key in ("cf_proxmox_endpoint_id", "proxmox_endpoint_id"):
+    for key in ("proxmox_endpoint_raw_id", "proxmox_endpoint_id"):
         endpoint_id = normalize_positive_int(vm.get(key))
         if endpoint_id is not None:
             return endpoint_id
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        for key in ("proxmox_endpoint_id", "cf_proxmox_endpoint_id"):
-            endpoint_id = normalize_positive_int(custom_fields.get(key))
-            if endpoint_id is not None:
-                return endpoint_id
     return None
 
 
@@ -102,17 +76,10 @@ def extract_proxmox_node(vm: dict[str, object]) -> str | None:
     """Extract the stored Proxmox node name from a NetBox VM record."""
     vm = _coerce_mapping(vm)
 
-    for key in ("cf_proxmox_node", "proxmox_node"):
+    for key in ("proxmox_node_name", "proxmox_node"):
         value = normalize_vmid(vm.get(key))
         if value:
             return value
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        for key in ("proxmox_node", "cf_proxmox_node"):
-            value = normalize_vmid(custom_fields.get(key))
-            if value:
-                return value
     return None
 
 
@@ -141,7 +108,7 @@ def select_proxmox_sessions_by_endpoint(
 
 
 def extract_proxmox_vm_type(vm: dict[str, object]) -> str | None:
-    """Extract Proxmox VM type from NetBox VM payload across known field layouts.
+    """Extract Proxmox VM type from a typed sync-state mapping.
 
     Returns 'qemu' or 'lxc' (case-normalized), or None if not found.
 
@@ -150,19 +117,8 @@ def extract_proxmox_vm_type(vm: dict[str, object]) -> str | None:
     """
     vm = _coerce_mapping(vm)
 
-    top_level_keys = (
-        "cf_proxmox_vm_type",
-        "proxmox_vm_type",
-    )
-    for key in top_level_keys:
+    for key in ("proxmox_vm_type",):
         value = vm.get(key)
         if value and str(value).strip().lower() in ("qemu", "lxc"):
             return str(value).strip().lower()
-
-    custom_fields = vm.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        for key in ("proxmox_vm_type", "cf_proxmox_vm_type"):
-            value = custom_fields.get(key)
-            if value and str(value).strip().lower() in ("qemu", "lxc"):
-                return str(value).strip().lower()
     return None

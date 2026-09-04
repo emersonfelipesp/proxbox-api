@@ -17,7 +17,6 @@ from proxbox_api.services.sync.orphan_sweep import (
     run_orphan_vm_sweep,
 )
 from proxbox_api.services.sync.sync_state_reader import SidecarVMOrphanScan
-from proxbox_api.services.sync.vm_helpers import LAST_RUN_ID_CUSTOM_FIELD
 
 
 def _vm(
@@ -31,21 +30,10 @@ def _vm(
         "id": record_id,
         "name": name,
         "display_url": f"/virtualization/virtual-machines/{record_id}/",
-        "custom_fields": {
-            LAST_RUN_ID_CUSTOM_FIELD: run_id,
-            "proxmox_vm_id": record_id + 1000,
-        },
+        "_proxbox_last_run_id": run_id,
+        "_proxmox_vm_id": record_id + 1000,
         "tags": [{"slug": tag_slug}],
     }
-
-
-def _enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
 
 
 class _Bridge:
@@ -65,84 +53,17 @@ class _Bridge:
 
 
 @pytest.mark.asyncio
-async def test_find_orphan_vms_uses_vm_discovery_slugs_and_stamp_filters(
+async def test_find_orphan_vms_returns_typed_sidecar_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Candidates are selected by VM discovery tag and stale/missing run ID."""
-    _enable_legacy_custom_fields(monkeypatch)
-    calls: list[dict[str, object]] = []
-
-    async def _fake_list(_nb: object, _path: str, *, base_query: dict[str, object], **_: Any):
-        calls.append(base_query)
-        if base_query.get("tag") == DISCOVERY_TAG_VM_QEMU and base_query.get(
-            f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie"
-        ):
-            return [_vm(1, "stale-qemu")]
-        if base_query.get("tag") == DISCOVERY_TAG_VM_LXC and base_query.get(
-            f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__empty"
-        ):
-            return [_vm(2, "missing-lxc", run_id=None, tag_slug=DISCOVERY_TAG_VM_LXC)]
-        if base_query.get("tag") == DISCOVERY_TAG_VM_LXC and base_query.get(
-            f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie"
-        ):
-            return [_vm(1, "duplicate-qemu")]
-        return []
+    stale_vm = _vm(8, "sidecar-stale")
 
     async def _fake_sidecar_scan(*_args: Any, **_kwargs: Any) -> SidecarVMOrphanScan:
-        return SidecarVMOrphanScan(
-            stale_candidates=[],
-            current_vm_ids=set(),
-            sidecar_unavailable=True,
-        )
+        return SidecarVMOrphanScan(stale_candidates=[stale_vm], current_vm_ids=set())
 
     monkeypatch.setattr(orphan_sweep, "scan_vm_sidecar_orphan_candidates", _fake_sidecar_scan)
-    monkeypatch.setattr(orphan_sweep, "rest_list_paginated_async", _fake_list)
 
-    candidates = await find_orphan_vms(object(), "current-run")
-
-    assert [candidate["id"] for candidate in candidates] == [1, 2]
-    assert {call["tag"] for call in calls} == {
-        DISCOVERY_TAG_VM_QEMU,
-        DISCOVERY_TAG_VM_LXC,
-    }
-    assert all("proxbox-discovered-cluster" not in str(call) for call in calls)
-    assert any(f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie" in call for call in calls)
-    assert any(call.get(f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__empty") is True for call in calls)
-
-
-@pytest.mark.asyncio
-async def test_find_orphan_vms_skips_first_pass_current_sidecar_candidate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    current_vm_with_stale_cf = _vm(7, "current-sidecar-stale-cf")
-
-    async def _fake_sidecar_scan(*_args: Any, **_kwargs: Any) -> SidecarVMOrphanScan:
-        return SidecarVMOrphanScan(
-            stale_candidates=[],
-            current_vm_ids={7},
-        )
-
-    async def _fake_legacy_list(
-        _nb: object,
-        _path: str,
-        *,
-        base_query: dict[str, object],
-        **_: Any,
-    ) -> list[dict[str, object]]:
-        if base_query.get(f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie") == "current-run":
-            return [current_vm_with_stale_cf]
-        return []
-
-    async def _unexpected_last_run_lookup(*_args: Any, **_kwargs: Any) -> str | None:
-        raise AssertionError("first-pass-current sidecar VM must be skipped before recheck")
-
-    monkeypatch.setattr(orphan_sweep, "scan_vm_sidecar_orphan_candidates", _fake_sidecar_scan)
-    monkeypatch.setattr(orphan_sweep, "rest_list_paginated_async", _fake_legacy_list)
-    monkeypatch.setattr(orphan_sweep, "resolve_vm_last_run_id", _unexpected_last_run_lookup)
-
-    candidates = await find_orphan_vms(object(), "current-run")
-
-    assert candidates == []
+    assert await find_orphan_vms(object(), "current-run") == [stale_vm]
 
 
 @pytest.mark.asyncio
@@ -156,105 +77,12 @@ async def test_find_orphan_vms_treats_sidecar_503_scan_as_transient_failure(
             http_status_code=503,
         )
 
-    async def _unexpected_legacy_list(*_args: Any, **_kwargs: Any):
-        raise AssertionError("HTTP 503 sidecar scan failure must not enter legacy sweep")
-
     sync_state_reader.reset_sidecar_reader_availability_cache()
     monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _failed_sidecar_scan)
-    monkeypatch.setattr(orphan_sweep, "rest_list_paginated_async", _unexpected_legacy_list)
 
     candidates = await find_orphan_vms(object(), "current-run")
 
     assert candidates == []
-
-
-@pytest.mark.asyncio
-async def test_find_orphan_vms_treats_sidecar_404_scan_as_old_plugin_legacy_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _enable_legacy_custom_fields(monkeypatch)
-    stale_vm = _vm(8, "legacy-stale")
-
-    async def _missing_sidecar_route(*_args: Any, **_kwargs: Any):
-        raise ProxboxException(
-            message="NetBox REST request failed",
-            detail="Not found.",
-            http_status_code=404,
-        )
-
-    async def _fake_legacy_list(
-        _nb: object,
-        _path: str,
-        *,
-        base_query: dict[str, object],
-        **_: Any,
-    ) -> list[dict[str, object]]:
-        if base_query.get(f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie") == "current-run":
-            return [stale_vm]
-        return []
-
-    sync_state_reader.reset_sidecar_reader_availability_cache()
-    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _missing_sidecar_route)
-    monkeypatch.setattr(orphan_sweep, "rest_list_paginated_async", _fake_legacy_list)
-
-    candidates = await find_orphan_vms(object(), "current-run")
-
-    assert candidates == [stale_vm]
-
-
-@pytest.mark.asyncio
-async def test_find_orphan_vms_skips_legacy_candidates_when_sidecar_scan_transiently_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _fake_sidecar_scan(*_args: Any, **_kwargs: Any) -> SidecarVMOrphanScan:
-        return SidecarVMOrphanScan(
-            stale_candidates=[],
-            current_vm_ids=set(),
-            sidecar_read_failed=True,
-        )
-
-    async def _unexpected_legacy_list(*_args: Any, **_kwargs: Any):
-        raise AssertionError("transient sidecar scan failure must not fall through to legacy sweep")
-
-    monkeypatch.setattr(orphan_sweep, "scan_vm_sidecar_orphan_candidates", _fake_sidecar_scan)
-    monkeypatch.setattr(orphan_sweep, "rest_list_paginated_async", _unexpected_legacy_list)
-
-    candidates = await find_orphan_vms(object(), "current-run")
-
-    assert candidates == []
-
-
-@pytest.mark.asyncio
-async def test_find_orphan_vms_uses_legacy_candidates_when_sidecar_route_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _enable_legacy_custom_fields(monkeypatch)
-    stale_vm = _vm(8, "legacy-stale")
-
-    async def _fake_sidecar_scan(*_args: Any, **_kwargs: Any) -> SidecarVMOrphanScan:
-        return SidecarVMOrphanScan(
-            stale_candidates=[],
-            current_vm_ids=set(),
-            sidecar_unavailable=True,
-        )
-
-    async def _fake_legacy_list(
-        _nb: object,
-        _path: str,
-        *,
-        base_query: dict[str, object],
-        **_: Any,
-    ) -> list[dict[str, object]]:
-        if base_query.get(f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie") == "current-run":
-            return [stale_vm]
-        return []
-
-    monkeypatch.setattr(orphan_sweep, "scan_vm_sidecar_orphan_candidates", _fake_sidecar_scan)
-    monkeypatch.setattr(orphan_sweep, "rest_list_paginated_async", _fake_legacy_list)
-
-    candidates = await find_orphan_vms(object(), "current-run")
-
-    assert candidates == [stale_vm]
 
 
 @pytest.mark.asyncio

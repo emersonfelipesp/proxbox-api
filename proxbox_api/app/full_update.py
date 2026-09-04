@@ -26,7 +26,6 @@ from proxbox_api.dependencies import (
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.routes.dcim import create_all_device_interfaces
-from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
@@ -96,7 +95,6 @@ async def full_update_sync(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
@@ -124,7 +122,6 @@ async def full_update_sync(
         pxs=pxs,
         cluster_status=cluster_status,
         cluster_resources=cluster_resources,
-        custom_fields=custom_fields,
         tag=tag,
         overwrite_flags=overwrite_flags,
         behavior_flags=behavior_flags,
@@ -139,7 +136,6 @@ async def _full_update_sync_run(
     pxs,
     cluster_status,
     cluster_resources,
-    custom_fields,
     tag,
     overwrite_flags: SyncOverwriteFlags,
     behavior_flags: SyncBehaviorFlags,
@@ -157,7 +153,6 @@ async def _full_update_sync_run(
             pxs=pxs,
             cluster_status=cluster_status,
             cluster_resources=cluster_resources,
-            custom_fields=custom_fields,
             tag=tag,
             overwrite_flags=overwrite_flags,
             behavior_flags=behavior_flags,
@@ -171,7 +166,6 @@ async def _full_update_sync_impl(  # noqa: C901
     pxs,
     cluster_status,
     cluster_resources,
-    custom_fields,
     tag,
     overwrite_flags: SyncOverwriteFlags,
     behavior_flags: SyncBehaviorFlags,
@@ -249,7 +243,6 @@ async def _full_update_sync_impl(  # noqa: C901
                 pxs=pxs,
                 cluster_status=cluster_status,
                 cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
                 tag=tag,
                 use_websocket=False,
                 sync_vm_network=False,
@@ -370,7 +363,6 @@ async def _full_update_sync_impl(  # noqa: C901
                 pxs=pxs,
                 cluster_status=cluster_status,
                 cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
                 tag=tag,
                 use_websocket=False,
                 overwrite_flags=overwrite_flags,
@@ -391,7 +383,6 @@ async def _full_update_sync_impl(  # noqa: C901
                 pxs=pxs,
                 cluster_status=cluster_status,
                 cluster_resources=cluster_resources,
-                custom_fields=custom_fields,
                 tag=tag,
                 use_websocket=False,
                 overwrite_flags=overwrite_flags,
@@ -504,7 +495,6 @@ async def full_update_sync_stream(  # noqa: C901
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     behavior_flags: ResolvedSyncBehaviorFlagsDep = SyncBehaviorFlags(),
@@ -717,7 +707,6 @@ async def full_update_sync_stream(  # noqa: C901
                             pxs=pxs,
                             cluster_status=cluster_status,
                             cluster_resources=cluster_resources,
-                            custom_fields=custom_fields,
                             tag=tag,
                             websocket=vm_bridge,
                             use_websocket=True,
@@ -971,7 +960,6 @@ async def full_update_sync_stream(  # noqa: C901
                             pxs=pxs,
                             cluster_status=cluster_status,
                             cluster_resources=cluster_resources,
-                            custom_fields=custom_fields,
                             tag=tag,
                             websocket=vm_interfaces_bridge,
                             use_websocket=True,
@@ -1014,7 +1002,6 @@ async def full_update_sync_stream(  # noqa: C901
                             pxs=pxs,
                             cluster_status=cluster_status,
                             cluster_resources=cluster_resources,
-                            custom_fields=custom_fields,
                             tag=tag,
                             websocket=vm_ip_addresses_bridge,
                             use_websocket=True,

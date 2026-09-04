@@ -13,28 +13,13 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
-from proxbox_api.schemas.sync import SyncBehaviorFlags
 from proxbox_api.services.proxmox_helpers import GuestAgentFetchResult
 from proxbox_api.services.sync import sync_state_reader
-from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan
+from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan, VMSyncStateIdentityScan
 
 
 @pytest.fixture(autouse=True)
-def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
-    kwdefaults = getattr(create_virtual_machines, "__kwdefaults__", None)
-    if isinstance(kwdefaults, dict):
-        monkeypatch.setitem(
-            kwdefaults,
-            "behavior_flags",
-            SyncBehaviorFlags(custom_fields_enabled=True),
-        )
-
+def bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _legacy_vm_snapshot_bridge(
         netbox_session,
         path,
@@ -52,6 +37,12 @@ def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     # Production now uses the shared exhaustive paginator. These focused tests
     # provide a one-page path-aware fake, so bridge the new dependency to it.
     monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _legacy_vm_snapshot_bridge)
+
+    async def _typed_identity_bridge(_nb, vms, *, require_all):
+        del require_all
+        return vms
+
+    monkeypatch.setattr(sync_vm, "hydrate_vm_identities_from_sidecars", _typed_identity_bridge)
 
 
 def _vm_sync_inputs(vm_config: dict):
@@ -86,7 +77,6 @@ def _vm_sync_inputs(vm_config: dict):
         "pxs": [SimpleNamespace(name="lab", session=object())],
         "cluster_status": cluster_status,
         "cluster_resources": cluster_resources,
-        "custom_fields": [],
         "tag": SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
         "vm_config": vm_config,
     }
@@ -100,6 +90,11 @@ def _install_common_sync_patches(  # noqa: C901
     interface_payloads: list[dict] | None = None,
     first_queries: list[dict] | None = None,
 ):
+    async def _inline_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
+
     async def _fake_get_vm_config(**kwargs):
         return vm_config
 
@@ -129,6 +124,9 @@ def _install_common_sync_patches(  # noqa: C901
         if path == "/api/virtualization/interfaces/" and query.get("name"):
             return []
         return []
+
+    async def _fake_rest_list_paginated(_nb, path, **kwargs):
+        return await _fake_rest_list(_nb, path, query=kwargs.get("base_query", {}))
 
     async def _fake_rest_first(_nb, path, **kwargs):
         query = kwargs.get("query", {})
@@ -208,14 +206,14 @@ def _install_common_sync_patches(  # noqa: C901
         _fake_rest_list,
     )
     monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_list_paginated_async",
+        _fake_rest_list_paginated,
+    )
+    monkeypatch.setattr(
         "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list,
     )
     sync_state_reader.reset_sidecar_reader_availability_cache()
-    monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.rest_first_async",
-        _fake_rest_first,
-    )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
         _fake_resolve_netbox_vm,
@@ -287,14 +285,8 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
         resolved_color_maps.append(color_map)
         return [201]
 
-    async def _fake_rest_create(_nb, _path, payload, **kwargs):
-        custom_fields = payload.get("custom_fields") if isinstance(payload, dict) else None
-        lookup = kwargs.get("lookup") or {}
-        vmid = int(
-            (custom_fields.get("proxmox_vm_id") if isinstance(custom_fields, dict) else None)
-            or lookup["cf_proxmox_vm_id"]
-        )
-        return {"id": 1000 + vmid, **payload}
+    async def _fake_rest_create(_nb, _path, payload, **_kwargs):
+        return {"id": 1100 + int(str(payload["name"]).removeprefix("vm")), **payload}
 
     async def _fake_task_history(**_kwargs):
         return 0
@@ -331,7 +323,6 @@ def test_vm_sync_fetches_tag_color_map_once_per_cluster_under_concurrency(monkey
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             sync_vm_network=False,
             run_id="issue-519-run",
@@ -370,7 +361,6 @@ def test_network_sync_scans_role_snapshots_once_for_multiple_vms(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             sync_vm_network=True,
         )
@@ -415,7 +405,6 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -456,7 +445,6 @@ def test_vm_sync_guest_os_model_keeps_core_interface_name_by_default(monkeypatch
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -497,7 +485,6 @@ def test_vm_sync_legacy_rename_uses_guest_agent_interface_name(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             vm_interface_sync_strategy="legacy_rename",
         )
@@ -532,7 +519,6 @@ def test_vm_sync_falls_back_to_config_when_guest_agent_unavailable(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -574,7 +560,6 @@ def test_vm_sync_can_disable_guest_agent_interface_name(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             use_guest_agent_interface_name=False,
         )
@@ -613,7 +598,6 @@ def test_vm_sync_populates_task_history(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -672,13 +656,21 @@ def test_rest_selected_vm_sync_keeps_reused_vmid_on_requested_owner(monkeypatch)
                 "id": 55,
                 "name": "vm01",
                 "cluster": {"id": 1, "name": "LAB"},
-                "custom_fields": {
-                    "proxmox_endpoint_id": 11,
+            }
+        ]
+
+    async def _typed_identity_scan(_nb):
+        return VMSyncStateIdentityScan(
+            rows=(
+                {
+                    "virtual_machine": 55,
+                    "proxmox_endpoint_raw_id": 11,
+                    "proxmox_cluster_name": "lab",
                     "proxmox_vm_id": 101,
                     "proxmox_vm_type": "qemu",
                 },
-            }
-        ]
+            )
+        )
 
     async def _fake_get_vm_config(**kwargs):
         fetched_nodes.append(str(kwargs["node"]))
@@ -689,6 +681,10 @@ def test_rest_selected_vm_sync_keeps_reused_vmid_on_requested_owner(monkeypatch)
         return {"count": 1, "created": 0, "skipped": 0}
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vm_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _typed_identity_scan,
+    )
     monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
     monkeypatch.setattr(sync_vm, "sync_all_virtual_machine_task_histories", _fake_task_history)
 
@@ -698,7 +694,6 @@ def test_rest_selected_vm_sync_keeps_reused_vmid_on_requested_owner(monkeypatch)
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             netbox_vm_ids="55",
         )
@@ -737,7 +732,6 @@ def test_vm_sync_propagates_owned_task_history_fatal_error(monkeypatch):
                 pxs=data["pxs"],
                 cluster_status=data["cluster_status"],
                 cluster_resources=data["cluster_resources"],
-                custom_fields=data["custom_fields"],
                 tag=data["tag"],
             )
         )
@@ -769,7 +763,6 @@ def test_rest_vm_sync_with_network_raises_502_for_degraded_task_history(monkeypa
                 pxs=data["pxs"],
                 cluster_status=data["cluster_status"],
                 cluster_resources=data["cluster_resources"],
-                custom_fields=data["custom_fields"],
                 tag=data["tag"],
             )
         )
@@ -802,7 +795,6 @@ def test_vm_sync_can_disable_task_history_for_dedicated_followup_stage(monkeypat
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             sync_task_history=False,
         )
@@ -835,7 +827,6 @@ def test_vm_sync_skips_guest_agent_call_when_disabled(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -863,7 +854,6 @@ def test_vm_sync_marks_missing_primary_ip_as_warning(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             websocket=websocket,
             use_websocket=True,
@@ -920,7 +910,6 @@ def test_vm_sync_ignore_ipv6_link_local_true_skips_fe80(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             ignore_ipv6_link_local_addresses=True,
         )
@@ -964,7 +953,6 @@ def test_vm_sync_ignore_ipv6_link_local_false_includes_fe80(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             ignore_ipv6_link_local_addresses=False,
         )
@@ -997,7 +985,7 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1026,7 +1014,6 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1062,7 +1049,7 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1091,7 +1078,6 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1144,7 +1130,7 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1197,7 +1183,6 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1287,7 +1272,7 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1344,7 +1329,6 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1428,8 +1412,8 @@ def test_vm_only_ip_sync_guest_links_same_address_by_interface_scope(monkeypatch
 
     async def _fake_load_snapshot(nb):
         return [
-            {"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}},
-            {"id": 56, "name": "vm02", "custom_fields": {"proxmox_vm_id": 102}},
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101},
+            {"id": 56, "name": "vm02", "proxmox_vm_id": 102},
         ]
 
     async def _fake_guest_plugin_first(*args, **kwargs):
@@ -1493,7 +1477,6 @@ def test_vm_only_ip_sync_guest_links_same_address_by_interface_scope(monkeypatch
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1533,7 +1516,7 @@ def _install_ip_only_patches(monkeypatch, *, vm_config: dict, primary_ip_calls: 
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     for attr, val in [
         ("get_vm_config", _fake_get_vm_config),
@@ -1586,7 +1569,6 @@ def test_agent_kv_flag_disabled_skips_guest_agent_fetch(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1623,7 +1605,6 @@ def test_agent_kv_flag_enabled_calls_guest_agent_fetch(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
         )
     )
@@ -1664,7 +1645,7 @@ def test_vm_only_ip_sync_surfaces_missing_interface_skip(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1697,7 +1678,6 @@ def test_vm_only_ip_sync_surfaces_missing_interface_skip(monkeypatch):
             pxs=data["pxs"],
             cluster_status=data["cluster_status"],
             cluster_resources=data["cluster_resources"],
-            custom_fields=data["custom_fields"],
             tag=data["tag"],
             websocket=bridge,
             use_websocket=True,

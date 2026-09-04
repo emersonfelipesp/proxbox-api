@@ -216,7 +216,6 @@ sinal.
 | Prontidao da stack (NetBox API, proxbox-api API, `proxmox-sdk` `/openapi.json`) | sim | sim | sim |
 | Raiz `/` do mock reporta o servico carregado | (smoke pulado) | sim | sim |
 | Smoke `auth/register-key` + `netbox/endpoint` + `netbox/status` | sim | sim | sim |
-| Smoke `extras/custom-fields/create` | sim | sim | sim |
 | `test_backups_sync.py` (`requires_pve_schema`) | sim | skip | skip |
 | `test_devices_sync.py` (`requires_pve_schema`) | sim | skip | skip |
 | `test_vm_sync.py` (`requires_pve_schema`) | sim | skip | skip |

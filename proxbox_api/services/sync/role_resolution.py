@@ -3,8 +3,7 @@
 Synced Proxmox VMs/containers pick a NetBox ``DeviceRole`` from a four-tier
 hierarchy — operator-edit lock → per-Node → per-Endpoint → plugin singleton.
 The typed VM sync-state sidecar stores ``proxmox_last_synced_role_id`` so direct
-operator edits in the NetBox UI remain preserved on subsequent syncs. The
-deprecated same-named custom field is only a transition fallback.
+operator edits in the NetBox UI remain preserved on subsequent syncs.
 """
 
 from __future__ import annotations
@@ -31,8 +30,6 @@ from proxbox_api.services.sync.sync_state_writer import (
 )
 from proxbox_api.services.sync.vm_helpers import relation_id as _relation_id
 from proxbox_api.settings_client import get_settings
-
-LAST_SYNCED_ROLE_CUSTOM_FIELD = "proxmox_last_synced_role_id"
 
 VMType = Literal["qemu", "lxc"]
 
@@ -137,9 +134,9 @@ async def resolve_default_role_id(
 class RoleSnapshotDecision:
     """Resolved role + snapshot writes for a single VM reconciliation.
 
-    Attributes mirror the two payload writes the sync must produce: ``role``
-    on the VM and ``custom_fields.proxmox_last_synced_role_id``. ``None`` for
-    a ``*_value`` means the field would be cleared in NetBox; the matching
+    Attributes mirror the two writes the sync must produce: ``role`` on the VM
+    and ``proxmox_last_synced_role_id`` on the typed sidecar. ``None`` for a
+    ``*_value`` means the field would be cleared in NetBox; the matching
     ``write_*`` flag is the source of truth for "include this field in the
     PATCH at all".
     """
@@ -216,16 +213,6 @@ def compute_role_snapshot_decision(
     )
 
 
-def extract_snapshot_id(record: dict[str, object] | None) -> int | None:
-    """Pull ``proxmox_last_synced_role_id`` out of a NetBox VM record."""
-    if not isinstance(record, dict):
-        return None
-    custom_fields = record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    return _coerce_int(custom_fields.get(LAST_SYNCED_ROLE_CUSTOM_FIELD))
-
-
 async def resolve_snapshot_id(nb: object, record: dict[str, object] | None) -> int | None:
     """Compatibility wrapper returning a verified role snapshot id, if any."""
     return (await resolve_snapshot_read(nb, record)).snapshot_id
@@ -239,31 +226,18 @@ async def resolve_snapshot_read(
     return await read_vm_last_synced_role(
         nb,
         vm_record=record,
-        custom_field_name=LAST_SYNCED_ROLE_CUSTOM_FIELD,
     )
 
 
 def resolve_snapshot_read_from_scan(
     scan: VMRoleSnapshotScan,
     record: Mapping[str, object] | None,
-    *,
-    legacy_custom_fields_enabled: bool,
 ) -> VMRoleSnapshotRead:
-    """Resolve one VM from a fleet scan, with safe legacy fallback."""
+    """Resolve one VM from a fleet typed-sidecar scan."""
     if record is None:
         return VMRoleSnapshotRead(snapshot_id=None, verified=True)
     vm_id = _relation_id(record.get("id"))
-    read = scan.for_vm(vm_id)
-    if read.snapshot_id is not None:
-        return read
-    if (
-        legacy_custom_fields_enabled
-        and scan.read_verified
-        and vm_id not in scan.unverified_vm_ids
-        and (legacy_snapshot_id := extract_snapshot_id(dict(record))) is not None
-    ):
-        return VMRoleSnapshotRead(snapshot_id=legacy_snapshot_id, verified=True)
-    return read
+    return scan.for_vm(vm_id)
 
 
 def apply_role_snapshot_policy(
@@ -405,7 +379,6 @@ async def persist_sync_state_with_role_compensation(
         committed_snapshot = await read_vm_last_synced_role(
             nb,
             vm_record={"id": virtual_machine_id},
-            custom_field_name=LAST_SYNCED_ROLE_CUSTOM_FIELD,
         )
         if (
             expected_snapshot_id is not None

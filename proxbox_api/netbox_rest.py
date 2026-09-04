@@ -1620,8 +1620,8 @@ async def rest_reconcile_async(
             during a PATCH if the current record has a non-null value and the
             normalized desired payload no longer carries the field. Use this to
             clear stale FK or choice values that are no longer managed by this
-            sync path (e.g. the VMInterface ``bridge`` FK after switching to the
-            ``proxbox_bridge`` custom field).
+            sync path (for example, a VMInterface ``bridge`` FK after bridge
+            ownership moves to the typed sync-state sidecar).
         lookup_query_field_map: Optional mapping of payload field names to the
             corresponding NetBox filter query parameter names used in GET requests.
             For example ``{"virtual_machine": "virtual_machine_id"}`` maps the

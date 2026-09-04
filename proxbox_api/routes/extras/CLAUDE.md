@@ -11,24 +11,17 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Purpose
 
-Endpoints for NetBox extras resources required by synchronization.
+Status endpoints for NetBox bootstrap support objects.
 
 ## Current Files
 
-- `__init__.py`: thin extras route handlers for NetBox custom field reconcile, cache bypass, and bootstrap status.
+- `__init__.py`: exposes the latest NetBox bootstrap status.
 
 ## How These Routes Work
 
-- These routes create or expose the custom fields and related extras metadata required by VM synchronization.
-- `POST /extras/custom-fields/reconcile` is the supported operator recovery route for missing or drifted NetBox custom fields; it bypasses the process-local custom-field cache and clears only `/api/extras/custom-fields/` entries from the lower-level NetBox GET cache before live lookup.
-- Custom-field reconcile failures leave the process-local custom-field cache
-  empty. A duplicate create response that cannot be re-fetched from NetBox is
-  surfaced as a failed field instead of being cached as success.
 - `GET /extras/bootstrap-status` exposes the last startup NetBox bootstrap status and warnings stored on `app.state.bootstrap_status`.
-- `GET /extras/extras/custom-fields/create` is the legacy double-prefix route and must keep working for older callers.
-- They also provide dependency aliases that the VM routes use when constructing sync workflows.
+- Custom-field creation and reconciliation routes are intentionally absent.
 
 ## Extension Guidance
 
-- Add new custom fields only in `proxbox_api/services/custom_fields.py`; startup bootstrap and extras routes consume that same inventory object.
 - Keep extras routes minimal and schema-driven.

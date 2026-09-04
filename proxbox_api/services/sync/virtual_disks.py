@@ -16,7 +16,6 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.runtime_settings import get_int
-from proxbox_api.services.custom_fields import legacy_custom_fields_payload
 from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
@@ -24,6 +23,7 @@ from proxbox_api.services.sync.storage_links import (
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_disk_sync_state
+from proxbox_api.services.sync.vm_filter import hydrate_vm_identities_from_sidecars
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     relation_id,
@@ -33,6 +33,7 @@ from proxbox_api.services.sync.vm_helpers import (
 )
 from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_endpoint_id,
+    extract_proxmox_node,
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
     normalize_vmid,
@@ -50,7 +51,7 @@ class VmConfigTarget:
     endpoint_id: int | None
     source: str
     netbox_device_name: str | None
-    custom_field_node: str | None
+    sync_state_node: str | None
 
 
 @dataclass(frozen=True)
@@ -78,21 +79,6 @@ def _text_or_none(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _proxmox_node_custom_field(vm: dict[str, object]) -> str | None:
-    vm_data = to_mapping(vm)
-    for key in ("proxmox_node", "cf_proxmox_node"):
-        value = _text_or_none(vm_data.get(key))
-        if value:
-            return value
-    custom_fields = vm_data.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        for key in ("proxmox_node", "cf_proxmox_node"):
-            value = _text_or_none(custom_fields.get(key))
-            if value:
-                return value
-    return None
 
 
 def _iter_cluster_vm_resources(
@@ -153,7 +139,7 @@ def _resolve_vm_config_target(
 ) -> VmConfigTarget:
     vm_data = to_mapping(vm)
     device_name = relation_name(vm_data.get("device"))
-    custom_field_node = _proxmox_node_custom_field(vm_data)
+    sync_state_node = extract_proxmox_node(vm_data)
     endpoint_id = extract_proxmox_endpoint_id(vm_data)
 
     cluster_target = _cluster_resource_target(
@@ -172,18 +158,18 @@ def _resolve_vm_config_target(
             endpoint_id=endpoint_id,
             source="cluster_resources",
             netbox_device_name=device_name,
-            custom_field_node=custom_field_node,
+            sync_state_node=sync_state_node,
         )
 
-    if custom_field_node:
+    if sync_state_node:
         return VmConfigTarget(
-            node=custom_field_node,
+            node=sync_state_node,
             vm_type=vm_type,
             cluster_name=cluster_name,
             endpoint_id=endpoint_id,
-            source="custom_fields.proxmox_node",
+            source="sync_state.proxmox_node",
             netbox_device_name=device_name,
-            custom_field_node=custom_field_node,
+            sync_state_node=sync_state_node,
         )
 
     return VmConfigTarget(
@@ -193,7 +179,7 @@ def _resolve_vm_config_target(
         endpoint_id=endpoint_id,
         source="device.name" if device_name else "unresolved",
         netbox_device_name=device_name,
-        custom_field_node=custom_field_node,
+        sync_state_node=sync_state_node,
     )
 
 
@@ -392,13 +378,13 @@ async def _fetch_virtual_disk_vm_config(
 
     if not node_name:
         logger.warning(
-            "No node found for VM %s (vmid=%s type=%s cluster=%s, device=%s custom_field_node=%s), skipping disk sync",
+            "No node found for VM %s (vmid=%s type=%s cluster=%s, device=%s sync_state_node=%s), skipping disk sync",
             vm_name,
             vmid,
             vm_type,
             cluster_name,
             target.netbox_device_name,
-            target.custom_field_node,
+            target.sync_state_node,
         )
         return VmDiskFetchResult(
             vm=vm,
@@ -518,6 +504,7 @@ async def _sync_virtual_disks_for_vm(
         parent_vm_disk_updated = False
 
         disk_payloads: list[dict[str, object]] = []
+        storage_id_by_key: dict[tuple[int | None, str], int | None] = {}
         for disk_entry in disk_entries:
             storage_name = disk_entry.storage_name or storage_name_from_volume_id(
                 disk_entry.storage
@@ -528,9 +515,6 @@ async def _sync_virtual_disks_for_vm(
                 storage_name=storage_name,
             )
             storage_id = storage_record.get("id") if storage_record else None
-            custom_fields: dict[str, object] = {}
-            if storage_id is not None:
-                custom_fields["proxbox_storage_id"] = storage_id
             disk_payload: dict[str, object] = {
                 "virtual_machine": vm_id,
                 "name": disk_entry.name,
@@ -539,9 +523,8 @@ async def _sync_virtual_disks_for_vm(
                 "description": disk_entry.description,
                 "tags": tag_refs,
             }
-            if custom_fields:
-                disk_payload["custom_fields"] = custom_fields
             disk_payloads.append(disk_payload)
+            storage_id_by_key[(relation_id(vm_id), disk_entry.name)] = storage_id
 
         desired_disk_sizes = {
             str(payload.get("name")): int(payload.get("size") or 0) for payload in disk_payloads
@@ -552,14 +535,7 @@ async def _sync_virtual_disks_for_vm(
             bulk_result = await rest_bulk_reconcile_async(
                 nb,
                 "/api/virtualization/virtual-disks/",
-                payloads=[
-                    legacy_custom_fields_payload(
-                        payload,
-                        overwrite=True,
-                        context="legacy virtual-disk custom-field payload",
-                    )
-                    for payload in disk_payloads
-                ],
+                payloads=disk_payloads,
                 lookup_fields=["virtual_machine", "name"],
                 schema=NetBoxVirtualDiskSyncState,
                 current_normalizer=lambda record: {
@@ -569,7 +545,6 @@ async def _sync_virtual_disks_for_vm(
                     "storage": record.get("storage"),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
                 base_query={"virtual_machine_id": vm_id},
                 lookup_query_field_map={"virtual_machine": "virtual_machine_id"},
@@ -578,30 +553,13 @@ async def _sync_virtual_disks_for_vm(
             )
             disks_created = bulk_result.created
             disks_updated = bulk_result.updated
-            sidecar_payload_by_key = {
-                (
-                    relation_id(payload.get("virtual_machine")),
-                    str(payload.get("name") or ""),
-                ): payload
-                for payload in disk_payloads
-            }
             for record in bulk_result.records:
                 record_vm_id = relation_id(record.get("virtual_machine"))
-                sidecar_payload = sidecar_payload_by_key.get(
-                    (record_vm_id, str(record.get("name") or ""))
-                )
-                custom_fields = (
-                    sidecar_payload.get("custom_fields")
-                    if isinstance(sidecar_payload, dict)
-                    else None
-                )
                 await write_virtual_disk_sync_state(
                     nb,
                     virtual_disk_id=record.get("id"),
-                    proxbox_storage_id=(
-                        custom_fields.get("proxbox_storage_id")
-                        if isinstance(custom_fields, dict)
-                        else None
+                    proxbox_storage_id=storage_id_by_key.get(
+                        (record_vm_id, str(record.get("name") or ""))
                     ),
                     overwrite_custom_fields=True,
                 )
@@ -695,7 +653,7 @@ async def create_virtual_disks(  # noqa: C901
     """
     Sync virtual disks for existing Virtual Machines in NetBox.
 
-    Queries NetBox for VMs that have cf_proxmox_vm_id set, fetches their
+    Joins NetBox VMs to typed sync-state identities, fetches their
     disk configuration from Proxmox, and creates/updates Virtual Disk objects.
 
     When ``netbox_vm_id`` is provided only that single VM is processed.
@@ -739,6 +697,11 @@ async def create_virtual_disks(  # noqa: C901
             )
         else:
             vms = await _list_all_vms_with_proxmox_id(nb)
+        vms = await hydrate_vm_identities_from_sidecars(
+            nb,
+            [to_mapping(vm) for vm in vms],
+            require_all=target_vm_ids is not None,
+        )
     except Exception as e:
         if target_vm_ids is not None:
             raise
@@ -766,7 +729,7 @@ async def create_virtual_disks(  # noqa: C901
         logger.warning("Error loading storage records for virtual disk sync: %s", error)
 
     if not vms:
-        logger.info("No VMs found with cf_proxmox_vm_id set")
+        logger.info("No VMs found with typed Proxbox sync-state identity")
         if use_websocket and websocket:
             await websocket.send_json(
                 {
@@ -774,7 +737,7 @@ async def create_virtual_disks(  # noqa: C901
                     "type": "sync",
                     "data": {
                         "completed": True,
-                        "message": "No VMs found with cf_proxmox_vm_id set",
+                        "message": "No VMs found with typed Proxbox sync-state identity",
                     },
                 }
             )
@@ -786,7 +749,7 @@ async def create_virtual_disks(  # noqa: C901
     skipped = 0
     websocket_lock = asyncio.Lock() if use_websocket and websocket else None
 
-    logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
+    logger.info(f"Found {total_vms} VMs with typed Proxbox sync-state identity to process")
 
     for vm in vms:
         vm_name = str(vm.get("name", "unknown") or "unknown")

@@ -7,6 +7,7 @@ from proxbox_api.proxmox_to_netbox.mappers.virtual_machine import (
 )
 from proxbox_api.proxmox_to_netbox.netbox_schema import resolve_netbox_schema_contract
 from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi
+from proxbox_api.services.sync.virtual_machines import build_virtual_machine_sync_state_fields
 
 
 def test_map_proxmox_vm_to_netbox_vm_body():
@@ -49,8 +50,13 @@ def test_map_proxmox_vm_to_netbox_vm_body():
     assert body["vcpus"] == 4
     assert body["memory"] == 8192
     assert body["disk"] == 153600
-    assert body["custom_fields"]["proxmox_vm_id"] == 101
-    assert body["custom_fields"]["proxmox_start_at_boot"] is True
+    assert "custom_fields" not in body
+    sync_state = build_virtual_machine_sync_state_fields(
+        proxmox_resource=resource,
+        proxmox_config=config,
+    )
+    assert sync_state["proxmox_vm_id"] == 101
+    assert sync_state["proxmox_start_at_boot"] is True
 
 
 def test_map_proxmox_vm_to_netbox_vm_body_no_parseable_disks():

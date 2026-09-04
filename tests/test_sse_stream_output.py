@@ -203,7 +203,7 @@ async def test_virtual_disk_stream_reports_partial_selected_lookup_as_failed(mon
     async def _partial_list(_nb, path, *, query=None):
         assert path == "/api/virtualization/virtual-machines/"
         assert query == {"id": ["7", "8"]}
-        return [{"id": 7, "custom_fields": {"proxmox_vm_id": 107}}]
+        return [{"id": 7}]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _partial_list)
 
@@ -238,7 +238,6 @@ async def test_vms_create_stream_forwards_task_history_false(monkeypatch):
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_vm_network=False,
         sync_task_history=False,
@@ -261,7 +260,6 @@ async def test_vms_create_stream_filters_selected_vm_to_exact_owner(monkeypatch)
                 "id": 501,
                 "name": "shared-name",
                 "cluster": None,
-                "custom_fields": {},
             }
         ]
 
@@ -289,10 +287,6 @@ async def test_vms_create_stream_filters_selected_vm_to_exact_owner(monkeypatch)
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _sidecar_scan,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
-    )
     monkeypatch.setattr(sync_vm, "create_virtual_machines", _fake_create_virtual_machines)
     px_a = SimpleNamespace(
         name="cluster-a",
@@ -315,7 +309,6 @@ async def test_vms_create_stream_filters_selected_vm_to_exact_owner(monkeypatch)
             SimpleNamespace(name="cluster-b", mode="cluster"),
         ],
         cluster_resources=[{"cluster-a": [requested]}, {"cluster-b": [reused]}],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         netbox_vm_ids="501",
         sync_vm_network=False,
@@ -341,7 +334,6 @@ async def test_vms_create_stream_reports_owned_task_history_fatal_error(monkeypa
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_vm_network=False,
         sync_task_history=True,
@@ -374,7 +366,6 @@ async def test_vm_by_id_create_stream_forwards_task_history_false(monkeypatch):
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_task_history=False,
         overwrite_flags=SyncOverwriteFlags(),
@@ -399,7 +390,6 @@ async def test_vm_by_id_create_stream_filters_exact_owned_resource(monkeypatch):
             "id": 248,
             "name": "shared-name",
             "cluster": None,
-            "custom_fields": {},
         }
     )
 
@@ -425,10 +415,6 @@ async def test_vm_by_id_create_stream_filters_exact_owned_resource(monkeypatch):
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _sidecar_scan,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
-    )
 
     selected = {"type": "qemu", "name": "renamed-in-proxmox", "vmid": 9248}
     same_name = {"type": "qemu", "name": "shared-name", "vmid": 9999}
@@ -450,7 +436,6 @@ async def test_vm_by_id_create_stream_filters_exact_owned_resource(monkeypatch):
             {"CLUSTER-A": [same_name, wrong_type, selected]},
             {"cluster-b": [reused_vmid]},
         ],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_task_history=True,
         overwrite_flags=SyncOverwriteFlags(),
@@ -481,7 +466,6 @@ async def test_vm_by_id_create_stream_reports_owned_task_history_fatal_error(mon
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_task_history=True,
         overwrite_flags=SyncOverwriteFlags(),
@@ -495,7 +479,7 @@ async def test_vm_by_id_create_stream_reports_owned_task_history_fatal_error(mon
 
 
 def _sidecar_only_vm_session(netbox_vm_id: int):
-    """NetBox session stub returning a VM without legacy Proxbox custom fields."""
+    """NetBox session stub returning a VM whose identity lives in a sidecar."""
 
     async def _get(id):
         assert id == netbox_vm_id
@@ -503,7 +487,6 @@ def _sidecar_only_vm_session(netbox_vm_id: int):
             "id": netbox_vm_id,
             "name": f"vm-{netbox_vm_id}",
             "cluster": None,
-            "custom_fields": {},
         }
 
     return SimpleNamespace(
@@ -730,7 +713,6 @@ async def test_vms_create_stream_forwards_run_id(monkeypatch):
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_vm_network=False,
         overwrite_flags=SyncOverwriteFlags(),
@@ -763,7 +745,6 @@ async def test_vm_by_id_create_stream_forwards_run_id(monkeypatch):
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         overwrite_flags=SyncOverwriteFlags(),
         run_id="issue-519-run",

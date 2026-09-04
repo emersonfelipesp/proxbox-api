@@ -242,8 +242,6 @@ class TestLiveVirtualMachineStatusPath:
 
     @staticmethod
     def _payload(proxmox_status: str) -> dict:
-        from datetime import datetime, timezone
-
         from proxbox_api.services.sync.individual.vm_sync import (
             _build_netbox_vm_payload,
         )
@@ -261,7 +259,6 @@ class TestLiveVirtualMachineStatusPath:
             device_id=None,
             role_id=None,
             tag_ids=[],
-            last_updated=datetime.now(timezone.utc),
         )
 
     @pytest.mark.parametrize(

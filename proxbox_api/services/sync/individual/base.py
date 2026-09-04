@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from proxbox_api.constants import VM_ROLE_MAPPINGS
@@ -54,14 +53,6 @@ class BaseIndividualSyncService:
             List containing tag payload dict.
         """
         return nested_tag_payload(tag)
-
-    def _last_updated_cf(self) -> dict[str, str]:
-        """Return proxmox_last_updated custom field with current timestamp.
-
-        Returns:
-            Dict with proxmox_last_updated key and ISO timestamp value.
-        """
-        return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
 
     async def sync_one(self, **params: object) -> dict:
         """Sync a single object. Override in subclasses.

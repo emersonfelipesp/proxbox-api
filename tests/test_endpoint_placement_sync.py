@@ -99,7 +99,6 @@ def test_vm_payload_includes_endpoint_site_and_excludes_tenant() -> None:
         tag_ids=[10],
         site_id=42,
         tenant_id=11,
-        cluster_name="cluster-a",
     )
 
     assert payload["site"] == 42

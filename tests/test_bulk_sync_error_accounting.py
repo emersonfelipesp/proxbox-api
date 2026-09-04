@@ -50,8 +50,21 @@ def test_backup_routines_includes_bulk_failed_count_in_errors(monkeypatch):
 
 
 def test_replications_includes_bulk_failed_count_in_errors(monkeypatch):
-    async def _fake_list_async(_nb, _path, **_kwargs):
-        return [{"id": 55, "custom_fields": {"proxmox_vm_id": "101"}}]
+    async def _fake_list_async(_nb, path, **_kwargs):
+        if path == "/api/virtualization/virtual-machines/":
+            return [{"id": 55}]
+        return []
+
+    async def _fake_identity_scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 55},
+                    "proxmox_vm_id": 101,
+                    "proxmox_vm_type": "qemu",
+                },
+            )
+        )
 
     async def _fake_bulk_reconcile(*_args, **_kwargs):
         return SimpleNamespace(created=1, updated=0, unchanged=0, failed=1, records=[])
@@ -63,6 +76,10 @@ def test_replications_includes_bulk_failed_count_in_errors(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.replications.rest_bulk_reconcile_async",
         _fake_bulk_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.replications.load_vm_sync_state_identities",
+        _fake_identity_scan,
     )
 
     pxs = [

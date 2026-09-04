@@ -214,7 +214,6 @@ container itself, so running it for `pbs` / `pdm` would add no signal.
 | Stack readiness (NetBox API, proxbox-api API, proxmox-sdk `/openapi.json`) | yes | yes | yes |
 | Mock root `/` reports the loaded service identifier | (smoke skipped) | yes | yes |
 | `auth/register-key` + `netbox/endpoint` + `netbox/status` smoke | yes | yes | yes |
-| `extras/custom-fields/create` smoke | yes | yes | yes |
 | `test_backups_sync.py` (`requires_pve_schema`) | yes | skip | skip |
 | `test_devices_sync.py` (`requires_pve_schema`) | yes | skip | skip |
 | `test_vm_sync.py` (`requires_pve_schema`) | yes | skip | skip |

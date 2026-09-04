@@ -22,7 +22,6 @@ using the same shape.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,7 +34,6 @@ from proxbox_api.netbox_rest import (
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxClusterSyncState,
     NetBoxClusterTypeSyncState,
-    NetBoxCustomFieldSyncState,
     NetBoxDeviceRoleSyncState,
     NetBoxDeviceTypeSyncState,
     NetBoxManufacturerSyncState,
@@ -43,10 +41,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineTypeSyncState,
 )
 from proxbox_api.schemas.netbox.extras import TagSchema
-from proxbox_api.services.custom_fields import (
-    legacy_custom_fields_payload,
-    warn_legacy_custom_fields,
-)
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
@@ -97,10 +91,6 @@ def _relation_id_or_none(value: object) -> int | None:
     return None
 
 
-def _last_updated_cf() -> dict[str, str]:
-    return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
-
-
 async def upsert_cluster_type(
     nb: Api,
     *,
@@ -116,24 +106,18 @@ async def upsert_cluster_type(
         nb,
         "/api/virtualization/cluster-types/",
         lookup={"slug": mode},
-        payload=legacy_custom_fields_payload(
-            {
-                "name": mode.capitalize(),
-                "slug": mode,
-                "description": f"Proxmox {mode} mode",
-                "tags": tag_refs,
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy cluster-type custom-field payload",
-        ),
+        payload={
+            "name": mode.capitalize(),
+            "slug": mode,
+            "description": f"Proxmox {mode} mode",
+            "tags": tag_refs,
+        },
         schema=NetBoxClusterTypeSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     return _from_reconcile(result)
@@ -159,25 +143,19 @@ async def upsert_cluster(
         "type": cluster_type_id,
         "description": f"Proxmox {mode} cluster.",
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
 
     result = await rest_reconcile_async_with_status(
         nb,
         "/api/virtualization/clusters/",
         lookup={"name": cluster_name},
-        payload=legacy_custom_fields_payload(
-            payload,
-            overwrite=True,
-            context="legacy cluster custom-field payload",
-        ),
+        payload=payload,
         schema=NetBoxClusterSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "type": _relation_id_or_none(record.get("type")),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     return _from_reconcile(result)
@@ -195,22 +173,16 @@ async def upsert_manufacturer(
         nb,
         "/api/dcim/manufacturers/",
         lookup={"slug": slug},
-        payload=legacy_custom_fields_payload(
-            {
-                "name": name,
-                "slug": slug,
-                "tags": tag_refs or [],
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy manufacturer custom-field payload",
-        ),
+        payload={
+            "name": name,
+            "slug": slug,
+            "tags": tag_refs or [],
+        },
         schema=NetBoxManufacturerSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     return _from_reconcile(result)
@@ -229,24 +201,18 @@ async def upsert_device_type(
         nb,
         "/api/dcim/device-types/",
         lookup={"model": model},
-        payload=legacy_custom_fields_payload(
-            {
-                "model": model,
-                "slug": slug,
-                "manufacturer": manufacturer_id,
-                "tags": tag_refs or [],
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy device-type custom-field payload",
-        ),
+        payload={
+            "model": model,
+            "slug": slug,
+            "manufacturer": manufacturer_id,
+            "tags": tag_refs or [],
+        },
         schema=NetBoxDeviceTypeSyncState,
         current_normalizer=lambda record: {
             "model": record.get("model"),
             "slug": record.get("slug"),
             "manufacturer": _relation_id_or_none(record.get("manufacturer")),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     return _from_reconcile(result)
@@ -271,7 +237,6 @@ async def upsert_device_role(
         "slug": slug,
         "color": color,
         "tags": tag_refs or [],
-        "custom_fields": _last_updated_cf(),
     }
     if description is not None:
         payload["description"] = description
@@ -282,11 +247,7 @@ async def upsert_device_role(
         nb,
         "/api/dcim/device-roles/",
         lookup={"slug": slug},
-        payload=legacy_custom_fields_payload(
-            payload,
-            overwrite=True,
-            context="legacy device-role custom-field payload",
-        ),
+        payload=payload,
         schema=NetBoxDeviceRoleSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -295,7 +256,6 @@ async def upsert_device_role(
             "description": record.get("description"),
             "vm_role": record.get("vm_role"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     return _from_reconcile(result)
@@ -399,89 +359,6 @@ async def upsert_platform(
             "tags": record.get("tags"),
         },
         patchable_fields=set(),
-    )
-    return _from_reconcile(result)
-
-
-async def upsert_custom_field(
-    nb: Api,
-    *,
-    name: str,
-    type: str,
-    label: str,
-    object_types: list[str],
-    description: str | None = None,
-    group_name: str | None = None,
-    ui_visible: str = "always",
-    ui_editable: str = "hidden",
-    weight: int = 100,
-    filter_logic: str = "loose",
-    search_weight: int = 1000,
-    related_object_type: str | None = None,
-) -> UpsertResult:
-    """Create-or-update an ``extras.CustomField`` identified by ``name``.
-
-    ``object_types`` uses NetBox's ``app.model`` content-type strings, e.g.
-    ``"virtualization.virtualmachine"``. The helper preserves the existing
-    inline ``create_custom_fields`` payload surface so behavior is identical
-    when called either from the bootstrap orchestrator or the legacy lazy
-    code path.
-    """
-    warn_legacy_custom_fields("legacy custom-field definition reconcile")
-    payload: dict[str, object] = {
-        "name": name,
-        "type": type,
-        "label": label,
-        "ui_visible": ui_visible,
-        "ui_editable": ui_editable,
-        "weight": weight,
-        "filter_logic": filter_logic,
-        "search_weight": search_weight,
-        "object_types": sorted(dict.fromkeys(object_types)),
-    }
-    if description is not None:
-        payload["description"] = description
-    if group_name is not None:
-        payload["group_name"] = group_name
-    if related_object_type is not None:
-        payload["related_object_type"] = related_object_type
-
-    result = await rest_reconcile_async_with_status(
-        nb,
-        "/api/extras/custom-fields/",
-        lookup={"name": name},
-        payload=payload,
-        schema=NetBoxCustomFieldSyncState,
-        current_normalizer=lambda record: {
-            "name": record.get("name"),
-            "type": (
-                record.get("type", {}).get("value")
-                if isinstance(record.get("type"), dict)
-                else record.get("type")
-            ),
-            "label": record.get("label"),
-            "description": record.get("description"),
-            "ui_visible": (
-                record.get("ui_visible", {}).get("value")
-                if isinstance(record.get("ui_visible"), dict)
-                else record.get("ui_visible")
-            ),
-            "ui_editable": (
-                record.get("ui_editable", {}).get("value")
-                if isinstance(record.get("ui_editable"), dict)
-                else record.get("ui_editable")
-            ),
-            "weight": record.get("weight"),
-            "filter_logic": (
-                record.get("filter_logic", {}).get("value")
-                if isinstance(record.get("filter_logic"), dict)
-                else record.get("filter_logic")
-            ),
-            "search_weight": record.get("search_weight"),
-            "group_name": record.get("group_name"),
-            "object_types": record.get("object_types") or [],
-            "related_object_type": record.get("related_object_type"),
-        },
     )
     return _from_reconcile(result)
 

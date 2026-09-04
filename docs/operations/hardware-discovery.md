@@ -88,26 +88,6 @@ On failure the orchestrator emits a generic `item_progress` frame with a
 | `host_key_mismatch` | The node's host key does not match the pinned fingerprint. Credentials are NOT sent. |
 | `hardware_discovery_failed: <exc>` | Catch-all for any other exception. |
 
-## NetBox custom fields
-
-The hardware-discovery custom fields are part of the canonical Proxbox
-custom-field inventory in `proxbox_api/services/custom_fields.py`. Startup
-bootstrap and `POST /extras/custom-fields/reconcile` both consume that same
-inventory:
-
-| Field | Object | Type |
-|---|---|---|
-| `hardware_chassis_serial` | `dcim.device` | text |
-| `hardware_chassis_manufacturer` | `dcim.device` | text |
-| `hardware_chassis_product` | `dcim.device` | text |
-| `nic_speed_gbps` | `dcim.interface` | integer |
-| `nic_duplex` | `dcim.interface` | text |
-| `nic_link` | `dcim.interface` | boolean |
-
-Writes go through the existing drift-detect PATCH path
-(`netbox_rest.rest_patch_async`), so a second consecutive successful sync emits
-zero `extras.ObjectChange` rows for these fields.
-
 ## Physical-NIC MAC addresses
 
 Discovery is the only path that can populate a **physical** NIC's MAC.
@@ -120,9 +100,8 @@ without one. When a discovery run parses `NicFacts.mac_address` (via
 node-network path uses for bridge/bond MACs — so both produce identical
 `dcim.MACAddress` rows and set `primary_mac_address`.
 
-This is a **native** NetBox field, not a custom field, so it is unaffected by
-the `custom_fields_enabled` gate. A MAC failure is logged as a warning and
-never aborts the discovery run.
+This is a native NetBox field. A MAC failure is logged as a warning and never
+aborts the discovery run.
 
 The MAC write requires two explicit NetBox UI opt-ins:
 `hardware_discovery_enabled=true` **and**

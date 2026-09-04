@@ -8,15 +8,12 @@ from typing import Any, cast
 from proxbox_api.constants import DISCOVERY_TAG_VM_LXC, DISCOVERY_TAG_VM_QEMU
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_bulk_delete_async, rest_list_paginated_async
+from proxbox_api.netbox_rest import rest_bulk_delete_async
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
-from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
 from proxbox_api.services.sync.sync_state_reader import (
     SidecarVMOrphanScan,
-    resolve_vm_last_run_id,
     scan_vm_sidecar_orphan_candidates,
 )
-from proxbox_api.services.sync.vm_helpers import LAST_RUN_ID_CUSTOM_FIELD
 
 VIRTUAL_MACHINES_PATH = "/api/virtualization/virtual-machines/"
 VM_DISCOVERY_TAG_SLUGS: tuple[str, ...] = (DISCOVERY_TAG_VM_QEMU, DISCOVERY_TAG_VM_LXC)
@@ -49,11 +46,6 @@ def _coerce_int(value: object) -> int | None:
         return int(cast(Any, value))
     except (TypeError, ValueError):
         return None
-
-
-def _custom_fields(record: dict[str, object]) -> dict[str, object]:
-    value = record.get("custom_fields")
-    return cast(dict[str, object], value) if isinstance(value, dict) else {}
 
 
 def _tag_slugs(record: dict[str, object]) -> list[str]:
@@ -121,7 +113,7 @@ async def _add_sidecar_orphan_candidates(
         )
     if scan.sidecar_read_failed:
         logger.warning(
-            "Skipping orphan VM legacy custom-field sweep for run_id=%s because "
+            "Skipping orphan VM sweep for run_id=%s because "
             "the VM sidecar scan failed transiently; refusing to delete VMs whose "
             "current sidecar state cannot be verified",
             run_id,
@@ -132,70 +124,6 @@ async def _add_sidecar_orphan_candidates(
         if record_id is not None:
             candidates_by_id.setdefault(record_id, candidate)
     return scan
-
-
-async def _sidecar_marks_current_run(
-    nb: object,
-    *,
-    candidate: dict[str, object],
-    run_id: str,
-    current_sidecar_vm_ids: set[int] | None,
-) -> bool:
-    if current_sidecar_vm_ids is None:
-        return False
-    candidate_id = _coerce_int(candidate.get("id"))
-    if candidate_id is not None and candidate_id in current_sidecar_vm_ids:
-        return True
-    last_run_id = await resolve_vm_last_run_id(
-        nb,
-        vm_record=candidate,
-        custom_field_name=LAST_RUN_ID_CUSTOM_FIELD,
-    )
-    return last_run_id == run_id
-
-
-async def _add_legacy_orphan_candidates(
-    nb: object,
-    *,
-    run_id: str,
-    vm_slugs: tuple[str, ...],
-    current_sidecar_vm_ids: set[int] | None,
-    candidates_by_id: dict[int, dict[str, object]],
-) -> None:
-    if not custom_fields_enabled():
-        return
-    warn_legacy_custom_fields("legacy orphan-sweep custom-field fallback")
-    run_filter = f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__nie"
-    empty_filter = f"cf_{LAST_RUN_ID_CUSTOM_FIELD}__empty"
-    for slug in vm_slugs:
-        queries: tuple[dict[str, object], dict[str, object]] = (
-            {"tag": slug, run_filter: run_id},
-            {"tag": slug, empty_filter: True},
-        )
-        for query in queries:
-            records = await rest_list_paginated_async(
-                nb,
-                VIRTUAL_MACHINES_PATH,
-                base_query=query,
-                page_size=200,
-            )
-            for record in records:
-                data = _record_to_dict(record)
-                if data is None:
-                    continue
-                record_id = _coerce_int(data.get("id"))
-                if record_id is None:
-                    continue
-                if current_sidecar_vm_ids is not None and record_id in current_sidecar_vm_ids:
-                    continue
-                if await _sidecar_marks_current_run(
-                    nb,
-                    candidate=data,
-                    run_id=run_id,
-                    current_sidecar_vm_ids=current_sidecar_vm_ids,
-                ):
-                    continue
-                candidates_by_id.setdefault(record_id, data)
 
 
 async def find_orphan_vms(
@@ -218,22 +146,10 @@ async def find_orphan_vms(
     )
     if sidecar_scan.sidecar_read_failed:
         return list(candidates_by_id.values())
-    current_sidecar_vm_ids = (
-        None if sidecar_scan.sidecar_unavailable else sidecar_scan.current_vm_ids
-    )
-    await _add_legacy_orphan_candidates(
-        nb,
-        run_id=run_id,
-        vm_slugs=normalized_slugs,
-        current_sidecar_vm_ids=current_sidecar_vm_ids,
-        candidates_by_id=candidates_by_id,
-    )
-
     return list(candidates_by_id.values())
 
 
 def _candidate_item(candidate: dict[str, object], *, run_id: str) -> dict[str, object]:
-    custom_fields = _custom_fields(candidate)
     return {
         "name": str(candidate.get("name") or candidate.get("display") or candidate.get("id")),
         "type": "virtual_machine",
@@ -242,9 +158,9 @@ def _candidate_item(candidate: dict[str, object], *, run_id: str) -> dict[str, o
         "extra": {
             "reason": "orphan",
             "run_id": run_id,
-            "stale_run_id": custom_fields.get(LAST_RUN_ID_CUSTOM_FIELD),
+            "stale_run_id": candidate.get("_proxbox_last_run_id"),
             "tag_slugs": _tag_slugs(candidate),
-            "vmid": custom_fields.get("proxmox_vm_id"),
+            "vmid": candidate.get("_proxmox_vm_id"),
         },
     }
 

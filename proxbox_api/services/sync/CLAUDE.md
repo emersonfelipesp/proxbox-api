@@ -162,8 +162,8 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   to guest OS names.
 
 - **`to_mapping()` failure is loud, not silent.** Returning `{}` means "this
-  record could not be read", and callers go on to read `name`/`custom_fields`
-  off it — so an empty result makes a populated record look blank. Every
+  record could not be read", and callers go on to read identity and name data
+  from it, so an empty result makes a populated record look blank. Every
   give-up path logs (WARNING for an uncoercible type, ERROR for an un-awaited
   coroutine, which is always a caller bug). Do not reintroduce a quiet
   `return {}`; a silent one is what hid netbox-proxbox issue #616 for two
@@ -216,14 +216,13 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   Python/Rust queue seam; `vm_create.py`, individual sync, and the network path
   apply the same policy before `rest_reconcile_async`. The writer receives a
   snapshot only after the corresponding reconcile succeeds and persists it
-  independently of the legacy custom-field flag. Unavailable, failed, or
+  after the corresponding reconcile succeeds. Unavailable, failed, or
   conflicting reads preserve the role without claiming ownership. Required
   snapshot writes retry three times. After an exhausted response, the shared
   persistence guard authoritatively re-reads typed state, accepts a confirmed
   commit, or restores and verifies both the previous role and snapshot before
   surfacing VM failure. Thus response loss cannot become a false operator lock
-  on the next pass. Typed sidecar reads win; legacy custom-field reads are
-  transition fallback only.
+  on the next pass. Typed sidecar reads are the only ownership-evidence path.
 
 ## Extension Guidance
 

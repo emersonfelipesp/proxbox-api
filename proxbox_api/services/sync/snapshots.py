@@ -24,6 +24,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.vm_filter import hydrate_vm_identities_from_sidecars
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     relation_id,
@@ -605,8 +606,8 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     """
     Sync snapshots for existing Virtual Machines in NetBox.
 
-    Queries NetBox for VMs that have cf_proxmox_vm_id set, fetches their
-    snapshots from Proxmox, and creates/updates VMSnapshot objects.
+    Resolves NetBox VMs through typed sync-state sidecars, fetches their
+    snapshots from Proxmox, and creates or updates VMSnapshot objects.
     """
     nb = netbox_session
     undefined_html = return_status_html("undefined", use_css)
@@ -670,6 +671,15 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                 detail=f"NetBox did not return selected VM id(s): {sorted(missing_netbox_ids)}.",
                 http_status_code=502,
             )
+
+    vms = await hydrate_vm_identities_from_sidecars(
+        nb,
+        [to_mapping(vm) for vm in vms],
+        require_all=netbox_vm_ids is not None,
+    )
+
+    if netbox_vm_ids is not None:
+        selected_netbox_ids = set(netbox_vm_ids)
     elif vmid is not None:
         selected_vmids = {
             normalized
@@ -684,9 +694,8 @@ async def create_virtual_machine_snapshots(  # noqa: C901
 
     if not vms:
         logger.warning(
-            "No VMs found with proxmox_vm_id custom field set; "
-            "ensure the VM sync stage runs before snapshot sync and that the "
-            "'proxmox_vm_id' custom field is defined and populated in NetBox"
+            "No VMs found with typed Proxbox sync-state identity; "
+            "ensure the VM sync stage runs before snapshot sync"
         )
         if use_websocket and websocket:
             await websocket.send_json(
@@ -695,7 +704,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     "type": "sync",
                     "data": {
                         "completed": True,
-                        "message": "No VMs found with cf_proxmox_vm_id set",
+                        "message": "No VMs found with typed sync-state identity",
                     },
                 }
             )
@@ -712,7 +721,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     deleted = 0
     storage_index = await _load_storage_index(nb)
 
-    logger.info(f"Found {total_vms} VMs with cf_proxmox_vm_id to process")
+    logger.info("Found %d VMs with typed sync-state identity to process", total_vms)
 
     # Emit structured discovery event so the live panel shows total VM count
     if use_websocket and websocket and hasattr(websocket, "emit_discovery"):

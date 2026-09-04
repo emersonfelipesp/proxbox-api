@@ -53,8 +53,7 @@ class TestVMSync:
         Verifies:
         1. VM exists in NetBox
         2. VM has 'proxbox e2e testing' tag
-        3. VM has correct custom fields
-        4. VM is linked to correct cluster and device
+        3. VM is linked to correct cluster and device
         """
         nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
@@ -141,7 +140,6 @@ class TestVMSync:
                 "memory": record.get("memory"),
                 "disk": record.get("disk"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
                 "description": record.get("description"),
             },
         )
@@ -153,9 +151,6 @@ class TestVMSync:
         tag_slugs = [t.get("slug") for t in vm_data.get("tags", [])]
         assert "proxbox-e2e-testing" in tag_slugs
 
-        cf = vm_data.get("custom_fields") or {}
-        if cf.get("proxmox_vm_id") is not None:
-            assert cf.get("proxmox_vm_id") == vm.vmid
         assert _relation_id(vm_data.get("cluster")) == cluster_obj.id
         assert _relation_id(vm_data.get("device")) == device.id
 
@@ -171,7 +166,6 @@ class TestVMSync:
         Verifies:
         1. LXC container exists in NetBox
         2. Container has 'proxbox e2e testing' tag
-        3. Container has correct custom fields
         """
         nb = netbox_e2e_session
         tag_refs = nested_tag_payload(e2e_tag)
@@ -265,7 +259,6 @@ class TestVMSync:
                 "memory": record.get("memory"),
                 "disk": record.get("disk"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
                 "description": record.get("description"),
             },
         )
@@ -276,129 +269,6 @@ class TestVMSync:
         vm_data = virtual_machine.serialize()
         tag_slugs = [t.get("slug") for t in vm_data.get("tags", [])]
         assert "proxbox-e2e-testing" in tag_slugs
-
-        cf = vm_data.get("custom_fields") or {}
-        if cf.get("proxmox_vm_id") is not None:
-            assert cf.get("proxmox_vm_id") == lxc_vm.vmid
-
-    async def test_sync_vm_creates_custom_fields(
-        self,
-        netbox_e2e_session,
-        e2e_tag,
-        e2e_shared_proxmox_site,
-        unique_prefix,
-    ):
-        """Test that VM custom fields are correctly set.
-
-        Verifies:
-        - proxmox_vm_id matches VM ID
-        - proxmox_start_at_boot reflects onboot config
-        - proxmox_unprivileged_container reflects unprivileged config
-        """
-        nb = netbox_e2e_session
-        tag_refs = nested_tag_payload(e2e_tag)
-        cluster = create_minimal_cluster(prefix=unique_prefix)
-
-        vm = cluster.vms[0]
-
-        await self._setup_cluster_dependencies(nb, cluster, tag_refs)
-
-        cluster_obj = await rest_reconcile_async(
-            nb,
-            "/api/virtualization/clusters/",
-            lookup={"name": cluster.name},
-            payload={
-                "name": cluster.name,
-                "type": (await self._get_cluster_type(nb, cluster.mode, tag_refs)).id,
-                "description": f"Proxmox {cluster.mode} cluster.",
-                "tags": tag_refs,
-            },
-            schema=NetBoxClusterSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "type": record.get("type"),
-                "description": record.get("description"),
-                "tags": record.get("tags"),
-            },
-        )
-
-        device = await self._get_or_create_device(
-            nb,
-            cluster,
-            cluster_obj,
-            cluster.nodes[0].name,
-            tag_refs,
-            shared_site=e2e_shared_proxmox_site,
-        )
-
-        netbox_vm_payload = build_netbox_virtual_machine_payload(
-            proxmox_resource=vm.to_resource(),
-            proxmox_config=vm.to_config(),
-            cluster_id=cluster_obj.id,
-            device_id=device.id,
-            role_id=1,
-            tag_ids=[e2e_tag["id"]],
-        )
-
-        vm_role = await rest_reconcile_async(
-            nb,
-            "/api/dcim/device-roles/",
-            lookup={"slug": "virtual-machine-qemu"},
-            payload={
-                "name": "Virtual Machine (QEMU)",
-                "slug": "virtual-machine-qemu",
-                "color": "00ffff",
-                "description": "Proxmox Virtual Machine",
-                "tags": tag_refs,
-            },
-            schema=NetBoxDeviceRoleSyncState,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "slug": record.get("slug"),
-                "color": record.get("color"),
-                "description": record.get("description"),
-                "tags": record.get("tags"),
-            },
-        )
-
-        netbox_vm_payload["role"] = vm_role.id
-
-        virtual_machine = await rest_reconcile_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            lookup={"name": vm.name},
-            payload=netbox_vm_payload,
-            schema=NetBoxVirtualMachineCreateBody,
-            current_normalizer=lambda record: {
-                "name": record.get("name"),
-                "status": record.get("status"),
-                "cluster": record.get("cluster"),
-                "device": record.get("device"),
-                "role": record.get("role"),
-                "vcpus": record.get("vcpus"),
-                "memory": record.get("memory"),
-                "disk": record.get("disk"),
-                "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
-                "description": record.get("description"),
-            },
-        )
-
-        vm_data = virtual_machine.serialize()
-        custom_fields = vm_data.get("custom_fields") or {}
-        if custom_fields.get("proxmox_vm_id") is None:
-            pytest.skip(
-                "NetBox demo does not return Proxmox VM custom fields (unset or no permission)."
-            )
-
-        assert custom_fields.get("proxmox_vm_id") == vm.vmid
-
-        config = vm.to_config()
-        assert custom_fields.get("proxmox_start_at_boot") == (config.get("onboot", 0) == 1)
-        assert custom_fields.get("proxmox_qemu_agent") == (config.get("agent", 0) == 1)
-        assert custom_fields.get("proxmox_unprivileged_container") == (
-            config.get("unprivileged", 0) == 1
-        )
 
     async def test_sync_multiple_vms_parallel(
         self,

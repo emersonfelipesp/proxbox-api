@@ -23,7 +23,10 @@ from proxbox_api.services.sync.vm_helpers import (
 from proxbox_api.services.sync.vm_helpers import (
     relation_id as _relation_id,
 )
-from proxbox_api.services.sync.vmid_helpers import extract_proxmox_endpoint_id
+from proxbox_api.services.sync.vmid_helpers import (
+    extract_proxmox_endpoint_id,
+    extract_proxmox_vmid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +59,7 @@ def extract_cluster_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, in
     cluster_id = _relation_id(record.get("cluster"))
     if cluster_id is None:
         return None
-    custom_fields = record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    raw_vmid = custom_fields.get("proxmox_vm_id")
+    raw_vmid = extract_proxmox_vmid(record)
     try:
         proxmox_vmid = int(str(raw_vmid).strip())
     except (TypeError, ValueError):
@@ -73,10 +73,7 @@ def extract_endpoint_and_proxmox_vmid(record: dict[str, object]) -> tuple[int, i
     endpoint_id = extract_proxmox_endpoint_id(record)
     if endpoint_id is None:
         return None
-    custom_fields = record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    raw_vmid = custom_fields.get("proxmox_vm_id")
+    raw_vmid = extract_proxmox_vmid(record)
     try:
         proxmox_vmid = int(str(raw_vmid).strip())
     except (TypeError, ValueError):
@@ -102,12 +99,9 @@ def normalize_proxmox_vm_type(value: object) -> str | None:
 
 
 def extract_proxmox_vm_type(record: dict[str, object]) -> str | None:
-    """Return the stored Proxmox VM type custom field for a NetBox VM record."""
+    """Return the stored Proxmox VM type from hydrated typed sync state."""
 
-    custom_fields = record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    return normalize_proxmox_vm_type(custom_fields.get("proxmox_vm_type"))
+    return normalize_proxmox_vm_type(record.get("proxmox_vm_type"))
 
 
 def build_vm_snapshot_identity_indexes(
@@ -118,7 +112,7 @@ def build_vm_snapshot_identity_indexes(
     _TypedSnapshotIndex,
     _UntypedSnapshotIndex,
 ]:
-    """Index NetBox VM records by endpoint identity plus legacy cluster identity."""
+    """Index NetBox VM records by endpoint and cluster identity."""
 
     endpoint_typed_index: _TypedSnapshotIndex = {}
     endpoint_untyped_candidates: _UntypedSnapshotIndex = {}
@@ -222,7 +216,7 @@ def build_vm_operation_queue_python(  # noqa: C901
 
     for prepared in prepared_vms:
         cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
-        endpoint_id = extract_proxmox_endpoint_id(prepared.desired_payload)
+        endpoint_id = extract_proxmox_endpoint_id(prepared.sync_state_fields)
         proxmox_vmid = _relation_id(prepared.resource.get("vmid"))
         if proxmox_vmid is None:
             operation_queue.append(NetBoxVMOperation(method="CREATE", prepared=prepared))
@@ -271,10 +265,6 @@ def build_vm_operation_queue_python(  # noqa: C901
             existing_description = existing_record.get("description")
             if isinstance(existing_description, str) and existing_description:
                 patch_payload.pop("description", None)
-        if not overwrite_vm_custom_fields:
-            existing_custom_fields = existing_record.get("custom_fields")
-            if isinstance(existing_custom_fields, dict) and existing_custom_fields:
-                patch_payload.pop("custom_fields", None)
         if not overwrite_vm_tags:
             existing_tags = existing_record.get("tags")
             if isinstance(existing_tags, list) and existing_tags:

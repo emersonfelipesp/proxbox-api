@@ -19,6 +19,7 @@ class _BridgeVm(BaseModel):
     cluster_name: str
     resource: dict[str, Any]
     desired_payload: dict[str, Any]
+    sync_state_fields: dict[str, Any]
     lookup: dict[str, Any]
     vm_type: str
 
@@ -54,6 +55,7 @@ def build_bridge_input(
                 cluster_name=prepared.cluster_name,
                 resource=prepared.resource,
                 desired_payload=prepared.desired_payload,
+                sync_state_fields=prepared.sync_state_fields,
                 lookup=prepared.lookup,
                 vm_type=prepared.vm_type,
             )

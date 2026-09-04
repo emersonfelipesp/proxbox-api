@@ -85,7 +85,6 @@ async def _reconcile_interface_ip(
         "status": "active",
         "dns_name": dns_name or "",
         "tags": tag_refs,
-        "custom_fields": {"proxmox_last_updated": now.isoformat()},
     }
 
     try:

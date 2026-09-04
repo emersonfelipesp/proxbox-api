@@ -1,14 +1,13 @@
 """Helpers for creating bridge interfaces on Proxmox node devices.
 
 Bridges (vmbr0, vmbr1, etc.) are node-level Linux bridges. They are modeled in
-NetBox as dcim.Interface objects on the Proxmox node device. Each VM NIC that uses
-a bridge stores the node's dcim.Interface ID in the ``proxbox_bridge`` custom field
-instead of using the VMInterface ``bridge`` FK (which only allows same-VM references).
+NetBox as dcim.Interface objects on the Proxmox node device and referenced by the
+typed VM-interface sync-state sidecar.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -20,10 +19,6 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxInterfaceSyncState
 from proxbox_api.schemas.sync import SyncOverwriteFlags
-from proxbox_api.services.custom_fields import (
-    include_custom_fields_in_payload,
-    legacy_custom_fields_payload,
-)
 
 
 def _normalize_node_interface_record(record: dict[str, object]) -> dict[str, object]:
@@ -33,7 +28,6 @@ def _normalize_node_interface_record(record: dict[str, object]) -> dict[str, obj
         "type": record.get("type"),
         "status": record.get("status"),
         "tags": record.get("tags"),
-        "custom_fields": record.get("custom_fields"),
     }
 
 
@@ -58,15 +52,7 @@ async def _reconcile_existing_node_bridge(
     payload: dict[str, object],
     overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
-    desired_model = NetBoxInterfaceSyncState.model_validate(
-        legacy_custom_fields_payload(
-            payload,
-            overwrite=(
-                overwrite_flags is None or overwrite_flags.overwrite_node_interface_custom_fields
-            ),
-            context="legacy node-interface custom-field payload",
-        )
-    )
+    desired_model = NetBoxInterfaceSyncState.model_validate(payload)
     desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
 
     current_payload = NetBoxInterfaceSyncState.model_validate(
@@ -82,11 +68,6 @@ async def _reconcile_existing_node_bridge(
     if overwrite_flags is not None:
         if not overwrite_flags.overwrite_node_interface_tags:
             patch_payload.pop("tags", None)
-        if not include_custom_fields_in_payload(
-            overwrite_flags.overwrite_node_interface_custom_fields,
-            context="legacy node-interface custom-field payload",
-        ):
-            patch_payload.pop("custom_fields", None)
     if patch_payload and hasattr(record, "save"):
         for field, value in patch_payload.items():
             setattr(record, field, value)
@@ -109,13 +90,11 @@ async def ensure_node_bridge_interface(  # noqa: C901
         device_id: NetBox ID of the Proxmox node device.
         bridge_name: Bridge name (e.g. "vmbr0", "vmbr1").
         tag_refs: Tag references to attach.
-        now: Timestamp for custom_fields (defaults to UTC now).
+        now: Retained for call-site compatibility.
 
     Returns:
         The dcim.Interface record dict, or {} on failure.
     """
-    if now is None:
-        now = datetime.now(timezone.utc)
     try:
         payload = {
             "device": device_id,
@@ -123,7 +102,6 @@ async def ensure_node_bridge_interface(  # noqa: C901
             "type": "bridge",
             "status": "active",
             "tags": tag_refs,
-            "custom_fields": {"proxmox_last_updated": now.isoformat()},
         }
         strict_query = {"device_id": device_id, "name": bridge_name, "limit": 2}
         existing = await rest_first_async(nb, "/api/dcim/interfaces/", query=strict_query)
@@ -133,14 +111,7 @@ async def ensure_node_bridge_interface(  # noqa: C901
                 record = await rest_create_async(
                     nb,
                     "/api/dcim/interfaces/",
-                    legacy_custom_fields_payload(
-                        payload,
-                        overwrite=(
-                            overwrite_flags is None
-                            or overwrite_flags.overwrite_node_interface_custom_fields
-                        ),
-                        context="legacy node-interface custom-field payload",
-                    ),
+                    payload,
                 )
             except ProxboxException:
                 # Another worker may have created it; invalidate the GET cache so the
@@ -166,23 +137,11 @@ async def ensure_node_bridge_interface(  # noqa: C901
             fallback_patchable: set[str] = {"name", "type", "status"}
             if overwrite_flags is None or overwrite_flags.overwrite_node_interface_tags:
                 fallback_patchable.add("tags")
-            if include_custom_fields_in_payload(
-                overwrite_flags is None or overwrite_flags.overwrite_node_interface_custom_fields,
-                context="legacy node-interface custom-field payload",
-            ):
-                fallback_patchable.add("custom_fields")
             record = await rest_reconcile_async(
                 nb,
                 "/api/dcim/interfaces/",
                 lookup={"device_id": device_id, "name": bridge_name},
-                payload=legacy_custom_fields_payload(
-                    payload,
-                    overwrite=(
-                        overwrite_flags is None
-                        or overwrite_flags.overwrite_node_interface_custom_fields
-                    ),
-                    context="legacy node-interface custom-field payload",
-                ),
+                payload=payload,
                 schema=NetBoxInterfaceSyncState,
                 current_normalizer=_normalize_node_interface_record,
                 patchable_fields=fallback_patchable,
@@ -212,8 +171,8 @@ async def ensure_bridge_interfaces(
 
     This is the main entry point for all sync code paths. It creates/updates a
     dcim.Interface (type=bridge) on the Proxmox node device. The returned ID
-    should be stored in the VM NIC's ``proxbox_bridge`` custom field so that all
-    VMs referencing the same bridge share one authoritative interface record.
+    is recorded in the VM NIC's typed sync-state sidecar so that all VMs
+    referencing the same bridge share one authoritative interface record.
 
     The VMInterface ``bridge`` FK is NOT used because NetBox enforces a same-VM
     constraint on that field, making it impossible to share a bridge across VMs.
@@ -224,14 +183,11 @@ async def ensure_bridge_interfaces(
         vm_id: Unused — kept for call-site compatibility during transition.
         bridge_name: Bridge name (e.g. "vmbr0", "vmbr1").
         tag_refs: Tag references to attach.
-        now: Timestamp for custom_fields (defaults to UTC now).
+        now: Retained for call-site compatibility.
 
     Returns:
         NetBox ID of the node-level dcim.Interface, or None on failure.
     """
-    if now is None:
-        now = datetime.now(timezone.utc)
-
     if device_id is None:
         return None
 

@@ -28,6 +28,7 @@ pub struct PreparedVm {
     pub cluster_name: String,
     pub resource: Value,
     pub desired_payload: Map<String, Value>,
+    pub sync_state_fields: Map<String, Value>,
     #[allow(dead_code)]
     pub lookup: Map<String, Value>,
     pub vm_type: String,
@@ -39,7 +40,6 @@ pub struct VmFlags {
     pub overwrite_vm_type: bool,
     pub overwrite_vm_tags: bool,
     pub overwrite_vm_description: bool,
-    pub overwrite_vm_custom_fields: bool,
     pub supports_virtual_machine_type_field: bool,
 }
 
@@ -73,7 +73,7 @@ fn build_vm_operation_queue(input: VmQueueInput) -> Vec<VmOperation> {
     let mut operations = Vec::with_capacity(input.prepared_vms.len());
 
     for prepared in input.prepared_vms {
-        let endpoint_id = extract_proxmox_endpoint_id_from_payload(&prepared.desired_payload);
+        let endpoint_id = extract_proxmox_endpoint_id_from_payload(&prepared.sync_state_fields);
         let cluster_id = relation_id(prepared.desired_payload.get("cluster"));
         let proxmox_vmid = relation_id(prepared.resource.get("vmid"));
         let Some(vmid) = proxmox_vmid else {
@@ -244,54 +244,29 @@ fn select_existing_vm_record(
 fn extract_cluster_and_proxmox_vmid(record: &Value) -> Option<(i64, i64)> {
     let object = record.as_object()?;
     let cluster_id = relation_id(object.get("cluster"))?;
-    let custom_fields = object.get("custom_fields")?.as_object()?;
-    let raw_vmid = custom_fields.get("proxmox_vm_id")?;
+    let raw_vmid = object.get("proxmox_vm_id")?;
     let proxmox_vmid = relation_id(Some(raw_vmid))?;
     Some((cluster_id, proxmox_vmid))
 }
 
 fn extract_endpoint_and_proxmox_vmid(record: &Value) -> Option<(i64, i64)> {
     let endpoint_id = extract_proxmox_endpoint_id(record)?;
-    let custom_fields = record.get("custom_fields")?.as_object()?;
-    let raw_vmid = custom_fields.get("proxmox_vm_id")?;
+    let raw_vmid = record.get("proxmox_vm_id")?;
     let proxmox_vmid = relation_id(Some(raw_vmid))?;
     Some((endpoint_id, proxmox_vmid))
 }
 
 fn extract_proxmox_endpoint_id(record: &Value) -> Option<i64> {
     let object = record.as_object()?;
-    for key in ["cf_proxmox_endpoint_id", "proxmox_endpoint_id"] {
-        if let Some(endpoint_id) = relation_id(object.get(key)) {
-            return Some(endpoint_id);
-        }
-    }
-    let custom_fields = object.get("custom_fields")?.as_object()?;
-    for key in ["proxmox_endpoint_id", "cf_proxmox_endpoint_id"] {
-        if let Some(endpoint_id) = relation_id(custom_fields.get(key)) {
-            return Some(endpoint_id);
-        }
-    }
-    None
+    relation_id(object.get("proxmox_endpoint_id"))
 }
 
 fn extract_proxmox_endpoint_id_from_payload(payload: &Map<String, Value>) -> Option<i64> {
-    for key in ["cf_proxmox_endpoint_id", "proxmox_endpoint_id"] {
-        if let Some(endpoint_id) = relation_id(payload.get(key)) {
-            return Some(endpoint_id);
-        }
-    }
-    let custom_fields = payload.get("custom_fields")?.as_object()?;
-    for key in ["proxmox_endpoint_id", "cf_proxmox_endpoint_id"] {
-        if let Some(endpoint_id) = relation_id(custom_fields.get(key)) {
-            return Some(endpoint_id);
-        }
-    }
-    None
+    relation_id(payload.get("proxmox_endpoint_id"))
 }
 
 fn extract_proxmox_vm_type(record: &Value) -> Option<String> {
-    let custom_fields = record.get("custom_fields")?.as_object()?;
-    normalize_proxmox_vm_type(custom_fields.get("proxmox_vm_type"))
+    normalize_proxmox_vm_type(record.get("proxmox_vm_type"))
 }
 
 #[cfg(test)]
@@ -325,26 +300,20 @@ mod tests {
                 "memory": 2048,
                 "disk": 30,
                 "tags": [99],
-                "custom_fields": {
-                    "proxmox_endpoint_id": 500,
-                    "proxmox_vm_id": vmid,
-                    "proxmox_vm_type": vm_type
-                },
                 "description": "Synced from Proxmox node pve01"
             },
-            "lookup": {"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": 500},
+            "sync_state_fields": {
+                "proxmox_endpoint_id": 500,
+                "proxmox_vm_id": vmid,
+                "proxmox_vm_type": vm_type
+            },
+            "lookup": {"id": 0},
             "vm_type": vm_type
         })
     }
 
     fn snapshot(record_id: i64, vmid: i64, vm_type: Option<&str>) -> Value {
-        let mut custom_fields = Map::new();
-        custom_fields.insert("proxmox_endpoint_id".to_string(), json!(500));
-        custom_fields.insert("proxmox_vm_id".to_string(), json!(vmid));
-        if let Some(vm_type) = vm_type {
-            custom_fields.insert("proxmox_vm_type".to_string(), json!(vm_type));
-        }
-        json!({
+        let mut record = json!({
             "id": record_id,
             "name": format!("{}-{vmid}", vm_type.unwrap_or("qemu")),
             "status": "active",
@@ -355,9 +324,14 @@ mod tests {
             "memory": 2048,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": custom_fields,
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": vmid,
             "description": "Synced from Proxmox node pve01"
-        })
+        });
+        if let Some(vm_type) = vm_type {
+            record["proxmox_vm_type"] = json!(vm_type);
+        }
+        record
     }
 
     fn run(input: Value) -> Vec<Value> {
@@ -382,11 +356,9 @@ mod tests {
                     "memory": 1024,
                     "disk": 30,
                     "tags": [{"id": 99}],
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 500,
-                        "proxmox_vm_id": 102,
-                        "proxmox_vm_type": "qemu"
-                    },
+                    "proxmox_endpoint_id": 500,
+                    "proxmox_vm_id": 102,
+                    "proxmox_vm_type": "qemu",
                     "description": "Synced from Proxmox node pve01"
                 }
             ],
@@ -420,16 +392,16 @@ mod tests {
     #[test]
     fn keeps_same_vmid_on_different_endpoints_separate() {
         let mut first = prepared(105, "qemu");
-        first["desired_payload"]["custom_fields"]["proxmox_endpoint_id"] = json!(1);
-        first["lookup"] = json!({"cf_proxmox_vm_id": 105, "cf_proxmox_endpoint_id": 1});
+        first["sync_state_fields"]["proxmox_endpoint_id"] = json!(1);
+        first["lookup"] = json!({"id": 0});
         let mut second = prepared(105, "qemu");
-        second["desired_payload"]["custom_fields"]["proxmox_endpoint_id"] = json!(2);
-        second["lookup"] = json!({"cf_proxmox_vm_id": 105, "cf_proxmox_endpoint_id": 2});
+        second["sync_state_fields"]["proxmox_endpoint_id"] = json!(2);
+        second["lookup"] = json!({"id": 0});
 
         let mut first_snapshot = snapshot(4105, 105, Some("qemu"));
-        first_snapshot["custom_fields"]["proxmox_endpoint_id"] = json!(1);
+        first_snapshot["proxmox_endpoint_id"] = json!(1);
         let mut second_snapshot = snapshot(4205, 105, Some("qemu"));
-        second_snapshot["custom_fields"]["proxmox_endpoint_id"] = json!(2);
+        second_snapshot["proxmox_endpoint_id"] = json!(2);
 
         let input = json!({
             "prepared_vms": [first, second],
@@ -471,28 +443,6 @@ mod tests {
         let operations = run(input);
 
         assert_eq!(operations[0]["method"], "GET");
-    }
-
-    #[test]
-    fn custom_field_null_and_missing_are_different() {
-        let mut desired = prepared(113, "qemu");
-        desired["desired_payload"]["custom_fields"] = json!({"proxmox_vm_id": 113, "foo": null});
-        let mut current = snapshot(2113, 113, None);
-        current["custom_fields"] = json!({"proxmox_vm_id": 113});
-        current["name"] = json!("qemu-113");
-        let input = json!({
-            "prepared_vms": [desired],
-            "netbox_snapshot": [current],
-            "flags": default_flags()
-        });
-
-        let operations = run(input);
-
-        assert_eq!(operations[0]["method"], "UPDATE");
-        assert_eq!(
-            operations[0]["patch_payload"]["custom_fields"],
-            json!({"proxmox_vm_id": 113, "foo": null})
-        );
     }
 
     #[test]

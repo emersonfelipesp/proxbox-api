@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
 from proxbox_api.proxmox_to_netbox.normalize import build_virtual_machine_transform
 
@@ -20,10 +18,6 @@ def map_proxmox_vm_to_netbox_vm_body(
     tenant_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     platform_id: int | None = None,
-    last_updated: datetime | None = None,
-    cluster_name: str | None = None,
-    proxmox_url: str | None = None,
-    endpoint_id: int | None = None,
     parse_description_metadata: bool = False,
     overwrite_flags: object | None = None,
 ) -> dict[str, object]:
@@ -40,10 +34,6 @@ def map_proxmox_vm_to_netbox_vm_body(
         tag_ids=tag_ids,
         virtual_machine_type_id=virtual_machine_type_id,
         platform_id=platform_id,
-        last_updated=last_updated,
-        cluster_name=cluster_name,
-        proxmox_url=proxmox_url,
-        endpoint_id=endpoint_id,
         parse_description_metadata=parse_description_metadata,
         overwrite_flags=overwrite_flags,
     )

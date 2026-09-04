@@ -64,7 +64,7 @@ def build_vm_dataset(
         if index % 5 == 3:
             snapshot_record["description"] = "Operator-maintained description"
         if pathological and index % 11 == 0:
-            snapshot_record["custom_fields"] = {"proxmox_vm_id": "not-an-int"}
+            snapshot_record["proxmox_vm_id"] = "not-an-int"
         if pathological and index % 13 == 0:
             snapshot_record.pop("cluster", None)
         snapshot.append(snapshot_record)
@@ -119,10 +119,14 @@ def _prepared_vm_fixture(
             "memory": memory,
             "disk": 30,
             "tags": tags,
-            "custom_fields": {"proxmox_vm_id": vmid, "proxmox_vm_type": vm_type},
             "description": "Synced from Proxmox node pve01",
         },
-        "lookup": {"cf_proxmox_vm_id": vmid, "cluster_id": 1},
+        "sync_state_fields": {
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": vmid,
+            "proxmox_vm_type": vm_type,
+        },
+        "lookup": {"id": 0},
         "vm_type": vm_type,
     }
 
@@ -148,6 +152,8 @@ def _snapshot_vm_fixture(
         "memory": float(memory) if vmid % 10 == 0 else memory,
         "disk": 30,
         "tags": tags,
-        "custom_fields": {"proxmox_vm_id": vmid, "proxmox_vm_type": vm_type},
+        "proxmox_endpoint_id": 500,
+        "proxmox_vm_id": vmid,
+        "proxmox_vm_type": vm_type,
         "description": "Synced from Proxmox node pve01",
     }

@@ -17,6 +17,11 @@ from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
 @pytest.fixture(autouse=True)
 def _bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _inline_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
+
     async def _legacy_vm_snapshot_bridge(
         netbox_session,
         path,
@@ -68,10 +73,6 @@ def _existing_vm_snapshot(*, name: str, vmid: int = 101, record_id: int = 55) ->
         "memory": 1024,
         "disk": 0,
         "tags": [{"id": 5}],
-        "custom_fields": {
-            "proxmox_vm_id": vmid,
-            "proxmox_vm_type": "qemu",
-        },
         "description": "Synced from Proxmox node pve01",
     }
 
@@ -93,6 +94,8 @@ def _install_full_update_stubs(
             limit = int((query or {}).get("limit", len(netbox_snapshot)) or len(netbox_snapshot))
             offset = int((query or {}).get("offset", 0) or 0)
             return [dict(record) for record in netbox_snapshot[offset : offset + limit]]
+        if path == sync_state_reader.VM_SYNC_STATE_PATH:
+            return [dict(row) for row in sidecar_rows or []]
         return []
 
     async def _fake_sidecar_paginated(_nb, path, *, base_query, page_size):
@@ -124,18 +127,28 @@ def _install_full_update_stubs(
             "memory": 1024,
             "disk": 0,
             "tags": kwargs["tag_ids"],
-            "custom_fields": {
-                "proxmox_vm_id": vmid,
-                "proxmox_vm_type": resource.get("type"),
-            },
             "description": "Synced from Proxmox node pve01",
         }
 
     async def _fake_rest_create(_nb, _path, payload, *, lookup=None):
-        vmid = int((lookup or {})["cf_proxmox_vm_id"])
+        assert lookup == {"id": 0}
+        vmid = int(str(payload["name"]).rsplit("-", maxsplit=1)[-1])
         return {"id": vmid, **payload}
 
     async def _fake_sidecar_first(_nb, _path, *, query=None):
+        return None
+
+    async def _fake_vm_first(_nb, path, *, query=None):
+        if path == sync_state_reader.VIRTUAL_MACHINES_PATH:
+            requested_id = int((query or {}).get("id", 0) or 0)
+            return next(
+                (
+                    dict(record)
+                    for record in netbox_snapshot or []
+                    if int(record.get("id", 0) or 0) == requested_id
+                ),
+                None,
+            )
         return None
 
     async def _fake_sidecar_create(_nb, _path, payload, *, lookup=None):
@@ -160,6 +173,7 @@ def _install_full_update_stubs(
         "proxbox_api.services.sync.sync_state_reader.rest_list_paginated_async",
         _fake_sidecar_paginated,
     )
+    monkeypatch.setattr(sync_state_reader, "rest_first_async", _fake_vm_first)
     sync_state_reader.reset_sidecar_reader_availability_cache()
     monkeypatch.setattr(sync_state_writer, "rest_first_async", _fake_sidecar_first)
     monkeypatch.setattr(sync_state_writer, "rest_create_async", _fake_sidecar_create)
@@ -230,7 +244,6 @@ def _run_full_update_name_case(
             cluster_resources=[
                 {"cluster-a": [{**_resource(101), "name": incoming_name}]},
             ],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             sync_vm_network=False,
         )
@@ -258,7 +271,6 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
             "memory": 8192,
             "disk": 0,
             "tags": kwargs["tag_ids"],
-            "custom_fields": {"proxmox_vm_id": 101, "proxmox_vm_type": "qemu"},
             "description": "Synced from Proxmox node pve01",
         }
 
@@ -317,8 +329,9 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert prepared.resource is resource
     assert prepared.vm_config is vm_config
     assert prepared.vm_config_obj.qemu_agent_enabled is True
-    assert prepared.lookup == {"cf_proxmox_vm_id": 101, "cf_proxmox_endpoint_id": 1}
-    assert prepared.desired_payload["custom_fields"]["proxmox_vm_id"] == 101
+    assert prepared.lookup == {"id": 0}
+    assert prepared.sync_state_fields["proxmox_vm_id"] == 101
+    assert prepared.sync_state_fields["proxmox_vm_type"] == "qemu"
     assert captured_payload_kwargs["proxmox_resource"] is resource
     assert captured_payload_kwargs["proxmox_config"] is vm_config
     assert captured_payload_kwargs["cluster_id"] == 11
@@ -410,7 +423,6 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
             cluster_resources=[
                 {"cluster-a": [_resource(101), _resource(102)]},
             ],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             websocket=bridge,
             sync_vm_network=False,
@@ -442,7 +454,6 @@ def test_full_update_fetch_timeout_isolated_and_stage_completes(monkeypatch):
             pxs=[],
             cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
             cluster_resources=[{"cluster-a": [_resource(102)]}],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             websocket=bridge,
             sync_vm_network=False,
@@ -480,7 +491,6 @@ def test_batch_vm_sync_runs_one_scoped_task_history_aggregate(monkeypatch):
             pxs=[],
             cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
             cluster_resources=[{"cluster-a": [_resource(101), _resource(102)]}],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             sync_vm_network=False,
         )
@@ -512,7 +522,6 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
                 "id": 501,
                 "name": "shared-name",
                 "cluster": {"id": 41, "name": "cluster-a"},
-                "custom_fields": {},
             }
         ]
 
@@ -535,7 +544,7 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
         return dict(PROXMOX_VM_CONFIG)
 
     async def _fake_rest_create(_nb, _path, payload, *, lookup=None):
-        assert lookup == {"cf_proxmox_vm_id": 101, "cf_proxmox_endpoint_id": 11}
+        assert lookup == {"id": 0}
         return {"id": 501, **payload}
 
     async def _fake_task_history(**kwargs):
@@ -546,10 +555,6 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
     monkeypatch.setattr(
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _sidecar_scan,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
     )
     monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_rest_create)
@@ -577,7 +582,6 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
                 SimpleNamespace(name="cluster-b", mode="cluster"),
             ],
             cluster_resources=[{"cluster-a": [resource_a]}, {"cluster-b": [resource_b]}],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             netbox_vm_ids="501",
             sync_vm_network=False,
@@ -613,7 +617,6 @@ def test_rest_vm_sync_without_network_raises_502_for_degraded_task_history(monke
                 pxs=[],
                 cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
                 cluster_resources=[{"cluster-a": [_resource(101)]}],
-                custom_fields=[],
                 tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
                 sync_vm_network=False,
             )
@@ -653,7 +656,6 @@ def test_full_update_finishes_all_config_fetches_before_processing(monkeypatch):
             cluster_resources=[
                 {"cluster-a": [_resource(101), _resource(102), _resource(103)]},
             ],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             sync_vm_network=False,
         )
@@ -701,7 +703,6 @@ def test_full_update_precomputes_both_clusters_when_two_clusters_present(monkeyp
                 {"cluster-a": [_resource(101)]},
                 {"cluster-b": [_resource(201)]},
             ],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             sync_vm_network=False,
         )
@@ -747,7 +748,6 @@ def test_full_update_uses_reconciled_cluster_site_scope(monkeypatch):
             pxs=[],
             cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
             cluster_resources=[{"cluster-a": [_resource(101)]}],
-            custom_fields=[],
             tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
             sync_vm_network=False,
         )
@@ -779,7 +779,6 @@ def test_full_update_cluster_precompute_failure_propagates_as_proxbox_exception(
                 pxs=[],
                 cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
                 cluster_resources=[{"cluster-a": [_resource(101)]}],
-                custom_fields=[],
                 tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
                 sync_vm_network=False,
             )

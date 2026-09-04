@@ -234,7 +234,6 @@ def test_guest_os_model_keeps_core_net_name_and_links_guest_to_core_ip(monkeypat
             "status": "active",
             "dns_name": "",
             "tags": [{"name": "Proxbox", "slug": "proxbox"}],
-            "custom_fields": core_ip_payloads[0]["custom_fields"],
         }
     ]
     assert len(core_ip_payloads) == 1
@@ -247,7 +246,6 @@ def test_guest_os_model_keeps_core_net_name_and_links_guest_to_core_ip(monkeypat
             "enabled": True,
             "mtu": None,
             "tags": [{"name": "Proxbox", "slug": "proxbox"}],
-            "custom_fields": {},
         }
     ]
     assert guest_address_payloads == [{"guest_interface": 901, "ip_address": 77}]

@@ -14,12 +14,10 @@ from typing import Any
 import pytest
 
 from proxbox_api.services.sync.role_resolution import (
-    LAST_SYNCED_ROLE_CUSTOM_FIELD,
     RoleSnapshotDecision,
     apply_role_snapshot_policy,
     compensate_failed_role_snapshot,
     compute_role_snapshot_decision,
-    extract_snapshot_id,
     resolve_default_role_id,
     resolve_snapshot_read_from_scan,
 )
@@ -183,16 +181,6 @@ def test_overwrite_true_no_desired_clears_snapshot_writes() -> None:
     assert not decision.write_snapshot
 
 
-def test_extract_snapshot_id_handles_missing_or_malformed() -> None:
-    assert extract_snapshot_id(None) is None
-    assert extract_snapshot_id({}) is None
-    assert extract_snapshot_id({"custom_fields": None}) is None
-    assert extract_snapshot_id({"custom_fields": {}}) is None
-    assert extract_snapshot_id({"custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: "nope"}}) is None
-    assert extract_snapshot_id({"custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: "42"}}) == 42
-    assert extract_snapshot_id({"custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: 18}}) == 18
-
-
 def test_apply_policy_hard_fences_operator_role_from_reconcile_patch() -> None:
     """An operator-owned role is removed from both payload writes and allowlist."""
     payload, patchable_fields, decision = apply_role_snapshot_policy(
@@ -241,11 +229,10 @@ def test_apply_policy_does_not_claim_ownership_after_unverified_read() -> None:
     assert not decision.write_snapshot
 
 
-def test_failed_batch_scan_does_not_trust_legacy_snapshot() -> None:
+def test_failed_batch_scan_does_not_claim_snapshot_ownership() -> None:
     read = resolve_snapshot_read_from_scan(
         VMRoleSnapshotScan(values={}, read_verified=False),
-        {"id": 64, "custom_fields": {LAST_SYNCED_ROLE_CUSTOM_FIELD: 11}},
-        legacy_custom_fields_enabled=True,
+        {"id": 64},
     )
 
     assert read.snapshot_id is None

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from proxbox_api.proxmox_to_netbox.errors import ProxmoxToNetBoxError
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
@@ -40,10 +38,6 @@ def build_virtual_machine_transform(
     tenant_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     platform_id: int | None = None,
-    last_updated: datetime | None = None,
-    cluster_name: str | None = None,
-    proxmox_url: str | None = None,
-    endpoint_id: int | None = None,
     parse_description_metadata: bool = False,
     overwrite_flags: object | None = None,
 ) -> NetBoxVirtualMachineCreateBody:
@@ -69,10 +63,6 @@ def build_virtual_machine_transform(
         virtual_machine_type_id=virtual_machine_type_id,
         platform_id=platform_id,
         tag_ids=tag_ids,
-        last_updated=last_updated,
-        cluster_name=cluster_name,
-        proxmox_url=proxmox_url,
-        endpoint_id=endpoint_id,
     )
 
     body = transform.as_netbox_create_body(

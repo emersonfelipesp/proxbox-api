@@ -52,8 +52,8 @@ reconcile.
 
 ## Operator-rename detection
 
-If NetBox has a `VirtualMachine` whose `custom_fields.proxmox_vm_id` matches
-the incoming VMID **and** whose current `name` is neither the bare candidate
+If NetBox has a `VirtualMachine` whose typed sync-state identity matches the
+incoming VMID **and** whose current `name` is neither the bare candidate
 nor any algorithmic suffix of it (`gateway (2)`, `gateway (3)`, …), the
 resolver returns the operator's name with `operator_renamed=True`. The
 caller emits a `duplicate_name_resolved` warning frame with
@@ -68,12 +68,12 @@ will be retained on subsequent syncs as if they were resolver-assigned.
 - **Per NetBox cluster.** Two VMs in different NetBox clusters do not
   collide structurally and are left as bare names — even if their Proxmox
   cluster labels differ. This matches NetBox's structural uniqueness.
-- **Stable identifier.** `custom_fields.proxmox_vm_id` is the durable
+- **Stable identifier.** The typed VM sync-state identity is the durable
   cross-reference. The resolver may flip which VM keeps the bare name if
   Proxmox cluster names are re-ordered, but the VMID-keyed link survives.
-- **Legacy records.** A NetBox VM with no `proxmox_vm_id` custom field
-  cannot be matched by VMID; the resolver treats it as a non-Proxbox record
-  and will not consider it an operator rename.
+- **Unmanaged records.** A NetBox VM without typed sync-state identity cannot
+  be matched by VMID; the resolver treats it as a non-Proxbox record and will
+  not consider it an operator rename.
 
 ## SSE frame shape
 

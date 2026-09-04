@@ -20,7 +20,7 @@ Each verb obeys the contract pinned in ``docs/design/operational-verbs.md``:
   with no Proxmox call. No-ops still write a journal entry.
 - **§6 Audit.** Every invocation — success, failure, or no-op — writes
   exactly one journal entry on the linked NetBox ``VirtualMachine``
-  (resolved by the ``proxmox_vm_id`` custom field). Even a Proxmox 500
+  resolved by typed sync-state identity. Even a Proxmox 500
   writes a ``kind: "warning"`` entry; failure to audit is a P0 bug.
 - **§7.3 Response shape.** ``verb``, ``vmid``, ``vm_type``,
   ``endpoint_id``, ``result``, ``dispatched_at`` and, on real

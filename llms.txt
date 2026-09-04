@@ -125,7 +125,6 @@ Per-object fine-grained sync routes (12 sub-routers): backup, backup-routine, cl
 
 ### Extras (`/extras`)
 
-- `GET /extras/extras/custom-fields/create` - Create or reconcile ~30 Proxmox-related custom fields in NetBox
 
 ### WebSockets
 

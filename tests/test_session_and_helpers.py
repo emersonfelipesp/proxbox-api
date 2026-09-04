@@ -1577,7 +1577,6 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                             "task_state": "running",
                             "exitstatus": None,
                             "tags": [{"slug": "proxbox", "name": "Proxbox"}],
-                            "custom_fields": {},
                         }
                     ],
                 },
@@ -1603,7 +1602,6 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                     "task_state": "stopped",
                     "exitstatus": "OK",
                     "tags": [{"slug": "proxbox", "name": "Proxbox"}],
-                    "custom_fields": {},
                 },
             ),
         }
@@ -1631,7 +1629,6 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                 "task_state": "stopped",
                 "exitstatus": "OK",
                 "tags": [{"slug": "proxbox", "name": "Proxbox"}],
-                "custom_fields": {},
             },
             schema=NetBoxTaskHistorySyncState,
             current_normalizer=lambda record: {
@@ -1651,7 +1648,6 @@ def test_rest_reconcile_async_can_limit_patches_to_explicit_fields():
                 "task_state": record.get("task_state"),
                 "exitstatus": record.get("exitstatus"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
             },
             patchable_fields={"status", "task_state", "exitstatus"},
         )
@@ -1763,7 +1759,6 @@ def test_rest_reconcile_async_reuses_duplicate_site_after_failed_create():
                 "slug": "proxmox-default-site-lab",
                 "status": "active",
                 "tags": [{"slug": "proxbox", "name": "Proxbox"}],
-                "custom_fields": {},
             },
             True,
         ),
@@ -3441,7 +3436,6 @@ def test_ensure_device_preserves_existing_site_different_from_sync_default():
                             "role": 15,
                             "description": "Proxmox Node pve01",
                             "tags": [],
-                            "custom_fields": {},
                         }
                     ],
                 },
@@ -3501,12 +3495,6 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monke
     When multiple devices share the same name, the sync must reuse the ProxBox-tagged
     record instead of arbitrarily updating a user-managed duplicate.
     """
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     proxbox_site_id = 16
     manual_site_id = 99
 
@@ -3530,7 +3518,6 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monke
         "role": 15,
         "description": "Proxmox Node pve01",
         "tags": [{"slug": "proxbox", "name": "Proxbox"}],
-        "custom_fields": {},
     }
     manual_device = {
         "id": 51,
@@ -3542,7 +3529,6 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monke
         "role": 15,
         "description": "Manually managed pve01",
         "tags": [],
-        "custom_fields": {},
     }
 
     def make_get_response(query, payload):
@@ -3592,7 +3578,7 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monke
 
     from proxbox_api.services.sync.device_ensure import _ensure_device
 
-    asyncio.run(
+    resolved = asyncio.run(
         _ensure_device(
             nb=facade,
             device_name="pve01",
@@ -3604,7 +3590,8 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monke
         )
     )
 
-    assert any(path == "/api/dcim/devices/50/" for path, _ in patch_calls)
+    assert resolved.id == 50
+    assert all(path != "/api/dcim/devices/51/" for path, _ in patch_calls)
 
 
 def test_rest_delete_invalidates_related_get_cache_entries():

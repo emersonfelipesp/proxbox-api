@@ -19,20 +19,25 @@ from proxbox_api.services.sync.task_history import (
 )
 
 
-@pytest.fixture(autouse=True)
-def allow_legacy_vm_identity_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep existing CF-based cases explicit while sidecar-only cases opt out."""
-
-    async def _unavailable_sidecar(_nb: object) -> VMSyncStateIdentityScan:
-        return VMSyncStateIdentityScan(rows=(), sidecar_unavailable=True)
-
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: True)
-    monkeypatch.setattr(task_history_service, "warn_legacy_custom_fields", lambda *_args: None)
-    monkeypatch.setattr(
-        task_history_service,
-        "load_vm_sync_state_identities",
-        _unavailable_sidecar,
+def _patch_sidecar_scan(
+    monkeypatch: pytest.MonkeyPatch,
+    identities: list[tuple[int, int, int | None, str, str]],
+) -> None:
+    rows = tuple(
+        {
+            "virtual_machine": {"id": netbox_id},
+            "proxmox_vm_id": proxmox_id,
+            "proxmox_endpoint_raw_id": endpoint_id,
+            "proxmox_vm_type": vm_type,
+            "proxmox_cluster_name": cluster_name,
+        }
+        for netbox_id, proxmox_id, endpoint_id, vm_type, cluster_name in identities
     )
+
+    async def _scan(_nb: object) -> VMSyncStateIdentityScan:
+        return VMSyncStateIdentityScan(rows=rows)
+
+    monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
 
 
 def test_selected_vm_list_uses_repeated_chunked_id_filters_and_dedupes(monkeypatch):
@@ -126,7 +131,6 @@ def test_sync_virtual_machine_task_history_builds_human_readable_payload(monkeyp
             "task_state",
             "exitstatus",
             "tags",
-            "custom_fields",
         }
         return SimpleNamespace(created=1, updated=0, unchanged=1, failed=0, records=[])
 
@@ -233,7 +237,6 @@ def test_sync_virtual_machine_task_history_does_not_fan_out_on_bulk_failure(monk
             "task_state",
             "exitstatus",
             "tags",
-            "custom_fields",
         }
         return SimpleNamespace(id=1)
 
@@ -433,6 +436,10 @@ def test_all_task_history_walks_each_endpoint_node_once_and_reconciles_globally(
     ]
     fetch_calls: list[dict[str, object]] = []
     bulk_calls: list[dict[str, object]] = []
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(501, 101, 11, "qemu", "lab"), (502, 101, 22, "lxc", "lab")],
+    )
 
     async def _fake_list_vms(_nb, batch_size=500, *, netbox_vm_ids=None):
         assert batch_size == 500
@@ -586,7 +593,6 @@ def test_all_task_history_uses_one_sidecar_scan_as_authoritative_identity(monkey
             records=[],
         )
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
     monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _list_sidecars)
     monkeypatch.setattr(
         task_history_service,
@@ -668,7 +674,6 @@ def test_selected_task_history_filters_vm_list_and_scans_sidecars_once(monkeypat
     async def _bulk(_nb, _path, **_kwargs):
         return SimpleNamespace(created=1, updated=0, unchanged=0, failed=0, records=[])
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
     monkeypatch.setattr(task_history_service, "get_node_tasks", _fetch)
@@ -700,7 +705,7 @@ def test_selected_task_history_filters_vm_list_and_scans_sidecars_once(monkeypat
         (VMSyncStateIdentityScan(rows=(), sidecar_read_failed=True), "temporarily failed"),
     ],
 )
-def test_task_history_fails_when_sidecar_identity_is_unverifiable_and_cf_disabled(
+def test_task_history_fails_when_sidecar_identity_is_unverifiable(
     monkeypatch,
     scan,
     detail_fragment,
@@ -711,7 +716,6 @@ def test_task_history_fails_when_sidecar_identity_is_unverifiable_and_cf_disable
     async def _scan(_nb: object) -> VMSyncStateIdentityScan:
         return scan
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
 
@@ -775,7 +779,6 @@ def test_unscoped_task_history_ignores_unmanaged_vm_after_successful_sidecar_sca
         assert [payload["virtual_machine"] for payload in kwargs["payloads"]] == [501]
         return SimpleNamespace(created=1, updated=0, unchanged=0, failed=0, records=[])
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
     monkeypatch.setattr(task_history_service, "get_node_tasks", _fetch)
@@ -793,10 +796,8 @@ def test_unscoped_task_history_ignores_unmanaged_vm_after_successful_sidecar_sca
     assert result == {"count": 1, "created": 1, "skipped": 2}
 
 
-@pytest.mark.parametrize("legacy_fallback_enabled", [False, True])
 def test_selected_task_history_missing_identity_is_fatal(
     monkeypatch,
-    legacy_fallback_enabled,
 ):
     async def _list_vms(*_args, **_kwargs):
         return [{"id": 501, "name": "selected-unmanaged"}]
@@ -804,11 +805,6 @@ def test_selected_task_history_missing_identity_is_fatal(
     async def _scan(_nb: object) -> VMSyncStateIdentityScan:
         return VMSyncStateIdentityScan(rows=())
 
-    monkeypatch.setattr(
-        task_history_service,
-        "custom_fields_enabled",
-        lambda: legacy_fallback_enabled,
-    )
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
 
@@ -854,23 +850,14 @@ def test_selected_task_history_missing_identity_is_fatal(
         ),
     ],
 )
-def test_present_invalid_sidecar_never_falls_back_to_enabled_custom_fields(
+def test_present_invalid_sidecar_fails_closed(
     monkeypatch,
     sidecar_rows,
 ):
-    vm_with_valid_legacy_identity = {
-        "id": 501,
-        "name": "vm-a",
-        "cluster": {"name": "lab"},
-        "custom_fields": {
-            "proxmox_endpoint_id": 11,
-            "proxmox_vm_id": 101,
-            "proxmox_vm_type": "qemu",
-        },
-    }
+    vm_record = {"id": 501, "name": "vm-a", "cluster": {"name": "lab"}}
 
     async def _list_vms(*_args, **_kwargs):
-        return [vm_with_valid_legacy_identity]
+        return [vm_record]
 
     async def _scan(_nb: object) -> VMSyncStateIdentityScan:
         return VMSyncStateIdentityScan(rows=sidecar_rows)
@@ -878,7 +865,6 @@ def test_present_invalid_sidecar_never_falls_back_to_enabled_custom_fields(
     async def _unexpected_fetch(*_args, **_kwargs):
         raise AssertionError("invalid present sidecar must fail before archive fetch")
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: True)
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
     monkeypatch.setattr(task_history_service, "get_node_tasks", _unexpected_fetch)
@@ -894,7 +880,7 @@ def test_present_invalid_sidecar_never_falls_back_to_enabled_custom_fields(
             )
         )
 
-    assert "Refusing legacy custom-field fallback" in str(exc_info.value.detail)
+    assert "sidecar" in str(exc_info.value.detail).lower()
 
 
 def test_selected_task_history_keeps_retired_malformed_sidecar_strict(monkeypatch):
@@ -913,7 +899,6 @@ def test_selected_task_history_keeps_retired_malformed_sidecar_strict(monkeypatc
             )
         )
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
 
@@ -929,7 +914,7 @@ def test_selected_task_history_keeps_retired_malformed_sidecar_strict(monkeypatc
             )
         )
 
-    assert "Refusing legacy custom-field fallback" in str(exc_info.value.detail)
+    assert "sidecar" in str(exc_info.value.detail).lower()
 
 
 def test_selected_task_history_ignores_unrelated_malformed_sidecar(monkeypatch):
@@ -971,7 +956,6 @@ def test_selected_task_history_ignores_unrelated_malformed_sidecar(monkeypatch):
     async def _bulk(*_args, **_kwargs):
         return SimpleNamespace(created=1, updated=0, unchanged=0, failed=0, records=[])
 
-    monkeypatch.setattr(task_history_service, "custom_fields_enabled", lambda: False)
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
     monkeypatch.setattr(task_history_service, "get_node_tasks", _fetch)
@@ -998,6 +982,10 @@ def test_all_task_history_stops_when_node_ignores_pagination_offset(monkeypatch)
     fetch_offsets: list[int] = []
     bulk_payloads: list[dict[str, object]] = []
     phase_summaries: list[dict[str, object]] = []
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(501, 101, 11, "qemu", "lab"), (502, 102, 11, "qemu", "lab")],
+    )
 
     class _Bridge:
         async def emit_discovery(self, **_kwargs):
@@ -1099,6 +1087,10 @@ def test_all_task_history_reports_no_new_upid_page_as_degraded(monkeypatch):
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
     offsets: list[int] = []
     phase_summaries: list[dict[str, object]] = []
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(601, 101, 11, "qemu", "lab"), (602, 102, 11, "qemu", "lab")],
+    )
     vms = [
         {
             "id": 500 + vmid,
@@ -1175,6 +1167,10 @@ def test_all_task_history_reads_more_than_one_archive_page_without_losing_new_ro
     monkeypatch,
 ):
     px = SimpleNamespace(db_endpoint_id=11)
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(1000 + vmid, vmid, 11, "qemu", "lab") for vmid in range(1, 502)],
+    )
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
     vms = [
         {
@@ -1252,6 +1248,10 @@ def test_all_task_history_isolates_partial_node_failure_dedupes_and_bounds_concu
     monkeypatch,
 ):
     px = SimpleNamespace(db_endpoint_id=11)
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(500 + vmid, vmid, 11, "qemu", "lab") for vmid in range(101, 105)],
+    )
     cluster = SimpleNamespace(
         name="lab",
         node_list=[
@@ -1360,7 +1360,11 @@ def test_all_task_history_isolates_partial_node_failure_dedupes_and_bounds_concu
     assert "degraded coverage" in str(phase_summaries[-1]["message"])
 
 
-def test_all_task_history_skips_ambiguous_legacy_cluster_vmid(monkeypatch):
+def test_all_task_history_rejects_endpointless_sidecar_identity(monkeypatch):
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(501, 101, None, "qemu", "lab"), (502, 101, None, "qemu", "lab")],
+    )
     px = SimpleNamespace(db_endpoint_id=None)
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
     vms = [
@@ -1409,21 +1413,21 @@ def test_all_task_history_skips_ambiguous_legacy_cluster_vmid(monkeypatch):
         _unexpected_bulk,
     )
 
-    result = asyncio.run(
-        sync_all_virtual_machine_task_histories(
-            netbox_session=object(), pxs=[px], cluster_status=[cluster]
+    with pytest.raises(ProxboxException, match="Unable to verify VM identity"):
+        asyncio.run(
+            sync_all_virtual_machine_task_histories(
+                netbox_session=object(), pxs=[px], cluster_status=[cluster]
+            )
         )
-    )
-
-    assert result["created"] == 0
-    assert result["skipped"] > 0
-    assert result["degraded"] is True
-    assert result["errors"] == 1
 
 
 def test_all_task_history_marks_exact_vm_ownership_collision_degraded(monkeypatch):
     px = SimpleNamespace(db_endpoint_id=11)
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(501, 101, 11, "qemu", "lab"), (502, 101, 11, "qemu", "lab")],
+    )
     vms = [
         {
             "id": netbox_id,
@@ -1475,14 +1479,14 @@ def test_all_task_history_marks_exact_vm_ownership_collision_degraded(monkeypatc
     assert result["errors"] == 1
 
 
-def test_all_task_history_marks_sidecar_and_endpointless_legacy_collision_degraded(
+def test_all_task_history_ignores_vm_without_sidecar_identity(
     monkeypatch,
 ):
     vms = [
         {"id": 501, "name": "sidecar-owner", "cluster": {"name": "stale"}},
         {
             "id": 502,
-            "name": "legacy-claimant",
+            "name": "unmanaged",
             "cluster": {"name": "lab"},
             "custom_fields": {
                 "proxmox_vm_id": 101,
@@ -1523,16 +1527,17 @@ def test_all_task_history_marks_sidecar_and_endpointless_legacy_collision_degrad
 
     bulk_calls = 0
 
-    async def _unexpected_bulk(*_args, **_kwargs):
+    async def _bulk(*_args, **kwargs):
         nonlocal bulk_calls
         bulk_calls += 1
-        raise AssertionError("mixed identity collision must not be reconciled")
+        assert [payload["virtual_machine"] for payload in kwargs["payloads"]] == [501]
+        return SimpleNamespace(created=1, updated=0, unchanged=0, failed=0, records=[])
 
     monkeypatch.setattr(task_history_service, "_list_all_vms_with_proxmox_id", _list_vms)
     monkeypatch.setattr(task_history_service, "load_vm_sync_state_identities", _scan)
     monkeypatch.setattr(task_history_service, "get_node_tasks", _fetch)
     monkeypatch.setattr(task_history_service, "dump_models", lambda items: items)
-    monkeypatch.setattr(task_history_service, "rest_bulk_reconcile_async", _unexpected_bulk)
+    monkeypatch.setattr(task_history_service, "rest_bulk_reconcile_async", _bulk)
 
     result = asyncio.run(
         sync_all_virtual_machine_task_histories(
@@ -1543,16 +1548,15 @@ def test_all_task_history_marks_sidecar_and_endpointless_legacy_collision_degrad
     )
 
     assert result == {
-        "count": 2,
-        "created": 0,
+        "count": 1,
+        "created": 1,
         "skipped": 1,
-        "degraded": True,
-        "errors": 1,
     }
-    assert bulk_calls == 0
+    assert bulk_calls == 1
 
 
 def test_all_task_history_unrelated_archive_vmid_is_only_skipped(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, 11, "qemu", "lab")])
     vm = {
         "id": 501,
         "cluster": {"name": "lab"},
@@ -1600,9 +1604,10 @@ def test_all_task_history_unrelated_archive_vmid_is_only_skipped(monkeypatch):
     assert result == {"count": 1, "created": 1, "skipped": 1}
 
 
-def test_all_task_history_fails_closed_for_legacy_vm_across_duplicate_cluster_names(
+def test_all_task_history_fails_closed_for_endpointless_sidecar(
     monkeypatch,
 ):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, None, "qemu", "lab")])
     px_a = SimpleNamespace(db_endpoint_id=11)
     px_b = SimpleNamespace(db_endpoint_id=22)
     clusters = [
@@ -1648,19 +1653,16 @@ def test_all_task_history_fails_closed_for_legacy_vm_across_duplicate_cluster_na
         _unexpected_bulk,
     )
 
-    result = asyncio.run(
-        sync_all_virtual_machine_task_histories(
-            netbox_session=object(), pxs=[px_a, px_b], cluster_status=clusters
+    with pytest.raises(ProxboxException, match="Unable to verify VM identity"):
+        asyncio.run(
+            sync_all_virtual_machine_task_histories(
+                netbox_session=object(), pxs=[px_a, px_b], cluster_status=clusters
+            )
         )
-    )
-
-    assert result["created"] == 0
-    assert result["skipped"] == 2
-    assert result["degraded"] is True
-    assert result["errors"] == 2
 
 
-def test_all_task_history_never_legacy_maps_a_known_mismatched_endpoint(monkeypatch):
+def test_all_task_history_ignores_identity_outside_active_endpoint(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, 22, "qemu", "lab")])
     source = SimpleNamespace(db_endpoint_id=11)
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
     vm_on_other_endpoint = {
@@ -1685,15 +1687,20 @@ def test_all_task_history_never_legacy_maps_a_known_mismatched_endpoint(monkeypa
     )
     monkeypatch.setattr("proxbox_api.services.sync.task_history.get_node_tasks", _unexpected_fetch)
 
-    with pytest.raises(ProxboxException, match="no selected Proxmox nodes"):
-        asyncio.run(
-            sync_all_virtual_machine_task_histories(
-                netbox_session=object(), pxs=[source], cluster_status=[cluster]
-            )
+    result = asyncio.run(
+        sync_all_virtual_machine_task_histories(
+            netbox_session=object(), pxs=[source], cluster_status=[cluster]
         )
+    )
+
+    assert result == {"count": 0, "created": 0, "skipped": 1}
 
 
 def test_all_task_history_reports_partially_missing_target_scope_as_degraded(monkeypatch):
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(501, 101, 11, "qemu", "lab-a"), (502, 102, 22, "qemu", "lab-b")],
+    )
     vms = [
         {
             "id": 501,
@@ -1749,13 +1756,13 @@ def test_all_task_history_reports_partially_missing_target_scope_as_degraded(mon
         )
     )
 
-    assert result["count"] == 2
+    assert result["count"] == 1
     assert result["created"] == 1
-    assert result["degraded"] is True
-    assert result["errors"] == 1
+    assert result["skipped"] == 1
 
 
 def test_all_task_history_empty_node_coverage_for_every_scope_is_fatal(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, 11, "qemu", "lab")])
     vm = {
         "id": 501,
         "cluster": {"name": "lab"},
@@ -1785,6 +1792,7 @@ def test_all_task_history_empty_node_coverage_for_every_scope_is_fatal(monkeypat
 
 
 def test_all_task_history_all_node_failure_is_fatal(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, 11, "qemu", "lab")])
     px = SimpleNamespace(db_endpoint_id=11)
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
     vm = {
@@ -1842,6 +1850,7 @@ def test_all_task_history_vm_list_failure_is_fatal(monkeypatch):
 
 
 def test_all_task_history_global_bulk_reconcile_failure_is_fatal(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, 11, "qemu", "lab")])
     vm = {
         "id": 501,
         "cluster": {"name": "lab"},
@@ -1896,6 +1905,7 @@ def test_all_task_history_global_bulk_reconcile_failure_is_fatal(monkeypatch):
 
 
 def test_all_task_history_preserves_cancellation_without_reconciling(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(501, 101, 11, "qemu", "lab")])
     px = SimpleNamespace(db_endpoint_id=11)
     cluster = SimpleNamespace(name="lab", node_list=[SimpleNamespace(name="pve-a")])
     vm = {
@@ -1936,6 +1946,7 @@ def test_all_task_history_preserves_cancellation_without_reconciling(monkeypatch
 
 
 def test_all_task_history_selected_scope_fetches_only_selected_endpoint(monkeypatch):
+    _patch_sidecar_scan(monkeypatch, [(502, 102, 22, "lxc", "lab-b")])
     px_a = SimpleNamespace(db_endpoint_id=11)
     px_b = SimpleNamespace(db_endpoint_id=22)
     clusters = [
@@ -2039,6 +2050,10 @@ def test_all_task_history_explicit_lookup_requires_complete_coverage(
 
 
 def test_all_task_history_skips_same_upid_mapped_to_different_endpoint_owners(monkeypatch):
+    _patch_sidecar_scan(
+        monkeypatch,
+        [(501, 101, 11, "qemu", "lab-a"), (502, 101, 22, "lxc", "lab-b")],
+    )
     px_a = SimpleNamespace(db_endpoint_id=11)
     px_b = SimpleNamespace(db_endpoint_id=22)
     clusters = [

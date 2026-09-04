@@ -11,7 +11,6 @@ from proxbox_api.app import bootstrap
 from proxbox_api.auth import check_auth_header
 from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
 from proxbox_api.logger import logger
-from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 from proxbox_api.services.auth_lockout import AuthSourceContext, resolve_auth_source_context
@@ -100,7 +99,6 @@ async def websocket_virtual_machines(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     websocket: WebSocket,
 ) -> None:
@@ -145,7 +143,6 @@ async def websocket_virtual_machines(
         pxs=pxs,
         cluster_status=cluster_status,
         cluster_resources=cluster_resources,
-        custom_fields=custom_fields,
         websocket=websocket,
         tag=tag,
         use_css=False,
@@ -158,7 +155,6 @@ async def websocket_sync_commands(  # noqa: C901
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     websocket: WebSocket,
 ) -> None:
@@ -226,7 +222,6 @@ async def websocket_sync_commands(  # noqa: C901
                         pxs=pxs,
                         cluster_status=cluster_status,
                         cluster_resources=cluster_resources,
-                        custom_fields=custom_fields,
                         websocket=websocket,
                         tag=tag,
                         use_websocket=True,
@@ -250,7 +245,6 @@ async def websocket_sync_commands(  # noqa: C901
                     pxs=pxs,
                     cluster_status=cluster_status,
                     cluster_resources=cluster_resources,
-                    custom_fields=custom_fields,
                     websocket=websocket,
                     tag=tag,
                     use_websocket=True,

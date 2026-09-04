@@ -26,16 +26,18 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_virtual_machine_by_netbox_id,
 )
 from proxbox_api.services.sync import sync_state_reader
+from proxbox_api.services.sync.sync_state_reader import VMSyncStateIdentityScan
 
 _TAG = SimpleNamespace(id=1, name="Proxbox", slug="proxbox", color="ff5722")
 
 
 @pytest.fixture(autouse=True)
 def _bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: True,
-    )
+
+    async def _inline_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
 
     async def _legacy_vm_snapshot_bridge(
         netbox_session,
@@ -67,18 +69,31 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
         _fake_create_virtual_machines,
     )
 
-    # NetBox record has a blank name but a known proxmox_vm_id.
+    # NetBox record has a blank name; its typed sidecar owns the Proxmox identity.
     vm_record = SimpleNamespace(
         serialize=lambda: {
             "id": 551,
             "name": "",
             "cluster": {"id": 10, "name": "cluster-a"},
-            "custom_fields": {
-                "proxmox_endpoint_id": 11,
-                "proxmox_vm_id": 9551,
-                "proxmox_vm_type": "qemu",
-            },
         }
+    )
+
+    async def _typed_identity_scan(_nb):
+        return VMSyncStateIdentityScan(
+            rows=(
+                {
+                    "virtual_machine": 551,
+                    "proxmox_endpoint_raw_id": 11,
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_vm_id": 9551,
+                    "proxmox_vm_type": "qemu",
+                },
+            )
+        )
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _typed_identity_scan,
     )
 
     # netbox-sdk's virtual_machines.get() is `async def`; the fake must be a
@@ -102,7 +117,6 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
             pxs=[SimpleNamespace(db_endpoint_id=11)],
             cluster_status=[SimpleNamespace(name="cluster-a")],
             cluster_resources=cluster_resources,
-            custom_fields=[],
             tag=_TAG,
         )
     )
@@ -114,15 +128,22 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
     ]
 
 
-def test_by_netbox_id_fails_closed_when_name_and_vmid_missing():
+def test_by_netbox_id_fails_closed_when_name_and_vmid_missing(monkeypatch):
     """With neither a name nor a proxmox_vm_id, the VM cannot be matched."""
     vm_record = SimpleNamespace(
         serialize=lambda: {
             "id": 551,
             "name": "",
             "cluster": {"id": 10, "name": "cluster-a"},
-            "custom_fields": {},
         }
+    )
+
+    async def _empty_identity_scan(_nb):
+        return VMSyncStateIdentityScan(rows=())
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _empty_identity_scan,
     )
 
     async def _fake_get(id):
@@ -140,12 +161,11 @@ def test_by_netbox_id_fails_closed_when_name_and_vmid_missing():
                 pxs=[],
                 cluster_status=[],
                 cluster_resources=[],
-                custom_fields=[],
                 tag=_TAG,
             )
         )
     assert excinfo.value.http_status_code == 502
-    assert "positive VMID" in str(excinfo.value.detail)
+    assert "no typed Proxbox sync-state owner" in str(excinfo.value.detail)
 
 
 def test_proxmox_vm_resource_input_fills_blank_name():
@@ -168,10 +188,12 @@ def _full_vm_sync_scaffold(monkeypatch, interface_impl):
     """
 
     async def _fake_reconcile(*args, **kwargs):
-        lookup = kwargs.get("lookup") or {}
-        if lookup.get("cf_proxmox_vm_id") == 101:
+        if len(args) > 1 and args[1] == "/api/virtualization/virtual-machines/":
             return {"id": 101, "name": "vm-101", "primary_ip4": None}
         return {"id": 1, "name": kwargs.get("payload", {}).get("name")}
+
+    async def _fake_create(_nb, _path, payload, **_kwargs):
+        return {"id": 101, "name": payload["name"], "primary_ip4": None}
 
     async def _fake_ensure(*args, **kwargs):
         return SimpleNamespace(id=1)
@@ -190,6 +212,7 @@ def _full_vm_sync_scaffold(monkeypatch, interface_impl):
 
     base = "proxbox_api.routes.virtualization.virtual_machines.sync_vm"
     monkeypatch.setattr(f"{base}.rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(f"{base}.rest_create_async", _fake_create)
     monkeypatch.setattr(f"{base}.rest_list_async", _fake_rest_list)
     monkeypatch.setattr(
         "proxbox_api.services.sync.sync_state_reader.rest_list_async",
@@ -236,7 +259,6 @@ def _full_vm_sync_scaffold(monkeypatch, interface_impl):
             cluster_resources=[
                 {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": 101, "node": "pve01"}]}
             ],
-            custom_fields=[],
             tag=_TAG,
         )
     )

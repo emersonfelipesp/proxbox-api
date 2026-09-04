@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 
 from proxbox_api.schemas.sync import SyncOverwriteFlags
-from proxbox_api.services import custom_fields as custom_fields_service
 
 
 @dataclass
@@ -35,15 +34,6 @@ class _FakeBulkResult:
     updated: int = 0
     unchanged: int = 0
     failed: int = 0
-
-
-@pytest.fixture(autouse=True)
-def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        custom_fields_service,
-        "get_plugin_bool",
-        lambda *, settings_key, default: True,
-    )
 
 
 def _make_bulk_capture(monkeypatch: pytest.MonkeyPatch, target: str) -> _Capture:
@@ -65,7 +55,7 @@ def _make_bulk_capture(monkeypatch: pytest.MonkeyPatch, target: str) -> _Capture
 
 
 @pytest.mark.asyncio
-async def test_vm_interfaces_default_includes_tags_and_custom_fields(
+async def test_vm_interfaces_default_includes_tags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from proxbox_api.services.sync import network as network_module
@@ -82,7 +72,6 @@ async def test_vm_interfaces_default_includes_tags_and_custom_fields(
 
     assert capture.called
     assert "tags" in capture.patchable_fields
-    assert "custom_fields" in capture.patchable_fields
 
 
 @pytest.mark.asyncio
@@ -102,31 +91,10 @@ async def test_vm_interfaces_drops_tags_when_flag_disabled(
     )
 
     assert "tags" not in capture.patchable_fields
-    assert "custom_fields" in capture.patchable_fields
 
 
 @pytest.mark.asyncio
-async def test_vm_interfaces_drops_custom_fields_when_flag_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from proxbox_api.services.sync import network as network_module
-
-    capture = _make_bulk_capture(
-        monkeypatch, "proxbox_api.services.sync.network.rest_bulk_reconcile_async"
-    )
-
-    await network_module.bulk_reconcile_vm_interfaces(
-        nb=object(),
-        interface_payloads=[{"name": "eth0", "virtual_machine": 1}],
-        overwrite_flags=SyncOverwriteFlags(overwrite_vm_interface_custom_fields=False),
-    )
-
-    assert "tags" in capture.patchable_fields
-    assert "custom_fields" not in capture.patchable_fields
-
-
-@pytest.mark.asyncio
-async def test_vm_interfaces_legacy_none_keeps_all_patchable(
+async def test_vm_interfaces_none_flags_keeps_tags_patchable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from proxbox_api.services.sync import network as network_module
@@ -142,7 +110,6 @@ async def test_vm_interfaces_legacy_none_keeps_all_patchable(
     )
 
     assert "tags" in capture.patchable_fields
-    assert "custom_fields" in capture.patchable_fields
 
 
 @pytest.mark.asyncio
@@ -191,7 +158,6 @@ async def test_vm_interface_normalizer_extracts_fk_ids(
         "untagged_vlan": {"id": 3, "url": "http://netbox/api/ipam/vlans/3/", "display": "vlan-3"},
         "mode": None,
         "tags": [],
-        "custom_fields": {},
     }
 
     normalized = normalizer(netbox_existing)
@@ -214,7 +180,7 @@ async def test_vm_interface_normalizer_extracts_fk_ids(
 
 
 @pytest.mark.asyncio
-async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
+async def test_vm_interface_ips_default_includes_status_tags_and_dns_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from proxbox_api.services.sync import network as network_module
@@ -229,7 +195,7 @@ async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
         overwrite_flags=SyncOverwriteFlags(),
     )
 
-    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields", "dns_name"})
+    assert capture.patchable_fields == frozenset({"status", "tags", "dns_name"})
 
 
 @pytest.mark.asyncio
@@ -238,7 +204,6 @@ async def test_vm_interface_ips_default_includes_status_tags_custom_fields(
     [
         ("overwrite_ip_status", "status"),
         ("overwrite_ip_tags", "tags"),
-        ("overwrite_ip_custom_fields", "custom_fields"),
         ("overwrite_ip_address_dns_name", "dns_name"),
     ],
 )
@@ -260,12 +225,12 @@ async def test_vm_interface_ips_drops_key_when_flag_disabled(
     )
 
     assert missing_key not in capture.patchable_fields
-    expected_remaining = {"status", "tags", "custom_fields", "dns_name"} - {missing_key}
+    expected_remaining = {"status", "tags", "dns_name"} - {missing_key}
     assert expected_remaining.issubset(capture.patchable_fields)
 
 
 @pytest.mark.asyncio
-async def test_vm_interface_ips_legacy_none_keeps_all_three(
+async def test_vm_interface_ips_none_flags_keeps_all_three(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from proxbox_api.services.sync import network as network_module
@@ -280,7 +245,7 @@ async def test_vm_interface_ips_legacy_none_keeps_all_three(
         overwrite_flags=None,
     )
 
-    assert capture.patchable_fields == frozenset({"status", "tags", "custom_fields", "dns_name"})
+    assert capture.patchable_fields == frozenset({"status", "tags", "dns_name"})
 
 
 # ---------------------------------------------------------------------------
@@ -304,14 +269,13 @@ def test_device_patchable_defaults_include_all_overwriteable_keys() -> None:
         "cluster",
         "status",
         "description",
-        "custom_fields",
         "role",
         "device_type",
         "tags",
     }
 
 
-def test_device_patchable_legacy_none_flags_keeps_status_description_custom_fields() -> None:
+def test_device_patchable_none_flags_keeps_status_and_description() -> None:
     """``overwrite_flags=None`` mirrors the always-overwrite legacy contract."""
     from proxbox_api.services.sync.device_ensure import _compute_device_patchable_fields
 
@@ -322,7 +286,7 @@ def test_device_patchable_legacy_none_flags_keeps_status_description_custom_fiel
         overwrite_device_tags=True,
     )
 
-    assert {"cluster", "status", "description", "custom_fields"}.issubset(fields)
+    assert {"cluster", "status", "description"}.issubset(fields)
     assert {"role", "device_type", "tags"}.issubset(fields)
 
 
@@ -356,7 +320,6 @@ def test_device_patchable_drops_key_when_positional_flag_false(
     [
         ("overwrite_device_status", "status"),
         ("overwrite_device_description", "description"),
-        ("overwrite_device_custom_fields", "custom_fields"),
     ],
 )
 def test_device_patchable_drops_key_when_schema_flag_false(
@@ -428,7 +391,6 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
         # ``comments`` carries the untruncated Proxmox note that ``description`` had to
         # cut, so it rides the same overwrite gate as ``description``.
         "comments",
-        "custom_fields",
     }
 
 
@@ -449,7 +411,6 @@ def test_vm_patchable_legacy_none_flags_keeps_all_keys() -> None:
         "role",
         "tags",
         "description",
-        "custom_fields",
     }.issubset(fields)
 
 
@@ -484,15 +445,13 @@ def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_k
     assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
 
 
-@pytest.mark.parametrize("flag_name", ["overwrite_vm_role", "overwrite_vm_custom_fields"])
-def test_vm_patchable_keeps_role_and_custom_fields_regardless_of_flag(flag_name: str) -> None:
+def test_vm_patchable_keeps_role_when_role_overwrite_is_disabled() -> None:
     """Per-VM lock now controls writes via payload mutation; allowlist stays open."""
     from proxbox_api.services.sync.vm_helpers import _compute_vm_patchable_fields
 
-    fields = _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
+    fields = _compute_vm_patchable_fields(SyncOverwriteFlags(overwrite_vm_role=False))
 
     assert "role" in fields
-    assert "custom_fields" in fields
 
 
 # ---------------------------------------------------------------------------

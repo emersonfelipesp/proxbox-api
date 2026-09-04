@@ -3,7 +3,7 @@
 This module ships the bootstrap orchestrator described by issue #358. On
 ``proxbox-api`` lifespan startup it walks a hardcoded inventory of objects
 the sync flows depend on (cluster type, manufacturer, device type, device
-role, VM role/type, custom fields, tags, choice sets) and reconciles each
+role, VM role/type, tags, choice sets) and reconciles each
 against the live NetBox via the typed ``upsert_*`` helpers in
 :mod:`proxbox_api.services.netbox_writers`.
 
@@ -46,13 +46,6 @@ from proxbox_api.netbox_rest import ReconcileResult
 from proxbox_api.netbox_version import (
     detect_netbox_version,
     supports_virtual_machine_type,
-)
-from proxbox_api.services.custom_fields import (
-    CUSTOM_FIELD_INVENTORY,
-    custom_fields_enabled,
-    describe_custom_field_failure,
-    reconcile_custom_field_with_status,
-    warn_legacy_custom_fields,
 )
 from proxbox_api.services.netbox_writers import (
     UpsertResult,
@@ -282,17 +275,6 @@ async def run_netbox_bootstrap(
             ".".join(str(part) for part in netbox_version),
         )
 
-    if custom_fields_enabled():
-        warn_legacy_custom_fields("legacy custom-field definition bootstrap")
-        for cf in CUSTOM_FIELD_INVENTORY:
-            await _safe_upsert(
-                status,
-                f"custom_field:{cf['name']}",
-                lambda cf=cf: reconcile_custom_field_with_status(nb, cf, warn=False),
-            )
-    else:
-        logger.info("Skipping custom-field bootstrap: custom_fields_enabled=false")
-
     if status.warnings:
         status.ok = False
         logger.error(
@@ -325,22 +307,7 @@ async def _safe_upsert(
         result = await call()
     except Exception as exc:  # noqa: BLE001 — orchestrator must not abort the run
         warning: dict[str, str] = {"object": label, "error": str(exc)}
-        # NetBox refuses to change the type of an existing custom field, so a field
-        # pre-created with the wrong type blocks the bootstrap permanently. The raw
-        # NetBox message names neither the type Proxbox expects nor a remedy, and this
-        # log line is what an operator actually reads when it happens.
-        described = describe_custom_field_failure(label, str(exc))
-        if described is not None:
-            warning["expected_type"] = described["expected_type"]
-            warning["remedy"] = described["remedy"]
-            logger.error(
-                "NetBox bootstrap failed for %s: %s -- %s",
-                label,
-                exc,
-                described["remedy"],
-            )
-        else:
-            logger.error("NetBox bootstrap failed for %s: %s", label, exc)
+        logger.error("NetBox bootstrap failed for %s: %s", label, exc)
         status.warnings.append(warning)
         return None
 

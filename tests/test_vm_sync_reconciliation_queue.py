@@ -9,18 +9,8 @@ import pytest
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
-from proxbox_api.services import custom_fields as custom_fields_service
 from proxbox_api.services.sync import role_resolution
 from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan
-
-
-@pytest.fixture(autouse=True)
-def enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        custom_fields_service,
-        "get_plugin_bool",
-        lambda *, settings_key, default: True,
-    )
 
 
 def _prepared_vm(
@@ -40,10 +30,6 @@ def _prepared_vm(
         "memory": memory,
         "disk": 30,
         "tags": [99],
-        "custom_fields": {
-            "proxmox_endpoint_id": endpoint_id,
-            "proxmox_vm_id": vmid,
-        },
         "description": "Synced from Proxmox node pve01",
     }
     return sync_vm._PreparedVMState(
@@ -52,9 +38,10 @@ def _prepared_vm(
         vm_config={},
         vm_config_obj=ProxmoxVmConfigInput.model_validate({}),
         desired_payload=desired_payload,
-        lookup={"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id},
+        lookup={"id": 0},
         now=datetime.now(timezone.utc),
         vm_type="qemu",
+        sync_state_fields={"proxmox_endpoint_id": endpoint_id, "proxmox_vm_id": vmid},
     )
 
 
@@ -77,7 +64,8 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 102},
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 102,
             "description": "Synced from Proxmox node pve01",
         },
         {
@@ -91,7 +79,8 @@ def test_build_vm_operation_queue_classifies_ok_create_update():
             "memory": 2048,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 103},
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 103,
             "description": "Synced from Proxmox node pve01",
         },
     ]
@@ -120,11 +109,9 @@ def test_build_vm_operation_queue_keeps_same_vmid_endpoints_separate():
             "memory": 2048,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {
-                "proxmox_endpoint_id": 1,
-                "proxmox_vm_id": 105,
-                "proxmox_vm_type": "qemu",
-            },
+            "proxmox_endpoint_id": 1,
+            "proxmox_vm_id": 105,
+            "proxmox_vm_type": "qemu",
             "description": "Synced from Proxmox node pve01",
         },
         {
@@ -138,11 +125,9 @@ def test_build_vm_operation_queue_keeps_same_vmid_endpoints_separate():
             "memory": 2048,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {
-                "proxmox_endpoint_id": 2,
-                "proxmox_vm_id": 105,
-                "proxmox_vm_type": "qemu",
-            },
+            "proxmox_endpoint_id": 2,
+            "proxmox_vm_id": 105,
+            "proxmox_vm_type": "qemu",
             "description": "Synced from Proxmox node pve01",
         },
     ]
@@ -170,7 +155,8 @@ def test_build_vm_operation_queue_omits_vm_type_when_overwrite_disabled():
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 104},
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 104,
             "description": "Synced from Proxmox node pve01",
         }
     ]
@@ -201,7 +187,8 @@ def test_build_vm_operation_queue_omits_vm_type_when_netbox_lacks_native_field()
             "memory": 4096,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 105},
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 105,
             "description": "Synced from Proxmox node pve01",
         }
     ]
@@ -235,9 +222,7 @@ def test_log_vm_reconciliation_measurement_includes_gate_fields(monkeypatch):
     operation_counts = sync_vm._log_vm_reconciliation_measurement(
         operation_queue=queue,
         prepared_vms=[prepared_qemu, prepared_lxc],
-        netbox_snapshot=[
-            {"id": 2106, "custom_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 106}}
-        ],
+        netbox_snapshot=[{"id": 2106, "proxmox_endpoint_id": 500, "proxmox_vm_id": 106}],
         duration_ms=12.34,
         supports_virtual_machine_type_field=True,
     )
@@ -264,24 +249,20 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 2)
 
     async def _fake_create(nb, path, payload, *, lookup=None):
-        calls.append(f"create:{payload['custom_fields']['proxmox_vm_id']}")
+        calls.append(f"create:{payload['name']}")
         create_lookups.append(lookup)
-        vmid = payload["custom_fields"]["proxmox_vm_id"]
+        vmid = int(str(payload["name"]).removeprefix("vm-"))
         return {"id": 3000 + vmid, **payload}
 
     async def _fake_patch(nb, path, record_id, payload):
         calls.append(f"patch:{record_id}")
         return {"id": record_id, **payload}
 
-    async def _fake_first(nb, path, query):
-        return None
-
     async def _fake_resolve(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_create)
     monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
-    monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
     monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolve)
 
     prepared_create = _prepared_vm(cluster_name="cluster-a", vmid=201, memory=2048)
@@ -296,7 +277,6 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
             existing_record={
                 "id": 4202,
                 "role": {"id": 20},
-                "custom_fields": {"proxmox_vm_id": 202},
             },
         ),
         sync_vm._NetBoxVMOperation(
@@ -305,7 +285,6 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
             existing_record={
                 "id": 4203,
                 "role": {"id": 20},
-                "custom_fields": {"proxmox_vm_id": 203},
             },
             patch_payload={"memory": 4096},
         ),
@@ -314,8 +293,8 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
     assert failed_keys == set()
 
-    assert calls == ["create:201", "patch:4203"]
-    assert create_lookups == [{"cf_proxmox_vm_id": 201, "cf_proxmox_endpoint_id": 500}]
+    assert calls == ["create:vm-201", "patch:4203"]
+    assert create_lookups == [{"id": 0}]
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
@@ -376,7 +355,6 @@ async def test_dispatch_vm_role_snapshot_policy_preserves_operator_edit_and_back
         object(),
         queue,
         overwrite_vm_role=False,
-        custom_fields_enabled_flag=False,
     )
 
     assert failed_keys == set()
@@ -452,7 +430,6 @@ async def test_snapshot_failure_rollback_allows_next_sync_to_retry_role_roll_for
         object(),
         [first],
         overwrite_vm_role=False,
-        custom_fields_enabled_flag=False,
     )
 
     assert failed_keys == set()
@@ -484,7 +461,6 @@ async def test_snapshot_failure_rollback_allows_next_sync_to_retry_role_roll_for
         object(),
         [second],
         overwrite_vm_role=False,
-        custom_fields_enabled_flag=False,
     )
 
     assert failed_keys == set()
@@ -553,7 +529,6 @@ async def test_commit_then_error_confirmation_avoids_rollback_and_false_lock(
         object(),
         [first],
         overwrite_vm_role=False,
-        custom_fields_enabled_flag=False,
     )
 
     assert failed_keys == set()
@@ -582,7 +557,6 @@ async def test_commit_then_error_confirmation_avoids_rollback_and_false_lock(
         object(),
         [second],
         overwrite_vm_role=False,
-        custom_fields_enabled_flag=False,
     )
 
     assert failed_keys == set()
@@ -592,7 +566,7 @@ async def test_commit_then_error_confirmation_avoids_rollback_and_false_lock(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_create_re_adopts_sidecar_vm_when_custom_fields_absent(monkeypatch):
+async def test_dispatch_create_re_adopts_sidecar_vm(monkeypatch):
     calls: list[str] = []
 
     async def _unexpected_create(*_args, **_kwargs):
@@ -614,7 +588,6 @@ async def test_dispatch_create_re_adopts_sidecar_vm_when_custom_fields_absent(mo
                     "memory": 1024,
                     "disk": 30,
                     "tags": [{"id": 99}],
-                    "custom_fields": {},
                     "description": "old",
                 },
                 "record_id": 6101,
@@ -643,56 +616,12 @@ async def test_dispatch_create_re_adopts_sidecar_vm_when_custom_fields_absent(mo
         object(),
         queue,
         overwrite_vm_role=False,
-        custom_fields_enabled_flag=False,
     )
 
     assert failed_keys == set()
     assert calls == [6101]
     assert resolved[("cluster-a", 301, "qemu")]["id"] == 6101
     assert resolved[("cluster-a", 301, "qemu")]["memory"] == 2048
-    assert queue[0].role_snapshot_id_to_write is None
-
-
-@pytest.mark.asyncio
-async def test_dispatch_create_conflict_preserves_operator_role(monkeypatch):
-    async def _no_sidecar_resolution(*_args, **_kwargs):
-        return None
-
-    async def _conflicting_create(*_args, **_kwargs):
-        raise ProxboxException(message="duplicate VM")
-
-    async def _legacy_existing(*_args, **_kwargs):
-        return {"id": 6105, "role": {"id": 42}, "custom_fields": {}}
-
-    async def _unexpected_patch(*_args, **_kwargs):
-        raise AssertionError("operator-owned role must not be patched")
-
-    async def _fake_role_scan(*_args, **_kwargs) -> VMRoleSnapshotScan:
-        return VMRoleSnapshotScan(values={6105: 11})
-
-    monkeypatch.setattr(
-        sync_vm,
-        "resolve_virtual_machine_by_sync_state",
-        _no_sidecar_resolution,
-    )
-    monkeypatch.setattr(sync_vm, "rest_create_async", _conflicting_create)
-    monkeypatch.setattr(sync_vm, "rest_first_async", _legacy_existing)
-    monkeypatch.setattr(sync_vm, "rest_patch_async", _unexpected_patch)
-    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_scan)
-    monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
-
-    prepared = _prepared_vm(cluster_name="cluster-a", vmid=305, memory=2048)
-    queue = [sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared)]
-
-    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(
-        object(),
-        queue,
-        overwrite_vm_role=False,
-        custom_fields_enabled_flag=True,
-    )
-
-    assert failed_keys == set()
-    assert resolved[("cluster-a", 305, "qemu")]["role"] == {"id": 42}
     assert queue[0].role_snapshot_id_to_write is None
 
 
@@ -704,7 +633,6 @@ async def test_sidecar_hydration_prevents_name_prepass_rename_for_cf_absent_vm(m
             "id": 6101,
             "name": "vm-301",
             "cluster": {"id": 1, "name": "cluster-a"},
-            "custom_fields": {},
         }
     ]
 
@@ -729,11 +657,9 @@ async def test_sidecar_hydration_prevents_name_prepass_rename_for_cf_absent_vm(m
     assert hydrated == 1
     assert resolutions == []
     assert prepared.desired_payload["name"] == "vm-301"
-    assert snapshot[0]["custom_fields"] == {
-        "proxmox_endpoint_id": 500,
-        "proxmox_vm_id": 301,
-        "proxmox_vm_type": "qemu",
-    }
+    assert snapshot[0]["proxmox_endpoint_id"] == 500
+    assert snapshot[0]["proxmox_vm_id"] == 301
+    assert snapshot[0]["proxmox_vm_type"] == "qemu"
 
 
 @pytest.mark.asyncio
@@ -751,7 +677,6 @@ async def test_sidecar_hydration_makes_reconciliation_queue_adopt_cf_absent_vm(m
             "memory": 1024,
             "disk": 30,
             "tags": [{"id": 99}],
-            "custom_fields": {},
             "description": "Synced from Proxmox node pve01",
         }
     ]
@@ -789,7 +714,7 @@ async def test_load_netbox_virtual_machine_snapshot_can_bypass_stale_cache(monke
 
     async def _fake_list(nb, path, *, page_size=None):
         page_sizes.append(page_size)
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01"}]
 
     monkeypatch.setattr(sync_vm, "clear_rest_get_cache_for_path", _fake_clear)
     monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _fake_list)
@@ -798,7 +723,7 @@ async def test_load_netbox_virtual_machine_snapshot_can_bypass_stale_cache(monke
 
     assert cleared_paths == ["/api/virtualization/virtual-machines/"]
     assert page_sizes == [200]
-    assert snapshot == [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+    assert snapshot == [{"id": 55, "name": "vm01"}]
 
 
 @pytest.mark.asyncio
@@ -829,7 +754,6 @@ async def test_dispatch_vm_operation_queue_retries_disk_aggregate_validation(mon
             existing_record={
                 "id": 4204,
                 "role": {"id": 20},
-                "custom_fields": {"proxmox_vm_id": 204},
                 "disk": 2256,
             },
             patch_payload={"memory": 4096, "disk": 2252},
@@ -862,7 +786,6 @@ async def test_dispatch_vm_operation_queue_keeps_same_vmid_types_separate(monkey
             existing_record={
                 "id": 5300,
                 "role": {"id": 20},
-                "custom_fields": {"proxmox_vm_id": 300},
             },
         ),
         sync_vm._NetBoxVMOperation(
@@ -871,7 +794,6 @@ async def test_dispatch_vm_operation_queue_keeps_same_vmid_types_separate(monkey
             existing_record={
                 "id": 6300,
                 "role": {"id": 20},
-                "custom_fields": {"proxmox_vm_id": 300},
             },
         ),
     ]
@@ -890,19 +812,15 @@ async def test_dispatch_vm_operation_queue_isolates_failed_operation(monkeypatch
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 4)
 
     async def _fake_create(nb, path, payload, *, lookup=None):
-        vmid = payload["custom_fields"]["proxmox_vm_id"]
+        vmid = int(str(payload["name"]).removeprefix("vm-"))
         if vmid == 401:
             raise RuntimeError("netbox create failed")
         return {"id": 3000 + vmid, **payload}
-
-    async def _fake_first(nb, path, query):
-        return None
 
     async def _fake_resolve(*_args, **_kwargs):
         return None
 
     monkeypatch.setattr(sync_vm, "rest_create_async", _fake_create)
-    monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
     monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolve)
 
     prepared_bad = _prepared_vm(cluster_name="cluster-a", vmid=401, memory=2048)

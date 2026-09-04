@@ -9,7 +9,6 @@ from typing import cast
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async, rest_list_async, rest_list_paginated_async
-from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
 from proxbox_api.services.sync.sync_state_writer import (
     VM_SYNC_STATE_PATH,
     _is_sidecar_unavailable,
@@ -133,8 +132,7 @@ def _memoize_sidecar_failure(path: str, error: Exception) -> None:
         )
     else:
         logger.warning(
-            "Proxbox sync-state sidecar read failed at %s; "
-            "legacy custom-field fallback is available only when custom_fields_enabled=true: %s",
+            "Proxbox sync-state sidecar read failed at %s: %s",
             path,
             getattr(error, "detail", str(error)),
         )
@@ -198,8 +196,7 @@ async def _first_sidecar(
         return None
     if len(rows) > 1:
         logger.warning(
-            "Proxbox sync-state VM sidecar lookup was ambiguous for query=%s; "
-            "falling back to legacy custom-field lookup",
+            "Proxbox sync-state VM sidecar lookup was ambiguous for query=%s; refusing the lookup",
             query,
         )
         return None
@@ -213,9 +210,9 @@ async def _fetch_vm_by_id(nb: object, vm_id: int) -> object | None:
             VIRTUAL_MACHINES_PATH,
             query={"id": vm_id, "limit": 2},
         )
-    except Exception as exc:  # noqa: BLE001 - fallback to CF path when detail fetch fails
+    except Exception as exc:  # noqa: BLE001 - optional sidecar relation lookup
         logger.debug(
-            "Failed to fetch NetBox VM id=%s from sidecar relation; falling back to legacy lookup: %s",
+            "Failed to fetch NetBox VM id=%s from sidecar relation: %s",
             vm_id,
             exc,
         )
@@ -291,58 +288,12 @@ async def _list_sidecar_vm_identity_candidates(
     return candidates, refused
 
 
-async def _list_custom_field_vm_identity_candidates(
-    nb: object,
-    *,
-    proxmox_vm_id: int,
-    endpoint_id: int | None,
-    cluster_id: int | None,
-    fallback_query: dict[str, object] | None = None,
-) -> tuple[list[_VMIdentityCandidate] | None, bool]:
-    if fallback_query is not None:
-        query = dict(fallback_query)
-    else:
-        query = {"cf_proxmox_vm_id": proxmox_vm_id}
-        if endpoint_id is not None:
-            query["cf_proxmox_endpoint_id"] = endpoint_id
-        elif cluster_id is not None:
-            query["cluster_id"] = cluster_id
-    try:
-        records = await rest_list_async(
-            nb,
-            VIRTUAL_MACHINES_PATH,
-            query={**query, "limit": 2},
-        )
-    except Exception as exc:  # noqa: BLE001 - distinguish absent from unverifiable CF lookup
-        logger.debug("Legacy VM custom-field lookup failed for query=%s: %s", query, exc)
-        return None, True
-
-    candidates: list[_VMIdentityCandidate] = []
-    for record in records:
-        record_id = _record_id(record)
-        if record_id is None:
-            logger.debug(
-                "Legacy VM custom-field lookup returned a record without id: %s",
-                record,
-            )
-            continue
-        candidates.append(
-            _VMIdentityCandidate(
-                record=record,
-                record_id=record_id,
-                source="custom_fields",
-            )
-        )
-    return candidates, False
-
-
 async def _resolve_unique_vm_identity_candidate(
     nb: object,
     *,
     proxmox_vm_id: int,
     endpoint_id: int | None = None,
     cluster_id: int | None = None,
-    fallback_query: dict[str, object] | None = None,
 ) -> tuple[SyncStateVMResolution | None, bool]:
     sidecar_candidates, sidecar_refused = await _list_sidecar_vm_identity_candidates(
         nb,
@@ -350,46 +301,27 @@ async def _resolve_unique_vm_identity_candidate(
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
     )
-    custom_field_candidates: list[_VMIdentityCandidate] | None = None
-    custom_field_read_failed = False
-    legacy_custom_fields_enabled = custom_fields_enabled()
-    if legacy_custom_fields_enabled:
-        warn_legacy_custom_fields("legacy VM identity custom-field fallback")
-        (
-            custom_field_candidates,
-            custom_field_read_failed,
-        ) = await _list_custom_field_vm_identity_candidates(
-            nb,
-            proxmox_vm_id=proxmox_vm_id,
-            endpoint_id=endpoint_id,
-            cluster_id=cluster_id,
-            fallback_query=fallback_query,
-        )
-    elif sidecar_candidates is None:
+    if sidecar_candidates is None:
         logger.warning(
             "Proxbox VM sync-state lookup for vmid=%s endpoint_id=%s cluster_id=%s "
-            "could not read the typed sidecar and legacy custom-field fallback is disabled; "
-            "refusing to treat the VM identity as verifiably absent",
+            "could not read the typed sidecar; refusing to treat the VM identity as "
+            "verifiably absent",
             proxmox_vm_id,
             endpoint_id,
             cluster_id,
         )
         return None, True
-    if sidecar_refused and not custom_field_candidates:
+    if sidecar_refused:
         logger.warning(
             "Proxbox VM sync-state lookup for vmid=%s endpoint_id=%s cluster_id=%s "
-            "could not verify sidecar identity and found no legacy CF match; "
-            "refusing to treat the VM as absent",
+            "could not verify sidecar identity; refusing to treat the VM as absent",
             proxmox_vm_id,
             endpoint_id,
             cluster_id,
         )
         return None, True
 
-    candidates = [
-        *(sidecar_candidates or []),
-        *(custom_field_candidates or []),
-    ]
+    candidates = sidecar_candidates or []
     candidates_by_id = {candidate.record_id: candidate for candidate in candidates}
     if len(candidates_by_id) > 1:
         logger.warning(
@@ -401,32 +333,12 @@ async def _resolve_unique_vm_identity_candidate(
             sorted(candidates_by_id),
         )
         return None, True
-    if custom_field_read_failed and not candidates_by_id:
-        logger.warning(
-            "Proxbox VM sync-state lookup for vmid=%s endpoint_id=%s cluster_id=%s "
-            "could not verify legacy custom-field identity and found no authoritative "
-            "sidecar match; refusing to treat the VM as absent",
-            proxmox_vm_id,
-            endpoint_id,
-            cluster_id,
-        )
-        return None, True
     if not candidates_by_id:
         return None, False
 
     record_id = next(iter(candidates_by_id))
     sidecar_candidate = next(
         (candidate for candidate in candidates if candidate.record_id == record_id),
-        None,
-    )
-    custom_field_candidate = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate.record_id == record_id
-            and candidate.record is not None
-            and candidate.source == "custom_fields"
-        ),
         None,
     )
     hydrated_sidecar_candidate = next(
@@ -437,11 +349,9 @@ async def _resolve_unique_vm_identity_candidate(
         ),
         None,
     )
-    source = sidecar_candidate.source if sidecar_candidate is not None else "custom_fields"
+    source = sidecar_candidate.source if sidecar_candidate is not None else "sidecar"
     record = (
-        custom_field_candidate.record
-        if custom_field_candidate is not None
-        else hydrated_sidecar_candidate.record
+        hydrated_sidecar_candidate.record
         if hydrated_sidecar_candidate is not None
         else await _fetch_vm_by_id(nb, record_id)
     )
@@ -456,10 +366,9 @@ async def resolve_virtual_machine_by_sync_state(
     proxmox_vm_id: int | str | None,
     endpoint_id: int | None = None,
     cluster_id: int | None = None,
-    fallback_query: dict[str, object] | None = None,
     fail_on_ambiguous: bool = False,
 ) -> SyncStateVMResolution | None:
-    """Resolve a NetBox VM only when sidecar and legacy CF matches are unique."""
+    """Resolve a NetBox VM only when the typed sidecar match is unique."""
     vmid = _as_positive_int(proxmox_vm_id)
     if vmid is None:
         return None
@@ -469,14 +378,13 @@ async def resolve_virtual_machine_by_sync_state(
         proxmox_vm_id=vmid,
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
-        fallback_query=fallback_query,
     )
     if _ambiguous and fail_on_ambiguous:
         raise ProxboxException(
             message="Refusing to create or bind a VM from ambiguous sync-state identity.",
             detail=(
                 f"vmid={vmid} endpoint_id={endpoint_id} cluster_id={cluster_id}; "
-                "sidecar/legacy identity was ambiguous or could not be verified"
+                "sidecar identity was ambiguous or could not be verified"
             ),
         )
     return resolution
@@ -488,15 +396,13 @@ async def resolve_virtual_machine_id_by_sync_state(
     proxmox_vm_id: int | str | None,
     endpoint_id: int | None = None,
     cluster_id: int | None = None,
-    fallback_query: dict[str, object] | None = None,
 ) -> int | None:
-    """Resolve only the NetBox VM id when sidecar and legacy CF matches are unique."""
+    """Resolve only the NetBox VM id when the typed sidecar match is unique."""
     resolution = await resolve_virtual_machine_by_sync_state(
         nb,
         proxmox_vm_id=proxmox_vm_id,
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
-        fallback_query=fallback_query,
     )
     return resolution.record_id if resolution is not None else None
 
@@ -506,7 +412,7 @@ async def resolve_unique_virtual_machine_by_sync_state(
     *,
     proxmox_vm_id: int | str | None,
 ) -> tuple[SyncStateVMResolution | None, bool]:
-    """Resolve by VMID only when the combined sidecar and CF match set is unique."""
+    """Resolve by VMID only when the sidecar match set is unique."""
     vmid = _as_positive_int(proxmox_vm_id)
     if vmid is None:
         return None, False
@@ -699,39 +605,27 @@ async def resolve_vm_last_run_id(
     nb: object,
     *,
     vm_record: dict[str, object] | None,
-    custom_field_name: str,
 ) -> str | None:
-    """Read VM last-run state from sidecar first, then the legacy custom field."""
+    """Read VM last-run state from the typed sidecar."""
     vm_id = _record_id(vm_record) if vm_record is not None else None
     if vm_id is not None:
         sidecar = await resolve_vm_sidecar_by_parent_id(nb, vm_id)
         if sidecar is not None and "last_run_id" in sidecar:
             value = _sidecar_text(sidecar.get("last_run_id"))
             return value or None
-    if not isinstance(vm_record, dict):
-        return None
-    if not custom_fields_enabled():
-        return None
-    warn_legacy_custom_fields("legacy VM last-run custom-field fallback")
-    custom_fields = vm_record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    value = _sidecar_text(custom_fields.get(custom_field_name))
-    return value or None
+    return None
 
 
 async def resolve_vm_last_synced_role_id(
     nb: object,
     *,
     vm_record: dict[str, object] | None,
-    custom_field_name: str,
 ) -> int | None:
     """Compatibility wrapper returning a snapshot only when one is verified."""
     return (
         await read_vm_last_synced_role(
             nb,
             vm_record=vm_record,
-            custom_field_name=custom_field_name,
         )
     ).snapshot_id
 
@@ -758,31 +652,10 @@ def _typed_vm_role_snapshot(
     return VMRoleSnapshotRead(snapshot_id=None, verified=True)
 
 
-def _legacy_vm_role_snapshot(
-    vm_record: dict[str, object] | None,
-    *,
-    custom_field_name: str,
-    typed_read: VMRoleSnapshotRead,
-) -> VMRoleSnapshotRead:
-    if not custom_fields_enabled():
-        return typed_read
-    warn_legacy_custom_fields("legacy VM role-ownership custom-field read")
-    if not isinstance(vm_record, dict):
-        return typed_read
-    custom_fields = vm_record.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return typed_read
-    legacy_role_id = _as_positive_int(custom_fields.get(custom_field_name))
-    if legacy_role_id is not None and typed_read.verified:
-        return VMRoleSnapshotRead(snapshot_id=legacy_role_id, verified=True)
-    return typed_read
-
-
 async def read_vm_last_synced_role(
     nb: object,
     *,
     vm_record: dict[str, object] | None,
-    custom_field_name: str,
 ) -> VMRoleSnapshotRead:
     """Read a role snapshot while preserving unavailable/ambiguous outcomes."""
     vm_id = _record_id(vm_record) if vm_record is not None else None
@@ -798,13 +671,7 @@ async def read_vm_last_synced_role(
             if rows is None
             else _typed_vm_role_snapshot(vm_id, rows)
         )
-    if typed_read.snapshot_id is not None:
-        return typed_read
-    return _legacy_vm_role_snapshot(
-        vm_record,
-        custom_field_name=custom_field_name,
-        typed_read=typed_read,
-    )
+    return typed_read
 
 
 async def scan_vm_sidecar_orphan_candidates(
@@ -847,6 +714,8 @@ async def scan_vm_sidecar_orphan_candidates(
             continue
         if not _record_has_any_tag_slug(vm_data, vm_slugs):
             continue
+        vm_data["_proxbox_last_run_id"] = data.get("last_run_id")
+        vm_data["_proxmox_vm_id"] = data.get("proxmox_vm_id")
         candidates_by_id[vm_id] = vm_data
     return SidecarVMOrphanScan(
         stale_candidates=list(candidates_by_id.values()),

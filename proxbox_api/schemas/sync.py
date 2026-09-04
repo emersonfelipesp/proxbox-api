@@ -65,10 +65,10 @@ class SyncOverwriteFlags(ProxboxBaseModel):
     )
     overwrite_device_custom_fields: bool = Field(
         default=True,
-        title="Overwrite Device Custom Fields",
+        title="Overwrite Device Sync State",
         description=(
-            "When false, custom_fields are not patched on existing NetBox devices that already "
-            "have non-empty custom_fields. Custom fields are still applied on first create."
+            "Compatibility-named flag controlling updates to typed device sync-state sidecars. "
+            "It no longer writes NetBox custom fields."
         ),
     )
 
@@ -117,10 +117,10 @@ class SyncOverwriteFlags(ProxboxBaseModel):
     )
     overwrite_vm_custom_fields: bool = Field(
         default=True,
-        title="Overwrite VM Custom Fields",
+        title="Overwrite VM Sync State",
         description=(
-            "When false, custom_fields are not patched on existing VMs that already have "
-            "non-empty custom_fields. Custom fields are still applied on first create."
+            "Compatibility-named flag controlling updates to typed VM sync-state sidecars. "
+            "It no longer writes NetBox custom fields."
         ),
     )
     overwrite_vm_cloudinit: bool = Field(
@@ -151,10 +151,10 @@ class SyncOverwriteFlags(ProxboxBaseModel):
     )
     overwrite_cluster_custom_fields: bool = Field(
         default=True,
-        title="Overwrite Cluster Custom Fields",
+        title="Overwrite Cluster Sync State",
         description=(
-            "When false, custom_fields are not patched on existing NetBox clusters that "
-            "already have non-empty custom_fields."
+            "Compatibility-named flag controlling updates to typed cluster sync-state sidecars. "
+            "It no longer writes NetBox custom fields."
         ),
     )
 
@@ -169,10 +169,10 @@ class SyncOverwriteFlags(ProxboxBaseModel):
     )
     overwrite_node_interface_custom_fields: bool = Field(
         default=True,
-        title="Overwrite Node Interface Custom Fields",
+        title="Overwrite Node Interface Sync State",
         description=(
-            "When false, custom_fields are not patched on existing NetBox node interfaces "
-            "that already have non-empty custom_fields."
+            "Compatibility-named flag controlling updates to typed interface sync-state "
+            "sidecars. It no longer writes NetBox custom fields."
         ),
     )
 
@@ -197,10 +197,10 @@ class SyncOverwriteFlags(ProxboxBaseModel):
     )
     overwrite_vm_interface_custom_fields: bool = Field(
         default=True,
-        title="Overwrite VM Interface Custom Fields",
+        title="Overwrite VM Interface Sync State",
         description=(
-            "When false, custom_fields are not patched on existing NetBox VM interfaces "
-            "that already have non-empty custom_fields."
+            "Compatibility-named flag controlling updates to typed VM-interface sync-state "
+            "sidecars. It no longer writes NetBox custom fields."
         ),
     )
 
@@ -222,10 +222,10 @@ class SyncOverwriteFlags(ProxboxBaseModel):
     )
     overwrite_ip_custom_fields: bool = Field(
         default=True,
-        title="Overwrite IP Custom Fields",
+        title="Overwrite IP Sync State",
         description=(
-            "When false, custom_fields are not patched on existing NetBox IP address records "
-            "that already have non-empty custom_fields."
+            "Compatibility-named flag controlling updates to typed IP sync-state sidecars. "
+            "It no longer writes NetBox custom fields."
         ),
     )
     overwrite_ip_address_dns_name: bool = Field(
@@ -288,19 +288,6 @@ class SyncBehaviorFlags(ProxboxBaseModel):
             "at no additional request cost."
         ),
     )
-    custom_fields_enabled: bool | None = Field(
-        default=None,
-        title="Legacy Custom Fields Enabled",
-        description=(
-            "When true, legacy Proxbox reflection custom-field writes, reads, "
-            "and definition reconcile are enabled for transition. When false, "
-            "the typed netbox-proxbox Proxbox*SyncState sidecar models are the "
-            "source of truth. When omitted (null), the value falls back to the "
-            "ProxboxPluginSettings.custom_fields_enabled plugin setting (default "
-            "false), so internal callers that do not thread the request flag "
-            "still honor the operator's opt-in."
-        ),
-    )
     sync_node_interfaces: bool = Field(
         default=False,
         title="Sync Node Interfaces",
@@ -318,10 +305,6 @@ def behavior_flags_from_query_params(
 ) -> SyncBehaviorFlags:
     """Resolve canonical behavior flags from raw flat query parameters."""
     resolved = (base or SyncBehaviorFlags()).model_dump()
-    if "custom_fields_enabled" not in query_params:
-        from proxbox_api.services.custom_fields import custom_fields_enabled
-
-        resolved["custom_fields_enabled"] = custom_fields_enabled()
     for name in SyncBehaviorFlags.model_fields:
         if name in query_params:
             resolved[name] = query_params[name]

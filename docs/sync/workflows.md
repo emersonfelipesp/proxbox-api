@@ -223,8 +223,8 @@ renders the same payload. Tracked under
 
 Operators can stash a fenced JSON block (`netbox-metadata`) inside the Proxmox
 VM description. The sync extracts the block, validates it through a permissive
-Pydantic schema, and uses it to seed user-managed NetBox fields (description,
-tags, custom fields) before the normal Proxmox-derived payload merges in. The
+Pydantic schema, and uses it to seed user-managed NetBox fields such as
+description and tags before the normal Proxmox-derived payload merges in. The
 parsing logic is centralized in
 `proxbox_api/proxmox_to_netbox/description_metadata.py` and locked in by
 `tests/test_description_metadata.py`. Invalid JSON or schema violations are
@@ -233,9 +233,8 @@ string.
 
 ### Proxbox sync-state sidecars
 
-During the additive migration away from custom-field-only state, sync writes the
-legacy Proxbox custom fields and also mirrors selected values into
-netbox-proxbox typed sidecars under `/api/plugins/proxbox/sync-state/*`.
+Sync writes reflection values into netbox-proxbox typed sidecars under
+`/api/plugins/proxbox/sync-state/*`.
 
 Mirrored write sites:
 
@@ -250,9 +249,9 @@ Mirrored write sites:
 - Virtual disk `proxbox_storage_id` is mirrored to
   `ProxboxVirtualDiskSyncState.proxbox_storage`.
 
-Each reflection sidecar payload is built from the same live Proxmox-derived
-values already computed for the custom-field payload. Reflection fields follow
-the matching `overwrite_*_custom_fields` flag. Ownership evidence such as
+Each reflection sidecar payload is built from live Proxmox-derived values.
+Reflection fields follow the matching `overwrite_*_custom_fields` flag.
+Ownership evidence such as
 `proxmox_vm_name` and `proxmox_last_synced_role_id` is written independently of
 that flag after successful VM reconciliation. Reflection-only sidecar writes
 remain best-effort. A role snapshot that accompanies a managed role change is
@@ -263,16 +262,12 @@ and verified before the VM is marked failed. This prevents either half of the
 pair from misclassifying the next pass as an operator edit. Deploy the
 netbox-proxbox schema/API addition before this backend consumer.
 
-Reads are migrated in the same additive style. VM identity lookups first query
+VM identity lookups query
 `/api/plugins/proxbox/sync-state/virtual-machines/` by `proxmox_vm_id` and
-endpoint, then fall back to the legacy `cf_proxmox_vm_id` plus endpoint/cluster
-query when no sidecar row exists. Orphan sweep reads `last_run_id` from the VM
-sidecar before trusting `proxbox_last_run_id`, so a VM touched by the current
-run is not deleted just because the legacy custom field is stale or absent.
-Role ownership is read first from
-`ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id`; the deprecated
-same-named custom field is a transition fallback only when legacy custom fields
-are enabled. Full/bulk sync loads typed role snapshots once per pass, then the
+endpoint. Orphan sweep reads `last_run_id` from the VM sidecar, so a VM touched
+by the current run is not deleted. Role ownership is read from
+`ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id`. Full/bulk sync
+loads typed role snapshots once per pass, then the
 engine-neutral dispatch policy applies the same decision after either Python or
 Rust queue construction. Individual and sidecar-adoption paths call the same
 truth table. A missing snapshot captures the current role without changing it;
@@ -280,8 +275,7 @@ a role that differs from its snapshot is preserved when overwrite is disabled;
 and a role still matching its snapshot may roll forward with a changed managed
 default. Unavailable, transiently failed, or conflicting snapshot reads are not
 treated as a first-sync absence: the current role is preserved and no ownership
-snapshot is claimed. Removing the legacy custom fields is a separate retirement
-step.
+snapshot is claimed.
 
 ## Backup Sync Flow
 

@@ -182,18 +182,13 @@ def test_every_event_e2e_matrix_stays_within_github_limit_and_keeps_coverage():
     assert {row["netbox_proxbox_mode"] for row in release_rows} == {"dev", "pypi"}
 
 
-def test_ci_e2e_explicitly_opts_into_legacy_custom_field_coverage():
+def test_ci_e2e_does_not_restore_retired_custom_field_setup():
     workflow = _read(CI_WORKFLOW_PATH)
     e2e_block = workflow.split("e2e-docker:", 1)[1]
 
-    _assert_order(
-        e2e_block,
-        "Wait for NetBox and create API token",
-        '"${{ matrix.netbox_public_url }}/api/plugins/proxbox/settings/"',
-        "--data '{\"custom_fields_enabled\":true}'",
-        "Create Proxbox custom fields in NetBox",
-        'uv run pytest tests/e2e/ -m "mock_http" --tb=short -v',
-    )
+    assert "custom_fields_enabled" not in e2e_block
+    assert "/extras/extras/custom-fields/create" not in e2e_block
+    assert 'uv run pytest tests/e2e/ -m "mock_http" --tb=short -v' in e2e_block
 
 
 def test_primary_ci_enforces_repository_coverage_ratchet():

@@ -10,7 +10,6 @@ class ClusterTypeSchema(ProxboxBaseModel):
     slug: str | None = None
     description: str | None = None
     tags: list[TagSchema] | None = None
-    custom_fields: dict[str, object] | None = None
 
 
 class ClusterSchema(ProxboxBaseModel):
@@ -23,4 +22,3 @@ class ClusterSchema(ProxboxBaseModel):
     description: str | None = None
     comments: str | None = None
     tags: list[int] | None = None
-    custom_fields: dict[str, object] | None = None

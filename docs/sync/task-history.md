@@ -47,22 +47,16 @@ requests. This keeps request growth proportional to nodes and pages rather than
 
 The typed VM sync-state sidecar is authoritative for VMID, raw endpoint ID, VM
 type, and Proxmox cluster name. A malformed or duplicate sidecar belonging to a
-VM relevant to the run fails closed and is never masked by custom fields; a
-selected request is not aborted by corrupt sidecars that belong only to an
-unrelated VM. Legacy custom-field identity is considered only when no sidecar
-row exists (or the optional sidecar route cannot be read) and
-`custom_fields_enabled=true`.
+VM relevant to the run fails closed; a selected request is not aborted by
+corrupt sidecars that belong only to an unrelated VM.
 
-When an estate-wide sidecar scan succeeds, a NetBox VM with neither a sidecar
-nor usable legacy identity is treated as unmanaged and skipped. An explicitly
-selected VM without identity remains fatal. An unavailable/transient sidecar
-read with custom fields disabled is also fatal because ownership cannot be
-verified. A task from endpoint 11 therefore cannot fall back to a VM explicitly
-pinned to endpoint 22. Legacy `(cluster_name, vmid)` matching additionally
-requires a globally unique VM match and one source endpoint/session for that
-cluster name. True exact/legacy ownership collisions and duplicate cluster
-sources are skipped and mark the run degraded; unrelated archive VMIDs are
-ordinary skips and do not count as errors.
+When an estate-wide sidecar scan succeeds, a NetBox VM without a sidecar is
+treated as unmanaged and skipped. An explicitly selected VM without identity
+remains fatal. An unavailable or transient sidecar read is also fatal because
+ownership cannot be verified. A task from endpoint 11 therefore cannot map to a
+VM pinned to endpoint 22. Ownership collisions and duplicate cluster sources are
+skipped and mark the run degraded; unrelated archive VMIDs are ordinary skips
+and do not count as errors.
 
 One UPID observed on old and new nodes for the same VM (for example after
 migration) is deduplicated safely. The same UPID resolving to different VM

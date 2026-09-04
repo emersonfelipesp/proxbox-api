@@ -33,6 +33,7 @@ from proxbox_api.services.sync.storage_links import (
     find_storage_record,
     storage_name_from_volume_id,
 )
+from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
 from proxbox_api.services.sync.vm_filter import hydrate_selected_vm_identities
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
@@ -425,20 +426,13 @@ async def create_netbox_backups(  # noqa: C901
             proxmox_vmid=vmid_int,
         )
         if virtual_machine is None:
-            # Get the virtual machine on NetBox by the VM ID using custom field filter
-            vms = await rest_list_async(
+            resolution = await resolve_virtual_machine_by_sync_state(
                 nb,
-                "/api/virtualization/virtual-machines/",
-                query={"cf_proxmox_vm_id": vmid_int},
+                proxmox_vm_id=vmid_int,
+                endpoint_id=normalize_positive_int(resolved_endpoint_id),
+                fail_on_ambiguous=True,
             )
-            lookup_cache = vm_cache if isinstance(vm_cache, _BackupVMCache) else _BackupVMCache()
-            for vm in vms:
-                lookup_cache.add(vm)
-            virtual_machine = lookup_cache.resolve(
-                endpoint_id=resolved_endpoint_id,
-                cluster_name=resolved_cluster_name,
-                proxmox_vmid=vmid_int,
-            )
+            virtual_machine = to_mapping(resolution.record) if resolution is not None else None
             if isinstance(vm_cache, dict):
                 vm_cache[vmid_int] = virtual_machine
 
@@ -1553,8 +1547,7 @@ async def create_virtual_machine_backups_by_id_stream(
         )
 
     # Ownership identity is resolved downstream from the authoritative typed
-    # sidecar (legacy custom fields only as a gated fallback), so no legacy
-    # proxmox_vm_id custom-field precondition applies here.
+    # sidecar, so no custom-field precondition applies here.
     async def event_stream():
         bridge = WebSocketSSEBridge()
 

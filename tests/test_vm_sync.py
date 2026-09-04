@@ -33,6 +33,7 @@ from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
+    build_virtual_machine_sync_state_fields,
 )
 from proxbox_api.services.sync.vm_filter import filter_cluster_resources_by_netbox_vm_ids
 from proxbox_api.services.sync.vm_helpers import parse_selected_netbox_vm_ids
@@ -40,13 +41,12 @@ from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
 
 @pytest.fixture(autouse=True)
-def _enable_legacy_selected_vm_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Legacy-CF selector fixtures must opt into the transitional fallback."""
+def _preserve_hydrated_vm_test_fixtures(monkeypatch):
+    async def _passthrough(_nb, virtual_machines, *, require_all=False):
+        del require_all
+        return virtual_machines
 
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: True,
-    )
+    monkeypatch.setattr(sync_vm, "hydrate_vm_identities_from_sidecars", _passthrough)
 
 
 def _selection_source(cluster_name: str, endpoint_id: int) -> tuple[object, object]:
@@ -69,18 +69,45 @@ def _selected_vm_record(
     vm_type: str = "qemu",
     name: str | None = None,
 ) -> dict[str, object]:
-    custom_fields: dict[str, object] = {
-        "proxmox_vm_id": vmid,
-        "proxmox_vm_type": vm_type,
-    }
-    if endpoint_id is not None:
-        custom_fields["proxmox_endpoint_id"] = endpoint_id
+    del endpoint_id, vm_type
     return {
         "id": netbox_id,
         "name": name or f"vm-{vmid}",
         "cluster": {"id": netbox_id + 1000, "name": cluster_name},
-        "custom_fields": custom_fields,
     }
+
+
+def _sidecar_row(
+    netbox_id: int,
+    *,
+    cluster_name: str,
+    vmid: int,
+    endpoint_id: int | None,
+    vm_type: str = "qemu",
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "virtual_machine": {"id": netbox_id},
+        "proxmox_cluster_name": cluster_name,
+        "proxmox_vm_id": vmid,
+        "proxmox_vm_type": vm_type,
+    }
+    if endpoint_id is not None:
+        row["proxmox_endpoint_raw_id"] = endpoint_id
+    return row
+
+
+def _patch_sidecar_scan(monkeypatch, rows: list[dict[str, object]]) -> None:
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=tuple(rows),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _scan,
+    )
 
 
 def test_selected_vm_resource_filter_uses_repeated_chunked_ids_and_dedupes(monkeypatch):
@@ -99,17 +126,24 @@ def test_selected_vm_resource_filter_uses_repeated_chunked_ids_and_dedupes(monke
                     "id": int(vm_id),
                     "name": f"vm-{vm_id}",
                     "cluster": {"id": 1, "name": "lab"},
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 500,
-                        "proxmox_vm_id": int(vm_id),
-                        "proxmox_vm_type": "qemu",
-                    },
                 },
             )
             for vm_id in repeated_ids
         ]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    _patch_sidecar_scan(
+        monkeypatch,
+        [
+            _sidecar_row(
+                vm_id,
+                cluster_name="lab",
+                vmid=vm_id,
+                endpoint_id=500,
+            )
+            for vm_id in range(1, 103)
+        ],
+    )
     resources = [{"type": "qemu", "vmid": vm_id, "name": f"vm-{vm_id}"} for vm_id in range(1, 103)]
     px, status = _selection_source("lab", 500)
 
@@ -144,11 +178,6 @@ def test_selected_vm_resource_filter_fails_closed_when_any_chunk_lookup_fails(mo
                 "id": int(vm_id),
                 "name": f"vm-{vm_id}",
                 "cluster": {"id": 1, "name": "lab"},
-                "custom_fields": {
-                    "proxmox_endpoint_id": 500,
-                    "proxmox_vm_id": int(vm_id),
-                    "proxmox_vm_type": "qemu",
-                },
             }
             for vm_id in _kwargs["query"]["id"]
         ]
@@ -190,16 +219,15 @@ def test_dead_vm_filter_uses_selected_rest_record_contract(monkeypatch):
                     "id": 7,
                     "name": "vm-seven",
                     "cluster": {"id": 1, "name": "lab"},
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 500,
-                        "proxmox_vm_id": 700,
-                        "proxmox_vm_type": "qemu",
-                    },
                 },
             )
         ]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    _patch_sidecar_scan(
+        monkeypatch,
+        [_sidecar_row(7, cluster_name="lab", vmid=700, endpoint_id=500)],
+    )
     px, status = _selection_source("lab", 500)
 
     filtered = asyncio.run(
@@ -229,6 +257,10 @@ def test_selected_vm_filter_matches_exact_endpoint_cluster_vmid_and_type(monkeyp
         return [selected_vm]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    _patch_sidecar_scan(
+        monkeypatch,
+        [_sidecar_row(55, cluster_name="Cluster-A", vmid=101, endpoint_id=11)],
+    )
     px_a, status_a = _selection_source("cluster-a", 11)
     px_b, status_b = _selection_source("cluster-b", 22)
     requested = {"type": "qemu", "vmid": 101, "name": "shared-name", "node": "pve-a"}
@@ -253,7 +285,6 @@ def test_selected_vm_filter_uses_sidecar_only_identity_by_default(monkeypatch):
         "id": 55,
         "name": "vm-101",
         "cluster": None,
-        "custom_fields": {},
     }
 
     async def _list(*_args, **_kwargs):
@@ -279,10 +310,6 @@ def test_selected_vm_filter_uses_sidecar_only_identity_by_default(monkeypatch):
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _scan,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
-    )
     px, status = _selection_source("cluster-a", 11)
     resource = {"type": "qemu", "vmid": 101, "name": "vm-101"}
 
@@ -299,13 +326,20 @@ def test_selected_vm_filter_uses_sidecar_only_identity_by_default(monkeypatch):
     assert filtered == [{"cluster-a": [resource]}]
 
 
-def test_selected_vm_filter_prefers_sidecar_over_conflicting_legacy_fields(monkeypatch):
+def test_selected_vm_filter_prefers_sidecar_over_conflicting_vm_attributes(monkeypatch):
     selected_vm = _selected_vm_record(
         55,
         cluster_name="stale-cluster",
         vmid=999,
         endpoint_id=22,
         vm_type="lxc",
+    )
+    selected_vm.update(
+        {
+            "proxmox_endpoint_id": 22,
+            "proxmox_vm_id": 999,
+            "proxmox_vm_type": "lxc",
+        }
     )
 
     async def _list(*_args, **_kwargs):
@@ -381,10 +415,6 @@ def test_selected_vm_filter_rejects_missing_or_duplicate_sidecar_by_default(
         "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
         _scan,
     )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.vm_filter.custom_fields_enabled",
-        lambda: False,
-    )
     px, status = _selection_source("cluster-a", 11)
 
     with pytest.raises(ProxboxException, match="selected VM ownership") as exc_info:
@@ -401,7 +431,7 @@ def test_selected_vm_filter_rejects_missing_or_duplicate_sidecar_by_default(
     assert exc_info.value.http_status_code == 502
 
 
-def test_selected_vm_filter_allows_only_unique_endpointless_legacy_owner(monkeypatch):
+def test_selected_vm_filter_rejects_endpointless_sidecar_owner(monkeypatch):
     selected_vm = _selected_vm_record(
         55,
         cluster_name="cluster-a",
@@ -413,20 +443,23 @@ def test_selected_vm_filter_allows_only_unique_endpointless_legacy_owner(monkeyp
         return [selected_vm]
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    _patch_sidecar_scan(
+        monkeypatch,
+        [_sidecar_row(55, cluster_name="cluster-a", vmid=101, endpoint_id=None)],
+    )
     px, status = _selection_source("CLUSTER-A", 11)
     resource = {"type": "qemu", "vmid": 101, "name": "vm-101"}
 
-    filtered = asyncio.run(
-        filter_cluster_resources_by_netbox_vm_ids(
-            object(),
-            [{"Cluster-A": [resource]}],
-            [55],
-            pxs=[px],
-            cluster_status=[status],
+    with pytest.raises(ProxboxException, match="selected VM ownership"):
+        asyncio.run(
+            filter_cluster_resources_by_netbox_vm_ids(
+                object(),
+                [{"Cluster-A": [resource]}],
+                [55],
+                pxs=[px],
+                cluster_status=[status],
+            )
         )
-    )
-
-    assert filtered == [{"Cluster-A": [resource]}]
 
 
 @pytest.mark.parametrize("failure", ["missing", "invalid", "ambiguous"])
@@ -457,6 +490,24 @@ def test_selected_vm_filter_fails_typed_when_ownership_is_unresolved(monkeypatch
         return records
 
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    if failure == "missing":
+        sidecars: list[dict[str, object]] = []
+    elif failure == "invalid":
+        sidecars = [
+            _sidecar_row(
+                55,
+                cluster_name="cluster-a",
+                vmid=101,
+                endpoint_id=11,
+                vm_type="unknown",
+            )
+        ]
+    else:
+        sidecars = [
+            _sidecar_row(55, cluster_name="cluster-a", vmid=101, endpoint_id=11),
+            _sidecar_row(55, cluster_name="cluster-a", vmid=101, endpoint_id=22),
+        ]
+    _patch_sidecar_scan(monkeypatch, sidecars)
     px_a, status_a = _selection_source("cluster-a", 11)
     px_b, status_b = _selection_source("CLUSTER-A", 22)
     pxs = [px_a] if failure != "ambiguous" else [px_a, px_b]
@@ -508,8 +559,14 @@ def test_map_proxmox_vm_to_netbox_vm_body_uses_schema_driven_normalization(monke
     # >0 path.
     assert body["disk"] == 0
     assert body["tags"] == [7]
-    assert body["custom_fields"]["proxmox_vm_id"] == 101
-    assert body["custom_fields"]["proxmox_vm_type"] == "qemu"
+    assert "custom_fields" not in body
+
+    sync_state = build_virtual_machine_sync_state_fields(
+        proxmox_resource=PROXMOX_VM_RESOURCE,
+        proxmox_config=PROXMOX_VM_CONFIG,
+    )
+    assert sync_state["proxmox_vm_id"] == 101
+    assert sync_state["proxmox_vm_type"] == "qemu"
 
 
 def test_map_proxmox_vm_to_netbox_vm_body_uses_config_disk_aggregate(monkeypatch):
@@ -571,7 +628,12 @@ def test_build_netbox_virtual_machine_payload_matches_mapper(monkeypatch):
         tag_ids=[7],
     )
     assert payload["description"] == "Synced from Proxmox node pve01"
-    assert payload["custom_fields"]["proxmox_qemu_agent"] is True
+    assert "custom_fields" not in payload
+    sync_state = build_virtual_machine_sync_state_fields(
+        proxmox_resource=PROXMOX_VM_RESOURCE,
+        proxmox_config=PROXMOX_VM_CONFIG,
+    )
+    assert sync_state["proxmox_qemu_agent"] is True
 
 
 def test_build_netbox_virtual_machine_payload_sets_lxc_vm_type(monkeypatch):
@@ -591,7 +653,12 @@ def test_build_netbox_virtual_machine_payload_sets_lxc_vm_type(monkeypatch):
         role_id=None,
         tag_ids=[7],
     )
-    assert payload["custom_fields"]["proxmox_vm_type"] == "lxc"
+    assert "custom_fields" not in payload
+    sync_state = build_virtual_machine_sync_state_fields(
+        proxmox_resource=lxc_resource,
+        proxmox_config=PROXMOX_VM_CONFIG,
+    )
+    assert sync_state["proxmox_vm_type"] == "lxc"
 
 
 def test_default_vm_sync_network_preserves_operator_rename_with_sidecar(monkeypatch):
@@ -606,11 +673,6 @@ def test_default_vm_sync_network_preserves_operator_rename_with_sidecar(monkeypa
         "memory": 2048,
         "disk": 0,
         "tags": [{"id": 7}],
-        "custom_fields": {
-            "proxmox_endpoint_id": 500,
-            "proxmox_vm_id": 101,
-            "proxmox_vm_type": "qemu",
-        },
         "description": "Synced from Proxmox node pve01",
     }
     vm_reconcile_payloads: list[dict[str, object]] = []
@@ -720,9 +782,8 @@ def test_default_vm_sync_network_preserves_operator_rename_with_sidecar(monkeypa
                     ]
                 }
             ],
-            custom_fields=[],
             tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
-            behavior_flags=SyncBehaviorFlags(custom_fields_enabled=True),
+            behavior_flags=SyncBehaviorFlags(),
         )
     )
 
@@ -820,7 +881,7 @@ def test_virtual_machine_interface_state_accepts_choice_object_type():
     assert state.type == "bridge"
 
 
-def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate(monkeypatch):
+def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_overwrite_gate(monkeypatch):
     patch_calls: list[dict[str, object]] = []
     sidecar_calls: list[dict[str, object]] = []
 
@@ -846,7 +907,7 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate
             {
                 "id": 55,
                 "name": "vm01",
-                "custom_fields": {"proxmox_vm_id": 101},
+                "proxmox_vm_id": 101,
             }
         ]
 
@@ -898,7 +959,6 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_custom_field_gate
         "pxs": [SimpleNamespace(name="lab")],
         "cluster_status": cluster_status,
         "cluster_resources": cluster_resources,
-        "custom_fields": [],
         "tag": SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
         "sync_mac": False,
     }
@@ -970,8 +1030,8 @@ def test_create_only_vm_interfaces_reports_partial_bulk_warning(monkeypatch):
 
     async def _fake_load_snapshot(_nb):
         return [
-            {"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}},
-            {"id": 56, "name": "vm02", "custom_fields": {"proxmox_vm_id": 102}},
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101},
+            {"id": 56, "name": "vm02", "proxmox_vm_id": 102},
         ]
 
     async def _fake_resolve_cluster_id(*_args, **_kwargs):
@@ -1001,7 +1061,6 @@ def test_create_only_vm_interfaces_reports_partial_bulk_warning(monkeypatch):
             pxs=[SimpleNamespace(name="lab")],
             cluster_status=cluster_status,
             cluster_resources=cluster_resources,
-            custom_fields=[],
             tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
             websocket=_Bridge(),
             use_websocket=True,
@@ -1068,7 +1127,7 @@ def test_create_only_vm_interfaces_truncates_guest_interface_name(monkeypatch):
         return [{"name": long_guest_name, "mac_address": "aa:bb:cc:dd:ee:ff"}]
 
     async def _fake_load_snapshot(_nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     async def _fake_resolve_cluster_id(*_args, **_kwargs):
         return None
@@ -1103,7 +1162,6 @@ def test_create_only_vm_interfaces_truncates_guest_interface_name(monkeypatch):
             pxs=[SimpleNamespace(name="lab")],
             cluster_status=cluster_status,
             cluster_resources=cluster_resources,
-            custom_fields=[],
             tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
             sync_mac=False,
             vm_interface_sync_strategy="legacy_rename",
@@ -1156,7 +1214,7 @@ def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch)
         ]
 
     async def _fake_load_snapshot(_nb):
-        return [{"id": 55, "name": "vm01", "custom_fields": {"proxmox_vm_id": 101}}]
+        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
 
     async def _fake_resolve_cluster_id(*_args, **_kwargs):
         return None
@@ -1217,7 +1275,6 @@ def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch)
             pxs=[SimpleNamespace(name="lab")],
             cluster_status=cluster_status,
             cluster_resources=cluster_resources,
-            custom_fields=[],
             tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
             vm_interface_sync_strategy="legacy_rename",
         )
@@ -1225,8 +1282,6 @@ def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch)
 
     assert len(captured_payloads) == 1
     payload = captured_payloads[0]
-    last_updated = payload["custom_fields"]["proxmox_last_updated"]
-    assert isinstance(last_updated, str)
     assert payload == {
         "address": "192.0.2.10/24",
         "assigned_object_type": "virtualization.vminterface",
@@ -1234,7 +1289,6 @@ def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch)
         "status": "active",
         "dns_name": "",
         "tags": [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
-        "custom_fields": {"proxmox_last_updated": last_updated},
     }
     assert result == [{"ip_id": 10, "address": "192.0.2.10/24"}]
 
@@ -1259,7 +1313,6 @@ def test_standalone_vm_interfaces_response_surfaces_warnings(monkeypatch):
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
             use_guest_agent_interface_name=True,
             vm_interface_sync_strategy="guest_os_model",
@@ -1293,7 +1346,6 @@ def test_standalone_vm_interfaces_stream_complete_surfaces_warnings(monkeypatch)
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
             use_guest_agent_interface_name=True,
             vm_interface_sync_strategy="guest_os_model",
@@ -1408,7 +1460,6 @@ def test_full_update_continues_to_ip_stage_after_vm_interface_warning(monkeypatc
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=type("Tag", (), {"id": 1})(),
         )
     )

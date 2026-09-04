@@ -42,7 +42,7 @@ async def get_devices():
 @router.get(
     "/devices/create",
     # The NetBox-side support objects (Proxbox tag, cluster type, manufacturer,
-    # device type, device role, custom fields) must exist before the first device
+    # device type, device role) must exist before the first device
     # write. Declared as a *route-level* dependency rather than a function
     # parameter on purpose: FastAPI solves route-level dependencies ahead of the
     # path operation's own parameters, so the bootstrap completes before

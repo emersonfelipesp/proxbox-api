@@ -10,8 +10,7 @@ Owns no SSH primitives of its own — the static guard test
 2. Fetches the per-node SSH credential from the netbox-proxbox plugin REST
    endpoint (HTTPS + Bearer / NetBox token).
 3. Composes ``RemoteSSHClient`` + ``discover_node`` once per node, sequentially.
-4. Reflects parsed facts onto NetBox ``dcim.Device.custom_fields`` and each
-   ``dcim.Interface.custom_fields`` via the existing REST helpers.
+4. Reconciles discovered physical NIC MAC addresses when explicitly enabled.
 5. Emits typed SSE frames (``hardware_discovery`` or ``item_progress`` with a
    ``warning``) for every node so the UI shows live progress.
 
@@ -249,13 +248,11 @@ async def reflect_to_netbox(
     *,
     tag_refs: list[dict[str, object]] | None = None,
 ) -> None:
-    """Reflect parsed :class:`HardwareFacts` onto NetBox custom fields.
+    """Reflect discovered physical NIC MAC addresses onto NetBox interfaces.
 
-    Chassis fields land on ``dcim.devices/{node_id}``; per-NIC fields land on
-    each matching ``dcim.interfaces/{interface_id}`` resolved via the
-    ``interface_lookup`` ``{nic_name: interface_id}`` map. NICs without a
-    matching interface are silently skipped (the device-sync pass owns
-    interface lifecycle).
+    Interfaces are resolved via the ``interface_lookup``
+    ``{nic_name: interface_id}`` map. NICs without a matching interface are
+    silently skipped because the device-sync pass owns interface lifecycle.
 
     When both hardware-discovery settings are explicitly enabled, discovered
     NIC MACs are reconciled into ``dcim.MACAddress`` rows and set as
@@ -264,23 +261,9 @@ async def reflect_to_netbox(
     bridges/bonds only, so the API-only node-network sync leaves ``eno1``-style
     interfaces without one. The dedicated MAC opt-in defaults to false.
     """
-    from proxbox_api.netbox_rest import rest_list_async, rest_patch_async
+    from proxbox_api.netbox_rest import rest_list_async
 
     reflect_nic_macs = nic_mac_sync_enabled()
-
-    chassis_payload: dict[str, object] = {
-        "custom_fields": {
-            "hardware_chassis_serial": getattr(facts.chassis, "serial_number", None),
-            "hardware_chassis_manufacturer": getattr(facts.chassis, "manufacturer", None),
-            "hardware_chassis_product": getattr(facts.system, "product_name", None),
-        }
-    }
-    await rest_patch_async(
-        netbox_session,
-        "/api/dcim/devices/",
-        int(node_id),
-        chassis_payload,
-    )
 
     if interface_lookup is None:
         try:
@@ -313,24 +296,6 @@ async def reflect_to_netbox(
         iface_id = interface_lookup.get(getattr(nic, "name", ""))
         if iface_id is None:
             continue
-        ethtool = getattr(nic, "ethtool", None)
-        speed_gbps = getattr(nic, "speed_gbps", None)
-        duplex = getattr(ethtool, "duplex", None) if ethtool is not None else None
-        link = getattr(ethtool, "link_detected", None) if ethtool is not None else None
-        iface_payload: dict[str, object] = {
-            "custom_fields": {
-                "nic_speed_gbps": speed_gbps,
-                "nic_duplex": duplex,
-                "nic_link": link,
-            }
-        }
-        await rest_patch_async(
-            netbox_session,
-            "/api/dcim/interfaces/",
-            int(iface_id),
-            iface_payload,
-        )
-
         if reflect_nic_macs:
             await _reflect_nic_mac(
                 netbox_session,

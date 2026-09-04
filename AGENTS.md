@@ -43,9 +43,8 @@ backend first before an orchestrating plugin begins sending `false`.
 Bulk task history is node-oriented: paginate each selected node archive with a
 fixed run-start `until`, load the typed VM sync-state sidecar once, map by its
 endpoint + cluster + VMID identity, deduplicate UPIDs, then issue one NetBox bulk
-reconcile. A present malformed/duplicate sidecar for a relevant VM always fails closed; legacy CF
-fallback is allowed only for an absent/unreadable sidecar when
-`custom_fields_enabled=true`. A successful estate scan skips unmanaged VMs,
+reconcile. A present malformed/duplicate sidecar for a relevant VM always fails closed. There is no
+custom-field fallback. A successful estate scan skips unmanaged VMs,
 but explicitly selected VMs without identity remain fatal. Encode selected
 NetBox IDs as repeated multi-value parameters in deduplicated groups of at most
 100; comma text is invalid for `MultiValueNumberFilter`. Never restore per-VM
@@ -157,71 +156,28 @@ the content is the same under the same consent. When adding a field to the VM cr
 body, also add it to `normalize_current_virtual_machine_payload()` or the reconciler
 diff will never patch it.
 
-## NetBox Custom Field Lifecycle
+## NetBox Sync-State Lifecycle
 
-The canonical Proxbox custom-field inventory lives in
-`proxbox_api/services/custom_fields.py`. Startup bootstrap and the extras route
-must consume that same inventory object; do not add route-local or
-bootstrap-local custom-field literals. Operators can force a live reconcile
-without a service restart through `POST /extras/custom-fields/reconcile`, and
-can inspect startup bootstrap warnings through `GET /extras/bootstrap-status`.
-The legacy `GET /extras/extras/custom-fields/create` route remains for older
-callers.
+Proxbox no longer creates, reconciles, reads, or writes NetBox custom fields.
+The typed netbox-proxbox `/api/plugins/proxbox/sync-state/*` sidecar API is the
+only reflection-state store. VM identity, run IDs, device and cluster timestamps,
+VM-interface bridge foreign keys, and virtual-disk storage foreign keys must be
+built from the live synchronization values. Sidecar writes remain best-effort:
+404/501 responses from older plugin builds and transient NetBox errors are logged
+and skipped without aborting sync. Sync reads use
+`proxbox_api/services/sync/sync_state_reader.py` and never fall back to custom fields.
 
-Every sync stage route that writes NetBox objects must reconcile that inventory
-before its first write, through the route-level
-`dependencies=[Depends(ensure_netbox_sync_dependencies)]` entry — not a handler
-parameter, because only the route-level form is solved ahead of the operation's
-own data dependencies. This covers the DCIM device routes, the VM storage routes,
-the VM create routes, and `/full-update`; the device and storage routes are the
-ones a fresh stage-by-stage sync reaches first, and omitting the bootstrap there
-makes NetBox reject every write for a missing `proxmox_last_updated` custom field.
-When adding a NetBox-writing route, add the dependency and extend
-`tests/test_stage_route_bootstrap.py`.
-
-A failed custom-field reconcile raises `custom_field_sync_failed` whose
-`failed_fields` entries carry `expected_type`, `expected_object_types`, and a
-`remedy`. NetBox does not allow changing the type of an existing custom field, so
-a field pre-created with the wrong type blocks the bootstrap until it is deleted
-and recreated — the remedy says so and warns that deletion discards stored values.
-Keep that enrichment in `_custom_field_failure_entry()`; do not build failure
-dictionaries inline. The same description reaches
-`run_netbox_bootstrap()`'s per-entry warning capture through
-`describe_custom_field_failure()`, so `BootstrapStatus.warnings` entries for
-`custom_field:<name>` carry `expected_type` and `remedy` too — that log line is
-the one operators read. Non-custom-field warnings stay unchanged.
-
-During sync, `proxbox_api/services/sync/sync_state_writer.py` additively mirrors
-selected legacy custom-field payloads into the netbox-proxbox typed
-`/api/plugins/proxbox/sync-state/*` sidecar API. VM identity, run ids,
-device/cluster timestamps, VM-interface bridge FKs, and virtual-disk storage
-FKs must be built from the same live payloads already used for custom-field
-writes. Keep these sidecar writes best-effort: 404/501 from older plugin builds
-and transient NetBox errors are logged and skipped without aborting sync.
-The typed sidecars are the DEFAULT source of truth. The legacy reflection custom
-fields are deprecated and gated behind the `custom_fields_enabled` plugin setting
-(default `false`). Gate every legacy custom-field write, read, and reconcile on
-`custom_fields_enabled()` (helpers in `proxbox_api/services/custom_fields.py`),
-composed with the existing `overwrite_*_custom_fields` flags; keep building the
-in-memory `custom_fields` dict so sidecar derivation stays intact, and never
-disable sidecar writes when the flag is off. Sync reads resolve via
-`proxbox_api/services/sync/sync_state_reader.py`: sidecar-only by default, with
-the legacy `cf_*` fallback (VM identity lookup, orphan-sweep last-run checks)
-running only when `custom_fields_enabled=true`, which also emits a deprecation
-warning. Role ownership uses the typed VM-sidecar
+Role ownership uses the typed VM-sidecar
 `proxmox_last_synced_role_id` field first. Full sync loads these snapshots once
 and applies the decision after the Python/Rust queue seam; individual and
 adoption paths use the same truth table. Persist ownership evidence only after
-a successful reconcile and independently of the legacy custom-field flag.
+a successful reconcile.
 Unavailable, failed, or conflicting reads preserve the role without claiming
 ownership. Required ownership writes retry three times. After an exhausted
 response, the backend authoritatively re-reads the typed snapshot, accepts a
 confirmed commit, or restores and verifies both the previous role and snapshot
 before surfacing VM failure. This prevents response loss from creating a false
-operator lock on the next pass. The
-same-named custom field is a transition fallback only when the flag is enabled.
-Complete custom-field retirement is a separate follow-up; do not delete
-custom-field data while the flag exists.
+operator lock on the next pass.
 
 ## CI/CD Workflows
 

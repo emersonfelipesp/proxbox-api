@@ -388,7 +388,6 @@ async def sync_ip_individual(
                 "status": "active",
                 "dns_name": dns_name or "",
                 "tags": tag_refs,
-                "custom_fields": {"proxmox_last_updated": now.isoformat()},
             }
             ip_record = await rest_reconcile_async(
                 nb,

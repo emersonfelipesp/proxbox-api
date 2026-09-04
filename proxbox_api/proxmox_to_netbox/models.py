@@ -224,7 +224,6 @@ class NetBoxNamedSlugTaggedState(BaseModel):
     name: str
     slug: str
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -266,7 +265,6 @@ class NetBoxClusterSyncState(BaseModel):
     scope_id: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("type", "tenant", "scope_id", mode="before")
     @classmethod
@@ -294,7 +292,6 @@ class NetBoxDeviceTypeSyncState(BaseModel):
     slug: str
     manufacturer: int | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("manufacturer", mode="before")
     @classmethod
@@ -305,54 +302,6 @@ class NetBoxDeviceTypeSyncState(BaseModel):
     @classmethod
     def normalize_tags(cls, value: object) -> list[dict[str, object]]:
         return _normalized_tag_list(value)
-
-
-class NetBoxCustomFieldSyncState(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    name: str
-    type: str
-    label: str
-    description: str | None = None
-    ui_visible: str = "always"
-    ui_editable: str = "hidden"
-    weight: int = 100
-    filter_logic: str = "loose"
-    search_weight: int = 1000
-    group_name: str | None = None
-    object_types: list[str] = Field(default_factory=list)
-    related_object_type: str | None = None
-
-    @field_validator(
-        "name",
-        "type",
-        "label",
-        "description",
-        "ui_visible",
-        "ui_editable",
-        "filter_logic",
-        "group_name",
-        mode="before",
-    )
-    @classmethod
-    def normalize_text(cls, value: object) -> object:
-        if value is None:
-            return value
-        text = str(value).strip()
-        return text or None
-
-    @field_validator("weight", "search_weight", mode="before")
-    @classmethod
-    def normalize_int(cls, value: object) -> int:
-        return int(value or 0)
-
-    @field_validator("object_types", mode="before")
-    @classmethod
-    def normalize_object_types(cls, value: object) -> list[str]:
-        if value is None:
-            return []
-        items = [str(item).strip() for item in value if str(item).strip()]
-        return sorted(dict.fromkeys(items))
 
 
 class NetBoxInterfaceSyncState(BaseModel):
@@ -370,7 +319,6 @@ class NetBoxInterfaceSyncState(BaseModel):
     tagged_vlans: list[int] = Field(default_factory=list)
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("device", "bridge", "lag", "parent", "untagged_vlan", mode="before")
     @classmethod
@@ -432,7 +380,6 @@ class NetBoxVirtualMachineInterfaceSyncState(BaseModel):
     untagged_vlan: int | None = None
     mode: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("virtual_machine", "untagged_vlan", "bridge", mode="before")
     @classmethod
@@ -478,7 +425,6 @@ class NetBoxMACAddressSyncState(BaseModel):
     assigned_object_type: str
     assigned_object_id: int
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("mac_address", mode="before")
     @classmethod
@@ -507,7 +453,6 @@ class NetBoxIpAddressSyncState(BaseModel):
     status: str = "active"
     dns_name: str = ""
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("assigned_object_id", mode="before")
     @classmethod
@@ -545,7 +490,6 @@ class NetBoxVlanSyncState(BaseModel):
     site: int | None = None
     tenant: int | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("site", "tenant", mode="before")
     @classmethod
@@ -676,7 +620,6 @@ class NetBoxTaskHistorySyncState(BaseModel):
     task_state: str | None = None
     exitstatus: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator(
         "virtual_machine",
@@ -768,7 +711,6 @@ class NetBoxVirtualDiskSyncState(BaseModel):
     storage: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("virtual_machine", mode="before")
     @classmethod
@@ -882,7 +824,6 @@ class NetBoxReplicationSyncState(BaseModel):
     status: str = "active"
     raw_config: dict[str, object] = Field(default_factory=dict)
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("endpoint", "virtual_machine", "proxmox_node", mode="before")
     @classmethod
@@ -1146,7 +1087,6 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     memory: int = 0
     disk: int = 0
     tags: list[int] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
     description: str | None = None
     # NetBox ``description`` is a single-line 200-char field; a Proxmox note is
     # free-form and often multi-line. The full note goes here so truncating the
@@ -1236,7 +1176,6 @@ class NetBoxDeviceSyncState(BaseModel):
     site: int | None = None
     description: str | None = None
     tags: list[NetBoxTagRef] = Field(default_factory=list)
-    custom_fields: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -1302,33 +1241,6 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
     # resource/config input.
     platform_id: int | None = None
     tag_ids: list[int] = Field(default_factory=list)
-    last_updated: datetime | None = None
-    cluster_name: str | None = None
-    proxmox_url: str | None = None
-    endpoint_id: int | None = None
-
-    @computed_field(return_type=dict)
-    @property
-    def vm_custom_fields(self) -> dict[str, object]:
-        vm_type = self.resource.type if self.resource.type in {"qemu", "lxc"} else "unknown"
-        fields = {
-            "proxmox_vm_id": self.resource.vmid,
-            "proxmox_vm_type": vm_type,
-            "proxmox_start_at_boot": self.config.start_at_boot,
-            "proxmox_unprivileged_container": self.config.unprivileged_container,
-            "proxmox_qemu_agent": self.config.qemu_agent_enabled,
-            "proxmox_search_domain": self.config.searchdomain,
-            "proxmox_node": self.resource.node,
-            "proxmox_status": self.resource.status,
-        }
-        if self.cluster_name:
-            fields["proxmox_cluster"] = self.cluster_name
-        if self.proxmox_url:
-            fields["proxmox_link"] = f"{self.proxmox_url}/#v1:0:={vm_type}/{self.resource.vmid}"
-        if self.last_updated:
-            fields["proxmox_last_updated"] = self.last_updated.isoformat()
-        fields["proxmox_endpoint_id"] = self.endpoint_id
-        return fields
 
     @computed_field(return_type=int)
     @property
@@ -1492,7 +1404,6 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             memory=self.resource.memory_mb,
             disk=disk_value,
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
-            custom_fields=self.vm_custom_fields,
             description=description_text,
         )
         if comments_text is not None:

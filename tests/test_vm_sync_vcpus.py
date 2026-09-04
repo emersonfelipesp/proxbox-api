@@ -7,12 +7,8 @@ config (cores*sockets) and never emit 0, and the create-body model must accept a
 null vcpus and coerce 0 -> None.
 """
 
-from datetime import datetime, timezone
-
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
 from proxbox_api.services.sync.individual.vm_sync import _build_netbox_vm_payload
-
-_NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 def _payload(resource: dict, config: dict) -> dict:
@@ -23,7 +19,6 @@ def _payload(resource: dict, config: dict) -> dict:
         device_id=None,
         role_id=None,
         tag_ids=[],
-        last_updated=_NOW,
     )
 
 

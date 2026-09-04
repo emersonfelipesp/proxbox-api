@@ -5,7 +5,6 @@ from __future__ import annotations
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
-from proxbox_api.services.custom_fields import legacy_custom_field_fallback_query
 from proxbox_api.services.sync.sync_state_reader import (
     resolve_unique_virtual_machine_by_sync_state,
     resolve_virtual_machine_by_sync_state,
@@ -285,24 +284,6 @@ async def _lookup_unique_vm_by_vmid(
             vmid,
         )
         return None, True
-    existing_vms: list[object] = []
-    fallback_query = legacy_custom_field_fallback_query({"cf_proxmox_vm_id": vmid})
-    if fallback_query is not None:
-        existing_vms = await rest_list_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            query=fallback_query,
-        )
-    if len(existing_vms) == 1:
-        return existing_vms[0], False
-    if len(existing_vms) > 1:
-        logger.warning(
-            "ambiguous vmid across clusters: cluster=%s vmid=%s matched %s NetBox VMs",
-            cluster_name or "unknown",
-            vmid,
-            len(existing_vms),
-        )
-        return None, True
     return None, False
 
 
@@ -320,9 +301,6 @@ async def _lookup_vm_by_scope_or_unique_vmid(
             nb,
             proxmox_vm_id=vmid,
             endpoint_id=endpoint_id,
-            fallback_query=legacy_custom_field_fallback_query(
-                {"cf_proxmox_vm_id": vmid, "cf_proxmox_endpoint_id": endpoint_id}
-            ),
         )
         if existing is not None:
             return existing.record, False
@@ -332,9 +310,6 @@ async def _lookup_vm_by_scope_or_unique_vmid(
             nb,
             proxmox_vm_id=vmid,
             cluster_id=cluster_id,
-            fallback_query=legacy_custom_field_fallback_query(
-                {"cf_proxmox_vm_id": vmid, "cluster_id": cluster_id}
-            ),
         )
         if existing is not None:
             return existing.record, False

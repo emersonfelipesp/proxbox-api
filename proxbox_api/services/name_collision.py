@@ -6,7 +6,7 @@ NetBox cluster. Two responsibilities:
 1.  Pick the smallest free ``" (N)"`` suffix for a candidate name given the
     set of names already taken in the target NetBox cluster.
 2.  Detect operator renames: if NetBox already has a ``VirtualMachine`` whose
-    ``custom_fields.proxmox_vm_id`` matches the incoming VMID and whose
+    typed sync-state identity matches the incoming VMID and whose
     current ``name`` is neither the bare candidate nor any algorithmic suffix
     of it, preserve the operator's name instead of renaming back.
 

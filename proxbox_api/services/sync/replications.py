@@ -15,11 +15,13 @@ from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.sync._helpers import _extract_choice_value, _extract_fk_id
 from proxbox_api.services.sync.backup_routines import _get_netbox_endpoint_id
 from proxbox_api.services.sync.reconciliation.vm_queue import extract_cluster_and_proxmox_vmid
+from proxbox_api.services.sync.sync_state_reader import load_vm_sync_state_identities
 from proxbox_api.services.sync.vm_helpers import (
     record_id,
     resolve_netbox_cluster_id_by_name,
     to_mapping,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_vmid
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 
@@ -73,15 +75,6 @@ async def _mark_stale_replications(
         return 0
 
     return len(stale_ids)
-
-
-def _extract_proxmox_vmid(record: object) -> int | None:
-    """Extract a positive Proxmox VMID custom field from a NetBox VM record."""
-    mapped = to_mapping(record)
-    custom_fields = mapped.get("custom_fields")
-    if not isinstance(custom_fields, dict):
-        return None
-    return _coerce_positive_vmid(custom_fields.get("proxmox_vm_id"))
 
 
 def _coerce_positive_vmid(value: object) -> int | None:
@@ -168,15 +161,38 @@ async def sync_all_replications(  # noqa: C901
         all_vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
         vms_by_cluster_and_proxmox_id: dict[tuple[int, int], int] = {}
         vms_by_proxmox_id: dict[int, list[int]] = {}
+        identity_scan = await load_vm_sync_state_identities(nb)
+        identity_by_vm_id: dict[int, dict[str, object]] = {}
+        ambiguous_vm_ids: set[int] = set()
+        for sidecar in identity_scan.rows:
+            parent_id = record_id(sidecar.get("virtual_machine"))
+            if parent_id is None:
+                continue
+            previous = identity_by_vm_id.get(parent_id)
+            if previous is not None and previous != sidecar:
+                ambiguous_vm_ids.add(parent_id)
+                identity_by_vm_id.pop(parent_id, None)
+                continue
+            if parent_id not in ambiguous_vm_ids:
+                identity_by_vm_id[parent_id] = sidecar
+
         for vm in all_vms or []:
             vm_id = record_id(vm)
             if vm_id is None:
                 continue
             mapped_vm = to_mapping(vm)
+            sidecar = identity_by_vm_id.get(vm_id)
+            if sidecar is not None:
+                mapped_vm = {
+                    **mapped_vm,
+                    "proxmox_vm_id": sidecar.get("proxmox_vm_id"),
+                    "proxmox_vm_type": sidecar.get("proxmox_vm_type"),
+                    "proxmox_endpoint_id": sidecar.get("proxmox_endpoint_raw_id"),
+                }
             key = extract_cluster_and_proxmox_vmid(mapped_vm)
             if key is not None:
                 vms_by_cluster_and_proxmox_id[key] = vm_id
-            vmid = _extract_proxmox_vmid(mapped_vm)
+            vmid = _coerce_positive_vmid(extract_proxmox_vmid(mapped_vm))
             if vmid is not None:
                 _add_vmid_candidate(vms_by_proxmox_id, vmid=vmid, vm_id=vm_id)
     except Exception as e:

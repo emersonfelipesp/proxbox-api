@@ -46,7 +46,6 @@ class _FakeRecord:
 
 _TAG = SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722")
 _TAG_PAYLOAD = [{"id": 7, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}]
-_FROZEN_NOW = "2026-04-29T00:00:00+00:00"
 
 
 @pytest.fixture
@@ -54,19 +53,12 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
     """Return a NetBox stand-in whose stored cluster type and cluster already
     match the payloads that ``upsert_*`` will compute, so the second sync run
     must be a no-op end-to-end."""
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     cluster_type_record = _FakeRecord(
         {
             "name": "Cluster",
             "slug": "cluster",
             "description": "Proxmox cluster mode",
             "tags": _TAG_PAYLOAD,
-            "custom_fields": {"proxmox_last_updated": _FROZEN_NOW},
         },
         record_id=7,
     )
@@ -76,7 +68,6 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
             "type": {"id": 7, "name": "Cluster", "slug": "cluster"},
             "description": "Proxmox cluster cluster.",
             "tags": _TAG_PAYLOAD,
-            "custom_fields": {"proxmox_last_updated": _FROZEN_NOW},
         },
         record_id=42,
     )
@@ -113,20 +104,11 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
         _fake_first,
     )
 
-    # Pin the helper's timestamp so the desired and stored custom_fields
-    # compare equal across runs.
-    import proxbox_api.services.netbox_writers as nw
-
-    nw_original = nw._last_updated_cf
-    nw._last_updated_cf = lambda: {"proxmox_last_updated": _FROZEN_NOW}
-
     yield {
         "cluster_type": cluster_type_record,
         "cluster": cluster_record,
         "posts": posts,
     }
-
-    nw._last_updated_cf = nw_original
 
 
 @pytest.mark.asyncio

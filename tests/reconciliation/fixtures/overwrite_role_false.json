@@ -14,10 +14,9 @@
         "memory": 2048,
         "disk": 30,
         "tags": [99],
-        "custom_fields": {"proxmox_vm_id": 103, "proxmox_vm_type": "qemu"},
         "description": "Synced from Proxmox node pve01"
       },
-      "lookup": {"cf_proxmox_vm_id": 103, "cluster_id": 1},
+      "lookup": {"id": 0},
       "vm_type": "qemu"
     }
   ],
@@ -33,7 +32,8 @@
       "memory": 2048,
       "disk": 30,
       "tags": [{"id": 99}],
-      "custom_fields": {"proxmox_vm_id": 103, "proxmox_vm_type": "qemu"},
+      "proxmox_vm_id": 103,
+      "proxmox_vm_type": "qemu",
       "description": "Synced from Proxmox node pve01"
     }
   ],

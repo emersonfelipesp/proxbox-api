@@ -105,7 +105,7 @@ async def resolve_netbox_vm_id(
     """Return the scoped NetBox ``VirtualMachine.id`` linked to a Proxmox VMID.
 
     ``endpoint_id`` is the proxbox-api ``ProxmoxEndpoint`` id mirrored into
-    VM sync-state sidecars and legacy custom fields. When ``fail_closed`` is
+    VM sync-state sidecars. When ``fail_closed`` is
     true, ambiguous, unverifiable, or absent identities raise before the caller
     can dispatch a Proxmox write that cannot be durably journaled.
     """

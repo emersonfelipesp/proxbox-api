@@ -2,16 +2,15 @@
 
 netbox-proxbox issue #616: every targeted (single-VM) sync failed with
 
-    Virtual machine id=<n> has no name and no proxmox_vm_id custom field
-    to match in Proxmox.
+    Virtual machine id=<n> has no name to match in Proxmox.
 
 even though a full-cluster sync of the same VM worked. The netbox-sdk accessor
 ``virtualization.virtual_machines.get()`` is ``async def``; the targeted sync
 routes called it without ``await`` (``sync_vm.py``) or wrapped it in
 ``asyncio.to_thread`` (``backups_vm.py`` / ``disks_vm.py`` / ``snapshots_vm.py``),
 both of which yield a *coroutine* instead of a ``Record``. ``to_mapping()`` then
-silently degraded that coroutine to ``{}``, so the VM looked nameless and
-custom-field-less and the 422 guard fired on every run.
+silently degraded that coroutine to ``{}``, so the VM looked nameless and the
+422 guard fired on every run.
 
 These tests lock in both halves of the fix:
 
@@ -80,21 +79,17 @@ VM_PAYLOAD: dict[str, object] = {
     "id": 59,
     "name": "node57-k8s",
     "cluster": {"id": 4, "name": "pve-cluster-01"},
-    "custom_fields": {"proxmox_vm_id": 254, "proxmox_endpoint_id": 1},
 }
 
 
 @pytest.mark.asyncio
-async def test_awaited_vm_record_resolves_name_and_custom_fields():
-    """The awaited record must expose name + custom_fields (post-fix behaviour)."""
+async def test_awaited_vm_record_resolves_name():
+    """The awaited record must expose its native name."""
     endpoint = _AsyncEndpoint(_Record(VM_PAYLOAD))
 
     vm_data = to_mapping(await endpoint.get(id=59))
 
     assert str(vm_data.get("name", "")).strip() == "node57-k8s"
-    custom_fields = vm_data.get("custom_fields")
-    assert isinstance(custom_fields, dict)
-    assert custom_fields.get("proxmox_vm_id") == 254
 
 
 def test_unawaited_coroutine_no_longer_degrades_silently(proxbox_caplog):

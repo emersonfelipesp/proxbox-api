@@ -29,7 +29,7 @@ Main synchronization endpoints for virtual machines and related resources.
 ## How These Routes Work
 
 - These handlers aggregate Proxmox cluster resources, VM configs, and NetBox object creation calls.
-- They use sync decorators and extras dependencies for process tracking and custom fields.
+- They use sync decorators and route-level bootstrap dependencies for process tracking and support objects.
 - They write journal entries to NetBox for auditability of each synchronization run.
 - Some paths stream progress over WebSocket or SSE, so those payloads must stay aligned.
 - `sync_vm.py` also exposes the test route and the summary example route used by stub/coverage checks.
@@ -60,10 +60,9 @@ Main synchronization endpoints for virtual machines and related resources.
   and the selected batch filter join every selected core VM to the typed
   `ProxboxVMSyncState` sidecar once, then match only its Proxmox endpoint,
   normalized cluster name, positive VMID, and guest type. Sidecar identity is
-  authoritative even when legacy custom fields are stale. Legacy custom-field
-  fallback is allowed only when the sidecar row is absent/unavailable and
-  `custom_fields_enabled=true`; malformed or duplicate relevant sidecars fail
-  closed. VM names are never selectors, so a same-name guest, a reused VMID on
+  authoritative. There is no custom-field fallback; absent, unavailable,
+  malformed, or duplicate relevant sidecars fail closed. VM names are never
+  selectors, so a same-name guest, a reused VMID on
   another endpoint/cluster, or the wrong QEMU/LXC type cannot widen the
   operation. A blank-name record can still heal its name when that complete
   identity is present. The same sidecar-first selection contract applies to
@@ -71,9 +70,7 @@ Main synchronization endpoints for virtual machines and related resources.
   sidecar identity onto every selected VM (via
   `vm_filter.hydrate_selected_vm_identities`) before validating exact
   endpoint/cluster/VMID scope. The by-id snapshot and backup stream routes have
-  no legacy `proxmox_vm_id` custom-field precondition — ownership resolves
-  downstream from the sidecar, so sidecar-only VMs (the default with
-  `custom_fields_enabled=false`) sync through them.
+  no custom-field precondition — ownership resolves downstream from the sidecar.
 - **Interface failures are surfaced, not swallowed.** Per-interface creation is
   retried a bounded number of times for transient NetBox errors; interfaces
   that still fail are counted. The per-VM progress item carries
@@ -104,11 +101,9 @@ Main synchronization endpoints for virtual machines and related resources.
   endpoints have no shared NetBox cluster identity. The VM snapshot index is
   keyed by `(proxmox_endpoint_id, proxmox_vm_id)` via
   `_build_vm_index_by_proxmox_id`, and full VM sync, interface sync, IP sync,
-  individual VM sync, and the reconciliation queue all prefer
-  `cf_proxmox_endpoint_id + cf_proxmox_vm_id`. Cluster-scoped matching remains
-  only as legacy fallback when no endpoint id is available. A VMID-only fallback
-  is allowed only for one legacy NetBox VM that has no endpoint id; ambiguous
-  VMIDs are logged and skipped instead of being mapped to the wrong endpoint.
+  individual VM sync, and the reconciliation queue all use typed sidecar
+  endpoint and VMID identity. Missing or ambiguous identity fails closed instead
+  of mapping to the wrong endpoint.
   Disk and snapshot sync must route config/list calls through the Proxmox
   session whose endpoint id matches the NetBox VM, so a same-VMID guest on
   another endpoint cannot supply disks or snapshots. Regression coverage:
@@ -120,8 +115,7 @@ Main synchronization endpoints for virtual machines and related resources.
   `ensure_netbox_sync_dependencies` FastAPI dependency. It re-runs the
   idempotent NetBox bootstrap for Proxbox-owned support objects on each sync
   request, so missing discovery tags, VM roles/types, device roles/types,
-  cluster types, and custom fields are recreated before payloads reference
-  them by slug.
+  and cluster types are recreated before payloads reference them by slug.
 
 - **Task-history has one owner per request.** `/create`, `/create/stream`, and
   both targeted create routes declare `sync_task_history` as a real FastAPI

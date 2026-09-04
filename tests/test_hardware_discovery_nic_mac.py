@@ -94,10 +94,7 @@ async def test_reflect_sets_primary_mac_for_physical_nic(monkeypatch):
     assert macs[0]["interface_list_path"] == "/api/dcim/interfaces/"
     assert macs[0]["tag_refs"] == [{"name": "Proxbox", "slug": "proxbox"}]
 
-    # The pre-existing speed/duplex/link reflection is untouched.
-    iface_patch = [p for p in patches if p[0] == "/api/dcim/interfaces/"]
-    assert iface_patch[0][1] == 42
-    assert iface_patch[0][2]["custom_fields"]["nic_speed_gbps"] == 10.0
+    assert patches == []
 
 
 async def test_reflect_skips_mac_when_nic_has_none(monkeypatch):
@@ -111,8 +108,7 @@ async def test_reflect_skips_mac_when_nic_has_none(monkeypatch):
     )
 
     assert macs == []
-    # The custom-field reflection still ran.
-    assert any(p[0] == "/api/dcim/interfaces/" for p in patches)
+    assert patches == []
 
 
 async def test_reflect_skips_mac_when_dedicated_opt_in_is_disabled(monkeypatch):
@@ -127,7 +123,7 @@ async def test_reflect_skips_mac_when_dedicated_opt_in_is_disabled(monkeypatch):
     )
 
     assert macs == []
-    assert any(p[0] == "/api/dcim/interfaces/" for p in patches)
+    assert patches == []
 
 
 @pytest.mark.parametrize(
@@ -168,7 +164,7 @@ async def test_reflect_mac_failure_does_not_abort_remaining_nics(monkeypatch):
 
     # Both NICs were attempted despite the first raising.
     assert [m["assigned_object_id"] for m in macs] == [42, 43]
-    assert len([p for p in patches if p[0] == "/api/dcim/interfaces/"]) == 2
+    assert patches == []
 
 
 async def test_reflect_skips_nic_without_matching_netbox_interface(monkeypatch):
@@ -182,7 +178,7 @@ async def test_reflect_skips_nic_without_matching_netbox_interface(monkeypatch):
     )
 
     assert macs == []
-    assert [p[0] for p in patches] == ["/api/dcim/devices/"]
+    assert patches == []
 
 
 @pytest.mark.parametrize("lookup", [{}, None])
@@ -202,5 +198,4 @@ async def test_reflect_without_interfaces_writes_no_mac(monkeypatch, lookup):
     )
 
     assert macs == []
-    # Chassis reflection still happens even with no interfaces to match.
-    assert [p[0] for p in patches] == ["/api/dcim/devices/"]
+    assert patches == []

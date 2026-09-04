@@ -177,7 +177,6 @@ def netbox_virtual_machine_fallback_contract() -> dict[str, object]:
             "memory",
             "disk",
             "tags",
-            "custom_fields",
             "description",
         ],
         "status_examples": ["active", "offline", "planned"],

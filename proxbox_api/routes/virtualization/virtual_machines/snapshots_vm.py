@@ -285,8 +285,7 @@ async def create_virtual_machine_snapshots_by_id_stream(
         )
 
     # Ownership identity is resolved downstream from the authoritative typed
-    # sidecar (legacy custom fields only as a gated fallback), so no legacy
-    # proxmox_vm_id custom-field precondition applies here.
+    # sidecar, so no custom-field precondition applies here.
     async def event_stream():
         bridge = WebSocketSSEBridge()
 

@@ -328,12 +328,6 @@ def test_ensure_ip_assigned_already_on_this_vm(monkeypatch):
 
 
 def test_sync_interface_individual_mirrors_bridge_sidecar(monkeypatch):
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     sidecar_calls: list[dict[str, object]] = []
 
     async def _fake_get_vm_config(*_args, **_kwargs):
@@ -359,7 +353,7 @@ def test_sync_interface_individual_mirrors_bridge_sidecar(monkeypatch):
     async def _fake_reconcile(_nb, path, lookup, payload, **_kwargs):
         assert path == "/api/virtualization/interfaces/"
         assert lookup == {"name": "net0", "virtual_machine_id": 55}
-        assert payload["custom_fields"]["proxbox_bridge"] == 400
+        assert "custom_fields" not in payload
         return {"id": 66, **payload}
 
     async def _fake_sidecar(_nb, **kwargs):

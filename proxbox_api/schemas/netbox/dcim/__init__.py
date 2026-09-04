@@ -16,7 +16,6 @@ class SitesSchema(ProxboxBaseModel):
     time_zone: str | None = None
     description: str | None = None
     tags: list[TagSchema | int] | None = None
-    custom_fields: dict[str, object] | None = None
     physical_address: str | None = None
     shipping_address: str | None = None
     latitude: float | None = None

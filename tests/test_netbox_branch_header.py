@@ -145,7 +145,6 @@ def test_full_update_sync_does_not_call_activate_branch_without_schema_id(monkey
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=type("Tag", (), {"id": 1, "name": "Proxbox", "slug": "proxbox", "color": "ff0"})(),
         )
     )
@@ -173,7 +172,6 @@ def test_full_update_sync_invokes_activate_branch_with_schema_id(monkeypatch):
             pxs=[],
             cluster_status=[],
             cluster_resources=[],
-            custom_fields=[],
             tag=type("Tag", (), {"id": 1, "name": "Proxbox", "slug": "proxbox", "color": "ff0"})(),
             netbox_branch_schema_id="abcd1234",
         )

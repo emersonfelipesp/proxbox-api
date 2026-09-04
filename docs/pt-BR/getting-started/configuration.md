@@ -263,7 +263,6 @@ Algumas variaveis permanecem somente em nivel de processo porque sao lidas antes
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximo de entradas armazenadas no cache de GETs do NetBox antes de eviccao LRU. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Tamanho total maximo em bytes do cache de GETs do NetBox. |
 | `PROXBOX_DEBUG_CACHE` | nao definido | Quando `1`, `true` ou `yes`, emite logs detalhados de hit/miss/evict do cache. |
-| `PROXBOX_CUSTOM_FIELDS_REQUEST_DELAY` | `0.5` | Delay em segundos entre requisicoes na criacao de custom fields no NetBox, para evitar overruns no PostgreSQL. |
 | `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override do diretorio de saida da CLI geradora de schema (`proxbox-schema generate`). |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (vazio) | Lista de origens CORS extras, separadas por virgula. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | nao definido | Quando `1`, `true` ou `yes`, respostas HTTP 500 incluem detalhes internos da excecao. |

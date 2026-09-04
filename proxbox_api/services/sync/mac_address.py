@@ -115,7 +115,6 @@ async def reconcile_mac_for_interface(
             "assigned_object_id": _relation_id(record.get("assigned_object_id"))
             or _relation_id(record.get("assigned_object")),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
         strict_lookup=True,
     )

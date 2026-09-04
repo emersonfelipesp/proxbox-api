@@ -19,7 +19,6 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import RestRecord, rest_bulk_reconcile_async, rest_list_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxTaskHistorySyncState
 from proxbox_api.runtime_settings import get_int
-from proxbox_api.services.custom_fields import custom_fields_enabled, warn_legacy_custom_fields
 from proxbox_api.services.proxmox_helpers import dump_models, get_node_tasks
 from proxbox_api.services.sync._helpers import _extract_fk_id, _normalize_text
 from proxbox_api.services.sync.sync_state_reader import load_vm_sync_state_identities
@@ -28,10 +27,8 @@ from proxbox_api.services.sync.vm_helpers import (
     require_selected_netbox_vm_coverage,
 )
 from proxbox_api.services.sync.vmid_helpers import (
-    extract_proxmox_endpoint_id,
     extract_proxmox_session_endpoint_id,
     extract_proxmox_vm_type,
-    extract_proxmox_vmid,
     normalize_positive_int,
 )
 
@@ -59,7 +56,6 @@ _TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
         "task_state",
         "exitstatus",
         "tags",
-        "custom_fields",
     }
 )
 
@@ -67,7 +63,7 @@ _TASK_HISTORY_PATCHABLE_FIELDS = frozenset(
 @dataclass(frozen=True)
 class _VMTarget:
     netbox_id: int
-    endpoint_id: int | None
+    endpoint_id: int
     cluster_name: str
     vmid: int
     vm_type: str
@@ -105,15 +101,6 @@ def _as_mapping(value: object) -> dict[str, object]:
         if isinstance(serialized, Mapping):
             return {str(key): item for key, item in serialized.items()}
     return {}
-
-
-def _cluster_name(value: object) -> str:
-    mapping = _as_mapping(value)
-    cluster = mapping.get("cluster")
-    if isinstance(cluster, Mapping):
-        cluster_mapping = {str(key): item for key, item in cluster.items()}
-        return _normalize_text(cluster_mapping.get("name")) or ""
-    return _normalize_text(getattr(cluster, "name", None)) or ""
 
 
 def _status_name(value: object) -> str:
@@ -232,7 +219,6 @@ def _build_task_payload(
         "task_state": "stopped",
         "exitstatus": final_status,
         "tags": tag_refs,
-        "custom_fields": {},
     }
 
 
@@ -254,7 +240,6 @@ def _current_task_history(record: dict[str, object]) -> dict[str, object]:
         "task_state": record.get("task_state"),
         "exitstatus": record.get("exitstatus"),
         "tags": record.get("tags"),
-        "custom_fields": record.get("custom_fields"),
     }
 
 
@@ -276,23 +261,6 @@ async def _list_all_vms_with_proxmox_id(
         )
 
     return await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
-
-
-def _vm_target(vm: object) -> _VMTarget | None:
-    mapping = _as_mapping(vm)
-    netbox_id = normalize_positive_int(mapping.get("id"))
-    vmid = normalize_positive_int(extract_proxmox_vmid(mapping))
-    cluster_name = _cluster_name(mapping)
-    if netbox_id is None or vmid is None or not cluster_name:
-        return None
-    return _VMTarget(
-        netbox_id=netbox_id,
-        endpoint_id=extract_proxmox_endpoint_id(mapping),
-        cluster_name=cluster_name,
-        vmid=vmid,
-        vm_type=extract_proxmox_vm_type(mapping) or "qemu",
-        name=_normalize_text(mapping.get("name")) or str(netbox_id),
-    )
 
 
 def _sidecar_vm_target(
@@ -330,10 +298,8 @@ def _sidecar_vm_target(
 def _resolve_vm_target_from_sources(
     vm: object,
     sidecar_rows: Sequence[Mapping[str, object]],
-    *,
-    legacy_fallback_allowed: bool,
 ) -> tuple[_VMTarget | None, int | None, str]:
-    """Resolve one VM target and describe which identity branch was used."""
+    """Resolve one VM target from its authoritative typed sidecar."""
 
     mapping = _as_mapping(vm)
     netbox_id = normalize_positive_int(mapping.get("id"))
@@ -348,10 +314,7 @@ def _resolve_vm_target_from_sources(
             if target is not None
             else (None, netbox_id, "invalid_sidecar")
         )
-    if not legacy_fallback_allowed:
-        return None, netbox_id, "unresolved"
-    target = _vm_target(vm)
-    return (target, netbox_id, "legacy") if target is not None else (None, netbox_id, "unresolved")
+    return None, netbox_id, "unresolved"
 
 
 async def _resolve_vm_targets(  # noqa: C901
@@ -366,16 +329,11 @@ async def _resolve_vm_targets(  # noqa: C901
     if not vms:
         return [], 0
     identity_scan = await load_vm_sync_state_identities(nb)
-    legacy_fallback_allowed = custom_fields_enabled()
-    if (
-        identity_scan.sidecar_unavailable or identity_scan.sidecar_read_failed
-    ) and not legacy_fallback_allowed:
+    if identity_scan.sidecar_unavailable or identity_scan.sidecar_read_failed:
         reason = "temporarily failed" if identity_scan.sidecar_read_failed else "is unavailable"
         raise ProxboxException(
             message="Unable to verify VM identity for task-history sync",
-            detail=(
-                f"The VM sync-state sidecar {reason} and legacy custom-field fallback is disabled."
-            ),
+            detail=f"The VM sync-state sidecar {reason}.",
             http_status_code=502,
         )
 
@@ -442,7 +400,6 @@ async def _resolve_vm_targets(  # noqa: C901
     targets: list[_VMTarget] = []
     skipped = 0
     unresolved_ids: list[int] = []
-    used_legacy_fallback = False
     for vm in vms:
         mapping = _as_mapping(vm)
         netbox_id = normalize_positive_int(mapping.get("id"))
@@ -450,11 +407,9 @@ async def _resolve_vm_targets(  # noqa: C901
         target, resolved_id, source = _resolve_vm_target_from_sources(
             vm,
             sidecar_rows,
-            legacy_fallback_allowed=legacy_fallback_allowed,
         )
         if target is not None:
             targets.append(target)
-            used_legacy_fallback = used_legacy_fallback or source == "legacy"
         elif source == "invalid_sidecar" and resolved_id is not None:
             invalid_sidecar_refs.add(str(resolved_id))
             skipped += 1
@@ -472,8 +427,7 @@ async def _resolve_vm_targets(  # noqa: C901
             message="Unable to verify VM identity for task-history sync",
             detail=(
                 "VM sync-state identity is malformed, incomplete, or duplicated for "
-                f"relevant NetBox VM/sidecar id(s): {sample}{suffix}. Refusing legacy custom-field "
-                "fallback because a sidecar row is present."
+                f"relevant NetBox VM/sidecar id(s): {sample}{suffix}."
             ),
             http_status_code=502,
         )
@@ -490,8 +444,6 @@ async def _resolve_vm_targets(  # noqa: C901
             http_status_code=502,
         )
 
-    if used_legacy_fallback:
-        warn_legacy_custom_fields("task-history VM identity fallback")
     return targets, skipped
 
 
@@ -500,13 +452,7 @@ def _selected_archive_nodes(
     cluster_status: Sequence[object] | None,
     targets: list[_VMTarget],
 ) -> _ArchiveSelection:
-    exact_scopes = {
-        (target.endpoint_id, target.cluster_name)
-        for target in targets
-        if target.endpoint_id is not None
-    }
-    legacy_clusters = {target.cluster_name for target in targets if target.endpoint_id is None}
-    requested_scopes = exact_scopes | {(None, cluster_name) for cluster_name in legacy_clusters}
+    requested_scopes = {(target.endpoint_id, target.cluster_name) for target in targets}
     covered_scopes: set[tuple[int | None, str]] = set()
     selected: list[_ArchiveNode] = []
     seen: set[tuple[int, str, str]] = set()
@@ -515,11 +461,8 @@ def _selected_archive_nodes(
         endpoint_id = extract_proxmox_session_endpoint_id(session)
         matched_scopes: set[tuple[int | None, str]] = set()
         exact_scope = (endpoint_id, cluster_name)
-        if exact_scope in exact_scopes:
+        if exact_scope in requested_scopes:
             matched_scopes.add(exact_scope)
-        legacy_scope = (None, cluster_name)
-        if cluster_name in legacy_clusters:
-            matched_scopes.add(legacy_scope)
         if not matched_scopes:
             continue
         node_names = _status_nodes(status)
@@ -816,13 +759,13 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
         logger.warning(
             "Task-history target scope has no discovered non-empty node coverage: "
             "endpoint=%s cluster=%s",
-            endpoint_id if endpoint_id is not None else "legacy",
+            endpoint_id,
             cluster_name,
         )
     if not nodes:
         message = "Task-history archive has no selected Proxmox nodes"
         missing = ", ".join(
-            f"endpoint={endpoint_id if endpoint_id is not None else 'legacy'}/cluster={cluster_name}"
+            f"endpoint={endpoint_id}/cluster={cluster_name}"
             for endpoint_id, cluster_name in selection.missing_scopes
         )
         raise ProxboxException(
@@ -837,28 +780,11 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
         targets=targets,
     )
 
-    exact: dict[tuple[int, str, int], list[_VMTarget]] = {}
-    legacy: dict[tuple[str, int], list[_VMTarget]] = {}
+    targets_by_identity: dict[tuple[int, str, int], list[_VMTarget]] = {}
     for target in targets:
-        if target.endpoint_id is None:
-            legacy.setdefault((target.cluster_name, target.vmid), []).append(target)
-        else:
-            exact.setdefault((target.endpoint_id, target.cluster_name, target.vmid), []).append(
-                target
-            )
-    exact_cluster_vmids = {(cluster_name, vmid) for _endpoint_id, cluster_name, vmid in exact}
-    mixed_identity_collisions = exact_cluster_vmids.intersection(legacy)
-    cluster_source_scopes: dict[str, set[tuple[str, int]]] = {}
-    for node in nodes:
-        scope = (
-            ("endpoint", node.endpoint_id)
-            if node.endpoint_id is not None
-            else ("session", id(node.session))
-        )
-        cluster_source_scopes.setdefault(node.cluster_name, set()).add(scope)
-    legacy_safe_clusters = {
-        name for name, scopes in cluster_source_scopes.items() if len(scopes) == 1
-    }
+        targets_by_identity.setdefault(
+            (target.endpoint_id, target.cluster_name, target.vmid), []
+        ).append(target)
 
     until = int(datetime.now(timezone.utc).timestamp())
     semaphore = asyncio.Semaphore(
@@ -888,41 +814,15 @@ async def sync_all_virtual_machine_task_histories(  # noqa: C901
             if task_vmid is None or not upid:
                 skipped += 1
                 continue
-            if (archive_result.source.cluster_name, task_vmid) in mixed_identity_collisions:
-                errors += 1
-                skipped += 1
-                logger.warning(
-                    "Skipping task UPID %s because an endpoint-scoped VM and an "
-                    "endpoint-less legacy VM both claim cluster=%s vmid=%s",
-                    upid,
+            candidates = targets_by_identity.get(
+                (
+                    archive_result.source.endpoint_id,
                     archive_result.source.cluster_name,
                     task_vmid,
-                )
-                continue
-            candidates: list[_VMTarget] = []
-            ownership_ambiguous = False
-            if archive_result.source.endpoint_id is not None:
-                candidates = exact.get(
-                    (
-                        archive_result.source.endpoint_id,
-                        archive_result.source.cluster_name,
-                        task_vmid,
-                    ),
-                    [],
-                )
-                ownership_ambiguous = len(candidates) > 1
-            if not candidates:
-                legacy_candidates = legacy.get(
-                    (archive_result.source.cluster_name, task_vmid),
-                    [],
-                )
-                if legacy_candidates:
-                    if archive_result.source.cluster_name in legacy_safe_clusters:
-                        candidates = legacy_candidates
-                        ownership_ambiguous = len(candidates) > 1
-                    else:
-                        ownership_ambiguous = True
-            if ownership_ambiguous:
+                ),
+                [],
+            )
+            if len(candidates) > 1:
                 errors += 1
                 skipped += 1
                 logger.warning(

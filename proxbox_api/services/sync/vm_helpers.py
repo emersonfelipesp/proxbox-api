@@ -104,11 +104,9 @@ def _compute_vm_patchable_fields(
         overwrite_flags is None or overwrite_flags.overwrite_vm_type
     ):
         fields.add("virtual_machine_type")
-    # ``role`` and ``custom_fields`` are always patchable: per-VM lock is
-    # enforced by the snapshot decision in the payload, and the snapshot
-    # custom field itself must always be writable.
+    # ``role`` is always patchable because the per-VM lock is enforced by the
+    # typed ownership snapshot decision before the payload is reconciled.
     fields.add("role")
-    fields.add("custom_fields")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
         fields.add("tags")
     # ``platform`` is deliberately absent from every branch here: it is set when a VM is
@@ -144,7 +142,6 @@ def normalize_current_virtual_machine_payload(
         "memory": record.get("memory"),
         "disk": record.get("disk"),
         "tags": record.get("tags"),
-        "custom_fields": record.get("custom_fields"),
         "platform": record.get("platform"),
         "description": record.get("description"),
         # Without this the reconciler diff cannot see the current value and would
@@ -180,7 +177,7 @@ def to_mapping(value: object, _depth: int = 0) -> dict[str, object]:
     Pydantic ``RootModel`` wrappers (``root``).
 
     Returning an empty mapping is a *failure* mode, not a neutral one: callers
-    read ``name``/``custom_fields`` off the result and an empty dict makes a
+    read identity and relation values off the result, and an empty dict makes a
     populated record look blank. Every path that gives up therefore logs loudly
     with the offending type so the cause is visible in backend logs.
 
@@ -188,7 +185,7 @@ def to_mapping(value: object, _depth: int = 0) -> dict[str, object]:
     caller bug: the netbox-sdk accessors are ``async def``, so a missing
     ``await`` yields a coroutine here and previously degraded into a silent
     ``{}`` (see netbox-proxbox issue #616, where targeted single-VM sync failed
-    with "has no name and no proxmox_vm_id custom field to match in Proxmox").
+    with "has no name and no Proxmox VM identity to match in Proxmox").
     """
     if isinstance(value, dict):
         return value
@@ -770,9 +767,6 @@ def filter_cluster_resources_for_vm(
     return filtered
 
 
-LAST_RUN_ID_CUSTOM_FIELD = "proxbox_last_run_id"
-
-
 def _coerce_vm_record_to_dict(vm_record: object) -> dict[str, object] | None:
     """Coerce a NetBox VM record (dict or pynetbox-style) into a plain dict."""
     if isinstance(vm_record, dict):
@@ -805,15 +799,7 @@ async def stamp_vm_last_run_id(
     vm_record: object,
     run_id: str | None,
 ) -> None:
-    """Stamp `custom_fields.proxbox_last_run_id` on a NetBox VM after reconcile.
-
-    Idempotent: if the record already carries the same run_id, no PATCH is issued.
-    NetBox merges custom_field keys server-side on PATCH, so we only send the
-    target key. Spreading the existing custom_fields dict into the payload would
-    cause a serialization failure if any value is not JSON-serializable.
-    This runs as a separate narrow PATCH so the stamp is written regardless of
-    the operator's `overwrite_vm_custom_fields` gate.
-    """
+    """Persist the successful run identifier in the typed VM sync-state sidecar."""
     if not isinstance(run_id, str) or not run_id or not vm_record:
         return
 
@@ -824,34 +810,6 @@ async def stamp_vm_last_run_id(
     record_id = _extract_vm_id(record)
     if not record_id:
         return
-
-    from proxbox_api.services.custom_fields import include_custom_fields_in_payload
-
-    if include_custom_fields_in_payload(
-        True,
-        context="legacy VM last-run custom-field stamp",
-    ):
-        current_cf = record.get("custom_fields")
-        if not isinstance(current_cf, dict):
-            current_cf = {}
-
-        if current_cf.get(LAST_RUN_ID_CUSTOM_FIELD) != run_id:
-            from proxbox_api.netbox_rest import rest_patch_async
-
-            try:
-                await rest_patch_async(
-                    nb,
-                    "/api/virtualization/virtual-machines/",
-                    record_id,
-                    {"custom_fields": {LAST_RUN_ID_CUSTOM_FIELD: run_id}},
-                )
-            except Exception as error:  # noqa: BLE001
-                logger.warning(
-                    "Failed to stamp proxbox_last_run_id on VM id=%s name=%s: %s",
-                    record_id,
-                    record.get("name"),
-                    error,
-                )
 
     from proxbox_api.services.sync.sync_state_writer import write_vm_last_run_sync_state
 

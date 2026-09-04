@@ -196,7 +196,6 @@ async def sync_virtual_disk_individual(
             "storage": storage_id,
             "description": f"Proxmox disk {disk_name} for VM {vmid}",
             "tags": tag_refs,
-            "custom_fields": {"proxmox_last_updated": now.isoformat()},
         }
 
         existing_disks = await rest_list_async(
@@ -217,7 +216,6 @@ async def sync_virtual_disk_individual(
                 "storage": record.get("storage"),
                 "description": record.get("description"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
             },
             strict_lookup=True,
             nullable_fields={"storage"},

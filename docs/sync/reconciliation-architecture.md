@@ -43,8 +43,8 @@ For each VM candidate, sync prepares an in-memory state object containing:
 - Proxmox VM resource record
 - Proxmox VM config
 - Normalized desired NetBox VM payload
-- NetBox lookup keys (`cf_proxmox_vm_id` plus endpoint when available, with
-  cluster as the legacy fallback scope)
+- An impossible create lookup (`id=0`) used only after typed sidecar resolution
+  proves that no existing VM owns the identity
 
 Preparation runs with bounded concurrency using `asyncio.gather` + semaphore.
 
@@ -71,15 +71,12 @@ For VM, backup, snapshot, and virtual-disk selectors, omitted
 `netbox_vm_ids` means all VMs. A present empty or malformed selector is HTTP 422
 and never widens scope. Valid IDs are deduplicated and queried in groups of at
 most 100 as repeated `id` parameters (`?id=1&id=2`); lookup failures fail closed.
-When the snapshot lacks Proxbox custom fields, dispatch performs a sidecar-first
-identity read through `/api/plugins/proxbox/sync-state/virtual-machines/` before
-creating a VM. A sidecar match is reconciled as the existing NetBox VM, so
-custom-field deletion does not produce duplicates. If no sidecar row exists or
-the plugin API is unavailable, dispatch falls back to the legacy `cf_*` lookup
-and finally creates only when both sources are absent.
+Dispatch reads typed identity through
+`/api/plugins/proxbox/sync-state/virtual-machines/` before creating a VM. A
+sidecar match is reconciled as the existing NetBox VM, so an incomplete core
+snapshot does not produce duplicates. If the sidecar API is unavailable or its
+identity is ambiguous, dispatch fails closed.
 The VM type segment prevents QEMU VM 100 and LXC CT 100 in the same cluster from colliding.
-Legacy records that do not yet have `custom_fields.proxmox_vm_type` are matched only when the
-`(cluster_id, proxmox_vm_id)` identity is unambiguous.
 
 ### Phase 4: Queue Reconciliation
 

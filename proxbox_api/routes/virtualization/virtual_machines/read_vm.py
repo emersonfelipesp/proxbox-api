@@ -13,7 +13,6 @@ from proxbox_api.dependencies import (
 )
 from proxbox_api.logger import logger
 from proxbox_api.netbox_sdk_helpers import to_dict
-from proxbox_api.routes.extras import CreateCustomFieldsDep
 from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.schemas.virtualization import (  # Schemas
@@ -176,7 +175,6 @@ async def create_virtual_machines_interfaces(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     use_guest_agent_interface_name: bool = Query(
         default=True,
@@ -228,7 +226,6 @@ async def create_virtual_machines_interfaces(
         pxs=pxs,
         cluster_status=cluster_status,
         cluster_resources=cluster_resources,
-        custom_fields=custom_fields,
         tag=tag,
         websocket=None,
         use_websocket=False,
@@ -248,7 +245,6 @@ async def create_virtual_machines_interfaces_stream(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     use_guest_agent_interface_name: bool = Query(
         default=True,
@@ -306,7 +302,6 @@ async def create_virtual_machines_interfaces_stream(
                     pxs=pxs,
                     cluster_status=cluster_status,
                     cluster_resources=cluster_resources,
-                    custom_fields=custom_fields,
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,
@@ -340,7 +335,6 @@ async def create_virtual_machines_interfaces_ip_address(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     use_guest_agent_interface_name: bool = Query(
         default=True,
@@ -381,7 +375,6 @@ async def create_virtual_machines_interfaces_ip_address(
         pxs=pxs,
         cluster_status=cluster_status,
         cluster_resources=cluster_resources,
-        custom_fields=custom_fields,
         tag=tag,
         websocket=None,
         use_websocket=False,
@@ -400,7 +393,6 @@ async def create_virtual_machines_ip_address_stream(
     pxs: ProxmoxSessionsDep,
     cluster_status: ClusterStatusDep,
     cluster_resources: ClusterResourcesDep,
-    custom_fields: CreateCustomFieldsDep,
     tag: ProxboxTagDep,
     use_guest_agent_interface_name: bool = Query(
         default=True,
@@ -447,7 +439,6 @@ async def create_virtual_machines_ip_address_stream(
                     pxs=pxs,
                     cluster_status=cluster_status,
                     cluster_resources=cluster_resources,
-                    custom_fields=custom_fields,
                     tag=tag,
                     websocket=bridge,
                     use_websocket=True,

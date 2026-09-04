@@ -39,7 +39,8 @@ Para cada VM candidata, o sync prepara um estado em memoria contendo:
 - Resource da VM no Proxmox
 - Config da VM no Proxmox
 - Payload desired normalizado para NetBox
-- Chaves de lookup no NetBox (cluster + `cf_proxmox_vm_id`)
+- Um lookup impossivel de criacao (`id=0`), usado somente depois que a
+  resolucao do sidecar tipado prova que nenhuma VM existente possui a identidade
 
 A preparacao roda com concorrencia limitada usando `asyncio.gather` + semaforo.
 
@@ -69,8 +70,6 @@ consultados em grupos de no maximo 100 como parametros `id` repetidos
 (`?id=1&id=2`); falhas de consulta encerram de forma fechada.
 
 O segmento de tipo evita colisao entre uma VM QEMU 100 e um CT LXC 100 no mesmo cluster.
-Registros legados sem `custom_fields.proxmox_vm_type` so sao reaproveitados quando a identidade
-`(cluster_id, proxmox_vm_id)` e inequivoca.
 
 ### Fase 4: Reconciliacao da Fila
 

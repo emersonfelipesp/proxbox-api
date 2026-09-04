@@ -78,7 +78,6 @@ def _existing_payload(*, device_type_id: int, role_id: int, tagged: bool = True)
         "site": 41,
         "description": "Proxmox Node pve01",
         "tags": tags,
-        "custom_fields": {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"},
     }
 
 
@@ -642,7 +641,6 @@ async def test_bulk_device_reconcile_omits_reported_fields_when_flags_disabled()
                 {"id": 8, "name": "AH", "slug": "ah", "color": "000000"},
                 {"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"},
             ],
-            "custom_fields": {"proxmox_last_updated": "2026-05-07T16:43:17+00:00"},
         }
     )
     nb = _FakeNetBox(existing)
@@ -674,7 +672,6 @@ async def test_bulk_device_reconcile_omits_reported_fields_when_flags_disabled()
                 "site": 41,
                 "description": "Proxmox Node pve01",
                 "tags": [{"id": 5, "name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
-                "custom_fields": {"proxmox_last_updated": "2026-05-07T16:56:58+00:00"},
             }
         ],
         lookup_fields=["name"],
@@ -689,7 +686,6 @@ async def test_bulk_device_reconcile_omits_reported_fields_when_flags_disabled()
             "site": device_ensure._relation_id_or_none(record.get("site")),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 

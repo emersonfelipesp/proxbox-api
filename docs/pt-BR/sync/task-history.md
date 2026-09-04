@@ -51,21 +51,17 @@ requisicoes cresce por nodes e paginas, nao por `VMs × nodes × tasks`.
 O sidecar tipado de estado de sync da VM e autoritativo para VMID, ID bruto do
 endpoint, tipo de VM e nome do cluster Proxmox. Um sidecar malformado ou
 duplicado pertencente a uma VM relevante para a execucao falha de forma fechada
-e nunca e mascarado por custom fields; um pedido selecionado nao falha por um
-sidecar corrompido que pertence apenas a outra VM. A identidade legada em custom
-fields so e considerada quando nao existe linha no sidecar (ou a rota opcional
-nao pode ser lida) e `custom_fields_enabled=true`.
+e um pedido selecionado nao falha por um sidecar corrompido que pertence apenas
+a outra VM.
 
 Quando o scan completo do sidecar termina com sucesso, uma VM do NetBox sem
-sidecar nem identidade legada utilizavel e considerada nao gerenciada e e
-ignorada. Uma VM explicitamente selecionada sem identidade continua fatal. Uma
-leitura indisponivel/transiente do sidecar com custom fields desabilitados
-tambem e fatal porque a propriedade nao pode ser verificada. Uma tarefa do
-endpoint 11 nunca pode cair por fallback em uma VM ligada ao endpoint 22. O
-fallback legado `(cluster_name, vmid)` exige uma VM globalmente unica e uma
-unica sessao/endpoint para o nome do cluster. Colisoes reais de propriedade
-exata/legada e fontes duplicadas de cluster sao ignoradas e marcam a execucao
-como degradada; VMIDs nao relacionados no arquivo sao skips normais e nao
+sidecar e considerada nao gerenciada e e ignorada. Uma VM explicitamente
+selecionada sem identidade continua fatal. Uma leitura indisponivel ou
+transiente do sidecar tambem e fatal porque a propriedade nao pode ser
+verificada. Uma tarefa do endpoint 11 nao pode ser atribuida a uma VM ligada ao
+endpoint 22. Colisoes de propriedade e fontes duplicadas de cluster sao
+ignoradas e marcam a execucao como degradada; VMIDs nao relacionados no arquivo
+sao skips normais e nao
 contam como erro.
 
 Um UPID visto nos nodes antigo e novo da mesma VM apos migracao e deduplicado.

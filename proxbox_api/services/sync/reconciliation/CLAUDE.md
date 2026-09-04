@@ -59,7 +59,6 @@ plugin-settings only; backend environment variables must not override it.
   `overwrite_vm_tags=True`.
 - Keep relation handling tolerant of both integer IDs and nested objects with
   `id`.
-- Preserve documented `custom_fields: {"foo": None}` versus `{}` behavior.
 - If NetBox lacks the `virtual_machine_type` field, do not generate a patch for
   that field.
 

@@ -58,7 +58,7 @@ def test_sync_all_replications_reports_reconcile_and_stale_counts(monkeypatch):
 
     async def _fake_list_async(_nb, _path, **_kwargs):
         if _path == "/api/virtualization/virtual-machines/":
-            return [{"id": 55, "custom_fields": {"proxmox_vm_id": "101"}}]
+            return [{"id": 55}]
         if _path == "/api/plugins/proxbox/nodes/":
             return [{"id": 77, "name": "pve02"}]
         raise AssertionError(f"Unexpected rest_list_async path: {_path}")
@@ -73,6 +73,17 @@ def test_sync_all_replications_reports_reconcile_and_stale_counts(monkeypatch):
         captured["stale_synced_ids"] = synced_replication_ids
         captured["stale_endpoint_id"] = endpoint_id
         return 4
+
+    async def _fake_identity_scan(_nb):
+        return SimpleNamespace(
+            rows=(
+                {
+                    "virtual_machine": {"id": 55},
+                    "proxmox_vm_id": 101,
+                    "proxmox_vm_type": "qemu",
+                },
+            )
+        )
 
     monkeypatch.setattr(
         "proxbox_api.services.sync.replications._get_netbox_endpoint_id",
@@ -89,6 +100,10 @@ def test_sync_all_replications_reports_reconcile_and_stale_counts(monkeypatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.replications._mark_stale_replications",
         _fake_mark_stale,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.replications.load_vm_sync_state_identities",
+        _fake_identity_scan,
     )
 
     pxs = [

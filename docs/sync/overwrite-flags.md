@@ -191,16 +191,6 @@ opt-in behavior toggles that compose independently:
 - `sync_vm_platform_from_guest_agent` — default `false`. When true, the VM sync asks the
   QEMU guest agent for `get-osinfo` and uses the reported product as the NetBox
   platform. See [VM platform from the guest OS](#vm-platform-from-the-guest-os) below.
-- `custom_fields_enabled` — **deprecated legacy custom fields**, default `false`.
-  When `false`, the typed `Proxbox*SyncState` sidecars are the sole source of
-  truth and no legacy reflection custom fields are written, read, or reconciled.
-  It composes with the `overwrite_*_custom_fields` gates: a custom-field value is
-  only written to NetBox when the relevant `overwrite_*_custom_fields` flag **and**
-  `custom_fields_enabled` are both true, while sidecar writes continue whenever
-  the `overwrite_*` flag is true. The setting normally comes from the
-  `ProxboxPluginSettings.custom_fields_enabled` plugin field; an explicit
-  per-request behavior flag overrides it. When enabled, every custom-field path
-  emits a deprecation warning.
 
 ## VM description and comments
 

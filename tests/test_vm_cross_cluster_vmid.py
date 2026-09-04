@@ -16,7 +16,6 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     _build_vm_index_by_proxmox_id,
     _resolve_netbox_virtual_machine_by_proxmox_id,
 )
-from proxbox_api.services import custom_fields
 from proxbox_api.services.sync.individual.helpers import ensure_vm_record
 from proxbox_api.services.sync.vm_helpers import resolve_netbox_cluster_id_by_name
 
@@ -31,47 +30,26 @@ VM_IN_ALPHA = {
     "id": 1001,
     "name": "shared-vm-alpha",
     "cluster": {"id": CLUSTER_ALPHA_ID, "name": "alpha"},
-    "custom_fields": {
-        "proxmox_endpoint_id": ENDPOINT_ALPHA_ID,
-        "proxmox_vm_id": SHARED_VMID,
-    },
+    "proxmox_endpoint_id": ENDPOINT_ALPHA_ID,
+    "proxmox_vm_id": SHARED_VMID,
 }
 VM_IN_BETA = {
     "id": 2002,
     "name": "shared-vm-beta",
     "cluster": {"id": CLUSTER_BETA_ID, "name": "beta"},
-    "custom_fields": {
-        "proxmox_endpoint_id": ENDPOINT_BETA_ID,
-        "proxmox_vm_id": SHARED_VMID,
-    },
+    "proxmox_endpoint_id": ENDPOINT_BETA_ID,
+    "proxmox_vm_id": SHARED_VMID,
 }
 
 _CLUSTER_NAME_TO_ID = {"alpha": CLUSTER_ALPHA_ID, "beta": CLUSTER_BETA_ID}
 
 
-def _enable_legacy_custom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        custom_fields,
-        "get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
-
-
-def _fake_vm_list_by_cluster(_nb, _endpoint, query):
-    """Mimic NetBox VM filters for endpoint, cluster, and VMID."""
-    vmid = query.get("cf_proxmox_vm_id")
-    endpoint_id = query.get("cf_proxmox_endpoint_id")
-    cluster_id = query.get("cluster_id")
-    matches = [
-        vm
-        for vm in (VM_IN_ALPHA, VM_IN_BETA)
-        if vm["custom_fields"]["proxmox_vm_id"] == vmid
-        and (endpoint_id is None or vm["custom_fields"]["proxmox_endpoint_id"] == endpoint_id)
-        and (cluster_id is None or vm["cluster"]["id"] == cluster_id)
-    ]
-    return matches
+def _vm_for_endpoint(endpoint_id: object) -> dict[str, object] | None:
+    if endpoint_id == ENDPOINT_ALPHA_ID:
+        return VM_IN_ALPHA
+    if endpoint_id == ENDPOINT_BETA_ID:
+        return VM_IN_BETA
+    return None
 
 
 def test_build_vm_index_keys_by_endpoint_and_vmid():
@@ -117,23 +95,36 @@ async def test_resolve_netbox_cluster_id_by_name_matches_and_caches(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
-    _enable_legacy_custom_fields(monkeypatch)
     captured_queries: list[dict[str, object]] = []
 
     async def _fake_rest_list_async(_nb, _endpoint, query):
         captured_queries.append(dict(query))
-        return _fake_vm_list_by_cluster(_nb, _endpoint, query)
+        vm = _vm_for_endpoint(query.get("proxmox_endpoint_raw_id"))
+        return (
+            [
+                {
+                    "virtual_machine": {"id": vm["id"]},
+                    "proxmox_vm_id": SHARED_VMID,
+                    "proxmox_endpoint_raw_id": query.get("proxmox_endpoint_raw_id"),
+                }
+            ]
+            if vm
+            else []
+        )
+
+    async def _fake_rest_first_async(_nb, _endpoint, *, query):
+        return next((vm for vm in (VM_IN_ALPHA, VM_IN_BETA) if vm["id"] == query["id"]), None)
 
     async def _fake_resolve_cluster_id(_nb, cluster_name, **_kwargs):
         return _CLUSTER_NAME_TO_ID.get(str(cluster_name).strip())
 
     monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.helpers.rest_list_async",
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.sync_state_reader.rest_list_async",
-        _fake_rest_list_async,
+        "proxbox_api.services.sync.sync_state_reader.rest_first_async",
+        _fake_rest_first_async,
     )
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.helpers.resolve_netbox_cluster_id_by_name",
@@ -169,9 +160,9 @@ async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
     assert record_beta is VM_IN_BETA
 
     # Every NetBox VM lookup must have been endpoint-scoped.
-    cf_queries = [query for query in captured_queries if "cf_proxmox_endpoint_id" in query]
-    assert cf_queries, "expected at least one legacy NetBox VM lookup"
-    assert {q["cf_proxmox_endpoint_id"] for q in cf_queries} == {
+    sidecar_queries = [query for query in captured_queries if "proxmox_endpoint_raw_id" in query]
+    assert sidecar_queries
+    assert {q["proxmox_endpoint_raw_id"] for q in sidecar_queries} == {
         ENDPOINT_ALPHA_ID,
         ENDPOINT_BETA_ID,
     }
@@ -179,12 +170,25 @@ async def test_ensure_vm_record_resolves_correct_cluster(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(monkeypatch):
-    _enable_legacy_custom_fields(monkeypatch)
     captured_queries: list[dict[str, object]] = []
 
     async def _fake_rest_list_async(_nb, _endpoint, query):
         captured_queries.append(dict(query))
-        return _fake_vm_list_by_cluster(_nb, _endpoint, query)
+        vm = _vm_for_endpoint(query.get("proxmox_endpoint_raw_id"))
+        return (
+            [
+                {
+                    "virtual_machine": {"id": vm["id"]},
+                    "proxmox_vm_id": SHARED_VMID,
+                    "proxmox_endpoint_raw_id": query.get("proxmox_endpoint_raw_id"),
+                }
+            ]
+            if vm
+            else []
+        )
+
+    async def _fake_rest_first_async(_nb, _endpoint, *, query):
+        return next((vm for vm in (VM_IN_ALPHA, VM_IN_BETA) if vm["id"] == query["id"]), None)
 
     async def _fake_resolve_cluster_id(_nb, cluster_name, **_kwargs):
         return _CLUSTER_NAME_TO_ID.get(str(cluster_name).strip())
@@ -196,6 +200,10 @@ async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(m
     monkeypatch.setattr(
         "proxbox_api.services.sync.sync_state_reader.rest_list_async",
         _fake_rest_list_async,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_first_async",
+        _fake_rest_first_async,
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm."
@@ -212,8 +220,8 @@ async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(m
 
     assert resolved_alpha == VM_IN_ALPHA
     assert resolved_beta == VM_IN_BETA
-    cf_queries = [query for query in captured_queries if "cf_proxmox_endpoint_id" in query]
-    assert {q["cf_proxmox_endpoint_id"] for q in cf_queries} == {
+    sidecar_queries = [query for query in captured_queries if "proxmox_endpoint_raw_id" in query]
+    assert {q["proxmox_endpoint_raw_id"] for q in sidecar_queries} == {
         ENDPOINT_ALPHA_ID,
         ENDPOINT_BETA_ID,
     }

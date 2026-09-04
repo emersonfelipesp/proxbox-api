@@ -481,7 +481,6 @@ async def write_vm_role_snapshot_exact(
         read = await read_vm_last_synced_role(
             nb,
             vm_record={"id": normalized_vm_id},
-            custom_field_name="proxmox_last_synced_role_id",
         )
         if read.verified and read.snapshot_id == normalized_snapshot_id:
             return

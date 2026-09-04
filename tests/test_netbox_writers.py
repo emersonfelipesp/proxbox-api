@@ -75,7 +75,6 @@ def _existing_cluster_type_payload(
         "slug": slug,
         "description": "Proxmox cluster mode",
         "tags": _PROXBOX_TAG,
-        "custom_fields": {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"},
     }
 
 
@@ -86,12 +85,6 @@ def patch_rest(monkeypatch: pytest.MonkeyPatch):
     Returns a small handle exposing the captured POST traffic and the existing
     record holder so each test can configure the GET response.
     """
-    monkeypatch.setattr(
-        "proxbox_api.services.custom_fields.get_plugin_bool",
-        lambda *, settings_key, default=False: (
-            True if settings_key == "custom_fields_enabled" else default
-        ),
-    )
     holder: dict[str, _FakeRecord | None] = {"existing": None}
     posts: list[dict[str, Any]] = []
 
@@ -125,25 +118,8 @@ async def test_missing_record_emits_post_and_returns_created(patch_rest: dict[st
 async def test_unchanged_payload_emits_no_patch(patch_rest: dict[str, Any]) -> None:
     existing_payload = _existing_cluster_type_payload()
     existing = _FakeRecord(existing_payload, record_id=42)
-    # Pin the timestamp inside the desired payload to match the existing record
-    # so the custom-field diff is genuinely empty.
     patch_rest["holder"]["existing"] = existing
-
-    # The helper rebuilds custom_fields with `datetime.now()`, which would
-    # always differ from the stored timestamp. Patch _last_updated_cf so the
-    # second-run-is-silent semantics are testable without time mocking.
-    import proxbox_api.services.netbox_writers as nw
-
-    nw_original = nw._last_updated_cf
-
-    def _frozen_cf() -> dict[str, str]:
-        return {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"}
-
-    try:
-        nw._last_updated_cf = _frozen_cf
-        result = await upsert_cluster_type(object(), mode="cluster", tag_refs=_PROXBOX_TAG)
-    finally:
-        nw._last_updated_cf = nw_original
+    result = await upsert_cluster_type(object(), mode="cluster", tag_refs=_PROXBOX_TAG)
 
     assert result.status == "unchanged"
     assert existing.save_calls == 0
@@ -180,28 +156,17 @@ async def test_fk_diff_compares_id_only(patch_rest: dict[str, Any]) -> None:
         "type": {"id": 7, "name": "Cluster", "slug": "cluster", "url": "..."},
         "description": "Proxmox cluster cluster.",
         "tags": _PROXBOX_TAG,
-        "custom_fields": {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"},
     }
     existing = _FakeRecord(existing_payload, record_id=42)
     patch_rest["holder"]["existing"] = existing
 
-    import proxbox_api.services.netbox_writers as nw
-
-    def _frozen_cf() -> dict[str, str]:
-        return {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"}
-
-    nw_original = nw._last_updated_cf
-    try:
-        nw._last_updated_cf = _frozen_cf
-        result = await upsert_cluster(
-            object(),
-            cluster_name="pve-cluster",
-            cluster_type_id=7,
-            mode="cluster",
-            tag_refs=_PROXBOX_TAG,
-        )
-    finally:
-        nw._last_updated_cf = nw_original
+    result = await upsert_cluster(
+        object(),
+        cluster_name="pve-cluster",
+        cluster_type_id=7,
+        mode="cluster",
+        tag_refs=_PROXBOX_TAG,
+    )
 
     assert result.status == "unchanged"
     assert existing.save_calls == 0
@@ -240,7 +205,6 @@ async def test_back_compat_rest_reconcile_async_still_returns_bare_record(
             "slug": "cluster",
             "description": "Proxmox cluster mode",
             "tags": _PROXBOX_TAG,
-            "custom_fields": {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"},
         },
         schema=NetBoxClusterTypeSyncState,
         current_normalizer=lambda record: {
@@ -248,7 +212,6 @@ async def test_back_compat_rest_reconcile_async_still_returns_bare_record(
             "slug": record.get("slug"),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -271,7 +234,6 @@ async def test_with_status_wrapper_returns_reconcile_result(
             "slug": "cluster",
             "description": "Proxmox cluster mode",
             "tags": _PROXBOX_TAG,
-            "custom_fields": {"proxmox_last_updated": "2026-04-29T00:00:00+00:00"},
         },
         schema=NetBoxClusterTypeSyncState,
         current_normalizer=lambda record: {
@@ -279,7 +241,6 @@ async def test_with_status_wrapper_returns_reconcile_result(
             "slug": record.get("slug"),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 

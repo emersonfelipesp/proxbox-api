@@ -24,10 +24,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxSiteSyncState,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
-from proxbox_api.services.custom_fields import (
-    include_custom_fields_in_payload,
-    legacy_custom_fields_payload,
-)
 from proxbox_api.services.sync.cluster_links import sync_proxmox_cluster_netbox_link
 from proxbox_api.services.sync.discovery_tags import (
     discovery_tag_ref,
@@ -47,15 +43,9 @@ def _slugify(value: str) -> str:
     return text.strip("-") or "cluster"
 
 
-def _last_updated_cf() -> dict[str, str]:
-    return {"proxmox_last_updated": datetime.now(timezone.utc).isoformat()}
-
-
 def _payload_last_updated(payload: dict[str, object]) -> object:
-    custom_fields = payload.get("custom_fields")
-    if isinstance(custom_fields, dict):
-        return custom_fields.get("proxmox_last_updated")
-    return None
+    """Return a fresh timestamp for a typed sync-state sidecar write."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _relation_id_or_none(value: object) -> int | None:
@@ -338,7 +328,6 @@ def _cluster_type_payload(mode: str, tag_refs: list[dict[str, object]]) -> dict[
         "slug": mode,
         "description": f"Proxmox {mode} mode",
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
 
 
@@ -356,7 +345,6 @@ def _cluster_payload(
         "type": cluster_type_id,
         "description": f"Proxmox {mode} cluster.",
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
     if site_id is not None:
         payload["scope_type"] = "dcim.site"
@@ -371,7 +359,6 @@ def _manufacturer_payload(tag_refs: list[dict[str, object]]) -> dict[str, object
         "name": "Proxmox",
         "slug": "proxmox",
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
 
 
@@ -384,7 +371,6 @@ def _device_type_payload(
         "slug": "proxmox-generic-device",
         "manufacturer": manufacturer_id,
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
 
 
@@ -394,7 +380,6 @@ def _device_role_payload(tag_refs: list[dict[str, object]]) -> dict[str, object]
         "slug": "proxmox-node",
         "color": "00bcd4",
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
 
 
@@ -405,7 +390,6 @@ def _site_payload(cluster_name: str, tag_refs: list[dict[str, object]]) -> dict[
         "slug": site_slug,
         "status": "active",
         "tags": tag_refs,
-        "custom_fields": _last_updated_cf(),
     }
 
 
@@ -427,7 +411,6 @@ def _device_payload(
         "device_type": device_type_id,
         "role": role_id,
         "site": site_id,
-        "custom_fields": _last_updated_cf(),
     }
 
 
@@ -454,11 +437,6 @@ def _compute_device_patchable_fields(
         fields.add("status")
     if overwrite_flags is None or overwrite_flags.overwrite_device_description:
         fields.add("description")
-    if include_custom_fields_in_payload(
-        overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields,
-        context="legacy device custom-field payload",
-    ):
-        fields.add("custom_fields")
     if overwrite_device_role:
         fields.add("role")
     if overwrite_device_type:
@@ -512,11 +490,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 name="cluster_types",
                 path="/api/virtualization/cluster-types/",
                 payloads=[
-                    legacy_custom_fields_payload(
-                        _cluster_type_payload(mode, tag_refs),
-                        overwrite=True,
-                        context="legacy cluster-type custom-field payload",
-                    )
+                    _cluster_type_payload(mode, tag_refs)
                     for mode in sorted(set(cluster_modes.values()))
                 ],
                 lookup_fields=["slug"],
@@ -526,38 +500,24 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "slug": record.get("slug"),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             ),
             BulkReconcilePhase(
                 name="manufacturers",
                 path="/api/dcim/manufacturers/",
-                payloads=[
-                    legacy_custom_fields_payload(
-                        _manufacturer_payload(tag_refs),
-                        overwrite=True,
-                        context="legacy manufacturer custom-field payload",
-                    )
-                ],
+                payloads=[_manufacturer_payload(tag_refs)],
                 lookup_fields=["slug"],
                 schema=NetBoxManufacturerSyncState,
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "slug": record.get("slug"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             ),
             BulkReconcilePhase(
                 name="device_roles",
                 path="/api/dcim/device-roles/",
-                payloads=[
-                    legacy_custom_fields_payload(
-                        _device_role_payload(tag_refs),
-                        overwrite=True,
-                        context="legacy device-role custom-field payload",
-                    )
-                ],
+                payloads=[_device_role_payload(tag_refs)],
                 lookup_fields=["slug"],
                 schema=NetBoxDeviceRoleSyncState,
                 current_normalizer=lambda record: {
@@ -565,18 +525,13 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "slug": record.get("slug"),
                     "color": record.get("color"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             ),
             BulkReconcilePhase(
                 name="sites",
                 path="/api/dcim/sites/",
                 payloads=[
-                    legacy_custom_fields_payload(
-                        _site_payload(cluster_name, tag_refs),
-                        overwrite=True,
-                        context="legacy site custom-field payload",
-                    )
+                    _site_payload(cluster_name, tag_refs)
                     for cluster_name in default_site_cluster_names
                 ],
                 lookup_fields=["slug"],
@@ -586,7 +541,6 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "slug": record.get("slug"),
                     "status": record.get("status"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             ),
         ],
@@ -625,8 +579,8 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
 
     # Cluster reconcile honors per-field cluster overwrite flags. name/type are
     # always patchable (they identify the cluster and its mode); description,
-    # tags, and custom_fields are gated by the corresponding flags. When no
-    # flags are supplied (None), all five keys are patchable, preserving the
+    # and tags are gated by the corresponding flags. When no flags are supplied
+    # (None), all normal fields are patchable, preserving the
     # historical always-overwrite behavior.
     _cluster_patchable: set[str] = {"name", "type"}
     _cluster_patchable.update({"scope_type", "scope_id", "tenant"})
@@ -634,11 +588,6 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         _cluster_patchable.add("description")
     if overwrite_flags is None or overwrite_flags.overwrite_cluster_tags:
         _cluster_patchable.add("tags")
-    if include_custom_fields_in_payload(
-        overwrite_flags is None or overwrite_flags.overwrite_cluster_custom_fields,
-        context="legacy cluster custom-field payload",
-    ):
-        _cluster_patchable.add("custom_fields")
 
     cluster_payloads = [
         _cluster_payload(
@@ -665,17 +614,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
             BulkReconcilePhase(
                 name="clusters",
                 path="/api/virtualization/clusters/",
-                payloads=[
-                    legacy_custom_fields_payload(
-                        payload,
-                        overwrite=(
-                            overwrite_flags is None
-                            or overwrite_flags.overwrite_cluster_custom_fields
-                        ),
-                        context="legacy cluster custom-field payload",
-                    )
-                    for payload in cluster_payloads
-                ],
+                payloads=cluster_payloads,
                 lookup_fields=["name"],
                 schema=NetBoxClusterSyncState,
                 patchable_fields=frozenset(_cluster_patchable),
@@ -687,19 +626,14 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "scope_id": _relation_id_or_none(record.get("scope_id") or record.get("scope")),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             ),
             BulkReconcilePhase(
                 name="device_types",
                 path="/api/dcim/device-types/",
                 payloads=[
-                    legacy_custom_fields_payload(
-                        _device_type_payload(
-                            _relation_id_or_none(getattr(manufacturer, "id", None)), tag_refs
-                        ),
-                        overwrite=True,
-                        context="legacy device-type custom-field payload",
+                    _device_type_payload(
+                        _relation_id_or_none(getattr(manufacturer, "id", None)), tag_refs
                     )
                 ],
                 lookup_fields=["model"],
@@ -709,7 +643,6 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "slug": record.get("slug"),
                     "manufacturer": _relation_id_or_none(record.get("manufacturer")),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
             ),
         ],
@@ -798,17 +731,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
             BulkReconcilePhase(
                 name="devices",
                 path="/api/dcim/devices/",
-                payloads=[
-                    legacy_custom_fields_payload(
-                        payload,
-                        overwrite=(
-                            overwrite_flags is None
-                            or overwrite_flags.overwrite_device_custom_fields
-                        ),
-                        context="legacy device custom-field payload",
-                    )
-                    for payload in device_payloads
-                ],
+                payloads=device_payloads,
                 lookup_fields=["name", "site"],
                 lookup_query_field_map={"site": "site_id"},
                 schema=NetBoxDeviceSyncState,
@@ -822,7 +745,6 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                     "site": _relation_id_or_none(record.get("site")),
                     "description": record.get("description"),
                     "tags": record.get("tags"),
-                    "custom_fields": record.get("custom_fields"),
                 },
                 selector=_device_selector,
             )
@@ -864,24 +786,18 @@ async def _ensure_cluster_type(
         nb,
         "/api/virtualization/cluster-types/",
         lookup={"slug": mode},
-        payload=legacy_custom_fields_payload(
-            {
-                "name": mode.capitalize(),
-                "slug": mode,
-                "description": f"Proxmox {mode} mode",
-                "tags": tag_refs,
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy cluster-type custom-field payload",
-        ),
+        payload={
+            "name": mode.capitalize(),
+            "slug": mode,
+            "description": f"Proxmox {mode} mode",
+            "tags": tag_refs,
+        },
         schema=NetBoxClusterTypeSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -931,11 +847,7 @@ async def _ensure_cluster(
         nb,
         "/api/virtualization/clusters/",
         lookup={"name": cluster_name},
-        payload=legacy_custom_fields_payload(
-            payload,
-            overwrite=(overwrite_flags is None or overwrite_flags.overwrite_cluster_custom_fields),
-            context="legacy cluster custom-field payload",
-        ),
+        payload=payload,
         schema=NetBoxClusterSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
@@ -945,7 +857,6 @@ async def _ensure_cluster(
             "scope_id": _relation_id_or_none(record.get("scope_id") or record.get("scope")),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     await write_cluster_sync_state(
@@ -965,22 +876,16 @@ async def _ensure_manufacturer(nb: object, *, tag_refs: list[dict[str, object]])
         nb,
         "/api/dcim/manufacturers/",
         lookup={"slug": "proxmox"},
-        payload=legacy_custom_fields_payload(
-            {
-                "name": "Proxmox",
-                "slug": "proxmox",
-                "tags": tag_refs,
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy manufacturer custom-field payload",
-        ),
+        payload={
+            "name": "Proxmox",
+            "slug": "proxmox",
+            "tags": tag_refs,
+        },
         schema=NetBoxManufacturerSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -995,24 +900,18 @@ async def _ensure_device_type(
         nb,
         "/api/dcim/device-types/",
         lookup={"model": "Proxmox Generic Device"},
-        payload=legacy_custom_fields_payload(
-            {
-                "model": "Proxmox Generic Device",
-                "slug": "proxmox-generic-device",
-                "manufacturer": manufacturer_id,
-                "tags": tag_refs,
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy device-type custom-field payload",
-        ),
+        payload={
+            "model": "Proxmox Generic Device",
+            "slug": "proxmox-generic-device",
+            "manufacturer": manufacturer_id,
+            "tags": tag_refs,
+        },
         schema=NetBoxDeviceTypeSyncState,
         current_normalizer=lambda record: {
             "model": record.get("model"),
             "slug": record.get("slug"),
             "manufacturer": record.get("manufacturer"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -1022,24 +921,18 @@ async def _ensure_device_role(nb: object, *, tag_refs: list[dict[str, object]]) 
         nb,
         "/api/dcim/device-roles/",
         lookup={"slug": "proxmox-node"},
-        payload=legacy_custom_fields_payload(
-            {
-                "name": "Proxmox Node",
-                "slug": "proxmox-node",
-                "color": "00bcd4",
-                "tags": tag_refs,
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy device-role custom-field payload",
-        ),
+        payload={
+            "name": "Proxmox Node",
+            "slug": "proxmox-node",
+            "color": "00bcd4",
+            "tags": tag_refs,
+        },
         schema=NetBoxDeviceRoleSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "color": record.get("color"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -1066,24 +959,18 @@ async def _ensure_site(
         nb,
         "/api/dcim/sites/",
         lookup={"slug": site_slug},
-        payload=legacy_custom_fields_payload(
-            {
-                "name": site_name,
-                "slug": site_slug,
-                "status": "active",
-                "tags": tag_refs,
-                "custom_fields": _last_updated_cf(),
-            },
-            overwrite=True,
-            context="legacy site custom-field payload",
-        ),
+        payload={
+            "name": site_name,
+            "slug": site_slug,
+            "status": "active",
+            "tags": tag_refs,
+        },
         schema=NetBoxSiteSyncState,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "slug": record.get("slug"),
             "status": record.get("status"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
 
@@ -1165,7 +1052,6 @@ async def _ensure_device(
         "device_type": device_type_id,
         "role": role_id,
         "site": site_id,
-        "custom_fields": _last_updated_cf(),
     }
 
     allowed = _compute_device_patchable_fields(
@@ -1188,7 +1074,6 @@ async def _ensure_device(
                 "site": existing_device.get("site"),
                 "description": existing_device.get("description"),
                 "tags": existing_device.get("tags"),
-                "custom_fields": existing_device.get("custom_fields"),
             }
         )
         current_payload = current_model.model_dump(exclude_none=True, by_alias=True)
@@ -1228,11 +1113,7 @@ async def _ensure_device(
         nb,
         "/api/dcim/devices/",
         lookup={"name": device_name, "site_id": site_id},
-        payload=legacy_custom_fields_payload(
-            payload,
-            overwrite=(overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields),
-            context="legacy device custom-field payload",
-        ),
+        payload=payload,
         schema=NetBoxDeviceSyncState,
         patchable_fields=frozenset(allowed),
         current_normalizer=lambda record: {
@@ -1244,7 +1125,6 @@ async def _ensure_device(
             "site": record.get("site"),
             "description": record.get("description"),
             "tags": record.get("tags"),
-            "custom_fields": record.get("custom_fields"),
         },
     )
     await write_device_sync_state(

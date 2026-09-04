@@ -257,7 +257,6 @@ async def test_create_virtual_machines_stream_forwards_ip_mac_flags(monkeypatch)
         pxs=[],
         cluster_status=[],
         cluster_resources=[],
-        custom_fields=[],
         tag=SimpleNamespace(id=7),
         sync_vm_network=True,
         overwrite_flags=SyncOverwriteFlags(),
@@ -431,7 +430,6 @@ async def test_create_only_vm_interfaces_skips_mac_when_sync_mac_false(monkeypat
             pxs=pxs_stub,
             cluster_status=[],
             cluster_resources=[vm_resource],
-            custom_fields=[],
             tag=SimpleNamespace(id=7),
             overwrite_flags=SyncOverwriteFlags(),
             sync_mac=False,
@@ -506,7 +504,6 @@ async def test_create_only_vm_interfaces_calls_mac_when_sync_mac_true(monkeypatc
             pxs=pxs_stub,
             cluster_status=[],
             cluster_resources=[vm_resource],
-            custom_fields=[],
             tag=SimpleNamespace(id=7),
             overwrite_flags=SyncOverwriteFlags(),
             sync_mac=True,  # explicit default

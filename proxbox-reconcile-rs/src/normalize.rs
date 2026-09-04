@@ -82,10 +82,6 @@ pub fn normalize_current_vm_payload(record: &Value, supports_vm_type: bool) -> M
                 .collect(),
         ),
     );
-    insert_custom_fields(
-        &mut payload,
-        object.and_then(|item| item.get("custom_fields")),
-    );
     insert_optional_raw(
         &mut payload,
         "description",
@@ -129,7 +125,6 @@ pub fn normalize_desired_vm_payload(
                 .collect(),
         ),
     );
-    insert_custom_fields(&mut payload, desired_payload.get("custom_fields"));
     insert_optional_raw(
         &mut payload,
         "description",
@@ -208,17 +203,6 @@ fn insert_vm_int(payload: &mut Map<String, Value>, key: &str, value: Option<&Val
         key.to_string(),
         number_value(value.and_then(value_to_i64).unwrap_or(0)),
     );
-}
-
-fn insert_custom_fields(payload: &mut Map<String, Value>, value: Option<&Value>) {
-    match value {
-        Some(Value::Object(object)) => {
-            payload.insert("custom_fields".to_string(), Value::Object(object.clone()));
-        }
-        _ => {
-            payload.insert("custom_fields".to_string(), Value::Object(Map::new()));
-        }
-    }
 }
 
 fn normalize_status(value: Option<&Value>) -> String {

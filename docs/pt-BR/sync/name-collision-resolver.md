@@ -54,8 +54,8 @@ campo `name` do payload antes da reconciliação.
 
 ## Detecção de renomeação manual
 
-Se o NetBox tem uma `VirtualMachine` com
-`custom_fields.proxmox_vm_id` igual ao VMID em sincronização **e** cujo
+Se o NetBox tem uma `VirtualMachine` cuja identidade no sidecar tipado tem o
+mesmo VMID em sincronização **e** cujo
 `name` atual não é o candidato puro nem um sufixo algorítmico
 (`gateway (2)`, `gateway (3)`…), o resolvedor retorna o nome do operador
 com `operator_renamed=True`. O chamador emite o frame
@@ -72,14 +72,13 @@ subsequentes.
   colidem estruturalmente e ficam com o nome puro — mesmo que os rótulos
   de cluster Proxmox sejam diferentes. Isso espelha a unicidade
   estrutural do NetBox.
-- **Identificador estável.** `custom_fields.proxmox_vm_id` é o vínculo
+- **Identificador estável.** A identidade tipada de estado da VM é o vínculo
   cruzado durável. O resolvedor pode inverter qual VM mantém o nome puro
   se os nomes de cluster Proxmox forem reordenados, mas o vínculo por
   VMID permanece.
-- **Registros legados.** Uma VM NetBox sem o campo customizado
-  `proxmox_vm_id` não pode ser correlacionada por VMID; o resolvedor a
-  trata como um registro não-Proxbox e não a considerará uma renomeação
-  manual.
+- **Registros não gerenciados.** Uma VM NetBox sem identidade tipada não pode
+  ser correlacionada por VMID; o resolvedor a trata como um registro
+  não-Proxbox e não a considerará uma renomeação manual.
 
 ## Forma do frame SSE
 

@@ -42,6 +42,7 @@ def _prepared_state_from_fixture(data: dict[str, Any]) -> PreparedVMState:
         lookup=data.get("lookup") or {},
         now=datetime(2026, 1, 1, tzinfo=timezone.utc),
         vm_type=data["vm_type"],
+        sync_state_fields=data.get("sync_state_fields") or {},
     )
 
 

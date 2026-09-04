@@ -16,7 +16,8 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["delete_orphans"] is False
     assert settings["reconciliation_engine"] == "python"
     assert settings["reconciliation_compare_strict"] is False
-    assert settings["custom_fields_enabled"] is False
+    assert "custom_fields_enabled" not in settings
+    assert "custom_fields_request_delay" not in settings
     assert settings["hardware_discovery_sync_nic_macs"] is False
     assert settings["netbox_openapi_persist"] is True
     assert settings["cloud_network_lock_enabled"] is False
@@ -53,7 +54,6 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "delete_orphans": True,
         "reconciliation_engine": "rust",
         "reconciliation_compare_strict": True,
-        "custom_fields_enabled": True,
         "hardware_discovery_enabled": True,
         "hardware_discovery_sync_nic_macs": True,
         "cloud_network_lock_enabled": True,
@@ -79,7 +79,8 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["delete_orphans"] is True
     assert settings["reconciliation_engine"] == "rust"
     assert settings["reconciliation_compare_strict"] is True
-    assert settings["custom_fields_enabled"] is True
+    assert "custom_fields_enabled" not in settings
+    assert "custom_fields_request_delay" not in settings
     assert settings["hardware_discovery_enabled"] is True
     assert settings["hardware_discovery_sync_nic_macs"] is True
     assert settings["cloud_network_lock_enabled"] is True

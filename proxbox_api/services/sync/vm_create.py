@@ -18,10 +18,6 @@ from proxbox_api.proxmox_to_netbox.models import (
 )
 from proxbox_api.schemas.proxmox import ClusterStatusSchemaList
 from proxbox_api.schemas.sync import SyncOverwriteFlags
-from proxbox_api.services.custom_fields import (
-    legacy_custom_field_fallback_query,
-    legacy_custom_fields_payload,
-)
 from proxbox_api.services.sync.cloudinit import sync_vm_cloudinit
 from proxbox_api.services.sync.devices import (
     _effective_cluster_site_id,
@@ -43,7 +39,10 @@ from proxbox_api.services.sync.role_resolution import (
 )
 from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
-from proxbox_api.services.sync.virtual_machines import build_netbox_virtual_machine_payload
+from proxbox_api.services.sync.virtual_machines import (
+    build_netbox_virtual_machine_payload,
+    build_virtual_machine_sync_state_fields,
+)
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
     normalize_current_virtual_machine_payload,
@@ -339,7 +338,7 @@ async def create_or_update_virtual_machine(
         role_id: NetBox role ID
         tag_id: NetBox tag ID
         tag_refs: Tag references
-        cluster_name: Proxmox cluster name for custom field population.
+        cluster_name: Proxmox cluster name for typed sync state.
         virtual_machine_type_id: Optional NetBox VirtualMachineType ID (NetBox v4.6+).
         overwrite_flags: Per-field overwrite gates for existing VM updates.
 
@@ -384,26 +383,14 @@ async def create_or_update_virtual_machine(
         site_id=site_id,
         tenant_id=tenant_id,
         virtual_machine_type_id=resolved_virtual_machine_type_id,
-        last_updated=now,
-        cluster_name=cluster_name,
-        endpoint_id=endpoint_id,
     )
 
-    vm_lookup = {
-        key: value
-        for key, value in {
-            "cf_proxmox_vm_id": vmid_int,
-            "cf_proxmox_endpoint_id": endpoint_lookup_id,
-            "cluster_id": cluster_id if endpoint_lookup_id is None else None,
-        }.items()
-        if value is not None
-    }
+    vm_lookup = {"id": 0}
     existing_resolution = await resolve_virtual_machine_by_sync_state(
         netbox_session,
         proxmox_vm_id=vmid_int,
         endpoint_id=endpoint_lookup_id,
         cluster_id=cluster_id,
-        fallback_query=legacy_custom_field_fallback_query(vm_lookup),
         fail_on_ambiguous=True,
     )
 
@@ -433,11 +420,7 @@ async def create_or_update_virtual_machine(
         netbox_session,
         "/api/virtualization/virtual-machines/",
         lookup=vm_lookup,
-        payload=legacy_custom_fields_payload(
-            payload,
-            overwrite=(overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields),
-            context="legacy VM custom-field payload",
-        ),
+        payload=payload,
         schema=NetBoxVirtualMachineCreateBody,
         patchable_fields=patchable_fields,
         current_normalizer=lambda record: normalize_current_virtual_machine_payload(
@@ -456,13 +439,19 @@ async def create_or_update_virtual_machine(
         else getattr(virtual_machine, "id", None)
     )
     if vm_id is not None:
-        custom_fields = payload.get("custom_fields")
+        sync_state_fields = build_virtual_machine_sync_state_fields(
+            proxmox_resource=proxmox_resource,
+            proxmox_config=proxmox_config,
+            last_updated=now,
+            cluster_name=cluster_name,
+            endpoint_id=endpoint_id,
+        )
         await persist_sync_state_with_role_compensation(
             netbox_session,
             persistence=write_virtual_machine_sync_state(
                 netbox_session,
                 virtual_machine_id=vm_id,
-                custom_fields=custom_fields if isinstance(custom_fields, dict) else None,
+                custom_fields=sync_state_fields,
                 overwrite_custom_fields=(
                     overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
                 ),

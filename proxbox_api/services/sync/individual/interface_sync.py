@@ -10,7 +10,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
-from proxbox_api.services.custom_fields import legacy_custom_fields_payload
 from proxbox_api.services.proxmox_helpers import (
     get_qemu_guest_agent_network_interfaces,
     get_vm_config_individual,
@@ -77,24 +76,18 @@ async def _resolve_vlan_id(
             nb,
             "/api/ipam/vlans/",
             lookup={"vid": vlan_tag},
-            payload=legacy_custom_fields_payload(
-                {
-                    "vid": vlan_tag,
-                    "name": f"VLAN {vlan_tag}",
-                    "status": "active",
-                    "tags": tag_refs,
-                    "custom_fields": {"proxmox_last_updated": now.isoformat()},
-                },
-                overwrite=True,
-                context="legacy VLAN custom-field payload",
-            ),
+            payload={
+                "vid": vlan_tag,
+                "name": f"VLAN {vlan_tag}",
+                "status": "active",
+                "tags": tag_refs,
+            },
             schema=NetBoxVlanSyncState,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
                 "name": record.get("name"),
                 "status": record.get("status"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
             },
         )
         return (
@@ -303,10 +296,6 @@ async def sync_interface_individual(  # noqa: C901
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id else None,
             "tags": tag_refs,
-            "custom_fields": {
-                "proxmox_last_updated": now.isoformat(),
-                **({"proxbox_bridge": bridge_id} if bridge_id is not None else {}),
-            },
         }
 
         if vm_id:
@@ -321,11 +310,7 @@ async def sync_interface_individual(  # noqa: C901
             nb,
             "/api/virtualization/interfaces/",
             lookup=build_interface_lookup_key(resolved_name, vm_id),
-            payload=legacy_custom_fields_payload(
-                interface_payload,
-                overwrite=True,
-                context="legacy VM-interface custom-field payload",
-            ),
+            payload=interface_payload,
             schema=NetBoxVirtualMachineInterfaceSyncState,
             current_normalizer=lambda record: {
                 "name": record.get("name"),
@@ -337,7 +322,6 @@ async def sync_interface_individual(  # noqa: C901
                 "untagged_vlan": record.get("untagged_vlan"),
                 "mode": record.get("mode"),
                 "tags": record.get("tags"),
-                "custom_fields": record.get("custom_fields"),
             },
             nullable_fields={"bridge"},
         )

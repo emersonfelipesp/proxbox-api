@@ -13,7 +13,7 @@ from proxbox_api.services.sync.snapshots import create_virtual_machine_snapshots
 
 
 @pytest.fixture(autouse=True)
-def _bridge_snapshot_vm_pagination_to_legacy_test_fakes(monkeypatch):
+def _bridge_snapshot_vm_pagination_to_test_fakes(monkeypatch):
     """Keep path-aware test fakes while production uses the shared paginator."""
 
     async def _legacy_bridge(
@@ -31,10 +31,18 @@ def _bridge_snapshot_vm_pagination_to_legacy_test_fakes(monkeypatch):
 
     monkeypatch.setattr(snapshots_module, "rest_list_paginated_async", _legacy_bridge)
 
+    async def _typed_identity_bridge(_nb, vms, *, require_all):
+        del require_all
+        return vms
 
-def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_id(
-    monkeypatch,
-):
+    monkeypatch.setattr(
+        snapshots_module,
+        "hydrate_vm_identities_from_sidecars",
+        _typed_identity_bridge,
+    )
+
+
+def test_create_virtual_machine_snapshots_uses_typed_sidecar_identity(monkeypatch):
     session = object()
     proxmox_session = object()
     calls = {"get_vm_snapshots": [], "rest_list_async": []}
@@ -58,7 +66,7 @@ def test_create_virtual_machine_snapshots_uses_nested_custom_fields_proxmox_vm_i
             {
                 "id": 7,
                 "name": "vm-101",
-                "custom_fields": {"proxmox_vm_id": 101},
+                "proxmox_vm_id": 101,
             }
         ]
 
@@ -162,23 +170,19 @@ def test_create_virtual_machine_snapshots_scopes_fetch_by_endpoint(monkeypatch):
                     "id": 7,
                     "name": "vm-105-a",
                     "cluster": {"name": "pve"},
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 1,
-                        "proxmox_vm_id": 105,
-                        "proxmox_vm_type": "qemu",
-                        "proxmox_node": "pve",
-                    },
+                    "proxmox_endpoint_id": 1,
+                    "proxmox_vm_id": 105,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_node": "pve",
                 },
                 {
                     "id": 8,
                     "name": "vm-105-b",
                     "cluster": {"name": "astro"},
-                    "custom_fields": {
-                        "proxmox_endpoint_id": 2,
-                        "proxmox_vm_id": 105,
-                        "proxmox_vm_type": "qemu",
-                        "proxmox_node": "astro",
-                    },
+                    "proxmox_endpoint_id": 2,
+                    "proxmox_vm_id": 105,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_node": "astro",
                 },
             ]
         if _path in {"/api/plugins/proxbox/storage/", "/api/virtualization/virtual-disks/"}:
@@ -241,18 +245,16 @@ def _snapshot_vm(
     endpoint_id: int | None = 1,
     cluster_name: str = "cluster-a",
 ) -> dict[str, object]:
-    custom_fields: dict[str, object] = {
+    vm: dict[str, object] = {
+        "id": netbox_id,
+        "name": f"vm-{netbox_id}",
+        "cluster": {"name": cluster_name},
         "proxmox_vm_id": vmid,
         "proxmox_vm_type": "qemu",
     }
     if endpoint_id is not None:
-        custom_fields["proxmox_endpoint_id"] = endpoint_id
-    return {
-        "id": netbox_id,
-        "name": f"vm-{netbox_id}",
-        "cluster": {"name": cluster_name},
-        "custom_fields": custom_fields,
-    }
+        vm["proxmox_endpoint_id"] = endpoint_id
+    return vm
 
 
 def test_selected_snapshot_scope_uses_exact_netbox_owner_in_lookup(monkeypatch):

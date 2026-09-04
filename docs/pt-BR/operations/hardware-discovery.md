@@ -89,26 +89,6 @@ emitido. Códigos:
 | `host_key_mismatch` | Host-key do nó não bate com o fingerprint fixado. Credenciais NÃO são enviadas. |
 | `hardware_discovery_failed: <exc>` | Catch-all para qualquer outra exceção. |
 
-## Custom fields no NetBox
-
-Os custom fields de hardware discovery fazem parte do inventario canonico de
-custom fields do Proxbox em `proxbox_api/services/custom_fields.py`. O
-bootstrap de startup e `POST /extras/custom-fields/reconcile` usam esse mesmo
-inventario:
-
-| Campo | Objeto | Tipo |
-|---|---|---|
-| `hardware_chassis_serial` | `dcim.device` | text |
-| `hardware_chassis_manufacturer` | `dcim.device` | text |
-| `hardware_chassis_product` | `dcim.device` | text |
-| `nic_speed_gbps` | `dcim.interface` | integer |
-| `nic_duplex` | `dcim.interface` | text |
-| `nic_link` | `dcim.interface` | boolean |
-
-As escritas passam pelo PATCH com drift-detect existente
-(`netbox_rest.rest_patch_async`), então um segundo sync consecutivo bem-sucedido
-não gera nenhum `extras.ObjectChange` para esses campos.
-
 ## Endereços MAC de NICs físicas
 
 A descoberta é o único caminho capaz de preencher o MAC de uma NIC **física**.
@@ -121,9 +101,8 @@ reconcilia o valor pelo mesmo helper
 de node-network para MACs de bridge/bond — de modo que ambos produzem linhas
 `dcim.MACAddress` idênticas e definem `primary_mac_address`.
 
-Este é um campo **nativo** do NetBox, não um custom field, portanto não é
-afetado pelo gate `custom_fields_enabled`. Uma falha de MAC é registrada como
-warning e nunca aborta a execução da descoberta.
+Este é um campo nativo do NetBox. Uma falha de MAC é registrada como warning e
+nunca aborta a execução da descoberta.
 
 A gravação de MAC exige duas opções explícitas na UI do NetBox:
 `hardware_discovery_enabled=true` **e**

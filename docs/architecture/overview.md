@@ -165,11 +165,8 @@ evidence exists. Read-only planning and preflight are unaffected.
 The NetBox plugin owns typed Proxbox sync-state sidecars under
 `/api/plugins/proxbox/sync-state/*`. These typed sidecars are now the
 **standard** source of truth for the Proxmox-to-NetBox linkage: `proxbox-api`
-writes and reads them during sync. The legacy reflection custom fields are
-**deprecated** and gated behind the `custom_fields_enabled` plugin setting,
-which defaults to `false` — so by default no custom fields are written, read, or
-reconciled, and the sidecars stand alone. `proxbox-api` writes these rows during
-sync:
+writes and reads them during sync. The legacy custom-field integration has been
+removed. `proxbox-api` writes these rows during sync:
 
 - `ProxboxVirtualMachineSyncState` extends `virtualization.VirtualMachine`.
 - `ProxboxDeviceSyncState` extends `dcim.Device`.
@@ -177,41 +174,25 @@ sync:
 - `ProxboxVirtualDiskSyncState` extends `virtualization.VirtualDisk`.
 - `ProxboxVMInterfaceSyncState` extends `virtualization.VMInterface`.
 
-The sidecars carry the same synchronized data that historically lived only in
-custom fields, including VM Proxmox identity, device/cluster timestamps,
+The sidecars carry VM Proxmox identity, device/cluster timestamps,
 VM-interface bridge links, virtual-disk storage links, and VM last-run ids.
 Writes use the existing NetBox session and degrade gracefully when an older
 plugin does not expose the sidecar API.
 
 **Scope note.** `proxbox-api` populates typed sidecars for the five core object
 types listed above (VM, device, cluster, virtual disk, VM interface), which hold
-all Proxmox identity and linkage data. The supporting objects synced during a run
-(cluster types, manufacturers, device types, device roles, sites) only ever
-carried a `proxmox_last_updated` reflection timestamp in custom fields; with
-`custom_fields_enabled=false` (the default) that stamp is no longer written, and
-the plugin's typed sidecar models for those supporting objects are not populated
-by the backend today. This is intentional — supporting objects carry no
-Proxmox-to-NetBox linkage — and dropping the stamp has no effect on sync
-identity, orphan detection, or reconciliation. Enable `custom_fields_enabled` if
-you still need the legacy supporting-object timestamp during a transition.
+all Proxmox identity and linkage data. Supporting objects such as cluster types,
+manufacturers, device types, device roles, and sites have no typed sidecar because
+they carry no Proxmox-to-NetBox linkage.
 
-`proxbox-api` reads the sidecars for custom-field-dependent state. VM identity
-and orphan-sweep last-run checks use the typed sidecar rows. With
-`custom_fields_enabled=false` (the default) there is **no** legacy `cf_*`
-fallback — reads are sidecar-only, and because the sidecars are rebuilt from
-live Proxmox data on each sync, a normal re-sync re-adopts existing NetBox VMs
-even when the custom fields are already gone. Setting
-`custom_fields_enabled=true` restores the legacy behavior for a transition
-period (dual-writing custom fields and using the `cf_*` read fallback), and
-every custom-field code path then emits a deprecation warning. VM role ownership
-uses the typed sidecar's `proxmox_last_synced_role_id`; the deprecated same-named
-custom field is consulted only during an enabled transition. Unavailable,
-failed, or conflicting snapshot reads preserve the current role without claiming
-ownership. Required snapshot writes retry three times; after an exhausted
-response, an authoritative typed re-read accepts a confirmed commit or restores
-and verifies both the previous role and previous snapshot before the VM is
-reported failed. Full custom-field retirement remains a later migration item;
-no custom-field data is deleted while the flag exists.
+VM identity and orphan-sweep last-run checks use only typed sidecar rows. Because
+the sidecars are rebuilt from live Proxmox data on each sync, a normal re-sync
+re-adopts existing NetBox VMs after an upgrade. VM role ownership uses the typed
+sidecar's `proxmox_last_synced_role_id`. Unavailable, failed, or conflicting
+snapshot reads preserve the current role without claiming ownership. Required
+snapshot writes retry three times; after an exhausted response, an authoritative
+typed re-read accepts a confirmed commit or restores and verifies both the
+previous role and previous snapshot before the VM is reported failed.
 
 ### `NetBoxEndpoint`
 

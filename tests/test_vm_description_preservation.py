@@ -20,8 +20,6 @@ they happen to share, because sharing is precisely what was missing.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 
 from proxbox_api.proxmox_to_netbox.description_metadata import (
@@ -78,7 +76,6 @@ def _individual(config: dict) -> dict:
         device_id=1,
         role_id=1,
         tag_ids=[1],
-        last_updated=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
 
 

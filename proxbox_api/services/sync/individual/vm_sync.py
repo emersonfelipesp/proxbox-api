@@ -22,10 +22,6 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
-from proxbox_api.services.custom_fields import (
-    legacy_custom_field_fallback_query,
-    legacy_custom_fields_payload,
-)
 from proxbox_api.services.name_collision import resolve_unique_vm_name
 from proxbox_api.services.proxmox.tag_styles import fetch_tag_color_map
 from proxbox_api.services.proxmox_helpers import (
@@ -50,6 +46,7 @@ from proxbox_api.services.sync.sync_state_reader import (
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_machine_sync_state
 from proxbox_api.services.sync.tag_resolver import resolve_proxmox_tag_ids
+from proxbox_api.services.sync.virtual_machines import build_virtual_machine_sync_state_fields
 from proxbox_api.services.sync.vm_create import ensure_vm_platform
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
@@ -61,10 +58,7 @@ from proxbox_api.services.sync.vm_helpers import (
     stamp_vm_last_run_id,
     to_mapping,
 )
-from proxbox_api.services.sync.vmid_helpers import (
-    extract_proxmox_endpoint_id,
-    extract_proxmox_session_endpoint_id,
-)
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_session_endpoint_id
 
 
 def _mb_from_bytes(value: object) -> int:
@@ -85,17 +79,6 @@ def _status_value(value: object) -> str:
     a NetBox payload that is normalized again downstream.
     """
     return ProxmoxToNetBoxVMStatus.from_proxmox(value or "active").value
-
-
-def _as_bool(value: object) -> bool:
-    """Convert value to boolean."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
 
 
 async def _resolve_individual_proxmox_tag_ids(
@@ -126,6 +109,7 @@ async def _apply_name_collision_resolution(
     cluster_name: str,
     vmid: int,
     netbox_vm_payload: dict,
+    endpoint_id: int | None,
 ) -> None:
     """Resolve VM name collisions in-place on `netbox_vm_payload`.
 
@@ -147,6 +131,7 @@ async def _apply_name_collision_resolution(
         cluster_name=cluster_name,
         vmid=vmid,
         netbox_vm_payload=netbox_vm_payload,
+        endpoint_id=endpoint_id,
     )
     if sidecar_existing:
         existing_vm_by_vmid[vmid] = sidecar_existing
@@ -197,15 +182,6 @@ def _build_cluster_vm_name_state(
         vm_name = vm_dict.get("name")
         if isinstance(vm_name, str) and vm_name:
             used_names_in_cluster.add(vm_name)
-        cf = vm_dict.get("custom_fields")
-        if not isinstance(cf, dict):
-            continue
-        try:
-            raw_vmid = int(str(cf.get("proxmox_vm_id") or 0).strip())
-        except (TypeError, ValueError):
-            raw_vmid = 0
-        if raw_vmid:
-            existing_vm_by_vmid[raw_vmid] = vm_dict
     return used_names_in_cluster, existing_vm_by_vmid
 
 
@@ -216,22 +192,16 @@ async def _resolve_sidecar_existing_vm_for_name_collision(
     cluster_name: str,
     vmid: int,
     netbox_vm_payload: dict,
+    endpoint_id: int | None,
 ) -> dict[str, object] | None:
-    endpoint_id = extract_proxmox_endpoint_id(netbox_vm_payload)
-    vm_query: dict[str, object] = {"cf_proxmox_vm_id": vmid}
-    if endpoint_id is not None:
-        vm_query["cf_proxmox_endpoint_id"] = endpoint_id
-    else:
-        vm_query["cluster_id"] = cluster_id
     try:
         existing_resolution = await resolve_virtual_machine_by_sync_state(
             nb,
             proxmox_vm_id=vmid,
             endpoint_id=endpoint_id,
             cluster_id=cluster_id if endpoint_id is None else None,
-            fallback_query=legacy_custom_field_fallback_query(vm_query),
         )
-    except Exception as exc:  # noqa: BLE001 - collision handling can fall back to CF snapshot
+    except Exception as exc:  # noqa: BLE001 - collision handling remains best effort
         logger.debug(
             "Sidecar VM lookup for individual name collision failed: "
             "cluster=%s vmid=%s endpoint_id=%s error=%s",
@@ -256,17 +226,11 @@ async def _lookup_existing_vm_for_dry_run(
 ) -> object | None:
     """Resolve an existing VM for dry-run output without guessing ambiguous vmids."""
     cluster_id = await resolve_netbox_cluster_id_by_name(nb, cluster_name)
-    vm_query: dict[str, object] = {"cf_proxmox_vm_id": vmid}
-    if endpoint_id is not None:
-        vm_query["cf_proxmox_endpoint_id"] = endpoint_id
-    elif cluster_id is not None:
-        vm_query["cluster_id"] = cluster_id
     existing = await resolve_virtual_machine_by_sync_state(
         nb,
         proxmox_vm_id=vmid,
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
-        fallback_query=legacy_custom_field_fallback_query(vm_query),
     )
     return existing.record if existing is not None else None
 
@@ -278,10 +242,6 @@ def _build_netbox_vm_payload(
     device_id: int | None,
     role_id: int | None,
     tag_ids: list[int],
-    last_updated: datetime,
-    cluster_name: str | None = None,
-    proxmox_url: str | None = None,
-    endpoint_id: int | None = None,
     virtual_machine_type_id: int | None = None,
     site_id: int | None = None,
     platform_id: int | None = None,
@@ -290,11 +250,6 @@ def _build_netbox_vm_payload(
     vm_type = str(resource.get("type", "qemu")).lower()
     if vm_type not in ("qemu", "lxc"):
         vm_type = "qemu"
-
-    onboot = config.get("onboot", 0) if config else 0
-    agent = config.get("agent", 0) if config else 0
-    unprivileged = config.get("unprivileged", 0) if config else 0
-    searchdomain = config.get("searchdomain", None) if config else None
 
     maxcpu = int(resource.get("maxcpu") or 0)
     maxmem = resource.get("maxmem")
@@ -313,25 +268,6 @@ def _build_netbox_vm_payload(
 
     status = _status_value(resource.get("status", "stopped"))
     node = resource.get("node", "unknown")
-    proxmox_status = str(resource.get("status", "stopped"))
-
-    vm_custom_fields: dict[str, object] = {
-        "proxmox_vm_id": int(resource.get("vmid") or 0),
-        "proxmox_vm_type": vm_type,
-        "proxmox_start_at_boot": _as_bool(onboot),
-        "proxmox_unprivileged_container": _as_bool(unprivileged),
-        "proxmox_qemu_agent": _as_bool(agent),
-        "proxmox_search_domain": searchdomain,
-        "proxmox_node": node,
-        "proxmox_status": proxmox_status,
-        "proxmox_last_updated": last_updated.isoformat(),
-        "proxmox_endpoint_id": endpoint_id,
-    }
-    if cluster_name:
-        vm_custom_fields["proxmox_cluster"] = cluster_name
-    if proxmox_url:
-        vmid = int(resource.get("vmid") or 0)
-        vm_custom_fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{vmid}"
 
     # Same rule as the bulk builder: the Proxmox note is the description, the
     # placeholder is only the fallback, and the full note goes to ``comments``.
@@ -353,7 +289,6 @@ def _build_netbox_vm_payload(
         "memory": memory_mb,
         "disk": disk_mb,
         "tags": tag_ids,
-        "custom_fields": vm_custom_fields,
         "description": description_text,
     }
     if comments_text is not None:
@@ -391,7 +326,7 @@ async def sync_vm_individual(
         vmid: Proxmox VM ID.
         dry_run: If True, return what would be synced without making changes.
         overwrite_flags: Per-field overwrite gates for existing VM updates.
-        run_id: Optional UUID stamped on the VM's proxbox_last_run_id custom field.
+        run_id: Optional UUID stamped on the VM's typed sync-state sidecar.
             When omitted, a fresh UUID is generated. Pass a shared UUID to make
             related individual syncs share the same stamp.
 
@@ -496,21 +431,12 @@ async def sync_vm_individual(
         px_url = f"https://{px_domain}:{px_port}" if px_domain else None
 
         clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
-        vm_lookup = {
-            key: value
-            for key, value in {
-                "cf_proxmox_vm_id": vmid,
-                "cf_proxmox_endpoint_id": endpoint_id,
-                "cluster_id": cluster_id if endpoint_id is None else None,
-            }.items()
-            if value is not None
-        }
+        vm_lookup = {"id": 0}
         existing_resolution = await resolve_virtual_machine_by_sync_state(
             nb,
             proxmox_vm_id=vmid,
             endpoint_id=endpoint_id,
             cluster_id=cluster_id,
-            fallback_query=legacy_custom_field_fallback_query(vm_lookup),
             fail_on_ambiguous=True,
         )
         existing_vms = [existing_resolution.record] if existing_resolution is not None else []
@@ -560,10 +486,6 @@ async def sync_vm_individual(
             device_id=device_id,
             role_id=role_id,
             tag_ids=merged_tag_ids,
-            last_updated=now,
-            cluster_name=cluster_name,
-            proxmox_url=px_url,
-            endpoint_id=endpoint_id,
             virtual_machine_type_id=vm_type_id,
             site_id=site_id,
             platform_id=platform_id,
@@ -577,6 +499,7 @@ async def sync_vm_individual(
             cluster_name=cluster_name,
             vmid=vmid,
             netbox_vm_payload=netbox_vm_payload,
+            endpoint_id=endpoint_id,
         )
 
         existing_record = (
@@ -605,11 +528,7 @@ async def sync_vm_individual(
             nb,
             "/api/virtualization/virtual-machines/",
             lookup=vm_lookup,
-            payload=legacy_custom_fields_payload(
-                netbox_vm_payload,
-                overwrite=(overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields),
-                context="legacy VM custom-field payload",
-            ),
+            payload=netbox_vm_payload,
             schema=NetBoxVirtualMachineCreateBody,
             patchable_fields=patchable_fields,
             current_normalizer=lambda record: normalize_current_virtual_machine_payload(
@@ -627,13 +546,20 @@ async def sync_vm_individual(
             if isinstance(virtual_machine, dict)
             else getattr(virtual_machine, "id", None)
         )
-        custom_fields = netbox_vm_payload.get("custom_fields")
+        sync_state_fields = build_virtual_machine_sync_state_fields(
+            proxmox_resource=proxmox_resource,
+            proxmox_config=proxmox_config,
+            last_updated=now,
+            cluster_name=cluster_name,
+            proxmox_url=px_url,
+            endpoint_id=endpoint_id,
+        )
         await persist_sync_state_with_role_compensation(
             nb,
             persistence=write_virtual_machine_sync_state(
                 nb,
                 virtual_machine_id=virtual_machine_id,
-                custom_fields=custom_fields if isinstance(custom_fields, dict) else None,
+                custom_fields=sync_state_fields,
                 overwrite_custom_fields=(
                     overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
                 ),
@@ -725,7 +651,7 @@ async def sync_vm_with_related(
         dry_run: If True, don't make changes.
         sync_interfaces: Whether to sync interfaces.
         sync_task_history: Whether to sync task history.
-        run_id: Optional UUID stamped on the VM's proxbox_last_run_id custom field.
+        run_id: Optional UUID stamped on the VM's typed sync-state sidecar.
 
     Returns:
         Dict with VM result and related sync results.

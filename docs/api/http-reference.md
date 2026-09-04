@@ -9,7 +9,7 @@ For full request and response schemas, use the runtime OpenAPI at `/docs`.
 - `GET /` - Service metadata and links.
 - `GET /version` - Backend service version for external cache invalidation.
 - `GET /cache` - Inspect the in-memory cache snapshot.
-- `GET /clear-cache` - Clear in-memory caches, including the NetBox GET cache and the custom-field reconcile cache.
+- `GET /clear-cache` - Clear in-memory NetBox GET and application caches.
 - `GET /cache/metrics` - JSON snapshot of cache, reconciliation, and aggregate auth-lockout metrics, including failure-row count and in-flight/orphan reservation gauges.
 - `GET /cache/metrics/prometheus` - Prometheus text-format exposition of the same label-free metric families for scrape jobs.
 
@@ -657,8 +657,7 @@ Test coverage:
 
 Every sync stage route that writes NetBox objects first reconciles the NetBox-side
 support objects Proxbox owns — the Proxbox tag, cluster type, manufacturer, generic
-device type, device role, VM roles, VM types, and the custom-field inventory
-(including `proxmox_last_updated`). This runs through
+device type, device role, VM roles, and VM types. This runs through
 `ensure_netbox_sync_dependencies`, declared as a **route-level** dependency
 (`dependencies=[Depends(...)]`) rather than as a handler parameter: FastAPI solves
 route-level dependencies before the path operation's own parameters, so the support
@@ -674,40 +673,8 @@ Routes that run it:
 
 The device and storage routes matter most: the plugin's stage order starts with
 `devices` and then `storage`, so on a fresh installation a stage-by-stage sync reaches
-them before anything else. Without the bootstrap, NetBox rejects every write with
-`Custom field 'proxmox_last_updated' does not exist for this object type`, and the
-`device_roles -> clusters -> device_types -> devices` chain then fails with misleading
-downstream errors (`manufacturer: This field is required`, `device_type/role: This
-field is required`). The startup bootstrap does not cover this on a fresh install,
-because at process start no NetBox endpoint exists yet and the pass is skipped.
-
-When a bootstrap custom field cannot be reconciled, the resulting HTTP 400
-(`{"reason": "custom_field_sync_failed"}`) names, per failed field, its
-`expected_type`, its `expected_object_types`, and a `remedy` string. NetBox refuses to
-change the type of an existing custom field, so a field pre-created with the wrong type
-blocks the bootstrap until it is deleted and recreated; the remedy says so, and warns
-that deleting a custom field discards the values stored in it.
-
-The exception `message` names every failed field but quotes each *distinct* remedy at
-most once, and at most three of them — a bad API token fails the whole inventory at
-once, and one remedy per field would put kilobytes into an SSE frame, an HTTP error
-body and a long-lived NetBox job log. When remedies are withheld the message says how
-many and points at `detail.failed_fields`, which always carries the complete per-field
-set.
-
-The same enrichment reaches the **startup bootstrap** path. `run_netbox_bootstrap()`
-captures per-entry failures into `BootstrapStatus.warnings` rather than aborting, and a
-warning for a `custom_field:<name>` entry now carries `expected_type` and `remedy`
-alongside `object` and `error`; the accompanying log line quotes the remedy. That is the
-line an operator actually reads when a wrong-typed field blocks the bootstrap, so the
-guidance has to be there and not only on the extras route. Warnings for non-custom-field
-entries (tags, cluster types, device roles) are unchanged.
-
-Each entry's `error` is capped at 2000 characters — a single NetBox error can embed a
-whole response document, and the payload travels in an SSE frame and an HTTP error
-body. A capped value says so and points at the service log, which still receives the
-untruncated text. Classification runs against the **full** error, so a type-change
-refusal buried past the cap is still recognized as one.
+them before anything else. The startup bootstrap does not cover this on a fresh
+install because no NetBox endpoint exists yet and the pass is skipped.
 
 Adding a new route that writes NetBox objects means adding the same route-level
 dependency and extending `tests/test_stage_route_bootstrap.py`.
@@ -854,16 +821,11 @@ Headers:
 
 ## Extras Routes (`/extras`)
 
-- `POST /extras/custom-fields/reconcile`
 - `GET /extras/bootstrap-status`
-- `GET /extras/extras/custom-fields/create`
 
-`POST /extras/custom-fields/reconcile` is the supported operator recovery
-route for missing or drifted NetBox custom fields. It bypasses the
-process-local custom-field cache, re-reads live NetBox, and reconciles the
-canonical Proxbox custom-field inventory. `GET /extras/bootstrap-status`
-returns the last startup NetBox bootstrap status and warnings. The legacy
-double-prefix GET route remains available for backward compatibility.
+`GET /extras/bootstrap-status` returns the last startup NetBox bootstrap status
+and warnings. Proxbox custom-field creation and reconciliation routes have been
+removed; reflection state is stored only in typed netbox-proxbox sidecars.
 
 ## Proxbox Plugin Config Routes
 

@@ -498,16 +498,12 @@ Headers:
 
 ## Rotas Extras (`/extras`)
 
-- `POST /extras/custom-fields/reconcile`
 - `GET /extras/bootstrap-status`
-- `GET /extras/extras/custom-fields/create`
 
-`POST /extras/custom-fields/reconcile` e a rota suportada de recuperacao para
-custom fields ausentes ou com drift no NetBox. Ela ignora o cache local de
-custom fields, le o NetBox ao vivo e reconcilia o inventario canonico do
-Proxbox. `GET /extras/bootstrap-status` retorna o ultimo status de bootstrap
-do NetBox e seus warnings. A rota GET legada com prefixo duplo continua
-disponivel por compatibilidade.
+`GET /extras/bootstrap-status` retorna o ultimo status de bootstrap do NetBox
+e seus warnings. As rotas de criacao e reconciliacao de custom fields do
+Proxbox foram removidas; o estado de reflexao e armazenado somente nos sidecars
+tipados do netbox-proxbox.
 
 ## Rotas de configuracao do plugin Proxbox
 

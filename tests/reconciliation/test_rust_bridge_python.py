@@ -22,11 +22,15 @@ def _prepared_vm() -> PreparedVMState:
             "cluster": 1,
             "device": 10,
             "memory": 2048,
-            "custom_fields": {"proxmox_vm_id": 100, "proxmox_vm_type": "qemu"},
         },
-        lookup={"cf_proxmox_vm_id": 100, "cluster_id": 1},
+        lookup={"id": 0},
         now=datetime.now(timezone.utc),
         vm_type="qemu",
+        sync_state_fields={
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 100,
+            "proxmox_vm_type": "qemu",
+        },
     )
 
 
@@ -43,7 +47,7 @@ def test_rust_bridge_availability_reflects_native_extension(monkeypatch) -> None
 def test_build_bridge_input_uses_serializable_prepared_subset() -> None:
     payload = rust_bridge.build_bridge_input(
         prepared_vms=[_prepared_vm()],
-        netbox_snapshot=[{"id": 2000, "custom_fields": {"proxmox_vm_id": 100}}],
+        netbox_snapshot=[{"id": 2000, "proxmox_vm_id": 100}],
         flags={"overwrite_vm_role": True},
     )
 
@@ -52,14 +56,14 @@ def test_build_bridge_input_uses_serializable_prepared_subset() -> None:
     assert bridge_vm.cluster_name == "cluster-a"
     assert bridge_vm.resource["vmid"] == 100
     assert bridge_vm.desired_payload["cluster"] == 1
-    assert bridge_vm.lookup == {"cf_proxmox_vm_id": 100, "cluster_id": 1}
+    assert bridge_vm.lookup == {"id": 0}
     assert bridge_vm.vm_type == "qemu"
 
 
 def test_dump_bridge_input_json_returns_compact_bytes() -> None:
     output = rust_bridge.dump_bridge_input_json(
         prepared_vms=[_prepared_vm()],
-        netbox_snapshot=[{"id": 2000, "custom_fields": {"proxmox_vm_id": 100}}],
+        netbox_snapshot=[{"id": 2000, "proxmox_vm_id": 100}],
         flags={
             "overwrite_vm_role": True,
             "overwrite_vm_type": True,
@@ -79,9 +83,13 @@ def test_dump_bridge_input_json_returns_compact_bytes() -> None:
             "cluster": 1,
             "device": 10,
             "memory": 2048,
-            "custom_fields": {"proxmox_vm_id": 100, "proxmox_vm_type": "qemu"},
         },
-        "lookup": {"cf_proxmox_vm_id": 100, "cluster_id": 1},
+        "sync_state_fields": {
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 100,
+            "proxmox_vm_type": "qemu",
+        },
+        "lookup": {"id": 0},
         "vm_type": "qemu",
     }
     assert "vm_config" not in decoded["prepared_vms"][0]

@@ -37,7 +37,7 @@ docs/
 │   └── scheduler-container.md
 ├── operations/                 # Operational guides
 │   ├── database.md             # SQLite target/auth guard, startup/runtime locks, key binding, migration, recovery
-│   ├── custom-fields.md        # Custom-field reconcile and recovery procedure
+│   ├── custom-fields.md        # Custom-field retirement and upgrade notes
 │   ├── firecracker.md          # Firecracker host-agent provisioning
 │   └── hardware-discovery.md   # Hardware discovery and DCIM sync
 └── pt-BR/                      # Brazilian Portuguese translations

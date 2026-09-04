@@ -76,7 +76,6 @@ def _current_guest_interface(record: dict[str, object]) -> dict[str, object]:
         "enabled": record.get("enabled"),
         "mtu": record.get("mtu"),
         "tags": record.get("tags"),
-        "custom_fields": record.get("custom_fields"),
     }
 
 
@@ -318,7 +317,6 @@ async def reconcile_guest_vm_interfaces(
             "enabled": True,
             "mtu": _int_or_none(guest_iface.get("mtu")),
             "tags": tag_refs,
-            "custom_fields": {},
         }
         guest_record = await _best_effort_reconcile(
             nb,
