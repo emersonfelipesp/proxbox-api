@@ -13,7 +13,7 @@ Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code 
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
+Current pairing: `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.13`.
 `proxbox-api 0.0.20` adds NetBox 4.6.6 certification, strict Python 3.12/3.13
 support, FIPS-safe tag hashing, bounded release matrices, and immutable
 Gitea-first release/deployment evidence.
