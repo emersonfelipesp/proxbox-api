@@ -26,9 +26,9 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ### Companion repos (cross-link map)
 
-- **`netbox-proxbox` v0.0.21** — the NetBox plugin that consumes this backend.
+- **`netbox-proxbox` v0.0.24** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.22 ... proxbox-api 0.0.19.post5 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.10`.
+  pairing is `netbox-proxbox 0.0.24 ... proxbox-api 0.0.20 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.13`.
   `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
   RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
   VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
@@ -267,7 +267,7 @@ while the Docker container is healthy on port `18800`.
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.13` (external PyPI package), `netbox-sdk==0.0.10` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`
+- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.13` (external PyPI package), `netbox-sdk==0.0.13` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`. The service continues to pass `NETBOX_SCHEMA_VERSION = "4.6"` explicitly because its certified deployment matrix ends at NetBox 4.6.6; the SDK's 4.7 fallback default is therefore not selected.
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 

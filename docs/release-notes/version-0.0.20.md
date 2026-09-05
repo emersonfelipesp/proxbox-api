@@ -1,7 +1,7 @@
 # Version 0.0.20
 
 proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
-`proxmox-sdk 0.0.13`, and `netbox-sdk 0.0.10`. The package supports Python
+`proxmox-sdk 0.0.13`, and `netbox-sdk 0.0.13`. The package supports Python
 3.12 and 3.13 and certifies its NetBox integration through NetBox 4.6.6.
 
 ## Compatibility and reliability
@@ -9,7 +9,9 @@ proxbox-api `0.0.20` pairs with `netbox-proxbox 0.0.24`,
 - Adds NetBox 4.6.6 to the generated custom-field object-type and E2E
   compatibility matrices.
 - Keeps the package resolver bounded to supported Python 3.12 and 3.13
-  runtimes while retaining the released `netbox-sdk 0.0.10` client.
+  runtimes while upgrading to `netbox-sdk 0.0.13`. The service explicitly
+  selects the NetBox 4.6 schema used by its certified deployment matrix, so the
+  SDK's new NetBox 4.7 fallback default does not change live client behavior.
 - Makes deterministic Proxmox tag styling work in FIPS environments by marking
   the non-security MD5 use explicitly.
 - Generates the large E2E matrix through a tested Python helper, with pull
