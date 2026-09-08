@@ -340,8 +340,8 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert captured_payload_kwargs["site_id"] == 44
     assert captured_payload_kwargs["tenant_id"] == 55
     assert captured_payload_kwargs["tag_ids"] == [5, 7]
-    assert captured_payload_kwargs["proxmox_url"] == "https://pve.example:8006"
-    assert captured_payload_kwargs["endpoint_id"] == 1
+    assert prepared.sync_state_fields["proxmox_link"] == "https://pve.example:8006/#v1:0:=qemu/101"
+    assert prepared.sync_state_fields["proxmox_endpoint_id"] == 1
     assert ensure_device_calls
     assert role_reconcile_calls
     assert context.node_device_cache[("cluster-a", "pve01")].id == 22

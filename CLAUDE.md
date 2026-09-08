@@ -169,8 +169,15 @@ Open the nearest scoped guide for the code you are changing.
 
 ### Runtime flow
 
-1. `proxbox_api.app.factory.create_app()` initializes database state, builds the default NetBox session, and records bootstrap status.
-2. The app registers generated Proxmox proxy routes during lifespan startup and wires shared middleware, routers, and exception handlers.
+1. `proxbox_api.app.factory.create_app()` builds the application object and wires shared
+   middleware, routers, and exception handlers. It deliberately resolves **no** database or
+   NetBox configuration: importing or constructing the app must never touch the filesystem or
+   the network, so configuration errors surface at startup rather than at import time.
+2. The lifespan handler owns all runtime state. It calls `bootstrap.init_database_and_netbox()`,
+   validates the authentication lockout identity key, registers generated Proxmox proxy routes,
+   builds the default NetBox session, and records bootstrap status. On shutdown it always
+   disposes the database engines, so a subsequent lifespan in the same process re-establishes
+   its own state instead of inheriting a disposed one.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.

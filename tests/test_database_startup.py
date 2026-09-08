@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import inspect
 from sqlmodel import Session
 
@@ -27,6 +28,11 @@ from proxbox_api.database import (
     SQLiteDatabaseTarget,
     resolve_database_target,
     verify_sqlite_target,
+)
+from proxbox_api.services.auth_lockout import (
+    LockoutConfigurationError,
+    clear_runtime_auth_lockout_identity_key,
+    validate_auth_lockout_identity_key,
 )
 
 
@@ -759,6 +765,21 @@ def test_application_construction_does_not_resolve_database_configuration(
     assert database.sqlite_url is None
     assert database.engine is None
     assert database.async_engine is None
+
+
+def test_lifespan_reestablishes_identity_key_after_previous_owner_disposes() -> None:
+    _dispose_runtime()
+    application = factory.create_app()
+    clear_runtime_auth_lockout_identity_key()
+
+    with TestClient(application):
+        validate_auth_lockout_identity_key()
+
+    with pytest.raises(
+        LockoutConfigurationError,
+        match="authentication lockout identity key was not validated during startup",
+    ):
+        validate_auth_lockout_identity_key()
 
 
 def test_database_aware_cors_uses_endpoints_loaded_during_lifespan() -> None:
