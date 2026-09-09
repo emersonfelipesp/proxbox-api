@@ -509,8 +509,8 @@ async def full_update_sync_stream(  # noqa: C901
     dry_run: bool = Query(
         default=False,
         description=(
-            "Preview destructive end-of-run cleanup. When true, orphan VMs are "
-            "reported as would_delete events and no DELETE requests are sent."
+            "Preview end-of-run orphan marking. When true, orphan VMs are "
+            "reported as would_delete events and no PATCH requests are sent."
         ),
     ),
     netbox_branch_schema_id: Annotated[

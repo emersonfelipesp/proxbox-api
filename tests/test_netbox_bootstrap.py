@@ -257,13 +257,15 @@ async def test_run_netbox_bootstrap_creates_full_inventory_on_empty_netbox(
     assert status.patched == []
     assert status.unchanged == []
 
-    # 1 Proxbox tag + 4 discovery tags + 1 cluster_type + 1 manufacturer +
-    # 1 device_type + 1 device_role + 3 VM roles + 2 VM types = 14 objects.
-    assert len(status.created) == 14
+    # 1 Proxbox tag + 1 soft-delete tag + 4 discovery tags + 1 cluster_type +
+    # 1 manufacturer + 1 device_type + 1 device_role + 3 VM roles + 2 VM
+    # types = 15 objects.
+    assert len(status.created) == 15
 
     # Key entries from each category must appear in the created list.
     labels = set(status.created)
     assert "tag:Proxbox" in labels
+    assert "tag:proxbox-soft-deleted" in labels
     assert "tag:proxbox-discovered-qemu" in labels
     assert "tag:proxbox-discovered-lxc" in labels
     assert "tag:proxbox-discovered-cluster" in labels
@@ -388,8 +390,8 @@ async def test_run_netbox_bootstrap_captures_per_entry_failures(
     warning = status.warnings[0]
     assert warning["object"] == "tag:Proxbox"
     assert "403" in warning["error"]
-    # The remaining 13 inventory entries must still have been created.
-    assert len(status.created) == 13
+    # The remaining 14 inventory entries must still have been created.
+    assert len(status.created) == 14
     assert "tag:proxbox-discovered-qemu" in status.created
     assert "tag:proxbox-discovered-lxc" in status.created
     assert "cluster_type:proxmox" in status.created
@@ -515,5 +517,5 @@ async def test_run_netbox_bootstrap_skips_vm_types_on_old_netbox(
 
     assert status.ok is True
     assert not any(label.startswith("vm_type:") for label in status.created)
-    # The other 12 support objects must still be created.
-    assert len(status.created) == 12
+    # The other 13 support objects must still be created.
+    assert len(status.created) == 13

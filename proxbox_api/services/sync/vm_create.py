@@ -32,6 +32,7 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.orphan_sweep import clear_soft_delete_marker
 from proxbox_api.services.sync.role_resolution import (
     apply_role_snapshot_policy,
     persist_sync_state_with_role_compensation,
@@ -430,6 +431,7 @@ async def create_or_update_virtual_machine(
         strict_lookup=True,
         existing_record=existing_resolution.record if existing_resolution is not None else None,
     )
+    await clear_soft_delete_marker(netbox_session, virtual_machine)
 
     logger.debug("Created/updated virtual machine: %s", virtual_machine)
 

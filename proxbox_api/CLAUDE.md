@@ -70,6 +70,14 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 6. Route handlers translate those workflows into HTTP, SSE, or WebSocket responses.
 7. Generated Proxmox routes are mounted at lifespan startup and may fail open or fail closed depending on `PROXBOX_STRICT_STARTUP`.
 
+## Orphan VM lifecycle
+
+`services/sync/orphan_sweep.py` treats `delete_orphans` as a reversible marker
+workflow. Enabled full updates PATCH stale Proxbox-discovered QEMU/LXC records
+with `status=decommissioning` and the `proxbox-soft-deleted` tag; they never
+call NetBox DELETE. Re-adoption clears only that marker and preserves all other
+tags. The paired NetBox plugin owns the permission-gated human bulk-delete page.
+
 ## Extension Guidance
 
 - Keep route modules thin and move reusable logic into services or utility modules.

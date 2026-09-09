@@ -86,6 +86,15 @@ DISCOVERY_TAG_VM_LXC = "proxbox-discovered-lxc"
 DISCOVERY_TAG_CLUSTER = "proxbox-discovered-cluster"
 DISCOVERY_TAG_NODE = "proxbox-discovered-node"
 
+# Automatic orphan handling is reversible. The plugin uses this marker for its
+# human-only purge page; synchronization never deletes the marked VM record.
+SOFT_DELETE_TAG_NAME = "Proxbox: Soft-deleted VM"
+SOFT_DELETE_TAG_SLUG = "proxbox-soft-deleted"
+SOFT_DELETE_TAG_COLOR = "d32f2f"
+SOFT_DELETE_TAG_DESCRIPTION = (
+    "Proxbox VM or LXC container marked for human review before NetBox deletion."
+)
+
 DISCOVERY_TAG_SLUGS: tuple[str, ...] = (
     DISCOVERY_TAG_VM_QEMU,
     DISCOVERY_TAG_VM_LXC,

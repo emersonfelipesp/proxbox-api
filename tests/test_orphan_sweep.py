@@ -6,15 +6,17 @@ from typing import Any
 
 import pytest
 
+from proxbox_api import netbox_rest
 from proxbox_api.constants import DISCOVERY_TAG_VM_LXC, DISCOVERY_TAG_VM_QEMU
 from proxbox_api.exception import ProxboxException
 from proxbox_api.schemas.stream_messages import ItemOperation
 from proxbox_api.services.sync import orphan_sweep, sync_state_reader
 from proxbox_api.services.sync.orphan_sweep import (
-    delete_orphan_vms,
+    clear_soft_delete_marker,
     extract_touched_vm_ids,
     find_orphan_vms,
     run_orphan_vm_sweep,
+    soft_delete_orphan_vms,
 )
 from proxbox_api.services.sync.sync_state_reader import SidecarVMOrphanScan
 
@@ -96,11 +98,11 @@ async def test_run_orphan_vm_sweep_does_not_delete_when_sidecar_scan_transiently
             sidecar_read_failed=True,
         )
 
-    async def _unexpected_delete(*_args: Any, **_kwargs: Any) -> int:
-        raise AssertionError("transient sidecar scan failure must not delete")
+    async def _unexpected_delete(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        raise AssertionError("transient sidecar scan failure must not patch")
 
     monkeypatch.setattr(orphan_sweep, "scan_vm_sidecar_orphan_candidates", _fake_sidecar_scan)
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _unexpected_delete)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _unexpected_delete)
 
     result = await run_orphan_vm_sweep(object(), run_id="current-run", enabled=True)
 
@@ -109,53 +111,133 @@ async def test_run_orphan_vm_sweep_does_not_delete_when_sidecar_scan_transiently
 
 
 @pytest.mark.asyncio
-async def test_delete_orphan_vms_deletes_candidates_and_emits_progress(
+async def test_soft_delete_orphan_vms_patches_candidates_and_emits_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    deleted_ids: list[int] = []
+    patched: list[tuple[int, dict[str, object]]] = []
 
-    async def _fake_delete(_nb: object, path: str, ids: list[int]) -> int:
+    async def _fake_patch(
+        _nb: object, path: str, record_id: int, payload: dict[str, object]
+    ) -> dict[str, object]:
         assert path == orphan_sweep.VIRTUAL_MACHINES_PATH
-        deleted_ids.extend(ids)
-        return len(ids)
+        patched.append((record_id, payload))
+        return payload
 
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _fake_delete)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _fake_patch)
     bridge = _Bridge()
 
-    result = await delete_orphan_vms(
+    result = await soft_delete_orphan_vms(
         object(),
         [_vm(1, "stale-a"), _vm(2, "stale-b", tag_slug=DISCOVERY_TAG_VM_LXC)],
         run_id="current-run",
         stream=bridge,
+        soft_delete_tag_id=77,
     )
 
-    assert deleted_ids == [1, 2]
+    assert patched == [
+        (1, {"status": "decommissioning", "tags": [{"slug": DISCOVERY_TAG_VM_QEMU}, {"id": 77}]}),
+        (2, {"status": "decommissioning", "tags": [{"slug": DISCOVERY_TAG_VM_LXC}, {"id": 77}]}),
+    ]
     assert result == {
         "run_id": "current-run",
         "dry_run": False,
         "candidates": 2,
-        "deleted": 2,
+        "deleted": 0,
+        "soft_deleted": 2,
         "failed": 0,
         "skipped": 0,
     }
     assert [event["operation"] for event in bridge.item_progress] == [
-        ItemOperation.DELETED,
-        ItemOperation.DELETED,
+        ItemOperation.UPDATED,
+        ItemOperation.UPDATED,
     ]
-    assert bridge.phase_summary[-1]["deleted"] == 2
+    assert bridge.phase_summary[-1]["updated"] == 2
 
 
 @pytest.mark.asyncio
-async def test_delete_orphan_vms_dry_run_emits_would_delete_without_delete(
+async def test_clear_soft_delete_marker_preserves_other_tags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _unexpected_delete(*_args: Any, **_kwargs: Any) -> int:
-        raise AssertionError("dry-run must not delete")
+    patches: list[tuple[int, dict[str, object]]] = []
 
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _unexpected_delete)
+    async def _fake_patch(
+        _nb: object, path: str, record_id: int, payload: dict[str, object]
+    ) -> dict[str, object]:
+        assert path == orphan_sweep.VIRTUAL_MACHINES_PATH
+        patches.append((record_id, payload))
+        return payload
+
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _fake_patch)
+
+    record = _vm(5, "re-adopted", tag_slug=DISCOVERY_TAG_VM_QEMU)
+    record["tags"] = [
+        {"id": 10, "slug": DISCOVERY_TAG_VM_QEMU},
+        {"id": 11, "slug": "customer-owned"},
+        {"id": 12, "slug": "proxbox-soft-deleted"},
+    ]
+
+    await clear_soft_delete_marker(object(), record)
+
+    assert patches == [
+        (
+            5,
+            {
+                "tags": [
+                    {"id": 10},
+                    {"id": 11},
+                ]
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_orphan_vm_sweep_ensures_marker_before_patching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patched: list[tuple[int, dict[str, object]]] = []
+
+    async def _fake_find(_nb: object, _run_id: str) -> list[dict[str, object]]:
+        return [_vm(7, "stale")]
+
+    async def _fake_tag(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        return {"id": 77}
+
+    async def _fake_patch(
+        _nb: object, _path: str, record_id: int, payload: dict[str, object]
+    ) -> dict[str, object]:
+        patched.append((record_id, payload))
+        return payload
+
+    monkeypatch.setattr(orphan_sweep, "find_orphan_vms", _fake_find)
+    monkeypatch.setattr(netbox_rest, "ensure_tag_async", _fake_tag)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _fake_patch)
+
+    result = await run_orphan_vm_sweep(object(), run_id="current-run", enabled=True)
+
+    assert result["soft_deleted"] == 1
+    assert patched == [
+        (
+            7,
+            {
+                "status": "decommissioning",
+                "tags": [{"slug": DISCOVERY_TAG_VM_QEMU}, {"id": 77}],
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_orphan_vms_dry_run_emits_would_delete_without_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _unexpected_patch(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        raise AssertionError("dry-run must not patch")
+
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _unexpected_patch)
     bridge = _Bridge()
 
-    result = await delete_orphan_vms(
+    result = await soft_delete_orphan_vms(
         object(),
         [_vm(1, "preview-a"), _vm(2, "preview-b")],
         run_id="current-run",
@@ -173,16 +255,18 @@ async def test_delete_orphan_vms_dry_run_emits_would_delete_without_delete(
 
 
 @pytest.mark.asyncio
-async def test_delete_orphan_vms_skips_not_found_delete_errors(
+async def test_soft_delete_orphan_vms_skips_not_found_patch_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_delete(_nb: object, _path: str, _ids: list[int]) -> int:
+    async def _fake_patch(
+        _nb: object, _path: str, _record_id: int, _payload: dict[str, object]
+    ) -> dict[str, object]:
         raise ProxboxException(message="NetBox REST request failed", detail="404 not found")
 
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _fake_delete)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _fake_patch)
     bridge = _Bridge()
 
-    result = await delete_orphan_vms(
+    result = await soft_delete_orphan_vms(
         object(),
         [_vm(1, "already-gone")],
         run_id="current-run",
@@ -196,17 +280,19 @@ async def test_delete_orphan_vms_skips_not_found_delete_errors(
 
 
 @pytest.mark.asyncio
-async def test_delete_orphan_vms_raises_on_hard_delete_errors(
+async def test_soft_delete_orphan_vms_raises_on_patch_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_delete(_nb: object, _path: str, _ids: list[int]) -> int:
+    async def _fake_patch(
+        _nb: object, _path: str, _record_id: int, _payload: dict[str, object]
+    ) -> dict[str, object]:
         raise RuntimeError("permission denied")
 
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _fake_delete)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _fake_patch)
     bridge = _Bridge()
 
     with pytest.raises(ProxboxException, match="Error while sweeping orphan"):
-        await delete_orphan_vms(
+        await soft_delete_orphan_vms(
             object(),
             [_vm(1, "blocked")],
             run_id="current-run",
@@ -218,17 +304,17 @@ async def test_delete_orphan_vms_raises_on_hard_delete_errors(
 
 
 @pytest.mark.asyncio
-async def test_delete_orphan_vms_aborts_when_candidate_was_touched_this_run(
+async def test_soft_delete_orphan_vms_aborts_when_candidate_was_touched_this_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _unexpected_delete(*_args: Any, **_kwargs: Any) -> int:
-        raise AssertionError("stamp invariant failure must abort before deleting")
+    async def _unexpected_patch(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        raise AssertionError("stamp invariant failure must abort before patching")
 
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _unexpected_delete)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _unexpected_patch)
     bridge = _Bridge()
 
     with pytest.raises(ProxboxException, match="invariant failed"):
-        await delete_orphan_vms(
+        await soft_delete_orphan_vms(
             object(),
             [_vm(42, "bad-candidate", run_id=None)],
             run_id="current-run",
@@ -267,7 +353,7 @@ async def test_run_orphan_vm_sweep_dry_run_previews_when_disabled(
         raise AssertionError("dry-run must not delete")
 
     monkeypatch.setattr(orphan_sweep, "find_orphan_vms", _fake_find)
-    monkeypatch.setattr(orphan_sweep, "rest_bulk_delete_async", _unexpected_delete)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _unexpected_delete)
 
     result = await run_orphan_vm_sweep(
         object(),

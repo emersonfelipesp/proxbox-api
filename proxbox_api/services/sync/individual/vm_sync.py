@@ -35,6 +35,7 @@ from proxbox_api.services.sync.discovery_tags import (
 )
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
+from proxbox_api.services.sync.orphan_sweep import clear_soft_delete_marker
 from proxbox_api.services.sync.role_resolution import (
     apply_role_snapshot_policy,
     persist_sync_state_with_role_compensation,
@@ -540,6 +541,7 @@ async def sync_vm_individual(
                 existing_resolution.record if existing_resolution is not None else None
             ),
         )
+        await clear_soft_delete_marker(nb, virtual_machine)
 
         virtual_machine_id = (
             virtual_machine.get("id")

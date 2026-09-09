@@ -38,6 +38,10 @@ from proxbox_api.constants import (
     DISCOVERY_TAG_NODE,
     DISCOVERY_TAG_VM_LXC,
     DISCOVERY_TAG_VM_QEMU,
+    SOFT_DELETE_TAG_COLOR,
+    SOFT_DELETE_TAG_DESCRIPTION,
+    SOFT_DELETE_TAG_NAME,
+    SOFT_DELETE_TAG_SLUG,
     VM_ROLE_MAPPINGS,
     VM_TYPE_MAPPINGS,
 )
@@ -124,6 +128,12 @@ _DISCOVERY_TAGS: tuple[dict[str, str], ...] = (
         "slug": DISCOVERY_TAG_NODE,
         "color": "9c27b0",
         "description": "Proxmox node first discovered by Proxbox (apply-on-create-only).",
+    },
+    {
+        "name": SOFT_DELETE_TAG_NAME,
+        "slug": SOFT_DELETE_TAG_SLUG,
+        "color": SOFT_DELETE_TAG_COLOR,
+        "description": SOFT_DELETE_TAG_DESCRIPTION,
     },
 )
 

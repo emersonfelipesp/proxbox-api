@@ -209,6 +209,23 @@ VMs that will never be synced.
 
 When `overwrite_vm_tags=False` (the default), the VM sync merges Proxmox-derived tags with the user-managed NetBox tags already on the object instead of replacing them. The `Proxbox` tag is always retained so the plugin can identify objects it owns. Setting `overwrite_vm_tags=True` switches to a destructive replacement that drops any tags the sync did not produce. The same merge-vs-replace contract applies to the cluster, storage, node-interface, and IP tag groups via `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, and `overwrite_ip_tags`. See [Overwrite Flags](./overwrite-flags.md).
 
+## Orphan VM handling
+
+The `delete_orphans` setting and `PROXBOX_DELETE_ORPHANS` environment override
+control the end-of-run orphan scan. When disabled, the scan does not query or
+mutate NetBox. When enabled, a QEMU VM or LXC container that was discovered by
+Proxbox but not touched by the current run is updated, never deleted: the
+backend sets `status=decommissioning` and adds the `proxbox-soft-deleted` tag.
+Existing tags are preserved. A dry-run reports the candidates without sending
+PATCH requests.
+
+If the guest reappears in Proxmox, normal VM reconciliation clears the marker
+while preserving every other tag. The paired NetBox plugin's **Soft-deleted
+VMs** page is the only supported hard-delete path for these records. It is
+permission-gated, applies the marker and status filter on both selected and
+“all matching” bulk operations, and requires the operator to confirm deletion
+in NetBox. The operation removes NetBox inventory only; it never calls Proxmox.
+
 ### Cloud-init key reflection
 
 For QEMU VMs that boot with cloud-init, the VM sync reflects the configured

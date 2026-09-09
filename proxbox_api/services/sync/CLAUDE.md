@@ -224,6 +224,17 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   surfacing VM failure. Thus response loss cannot become a false operator lock
   on the next pass. Typed sidecar reads are the only ownership-evidence path.
 
+## Orphan VM sweep
+
+`orphan_sweep.py` is the only owner of end-of-run orphan handling. Its enabled
+path preserves the complete tag set, sets `status=decommissioning`, and adds
+the `proxbox-soft-deleted` marker; it never hard-deletes a NetBox VM. Dry-run
+does not send PATCH requests. `vm_create.py` and the individual VM sync call
+`clear_soft_delete_marker()` after successful reconciliation so a reappearing
+guest becomes live without losing unrelated operator tags. The marker and
+status are the contract consumed by the paired NetBox plugin's human-only
+purge page.
+
 ## Extension Guidance
 
 - Keep sync routines idempotent where possible.
