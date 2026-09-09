@@ -8,6 +8,7 @@ from sqlmodel import Session
 
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxmoxAPIError
+from proxbox_api.session.proxmox_core import ProxmoxSession, ProxmoxWebSocketAuth, SensitiveString
 
 
 def _make_endpoint(db_engine) -> int:
@@ -67,8 +68,48 @@ class _ChainableResource:
 class _FakePx:
     """Minimal fake ProxmoxSession returned by _open_session."""
 
-    def __init__(self, data: dict, exc: Exception | None = None):
+    def __init__(
+        self,
+        data: dict,
+        exc: Exception | None = None,
+        websocket_auth: ProxmoxWebSocketAuth | None = None,
+    ):
         self.session = _ChainableResource(data, exc)
+        self._websocket_auth = websocket_auth or ProxmoxWebSocketAuth(
+            kind="authorization", value="PVEAPIToken=test@pve!console=secret"
+        )
+
+    async def get_websocket_auth(self) -> ProxmoxWebSocketAuth:
+        return self._websocket_auth
+
+
+class _PasswordSession:
+    async def get_tokens(self) -> tuple[str, str]:
+        return "PVE:user@pam:session", "csrf-token"
+
+
+async def test_session_builds_api_token_websocket_auth() -> None:
+    session = ProxmoxSession()
+    session.user = "operator@pve"
+    session.token_name = "console"
+    session.token_value = SensitiveString("token-secret")
+
+    auth = await session.get_websocket_auth()
+
+    assert auth.kind == "authorization"
+    assert auth.value == "PVEAPIToken=operator@pve!console=token-secret"
+    assert "token-secret" not in repr(auth)
+
+
+async def test_session_builds_password_cookie_websocket_auth() -> None:
+    session = ProxmoxSession()
+    session.session = _PasswordSession()  # type: ignore[assignment]
+
+    auth = await session.get_websocket_auth()
+
+    assert auth.kind == "cookie"
+    assert auth.value == "PVEAuthCookie=PVE:user@pam:session"
+    assert "PVE:user@pam:session" not in repr(auth)
 
 
 def test_novnc_qemu_returns_200_with_ws_url(auth_test_client, db_engine):
@@ -102,6 +143,10 @@ def test_novnc_qemu_returns_200_with_ws_url(auth_test_client, db_engine):
     assert data["proxmox_port"] == 8006
     assert data["console_type"] == "novnc"
     assert data["verify_ssl"] is False
+    assert data["websocket_auth"] == {
+        "kind": "authorization",
+        "value": "PVEAPIToken=test@pve!console=secret",
+    }
 
 
 def test_term_lxc_returns_200(auth_test_client, db_engine):
@@ -131,6 +176,38 @@ def test_term_lxc_returns_200(auth_test_client, db_engine):
     assert data["console_type"] == "term"
     assert data["ws_url"].startswith("wss://")
     assert "vncwebsocket" in data["ws_url"]
+    assert data["websocket_auth"]["kind"] == "authorization"
+
+
+def test_password_session_returns_cookie_auth(auth_test_client, db_engine):
+    endpoint_id = _make_endpoint(db_engine)
+    fake_px = _FakePx(
+        {"ticket": "VNCTICKET", "port": 5900},
+        websocket_auth=ProxmoxWebSocketAuth(
+            kind="cookie", value="PVEAuthCookie=PVE:user@pam:session"
+        ),
+    )
+
+    with patch(
+        "proxbox_api.routes.proxmox.console._open_session",
+        new=AsyncMock(return_value=fake_px),
+    ):
+        resp = auth_test_client.post(
+            "/proxmox/console/sessions",
+            json={
+                "endpoint_id": endpoint_id,
+                "vmid": 100,
+                "node": "pve01",
+                "vm_type": "qemu",
+                "console_type": "novnc",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["websocket_auth"] == {
+        "kind": "cookie",
+        "value": "PVEAuthCookie=PVE:user@pam:session",
+    }
 
 
 def test_missing_endpoint_returns_404(auth_test_client):

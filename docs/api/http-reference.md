@@ -346,6 +346,12 @@ Attempting to create a second endpoint returns HTTP 400 with:
 
 ## Proxmox Routes (`/proxmox`)
 
+### Browser Console Session
+
+`POST /proxmox/console/sessions` creates the short-lived upstream session used by the trusted nms-backend console relay. The request selects an exact endpoint, node, VMID, workload type, and console type. QEMU supports `novnc` and `term`; LXC supports `term` only.
+
+The response contains the one-time VNC ticket URL, endpoint TLS policy, and a bounded `websocket_auth` object. `websocket_auth.kind` is `authorization` for a Proxmox API-token endpoint or `cookie` for a password-session endpoint. Its `value` is sensitive service-to-service transport material. nms-backend stores it in its one-use Redis relay ticket and attaches it only to the upstream WebSocket handshake; it must never be returned to browser JavaScript or written to logs.
+
 ### Endpoint configuration CRUD
 
 - `POST /proxmox/endpoints`

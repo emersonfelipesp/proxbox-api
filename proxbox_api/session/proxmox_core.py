@@ -7,8 +7,9 @@ import inspect
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from types import TracebackType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
@@ -40,6 +41,14 @@ class SensitiveString:
 
     def get(self) -> str | None:
         return self._value
+
+
+@dataclass(frozen=True, slots=True)
+class ProxmoxWebSocketAuth:
+    """One server-side authentication value for a Proxmox WebSocket upgrade."""
+
+    kind: Literal["authorization", "cookie"]
+    value: str = field(repr=False)
 
 
 def _proxmox_api_factory() -> type[ProxmoxSDK]:
@@ -337,6 +346,29 @@ class ProxmoxSession:
                 python_exception=f"{error}",
                 redact_log_details=True,
             ) from error
+
+    async def get_websocket_auth(self) -> ProxmoxWebSocketAuth:
+        """Return the active API-token header or password-session cookie.
+
+        This value is sensitive transport material. Callers must keep it on a
+        trusted service-to-service path and must never log or expose it to a
+        browser client.
+        """
+        token_value = self._get_token_value()
+        if self.user and self.token_name and token_value:
+            return ProxmoxWebSocketAuth(
+                kind="authorization",
+                value=f"PVEAPIToken={self.user}!{self.token_name}={token_value}",
+            )
+        if self.session is None:
+            raise ProxboxException(message="Proxmox session is not connected.")
+        try:
+            ticket, _csrf_token = await self.session.get_tokens()
+        except RuntimeError as error:
+            raise ProxboxException(
+                message="The Proxmox session cannot authenticate a WebSocket connection."
+            ) from error
+        return ProxmoxWebSocketAuth(kind="cookie", value=f"PVEAuthCookie={ticket}")
 
     @staticmethod
     async def _close_abandoned_sdk(sdk: ProxmoxSDK | None) -> None:

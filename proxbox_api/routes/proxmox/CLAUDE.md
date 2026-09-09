@@ -18,6 +18,7 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
 - `__init__.py`: Proxmox route handlers for sessions, storage, top-level resource access, and typed VM config helpers.
 - `access.py`: Proxmox API token info (GET) and token regeneration (PUT) endpoints (PVE 9.2+).
 - `cluster.py`: Proxmox cluster endpoints and cluster response schemas.
+- `console.py`: Authenticated service-to-service console-session creation. It obtains the Proxmox VNC/terminal ticket and returns the upstream `wss://` URL, TLS policy, and exactly one private WebSocket authentication value (`authorization` for API-token endpoints or `cookie` for password sessions). The consumer must keep this material in a server-side one-use relay ticket; never expose it to browser JavaScript or logs.
 - `datacenter.py`: Custom CPU models CRUD and datacenter options endpoints (PVE 9.2+).
 - `endpoints.py`: Proxmox endpoint CRUD handlers. The create/update/public
   schemas carry `access_methods` (`api` default / `api_ssh`) and the default-off
