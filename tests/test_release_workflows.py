@@ -696,6 +696,27 @@ def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
     assert "github.event_name == 'push'" in parsed["jobs"]["push-to-github"]["if"]
 
 
+def test_gitea_package_publication_links_an_exact_release_manifest():
+    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
+    steps = parsed["jobs"]["publish-gitea"]["steps"]
+    names = [step["name"] for step in steps]
+    manifest_step = next(
+        step for step in steps if step["name"] == "Publish repository-linked release manifest"
+    )
+    source = str(manifest_step["run"])
+
+    assert names.index("Publish to Gitea Package Registry") < names.index(
+        "Publish repository-linked release manifest"
+    )
+    assert names.index("Publish repository-linked release manifest") < names.index(
+        "Verify package in Gitea registry"
+    )
+    assert "scripts/release_artifacts.py manifest" in source
+    assert "scripts/release_artifacts.py publish-manifest" in source
+    assert '--owner emersonfelipesp --repository proxbox-api' in source
+    assert manifest_step["env"]["GITEA_PACKAGE_TOKEN"] == "${{ secrets.PKG_TOKEN }}"
+
+
 def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
     tmp_path: Path,
 ) -> None:
