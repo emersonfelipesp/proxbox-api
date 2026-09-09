@@ -134,29 +134,14 @@ jobs:
           test ! -e "${BOOTSTRAP_ROOT}"
           mkdir -m 0700 "${BOOTSTRAP_ROOT}"
           if ! command -v uv >/dev/null 2>&1; then
-            UV_ARCHIVE="${UV_ARCHIVE}" UV_URL="${UV_URL}" UV_SHA256="${UV_SHA256}" \
-              python3 - <<'PY'
-          import hashlib
-          import os
-          import urllib.request
-
-          archive = os.environ["UV_ARCHIVE"]
-          expected = os.environ["UV_SHA256"]
-          request = urllib.request.Request(
-              os.environ["UV_URL"], headers={"User-Agent": "proxbox-api-release"}
-          )
-          with urllib.request.urlopen(request, timeout=120) as response:
-              payload = response.read(100 * 1024 * 1024 + 1)
-          if len(payload) > 100 * 1024 * 1024:
-              raise SystemExit("uv release archive exceeds the 100 MiB safety limit")
-          actual = hashlib.sha256(payload).hexdigest()
-          if actual != expected:
-              raise SystemExit(f"uv release archive checksum mismatch: {actual}")
-          with open(archive, "xb") as output:
-              output.write(payload)
-          PY
+            curl --proto '=https' --tlsv1.2 --fail --location \
+              --silent --show-error --max-filesize 104857600 \
+              --output "${UV_ARCHIVE}" "${UV_URL}"
+            printf '%s  %s\n' "${UV_SHA256}" "${UV_ARCHIVE}" \
+              | sha256sum --check --strict
             tar -xzf "${UV_ARCHIVE}" -C "${BOOTSTRAP_ROOT}" \
-              --strip-components=1 uv-x86_64-unknown-linux-gnu/uv
+              --no-same-owner --strip-components=1 \
+              uv-x86_64-unknown-linux-gnu/uv
             chmod 0755 "${BOOTSTRAP_ROOT}/uv"
             export PATH="${BOOTSTRAP_ROOT}:${PATH}"
             echo "${BOOTSTRAP_ROOT}" >> "${GITHUB_PATH}"

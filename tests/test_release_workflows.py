@@ -660,11 +660,13 @@ def _assert_user_space_uv_bootstrap(step: dict[str, object]) -> None:
         "uv-x86_64-unknown-linux-gnu.tar.gz",
         "releases.astral.sh/github/uv/releases/download/0.11.28",
         "e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224",
-        "hashlib.sha256(payload).hexdigest()",
         'test "$(uname -m)" = "x86_64"',
-        "100 * 1024 * 1024",
+        "--proto '=https' --tlsv1.2 --fail --location",
+        "--max-filesize 104857600",
+        "sha256sum --check --strict",
+        "--no-same-owner --strip-components=1",
     )
-    forbidden = ("python3 -m venv", "apt-get", "curl")
+    forbidden = ("python3 -m venv", "apt-get", "urllib.request")
     assert all(token in source for token in required)
     assert all(token not in source for token in forbidden)
 
