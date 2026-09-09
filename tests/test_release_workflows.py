@@ -594,13 +594,15 @@ def test_release_sdist_uses_a_pinned_network_free_docker_contract():
     verifier = _load_offline_sdist_verifier()
     assert verifier.validate_dockerfile(dockerfile) == sorted(verifier.PINNED_IMAGES)
     assert "COPY docker/build-cache /root/.cache/uv" in dockerfile
-    assert "uv sync --frozen --offline --no-index --find-links" in dockerfile
+    assert f"RUN {preparer.OFFLINE_SYNC_COMMAND}" in dockerfile
+    assert f"RUN {preparer.PROJECT_INSTALL_COMMAND}" in dockerfile
     assert not any(
         token in f" {dockerfile.lower().replace(chr(10), ' ')} "
         for token in (" apk ", " apt-get ", " curl ", " wget ", " git clone ")
     )
     assert "include docker/offline-build-inputs.json" in manifest
     assert "recursive-include docker/build-cache *.whl" in manifest
+    assert "include docker/build-cache/offline-requirements.txt" in manifest
     assert "sort_keys=True" in preparer_source
     assert '"schema": 2' in preparer_source
     assert "PINNED_IMAGES" in preparer_source
@@ -643,15 +645,21 @@ def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members
 
     def make_sdist(path: Path, dockerfile: bytes, *, hostile_link: bool = False) -> None:
         wheel = b"wheel-bytes"
+        requirements = b"package==1.0 --hash=sha256:" + b"2" * 64 + b"\n"
         uv_lock = b"version = 1\n"
         lock = {
             "dockerfile_sha256": hashlib.sha256(dockerfile).hexdigest(),
             "files": [
                 {
+                    "path": "docker/build-cache/offline-requirements.txt",
+                    "sha256": hashlib.sha256(requirements).hexdigest(),
+                    "size": len(requirements),
+                },
+                {
                     "path": "docker/build-cache/package-1.0-py3-none-any.whl",
                     "sha256": hashlib.sha256(wheel).hexdigest(),
                     "size": len(wheel),
-                }
+                },
             ],
             "images": sorted(verifier.PINNED_IMAGES),
             "schema": 2,
@@ -660,6 +668,7 @@ def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members
         files = {
             "Dockerfile": dockerfile,
             "docker/build-cache/package-1.0-py3-none-any.whl": wheel,
+            "docker/build-cache/offline-requirements.txt": requirements,
             "docker/offline-build-inputs.json": (
                 json.dumps(lock, sort_keys=True, separators=(",", ":")).encode() + b"\n"
             ),
@@ -689,8 +698,8 @@ def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members
             f"FROM {verifier.PINNED_IMAGES[0]} AS raw\n"
             "COPY --from=uv-source /uv /usr/local/bin/uv\n"
             "COPY docker/build-cache /root/.cache/uv\n"
-            "RUN uv sync --frozen --offline --no-index --find-links "
-            "/root/.cache/uv --no-dev --no-editable\n"
+            f"RUN {verifier.OFFLINE_SYNC_COMMAND}\n"
+            f"RUN {verifier.PROJECT_INSTALL_COMMAND}\n"
         ).encode(),
     )
     output = verifier.extract_and_verify(accepted, tmp_path / "accepted", version)
@@ -740,13 +749,15 @@ def test_offline_release_preparer_binds_exact_inputs(tmp_path: Path, monkeypatch
         f"FROM {preparer.PINNED_IMAGES[0]} AS raw\n"
         "COPY --from=uv-source /uv /usr/local/bin/uv\n"
         "COPY docker/build-cache /root/.cache/uv\n"
-        "RUN uv sync --frozen --offline --no-index --find-links "
-        "/root/.cache/uv --no-dev --no-editable\n"
+        f"RUN {preparer.OFFLINE_SYNC_COMMAND}\n"
+        f"RUN {preparer.PROJECT_INSTALL_COMMAND}\n"
     )
     dockerfile_source.write_text(dockerfile, encoding="utf-8")
     uv_lock.write_text("version = 1\n", encoding="utf-8")
     wheel = cache_root / "dependency-1.0-py3-none-any.whl"
     wheel.write_bytes(b"immutable wheel")
+    requirements = cache_root / preparer.REQUIREMENTS_NAME
+    requirements.write_bytes(b"dependency==1.0 --hash=sha256:" + b"3" * 64 + b"\n")
 
     monkeypatch.setattr(preparer, "REPOSITORY_ROOT", tmp_path)
     monkeypatch.setattr(preparer, "DOCKERFILE_SOURCE", dockerfile_source)
@@ -758,6 +769,7 @@ def test_offline_release_preparer_binds_exact_inputs(tmp_path: Path, monkeypatch
     lock = preparer.prepare()
 
     expected_wheel_sha = hashlib.sha256(b"immutable wheel").hexdigest()
+    expected_requirements = b"dependency==1.0 --hash=sha256:" + b"3" * 64 + b"\n"
     assert dockerfile_output.read_text(encoding="utf-8") == dockerfile
     assert lock == {
         "dockerfile_sha256": hashlib.sha256(dockerfile.encode()).hexdigest(),
@@ -766,7 +778,12 @@ def test_offline_release_preparer_binds_exact_inputs(tmp_path: Path, monkeypatch
                 "path": "docker/build-cache/dependency-1.0-py3-none-any.whl",
                 "sha256": expected_wheel_sha,
                 "size": len(b"immutable wheel"),
-            }
+            },
+            {
+                "path": "docker/build-cache/offline-requirements.txt",
+                "sha256": hashlib.sha256(expected_requirements).hexdigest(),
+                "size": len(expected_requirements),
+            },
         ],
         "images": sorted(preparer.PINNED_IMAGES),
         "schema": 2,
@@ -787,7 +804,10 @@ def test_offline_release_preparer_rejects_non_wheel_cache_content(
     monkeypatch.setattr(preparer, "REPOSITORY_ROOT", tmp_path)
     monkeypatch.setattr(preparer, "CACHE_ROOT", cache_root)
 
-    with pytest.raises(preparer.OfflineReleaseError, match="wheels only"):
+    with pytest.raises(
+        preparer.OfflineReleaseError,
+        match="wheels and its requirements file only",
+    ):
         preparer._cache_inventory()
 
 
