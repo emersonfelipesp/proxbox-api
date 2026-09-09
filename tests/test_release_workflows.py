@@ -2597,3 +2597,49 @@ def test_public_files_name_no_private_infrastructure():
                 relative = path.relative_to(REPO_ROOT)
                 offenders.append(f"{relative}:{number}: {fragment}: {line.strip()}")
     assert offenders == []
+
+
+def test_release_manifest_ignores_the_build_tool_marker(tmp_path):
+    """`uv build` leaves a `.gitignore` in its output directory.
+
+    It is tooling state rather than a release artifact, and `ls` hides it, so
+    counting it fails the release with a message describing a directory the
+    operator cannot see anything wrong with.
+    """
+    release_artifacts = _load_release_artifacts()
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / ".gitignore").write_text("*\n", encoding="utf-8")
+    (dist / "proxbox_api-9.9.9-py3-none-any.whl").write_bytes(b"wheel")
+    (dist / "proxbox_api-9.9.9.tar.gz").write_bytes(b"sdist")
+
+    manifest = release_artifacts.create_manifest(
+        dist=dist,
+        package="proxbox_api",
+        version="9.9.9",
+        source_sha="0" * 40,
+    )
+
+    assert [entry["name"] for entry in manifest["artifacts"]] == [
+        "proxbox_api-9.9.9-py3-none-any.whl",
+        "proxbox_api-9.9.9.tar.gz",
+    ]
+
+
+def test_release_manifest_still_rejects_a_stray_artifact(tmp_path):
+    """Ignoring the marker must not weaken the exactly-two-artifacts rule."""
+    release_artifacts = _load_release_artifacts()
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / ".gitignore").write_text("*\n", encoding="utf-8")
+    (dist / "proxbox_api-9.9.9-py3-none-any.whl").write_bytes(b"wheel")
+    (dist / "proxbox_api-9.9.9.tar.gz").write_bytes(b"sdist")
+    (dist / "proxbox_api-9.9.8.tar.gz").write_bytes(b"stale sdist")
+
+    with pytest.raises(release_artifacts.ReleaseArtifactError):
+        release_artifacts.create_manifest(
+            dist=dist,
+            package="proxbox_api",
+            version="9.9.9",
+            source_sha="0" * 40,
+        )

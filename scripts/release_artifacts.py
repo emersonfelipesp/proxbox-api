@@ -64,7 +64,13 @@ def create_manifest(*, dist: Path, package: str, version: str, source_sha: str) 
     """Describe exactly one wheel and one source distribution."""
     if SHA_RE.fullmatch(source_sha) is None:
         raise ReleaseArtifactError("Source SHA must be canonical lowercase 40-hex")
-    files = sorted(path for path in dist.iterdir() if path.is_file())
+    # `uv build` drops a `.gitignore` marker into its output directory. It is
+    # tooling state rather than a release artifact, and `ls` hides it, so
+    # counting it here fails the release with a message that describes a
+    # directory the operator cannot see anything wrong with.
+    files = sorted(
+        path for path in dist.iterdir() if path.is_file() and not path.name.startswith(".")
+    )
     wheel = [path for path in files if path.name.endswith(".whl")]
     sdist = [path for path in files if path.name.endswith(".tar.gz")]
     if len(files) != 2 or len(wheel) != 1 or len(sdist) != 1:
