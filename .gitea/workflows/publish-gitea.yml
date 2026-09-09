@@ -62,9 +62,13 @@ jobs:
             git -c credential.helper= -c http.extraHeader= fetch \
             --no-tags --depth=1 origin "refs/tags/${TAG}"
           RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
-          test "${RESOLVED_SHA}" = "${GITHUB_SHA}"
+          case "${GITHUB_EVENT_NAME}" in
+            push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}" ;;
+            workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main" ;;
+            *) exit 1 ;;
+          esac
           git checkout --detach "${RESOLVED_SHA}"
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${RESOLVED_SHA}"
 
       - id: extract
         name: Extract and validate version
@@ -110,9 +114,13 @@ jobs:
             git -c credential.helper= -c http.extraHeader= fetch \
             --no-tags --depth=1 origin "refs/tags/${TAG}"
           RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
-          test "${RESOLVED_SHA}" = "${GITHUB_SHA}"
+          case "${GITHUB_EVENT_NAME}" in
+            push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}" ;;
+            workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main" ;;
+            *) exit 1 ;;
+          esac
           git checkout --detach "${RESOLVED_SHA}"
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${RESOLVED_SHA}"
 
       - name: Install build tools
         run: |
@@ -258,9 +266,13 @@ jobs:
             git -c credential.helper= -c http.extraHeader= fetch \
             --no-tags --depth=1 origin "refs/tags/${TAG}"
           RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
-          test "${RESOLVED_SHA}" = "${GITHUB_SHA}"
+          case "${GITHUB_EVENT_NAME}" in
+            push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}" ;;
+            workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main" ;;
+            *) exit 1 ;;
+          esac
           git checkout --detach "${RESOLVED_SHA}"
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "${RESOLVED_SHA}"
 
       - name: Push tag to GitHub
         run: |

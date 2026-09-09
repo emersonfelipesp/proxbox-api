@@ -646,9 +646,12 @@ def _assert_exact_public_tag_checkout(step: dict[str, object]) -> None:
         "--no-tags --depth=1",
         '"refs/tags/${TAG}"',
         "FETCH_HEAD^{commit}",
+        'case "${GITHUB_EVENT_NAME}"',
+        'push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}"',
+        'workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main"',
+        'test "$(git rev-parse HEAD)" = "${RESOLVED_SHA}"',
     )
     assert all(token in source for token in required)
-    assert source.count('= "${GITHUB_SHA}"') == 2
 
 
 def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
