@@ -1,8 +1,9 @@
-# Version 0.0.21
+# Version 0.0.21.post1
 
-proxbox-api `0.0.21` pairs with `netbox-proxbox 0.0.26.post1`,
+proxbox-api `0.0.21.post1` pairs with `netbox-proxbox 0.0.26.post1`,
 `proxmox-sdk 0.0.13`, and `netbox-sdk 0.0.13`. The package supports Python
-3.12 and 3.13.
+3.12 and 3.13. The post release is required because the historical `v0.0.21`
+tag was already assigned to an unrelated earlier commit and remains immutable.
 
 ## Console relay authentication
 
@@ -38,6 +39,6 @@ proxbox-api `0.0.21` pairs with `netbox-proxbox 0.0.26.post1`,
 
 ## Upgrade
 
-Deploy the exact `proxbox-api 0.0.21` package from the Gitea Package Registry,
-verify `/health`, and validate QEMU noVNC, QEMU terminal, and LXC terminal
-sessions through the NMS same-origin relay.
+Deploy the exact `proxbox-api 0.0.21.post1` package from the Gitea Package
+Registry, verify `/health`, and validate QEMU noVNC, QEMU terminal, and LXC
+terminal sessions through the NMS same-origin relay.
