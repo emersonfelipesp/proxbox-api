@@ -172,8 +172,8 @@ def _console_ticket(raw: object, req: ConsoleSessionRequest) -> tuple[str, int]:
     if "data" in data and isinstance(data["data"], dict):
         data = data["data"]
     ticket = data.get("ticket")
-    port = data.get("port")
-    if isinstance(ticket, str) and ticket and isinstance(port, int):
+    port = _console_port(data.get("port"))
+    if isinstance(ticket, str) and ticket and port is not None:
         return ticket, port
     logger.error(
         "console: unexpected Proxmox response for %s/%s/%s",
@@ -182,6 +182,19 @@ def _console_ticket(raw: object, req: ConsoleSessionRequest) -> tuple[str, int]:
         req.vmid,
     )
     raise HTTPException(status_code=502, detail="Proxmox did not return a ticket/port.")
+
+
+def _console_port(value: object) -> int | None:
+    """Normalize Proxmox's integer or decimal-string console port."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        port = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal():
+        port = int(value)
+    else:
+        return None
+    return port if 1 <= port <= 65535 else None
 
 
 async def _console_websocket_auth(px: ProxmoxSession, endpoint_id: int) -> ConsoleWebSocketAuth:

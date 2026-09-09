@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from sqlmodel import Session
 
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxmoxAPIError
+from proxbox_api.routes.proxmox import console
 from proxbox_api.session.proxmox_core import ProxmoxSession, ProxmoxWebSocketAuth, SensitiveString
 
 
@@ -365,6 +367,35 @@ def test_term_qemu_returns_200(auth_test_client, db_engine):
     assert data["console_type"] == "term"
     assert data["ticket"] == "TERMQEMU789"
     assert data["ws_url"].startswith("wss://")
+
+
+def test_production_numeric_string_port_is_normalized(auth_test_client, db_engine):
+    """Proxmox may encode a console port as a decimal JSON string."""
+    endpoint_id = _make_endpoint(db_engine)
+    fake_px = _FakePx({"ticket": "STRINGPORT", "port": "5904"})
+
+    with patch(
+        "proxbox_api.routes.proxmox.console._open_session",
+        new=AsyncMock(return_value=fake_px),
+    ):
+        resp = auth_test_client.post(
+            "/proxmox/console/sessions",
+            json={
+                "endpoint_id": endpoint_id,
+                "vmid": 301,
+                "node": "pve03",
+                "vm_type": "qemu",
+                "console_type": "term",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["port"] == 5904
+
+
+@pytest.mark.parametrize("value", [True, 0, 65536, "-1", "5900.0", "５９００", None])
+def test_console_port_rejects_non_decimal_or_out_of_range_values(value: object) -> None:
+    assert console._console_port(value) is None
 
 
 def test_proxmox_data_envelope_unwrapped(auth_test_client, db_engine):
