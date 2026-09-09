@@ -665,6 +665,7 @@ def _assert_user_space_uv_bootstrap(step: dict[str, object]) -> None:
         "--max-filesize 104857600",
         "sha256sum --check --strict",
         "--no-same-owner --strip-components=1",
+        '"uv 0.11.28"|"uv 0.11.28 "*',
     )
     forbidden = ("python3 -m venv", "apt-get", "urllib.request")
     assert all(token in source for token in required)
