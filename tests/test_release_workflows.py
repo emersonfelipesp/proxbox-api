@@ -637,6 +637,30 @@ def test_release_offline_sdist_job_builds_the_extracted_context_without_network(
     assert 'tags: ["v*"]' in workflow
 
 
+def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
+    workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
+    parsed = yaml.safe_load(workflow)
+
+    checkout_steps = [
+        step
+        for job in parsed["jobs"].values()
+        for step in job.get("steps", [])
+        if "Checkout exact public tag" in step.get("name", "")
+    ]
+
+    assert len(checkout_steps) == 3
+    assert "actions/checkout" not in workflow
+    for step in checkout_steps:
+        source = step["run"]
+        assert "emersonfelipesp/proxbox-api" in source
+        assert "credential.helper=" in source
+        assert "http.extraHeader=" in source
+        assert "--no-tags --depth=1" in source
+        assert '"refs/tags/${TAG}"' in source
+        assert "FETCH_HEAD^{commit}" in source
+        assert source.count('= "${GITHUB_SHA}"') == 2
+
+
 def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
     tmp_path: Path,
 ) -> None:

@@ -48,11 +48,23 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_ENV"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout tag
+      - name: Checkout exact public tag without Node.js
         if: ${{ steps.resolve_tag.outputs.tag != '' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.resolve_tag.outputs.tag }}
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "emersonfelipesp/proxbox-api"
+          printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          env -u GIT_ASKPASS -u SSH_ASKPASS \
+            git -c credential.helper= -c http.extraHeader= fetch \
+            --no-tags --depth=1 origin "refs/tags/${TAG}"
+          RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          test "${RESOLVED_SHA}" = "${GITHUB_SHA}"
+          git checkout --detach "${RESOLVED_SHA}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
       - id: extract
         name: Extract and validate version
@@ -87,10 +99,20 @@ jobs:
       VERSION: ${{ needs.validate-version.outputs.version }}
       TAG: ${{ needs.validate-version.outputs.tag }}
     steps:
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-version.outputs.tag }}
+      - name: Checkout exact public tag without Node.js
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "emersonfelipesp/proxbox-api"
+          printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          env -u GIT_ASKPASS -u SSH_ASKPASS \
+            git -c credential.helper= -c http.extraHeader= fetch \
+            --no-tags --depth=1 origin "refs/tags/${TAG}"
+          RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          test "${RESOLVED_SHA}" = "${GITHUB_SHA}"
+          git checkout --detach "${RESOLVED_SHA}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
       - name: Install build tools
         run: |
@@ -224,12 +246,20 @@ jobs:
           apt-get install -y gh
           gh --version
 
-      - name: Checkout tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate-version.outputs.tag }}
-          fetch-depth: 0
-          fetch-tags: true
+      - name: Checkout exact public tag without Node.js
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "emersonfelipesp/proxbox-api"
+          printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          env -u GIT_ASKPASS -u SSH_ASKPASS \
+            git -c credential.helper= -c http.extraHeader= fetch \
+            --no-tags --depth=1 origin "refs/tags/${TAG}"
+          RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          test "${RESOLVED_SHA}" = "${GITHUB_SHA}"
+          git checkout --detach "${RESOLVED_SHA}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
       - name: Push tag to GitHub
         run: |

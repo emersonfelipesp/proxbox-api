@@ -1,9 +1,10 @@
-# Version 0.0.21.post1
+# Version 0.0.21.post2
 
-proxbox-api `0.0.21.post1` pairs with `netbox-proxbox 0.0.26.post1`,
+proxbox-api `0.0.21.post2` pairs with `netbox-proxbox 0.0.26.post1`,
 `proxmox-sdk 0.0.13`, and `netbox-sdk 0.0.13`. The package supports Python
-3.12 and 3.13. The post release is required because the historical `v0.0.21`
-tag was already assigned to an unrelated earlier commit and remains immutable.
+3.12 and 3.13. The post release is required because `v0.0.21` belongs to an
+unrelated historical commit and the `v0.0.21.post1` publication failed before
+checkout on a trusted runner without Node.js. Both tags remain immutable.
 
 ## Console relay authentication
 
@@ -30,6 +31,8 @@ tag was already assigned to an unrelated earlier commit and remains immutable.
 
 ## Release and deployment integrity
 
+- Checks out the exact public tag without a JavaScript action, allowing the
+  minimal trusted publication runner to operate without Node.js.
 - Builds the release sdist with the immutable offline Docker context required
   by the production deployment controller.
 - Installs dependencies from hash-pinned wheels with no package index or
@@ -39,6 +42,6 @@ tag was already assigned to an unrelated earlier commit and remains immutable.
 
 ## Upgrade
 
-Deploy the exact `proxbox-api 0.0.21.post1` package from the Gitea Package
+Deploy the exact `proxbox-api 0.0.21.post2` package from the Gitea Package
 Registry, verify `/health`, and validate QEMU noVNC, QEMU terminal, and LXC
 terminal sessions through the NMS same-origin relay.
