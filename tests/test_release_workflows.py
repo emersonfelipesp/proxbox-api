@@ -722,6 +722,34 @@ def test_gitea_package_publication_links_an_exact_release_manifest():
     assert publish_step["env"]["GITEA_PACKAGE_TOKEN"] == "${{ secrets.PKG_TOKEN }}"
 
 
+def test_gitea_package_manifest_uses_an_isolated_version_bound_artifact_set():
+    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
+    steps = parsed["jobs"]["publish-gitea"]["steps"]
+    create_step = next(step for step in steps if step["name"] == "Create exact release manifest")
+    source = str(create_step["run"])
+
+    assert '-name "proxbox_api-${VERSION}-py3-none-any.whl"' in source
+    assert '-name "proxbox_api-${VERSION}.tar.gz"' in source
+    assert 'test ! -e "${MANIFEST_DIST}"' in source
+    assert 'install -m 0444 -- "${WHEEL}" "${SDIST}" "${MANIFEST_DIST}/"' in source
+    assert '--dist "${MANIFEST_DIST}"' in source
+    assert "--dist dist" not in source
+
+
+def test_gitea_package_registry_upload_uses_only_version_bound_artifacts():
+    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
+    steps = parsed["jobs"]["publish-gitea"]["steps"]
+    registry_step = next(
+        step for step in steps if step["name"] == "Publish to Gitea Package Registry"
+    )
+    source = str(registry_step["run"])
+
+    assert '-name "proxbox_api-${VERSION}-py3-none-any.whl"' in source
+    assert '-name "proxbox_api-${VERSION}.tar.gz"' in source
+    assert '"${WHEEL}" "${SDIST}"' in source
+    assert "dist/*" not in source
+
+
 def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
     tmp_path: Path,
 ) -> None:

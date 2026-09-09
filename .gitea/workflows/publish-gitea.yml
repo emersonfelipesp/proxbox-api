@@ -216,8 +216,20 @@ jobs:
           set -euo pipefail
           SOURCE_SHA="$(git rev-parse HEAD)"
           printf '%s' "${SOURCE_SHA}" | grep -Eq '^[a-f0-9]{40}$'
+          WHEEL="$(find dist -mindepth 1 -maxdepth 1 -type f \
+            -name "proxbox_api-${VERSION}-py3-none-any.whl" -print)"
+          SDIST="$(find dist -mindepth 1 -maxdepth 1 -type f \
+            -name "proxbox_api-${VERSION}.tar.gz" -print)"
+          test -n "${WHEEL}"
+          test -n "${SDIST}"
+          test "$(printf '%s\n' "${WHEEL}" | wc -l)" -eq 1
+          test "$(printf '%s\n' "${SDIST}" | wc -l)" -eq 1
+          MANIFEST_DIST="${RUNNER_TEMP}/proxbox-release-manifest-dist"
+          test ! -e "${MANIFEST_DIST}"
+          mkdir -m 0700 "${MANIFEST_DIST}"
+          install -m 0444 -- "${WHEEL}" "${SDIST}" "${MANIFEST_DIST}/"
           uv run python scripts/release_artifacts.py manifest \
-            --dist dist --package proxbox_api --version "${VERSION}" \
+            --dist "${MANIFEST_DIST}" --package proxbox_api --version "${VERSION}" \
             --source-sha "${SOURCE_SHA}" --manifest release-manifest.json
 
       - name: Publish to Gitea Package Registry
@@ -226,9 +238,18 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}
           TWINE_REPOSITORY_URL: https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi
         run: |
+          set -euo pipefail
           export HOME="${HOME:-/root}"
           export PATH="${HOME}/.local/bin:${PATH}"
-          uv run --with twine twine upload --non-interactive dist/*
+          WHEEL="$(find dist -mindepth 1 -maxdepth 1 -type f \
+            -name "proxbox_api-${VERSION}-py3-none-any.whl" -print)"
+          SDIST="$(find dist -mindepth 1 -maxdepth 1 -type f \
+            -name "proxbox_api-${VERSION}.tar.gz" -print)"
+          test -n "${WHEEL}"
+          test -n "${SDIST}"
+          test "$(printf '%s\n' "${WHEEL}" | wc -l)" -eq 1
+          test "$(printf '%s\n' "${SDIST}" | wc -l)" -eq 1
+          uv run --with twine twine upload --non-interactive "${WHEEL}" "${SDIST}"
 
       - name: Publish repository-linked release manifest
         env:
