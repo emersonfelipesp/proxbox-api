@@ -13,8 +13,8 @@ Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code 
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.26.post1 ... proxbox-api 0.0.21 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.13`.
-`proxbox-api 0.0.21` adds authenticated Proxmox console WebSocket handshakes,
+Current pairing: `netbox-proxbox 0.0.26.post1 ... proxbox-api 0.0.21.post1 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.13`.
+`proxbox-api 0.0.21.post1` adds authenticated Proxmox console WebSocket handshakes,
 typed-sidecar-only inventory state, NetBox 4.6.6 certification, strict Python
 3.12/3.13 support, and a verified network-free production release context.
 
