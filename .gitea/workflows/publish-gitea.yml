@@ -117,17 +117,16 @@ jobs:
       - name: Install build tools
         run: |
           set -euo pipefail
-          # The Gitea act runner does not always export HOME; guard it so
-          # `set -u` does not abort on an unbound variable.
-          export HOME="${HOME:-/root}"
+          BOOTSTRAP_ROOT="${RUNNER_TEMP}/uv-bootstrap"
+          test ! -e "${BOOTSTRAP_ROOT}"
+          python3 -m venv "${BOOTSTRAP_ROOT}"
           if ! command -v uv >/dev/null 2>&1; then
-            apt-get update -qq
-            apt-get install -y curl python3 2>/dev/null || true
-            curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --no-modify-path
-            export PATH="${HOME}/.local/bin:${PATH}"
+            "${BOOTSTRAP_ROOT}/bin/python" -m pip install \
+              --disable-pip-version-check --no-deps 'uv==0.11.28'
+            export PATH="${BOOTSTRAP_ROOT}/bin:${PATH}"
+            echo "${BOOTSTRAP_ROOT}/bin" >> "${GITHUB_PATH}"
           fi
-          export PATH="${HOME}/.local/bin:${PATH}"
-          uv --version
+          test "$(uv --version)" = "uv 0.11.28"
 
       - name: Build distributions
         run: |
@@ -218,7 +217,9 @@ jobs:
 
   push-to-github:
     needs: [validate-version, publish-gitea]
-    if: ${{ needs.validate-version.outputs.version != '' }}
+    # Manual dispatch is the safe package-only retry path. Public promotion is
+    # reserved for the immutable tag-push run after production validation.
+    if: ${{ needs.validate-version.outputs.version != '' && github.event_name == 'push' }}
     runs-on: mirror-host
     env:
       # The Gitea act runner does not export HOME; git and `gh auth setup-git`

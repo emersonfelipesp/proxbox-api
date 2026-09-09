@@ -637,28 +637,46 @@ def test_release_offline_sdist_job_builds_the_extracted_context_without_network(
     assert 'tags: ["v*"]' in workflow
 
 
+def _assert_exact_public_tag_checkout(step: dict[str, object]) -> None:
+    source = str(step["run"])
+    required = (
+        "emersonfelipesp/proxbox-api",
+        "credential.helper=",
+        "http.extraHeader=",
+        "--no-tags --depth=1",
+        '"refs/tags/${TAG}"',
+        "FETCH_HEAD^{commit}",
+    )
+    assert all(token in source for token in required)
+    assert source.count('= "${GITHUB_SHA}"') == 2
+
+
 def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
     workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
     parsed = yaml.safe_load(workflow)
-
-    checkout_steps = [
-        step
-        for job in parsed["jobs"].values()
-        for step in job.get("steps", [])
-        if "Checkout exact public tag" in step.get("name", "")
-    ]
+    checkout_steps: list[dict[str, object]] = []
+    for job in parsed["jobs"].values():
+        checkout_steps.extend(
+            step
+            for step in job.get("steps", [])
+            if "Checkout exact public tag" in step.get("name", "")
+        )
 
     assert len(checkout_steps) == 3
     assert "actions/checkout" not in workflow
     for step in checkout_steps:
-        source = step["run"]
-        assert "emersonfelipesp/proxbox-api" in source
-        assert "credential.helper=" in source
-        assert "http.extraHeader=" in source
-        assert "--no-tags --depth=1" in source
-        assert '"refs/tags/${TAG}"' in source
-        assert "FETCH_HEAD^{commit}" in source
-        assert source.count('= "${GITHUB_SHA}"') == 2
+        _assert_exact_public_tag_checkout(step)
+
+    publish_job = parsed["jobs"]["publish-gitea"]
+    install_step = next(
+        step for step in publish_job["steps"] if step.get("name") == "Install build tools"
+    )
+    install_source = install_step["run"]
+    assert "python3 -m venv" in install_source
+    assert "uv==0.11.28" in install_source
+    assert "apt-get" not in install_source
+    assert "curl" not in install_source
+    assert "github.event_name == 'push'" in parsed["jobs"]["push-to-github"]["if"]
 
 
 def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
