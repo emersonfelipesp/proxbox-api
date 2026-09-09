@@ -654,6 +654,21 @@ def _assert_exact_public_tag_checkout(step: dict[str, object]) -> None:
     assert all(token in source for token in required)
 
 
+def _assert_user_space_uv_bootstrap(step: dict[str, object]) -> None:
+    source = str(step["run"])
+    required = (
+        "uv-x86_64-unknown-linux-gnu.tar.gz",
+        "releases.astral.sh/github/uv/releases/download/0.11.28",
+        "e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224",
+        "hashlib.sha256(payload).hexdigest()",
+        'test "$(uname -m)" = "x86_64"',
+        "100 * 1024 * 1024",
+    )
+    forbidden = ("python3 -m venv", "apt-get", "curl")
+    assert all(token in source for token in required)
+    assert all(token not in source for token in forbidden)
+
+
 def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
     workflow = _read(GITEA_PUBLISH_WORKFLOW_PATH)
     parsed = yaml.safe_load(workflow)
@@ -674,11 +689,7 @@ def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
     install_step = next(
         step for step in publish_job["steps"] if step.get("name") == "Install build tools"
     )
-    install_source = install_step["run"]
-    assert "python3 -m venv" in install_source
-    assert "uv==0.11.28" in install_source
-    assert "apt-get" not in install_source
-    assert "curl" not in install_source
+    _assert_user_space_uv_bootstrap(install_step)
     assert "github.event_name == 'push'" in parsed["jobs"]["push-to-github"]["if"]
 
 
