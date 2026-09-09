@@ -109,10 +109,62 @@ jobs:
 
       - name: Build distributions
         run: |
+          set -euo pipefail
           export HOME="${HOME:-/root}"
           export PATH="${HOME}/.local/bin:${PATH}"
-          uv build
+          # The Gitea act runner does not always export RUNNER_TEMP, and `set -u`
+          # would abort on it. The same guard the tool install step uses for HOME.
+          RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+          echo "RUNNER_TEMP=${RUNNER_TEMP}" >> "$GITHUB_ENV"
+
+          # The wheel is built first, from the untouched checkout: it packages
+          # proxbox_api only, and the offline preparation below rewrites
+          # Dockerfile and populates docker/, which the wheel must not carry.
+          uv build --wheel
+
+          # The sdist is the artifact production deploys from, and the host
+          # helper refuses one whose build context is not byte-inventoried and
+          # network-free. Prepare that context exactly as the release-offline
+          # lane in .github/workflows/ci.yml does, so what is published is what
+          # that lane proves buildable with networking disabled.
+          uv sync --frozen --only-group publish --no-install-project --python 3.13.14
+          test ! -e docker/build-cache
+          test ! -e docker/offline-build-inputs.json
+          mkdir -m 0700 -p docker/build-cache
+          # The requirements file lives inside the cache directory so the pinned
+          # versions and hashes the image installs from are covered by the same
+          # inventory digests as the wheels themselves.
+          uv export --frozen --no-dev --group publish --no-emit-project \
+            --format requirements-txt --python .venv/bin/python \
+            --output-file docker/build-cache/offline-requirements.txt
+          uv run python -m ensurepip --default-pip
+          uv run python -m pip download \
+            --disable-pip-version-check --require-hashes --only-binary=:all: \
+            --platform musllinux_1_2_x86_64 --platform musllinux_1_1_x86_64 \
+            --python-version 3.13 --implementation cp \
+            --abi cp313 --abi abi3 --abi none \
+            --dest docker/build-cache \
+            --requirement docker/build-cache/offline-requirements.txt
+          find docker/build-cache -mindepth 1 -maxdepth 1 -type f \
+            \( -name '*.whl' -o -name 'offline-requirements.txt' \) \
+            -exec chmod 0444 {} +
+          uv run python scripts/prepare_offline_release.py
+          uv run python -m build --no-isolation --sdist --outdir dist
+
           ls dist/
+
+      - name: Verify the published sdist carries its offline build context
+        run: |
+          set -euo pipefail
+          export HOME="${HOME:-/root}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+          SDIST="$(find dist -mindepth 1 -maxdepth 1 -type f -name 'proxbox_api-*.tar.gz' -print)"
+          test -n "$SDIST"
+          test "$(printf '%s\n' "$SDIST" | wc -l)" -eq 1
+          uv run python scripts/verify_offline_release_sdist.py \
+            --sdist "$SDIST" --version "${VERSION}" \
+            --output "${RUNNER_TEMP}/proxbox-release-context"
 
       - name: Publish to Gitea Package Registry
         env:

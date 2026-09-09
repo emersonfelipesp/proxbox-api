@@ -20,7 +20,8 @@ ENV UV_PYTHON_DOWNLOADS=never
 COPY docker/build-cache /root/.cache/uv
 COPY README.md pyproject.toml uv.lock ./
 COPY proxbox_api ./proxbox_api
-RUN uv sync --frozen --offline --no-index --find-links /root/.cache/uv --no-dev --no-editable
+RUN uv pip sync --python /app/.venv/bin/python --offline --no-index --find-links /root/.cache/uv --require-hashes /root/.cache/uv/offline-requirements.txt
+RUN uv pip install --python /app/.venv/bin/python --offline --no-index --find-links /root/.cache/uv --no-deps .
 
 COPY docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh
 RUN chmod 0555 /usr/local/bin/docker-entrypoint-raw.sh

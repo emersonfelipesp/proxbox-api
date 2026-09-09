@@ -152,7 +152,7 @@ sequenceDiagram
   Alpine fixado e inclui o inventario canonico schema-2 exato em
   `docker/build-cache`. O controle travado rejeita independentemente divergencia
   de hash, imagens mutaveis, instrucoes Docker com rede, diretivas do parser,
-  `ADD` ou ausencia de `uv sync --frozen --offline` antes de selar. Altere os
+  `ADD` ou qualquer caminho de build diferente da instalacao offline com hashes fixos antes de selar: `uv pip sync --offline --no-index --find-links /root/.cache/uv --require-hashes`, lendo seus requisitos de dentro do cache inventariado, e depois `uv pip install --offline --no-index --find-links /root/.cache/uv --no-deps .`. Um `uv sync --frozen --offline` guiado pelo lock e rejeitado: com `--frozen` o uv ignora a resolucao e busca cada distribuicao travada pela URL registrada em vez dos wheels copiados. Altere os
   digests somente em uma atualizacao de release revisada; o recibo de producao
   vincula o ID da imagem ativa resultante.
 - O CI obrigatorio do GitHub reproduz o wheelhouse musllinux real de CPython

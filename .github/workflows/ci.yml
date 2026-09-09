@@ -95,12 +95,15 @@ jobs:
         run: |
           set -euo pipefail
           uv sync --frozen --only-group publish --no-install-project --python 3.13.14
-          uv export --frozen --no-dev --group publish --no-emit-project \
-            --format requirements-txt --python .venv/bin/python \
-            --output-file "$RUNNER_TEMP/runtime-requirements.txt"
           test ! -e docker/build-cache
           test ! -e docker/offline-build-inputs.json
           mkdir -m 0700 -p docker/build-cache
+          # The requirements file lives inside the cache directory so the pinned
+          # versions and hashes the image installs from are covered by the same
+          # inventory digests as the wheels themselves.
+          uv export --frozen --no-dev --group publish --no-emit-project \
+            --format requirements-txt --python .venv/bin/python \
+            --output-file docker/build-cache/offline-requirements.txt
           uv run python -m ensurepip --default-pip
           uv run python -m pip download \
             --disable-pip-version-check --require-hashes --only-binary=:all: \
@@ -108,8 +111,9 @@ jobs:
             --python-version 3.13 --implementation cp \
             --abi cp313 --abi abi3 --abi none \
             --dest docker/build-cache \
-            --requirement "$RUNNER_TEMP/runtime-requirements.txt"
-          find docker/build-cache -mindepth 1 -maxdepth 1 -type f -name '*.whl' \
+            --requirement docker/build-cache/offline-requirements.txt
+          find docker/build-cache -mindepth 1 -maxdepth 1 -type f \
+            \( -name '*.whl' -o -name 'offline-requirements.txt' \) \
             -exec chmod 0444 {} +
           uv run python scripts/prepare_offline_release.py
           uv run python -m build --no-isolation --sdist --outdir dist

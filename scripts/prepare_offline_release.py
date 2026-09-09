@@ -16,7 +16,17 @@ DOCKERFILE_OUTPUT = REPOSITORY_ROOT / "Dockerfile"
 UV_LOCK = REPOSITORY_ROOT / "uv.lock"
 CACHE_ROOT = REPOSITORY_ROOT / "docker/build-cache"
 LOCK_OUTPUT = REPOSITORY_ROOT / "docker/offline-build-inputs.json"
+# The install reads its requirements from inside the inventoried cache, so the
+# pinned versions and hashes are covered by the same digests as the wheels.
+REQUIREMENTS_NAME = "offline-requirements.txt"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+# The two exact commands the release image is allowed to run to populate its
+# environment. Both read only the byte-inventoried cache directory: the first
+# installs every dependency from hash-pinned wheels with no index at all, the
+# second installs the project itself from the copied source without touching
+# the network for its dependencies.
+OFFLINE_SYNC_COMMAND = "uv pip sync --python /app/.venv/bin/python --offline --no-index --find-links /root/.cache/uv --require-hashes /root/.cache/uv/offline-requirements.txt"
+PROJECT_INSTALL_COMMAND = "uv pip install --python /app/.venv/bin/python --offline --no-index --find-links /root/.cache/uv --no-deps ."
 PINNED_IMAGES = (
     "emersonfelipesp/proxbox-api:0.0.19.post5@sha256:"
     "f8b5decb8415867d2befb013f64f158d31650a974e9bc60bdf4f2e78c1808794",
@@ -36,6 +46,7 @@ def validate_dockerfile(dockerfile: str) -> list[str]:  # noqa: C901
     current_stage = -1
     cache_copy_stage: int | None = None
     offline_sync_stage: int | None = None
+    project_install_stage: int | None = None
     allowed_passive = {"CMD", "ENTRYPOINT", "ENV", "EXPOSE", "VOLUME", "WORKDIR"}
     for raw_line in dockerfile.splitlines():
         line = raw_line.strip()
@@ -72,10 +83,7 @@ def validate_dockerfile(dockerfile: str) -> list[str]:  # noqa: C901
             current_stage += 1
             continue
         if instruction == "RUN":
-            if arguments == (
-                "uv sync --frozen --offline --no-index --find-links "
-                "/root/.cache/uv --no-dev --no-editable"
-            ):
+            if arguments == OFFLINE_SYNC_COMMAND:
                 if (
                     current_stage < 0
                     or cache_copy_stage != current_stage
@@ -85,6 +93,12 @@ def validate_dockerfile(dockerfile: str) -> list[str]:  # noqa: C901
                         "Dockerfile offline sync does not follow one cache copy"
                     )
                 offline_sync_stage = current_stage
+            elif arguments == PROJECT_INSTALL_COMMAND:
+                if offline_sync_stage != current_stage or project_install_stage is not None:
+                    raise OfflineReleaseError(
+                        "Dockerfile project install does not follow the offline sync"
+                    )
+                project_install_stage = current_stage
             elif arguments != "chmod 0555 /usr/local/bin/docker-entrypoint-raw.sh":
                 raise OfflineReleaseError("Dockerfile RUN is not allowlisted")
             continue
@@ -115,6 +129,8 @@ def validate_dockerfile(dockerfile: str) -> list[str]:  # noqa: C901
         raise OfflineReleaseError("release Dockerfile image pins are incomplete")
     if cache_copy_stage is None or offline_sync_stage != cache_copy_stage:
         raise OfflineReleaseError("Dockerfile does not consume its offline cache")
+    if project_install_stage != cache_copy_stage:
+        raise OfflineReleaseError("Dockerfile does not install the project offline")
     return sorted(images)
 
 
@@ -147,8 +163,10 @@ def _cache_inventory() -> list[dict[str, object]]:
             raise OfflineReleaseError("offline wheel cache contains an unsafe entry")
         if path.is_file():
             _regular_file(path)
-            if path.suffix != ".whl":
-                raise OfflineReleaseError("offline cache must contain wheels only")
+            if path.name != REQUIREMENTS_NAME and path.suffix != ".whl":
+                raise OfflineReleaseError(
+                    "offline cache must contain wheels and its requirements file only"
+                )
             rows.append(
                 {
                     "path": path.relative_to(REPOSITORY_ROOT).as_posix(),
@@ -158,6 +176,10 @@ def _cache_inventory() -> list[dict[str, object]]:
             )
     if not rows:
         raise OfflineReleaseError("offline wheel cache is empty")
+    if not (CACHE_ROOT / REQUIREMENTS_NAME).is_file():
+        raise OfflineReleaseError("offline cache has no hash-pinned requirements file")
+    if len(rows) < 2:
+        raise OfflineReleaseError("offline cache carries no wheels")
     return rows
 
 

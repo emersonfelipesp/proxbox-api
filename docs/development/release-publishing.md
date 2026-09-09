@@ -163,7 +163,13 @@ sequenceDiagram
   the pinned Alpine runtime, and embeds their exact canonical schema-2 inventory
   under `docker/build-cache`. The locked control independently rejects hash drift,
   mutable images, networked Docker instructions, parser directives, `ADD`, or a
-  missing `uv sync --frozen --offline` path before sealing. Change either image
+  build path other than the hash-pinned offline install before sealing: `uv pip sync
+  --offline --no-index --find-links /root/.cache/uv --require-hashes`, reading its
+  requirements from inside the inventoried cache, then `uv pip install --offline
+  --no-index --find-links /root/.cache/uv --no-deps .`. A lock-driven `uv sync
+  --frozen --offline` is rejected, because uv skips resolution under `--frozen`
+  and fetches each locked distribution from its recorded URL instead of the
+  copied wheels. Change either image
   digest only through a reviewed release update; production receipts bind the
   resulting active image ID.
 - Required GitHub CI reproduces the real CPython 3.13 musllinux wheelhouse,

@@ -201,7 +201,13 @@ exact literal full-digest prior runtime/uv image sources and declared-stage-only
 `COPY --from`. Keep the local
 development `Dockerfile` separate. The locked control must independently reject
 inventory drift, networked/mutable Docker inputs, and any build path other than
-`uv sync --frozen --offline` before signing.
+the hash-pinned offline install before signing: `uv pip sync --offline
+--no-index --find-links /root/.cache/uv --require-hashes`, reading its
+requirements from inside the inventoried cache, then `uv pip install --offline
+--no-index --find-links /root/.cache/uv --no-deps .`. A lock-driven `uv sync
+--frozen --offline` is rejected: under `--frozen` uv skips resolution and
+fetches each locked distribution from its recorded URL rather than the copied
+wheels, so the build reaches for the network and fails closed.
 
 ### RC (release-candidate) pipeline
 
