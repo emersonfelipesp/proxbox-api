@@ -211,6 +211,15 @@ jobs:
             --sdist "$SDIST" --version "${VERSION}" \
             --output "${RUNNER_TEMP}/proxbox-release-context"
 
+      - name: Create exact release manifest
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          printf '%s' "${SOURCE_SHA}" | grep -Eq '^[a-f0-9]{40}$'
+          uv run python scripts/release_artifacts.py manifest \
+            --dist dist --package proxbox_api --version "${VERSION}" \
+            --source-sha "${SOURCE_SHA}" --manifest release-manifest.json
+
       - name: Publish to Gitea Package Registry
         env:
           TWINE_USERNAME: emersonfelipesp
@@ -226,11 +235,6 @@ jobs:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
         run: |
           set -euo pipefail
-          SOURCE_SHA="$(git rev-parse HEAD)"
-          printf '%s' "${SOURCE_SHA}" | grep -Eq '^[a-f0-9]{40}$'
-          uv run python scripts/release_artifacts.py manifest \
-            --dist dist --package proxbox_api --version "${VERSION}" \
-            --source-sha "${SOURCE_SHA}" --manifest release-manifest.json
           uv run python scripts/release_artifacts.py publish-manifest \
             --owner emersonfelipesp --repository proxbox-api \
             --manifest release-manifest.json

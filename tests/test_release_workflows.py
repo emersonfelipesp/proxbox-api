@@ -700,21 +700,26 @@ def test_gitea_package_publication_links_an_exact_release_manifest():
     parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
     steps = parsed["jobs"]["publish-gitea"]["steps"]
     names = [step["name"] for step in steps]
-    manifest_step = next(
+    create_step = next(step for step in steps if step["name"] == "Create exact release manifest")
+    publish_step = next(
         step for step in steps if step["name"] == "Publish repository-linked release manifest"
     )
-    source = str(manifest_step["run"])
+    create_source = str(create_step["run"])
+    publish_source = str(publish_step["run"])
 
+    assert names.index("Create exact release manifest") < names.index(
+        "Publish to Gitea Package Registry"
+    )
     assert names.index("Publish to Gitea Package Registry") < names.index(
         "Publish repository-linked release manifest"
     )
     assert names.index("Publish repository-linked release manifest") < names.index(
         "Verify package in Gitea registry"
     )
-    assert "scripts/release_artifacts.py manifest" in source
-    assert "scripts/release_artifacts.py publish-manifest" in source
-    assert '--owner emersonfelipesp --repository proxbox-api' in source
-    assert manifest_step["env"]["GITEA_PACKAGE_TOKEN"] == "${{ secrets.PKG_TOKEN }}"
+    assert "scripts/release_artifacts.py manifest" in create_source
+    assert "scripts/release_artifacts.py publish-manifest" in publish_source
+    assert '--owner emersonfelipesp --repository proxbox-api' in publish_source
+    assert publish_step["env"]["GITEA_PACKAGE_TOKEN"] == "${{ secrets.PKG_TOKEN }}"
 
 
 def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members(
