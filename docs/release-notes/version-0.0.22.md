@@ -13,6 +13,7 @@ proxbox-api 0.0.22 adds authenticated, bounded transports for querying Proxmox m
 - Reject redirects, ambient proxies, unexpected content encodings, provider error envelopes, ambiguous endpoint selection, and unsupported parameters.
 - Preserve compatibility with the certified `proxmox-sdk==0.0.13` dependency while preferring its public bounded method when a newer compatible SDK provides it.
 - Verify the repository-linked Gitea release manifest after upload even when Gitea reports an already-applied package link as HTTP 400.
+- Isolate GitHub CLI configuration in the runner's private temporary directory so public tag promotion does not depend on the host root configuration.
 
 ## Security and operational impact
 
