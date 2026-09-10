@@ -1416,6 +1416,81 @@ def test_release_manifest_binds_exact_artifact_bytes(tmp_path: Path) -> None:
         )
 
 
+def test_manifest_publish_accepts_link_conflict_after_exact_readback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release_artifacts = _load_release_artifacts()
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "proxbox_api-0.0.22rc2-py3-none-any.whl").write_bytes(b"wheel")
+    (dist / "proxbox_api-0.0.22rc2.tar.gz").write_bytes(b"sdist")
+    manifest = release_artifacts.create_manifest(
+        dist=dist,
+        package="proxbox_api",
+        version="0.0.22rc2",
+        source_sha="a" * 40,
+    )
+    requests: list[tuple[str, str]] = []
+
+    def request(url: str, *, method: str = "GET", **_kwargs: object) -> bytes:
+        requests.append((method, url))
+        if "/-/link/" in url:
+            raise release_artifacts.ReleaseArtifactError("Registry request failed")
+        return b""
+
+    monkeypatch.setattr(release_artifacts, "_request", request)
+    monkeypatch.setattr(release_artifacts, "fetch_gitea_manifest", lambda **_kwargs: manifest)
+
+    assert (
+        release_artifacts.publish_gitea_manifest(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            manifest=manifest,
+            token="registry-token",
+        )
+        == manifest
+    )
+    assert [method for method, _url in requests] == ["PUT", "POST"]
+
+
+def test_manifest_publish_rejects_unverified_link_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release_artifacts = _load_release_artifacts()
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "proxbox_api-0.0.22rc2-py3-none-any.whl").write_bytes(b"wheel")
+    (dist / "proxbox_api-0.0.22rc2.tar.gz").write_bytes(b"sdist")
+    manifest = release_artifacts.create_manifest(
+        dist=dist,
+        package="proxbox_api",
+        version="0.0.22rc2",
+        source_sha="a" * 40,
+    )
+
+    def request(url: str, **_kwargs: object) -> bytes:
+        if "/-/link/" in url:
+            raise release_artifacts.ReleaseArtifactError("Registry request failed")
+        return b""
+
+    def reject_readback(**_kwargs: object) -> dict[str, object]:
+        raise release_artifacts.ReleaseArtifactError("Gitea release manifest identity is invalid")
+
+    monkeypatch.setattr(release_artifacts, "_request", request)
+    monkeypatch.setattr(release_artifacts, "fetch_gitea_manifest", reject_readback)
+
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="Gitea release manifest identity is invalid",
+    ):
+        release_artifacts.publish_gitea_manifest(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            manifest=manifest,
+            token="registry-token",
+        )
+
+
 def test_ci_gate_binds_latest_actions_run_to_authenticated_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

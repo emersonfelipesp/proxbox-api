@@ -12,6 +12,7 @@ proxbox-api 0.0.22 adds authenticated, bounded transports for querying Proxmox m
 - Bound request scope, DNS resolution, total execution time, streamed bytes, normalized bytes, and returned rows.
 - Reject redirects, ambient proxies, unexpected content encodings, provider error envelopes, ambiguous endpoint selection, and unsupported parameters.
 - Preserve compatibility with the certified `proxmox-sdk==0.0.13` dependency while preferring its public bounded method when a newer compatible SDK provides it.
+- Verify the repository-linked Gitea release manifest after upload even when Gitea reports an already-applied package link as HTTP 400.
 
 ## Security and operational impact
 
@@ -25,7 +26,7 @@ The release is additive. Existing synchronization routes and configuration remai
 
 ## Validation
 
-The feature passed focused metrics tests, the complete backend suite with coverage above the repository threshold, Ruff lint and formatting, compile checks, strict documentation builds, lock verification, per-function cyclomatic complexity analysis, three capped adversarial review rounds, staging health and OpenAPI probes, and authentication-boundary checks. Release candidate and final package evidence are recorded by the release workflows.
+The feature passed focused metrics tests, the complete backend suite with coverage above the repository threshold, Ruff lint and formatting, compile checks, strict documentation builds, lock verification, per-function cyclomatic complexity analysis, three capped adversarial review rounds, staging health and OpenAPI probes, and authentication-boundary checks. The release-publishing recovery path also has positive and fail-closed regression coverage for Gitea's link response. Release candidate and final package evidence are recorded by the release workflows.
 
 ## Known limitations
 

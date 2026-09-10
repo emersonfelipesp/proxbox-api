@@ -254,13 +254,20 @@ def publish_gitea_manifest(
         "https://git.nmulti.cloud/api/v1/packages/"
         f"{_quoted(owner)}/generic/{_quoted(package)}/-/link/{_quoted(repository)}"
     )
-    _request(
-        link_url,
-        token=token,
-        maximum=MAX_RESPONSE_BYTES,
-        method="POST",
-        payload=b"",
-    )
+    try:
+        _request(
+            link_url,
+            token=token,
+            maximum=MAX_RESPONSE_BYTES,
+            method="POST",
+            payload=b"",
+        )
+    except ReleaseArtifactError:
+        # Gitea may apply the repository link and still answer HTTP 400 when
+        # the package was linked automatically or a retry observes the link.
+        # The authenticated read-back below is the authority: it requires the
+        # exact owner, repository, package, version, file, size, and digest.
+        pass
     verified = fetch_gitea_manifest(
         owner=owner,
         repository=repository,

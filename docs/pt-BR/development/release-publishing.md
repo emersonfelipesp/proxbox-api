@@ -139,6 +139,12 @@ sequenceDiagram
 - Uploads de pacote intencionalmente nao usam `twine --skip-existing`; se uma
   versao foi consumida por qualquer indice, corrija para frente com o proximo
   `.postN` ou `rcN`.
+- O Gitea pode aplicar o vinculo de repositorio de um pacote generico e ainda
+  responder HTTP 400 quando o pacote foi vinculado automaticamente ou uma nova
+  tentativa encontra o vinculo. O publicador do manifesto trata essa resposta
+  como ambigua e continua somente quando uma releitura autenticada comprova
+  proprietario, repositorio, pacote, versao, nome de arquivo, tamanho, digest e
+  bytes canonicos exatos do manifesto.
 - Publicacao no PyPI precisa passar pela validacao de reinstalacao do pacote
   antes das imagens Docker serem publicadas.
 - Tags Docker usam a mesma versao do pacote PyPI que passou na validacao. As
