@@ -17,6 +17,8 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 
 | File | What it tests |
 |------|---------------|
+| `test_proxmox_influx_metrics.py` | Bounded structured Flux generation, destination controls, upstream and normalized response-byte limits, response normalization, and secret-safe Influx failures. |
+| `test_proxmox_metrics_pull.py` | Fixed `cluster/metrics/export` routing, endpoint selection, request and response bounds, filtering, deterministic sorting/deduplication, session closure, authentication, and secret-safe pull failures. |
 | `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers |
 | `fixtures.py` | Shared reusable fixtures imported by multiple test modules |
 | `test_admin_logs.py` | In-memory log buffer routes (`/admin/logs`) |
@@ -178,6 +180,7 @@ on protected branches. The long-term target is 85%.
   and fingerprint discovery, cancellation, cleanup failure, and repeat-close
   behavior while proving the original exception survives and each acquired SDK
   closes exactly once.
+- `test_proxmox_bounded.py` proves the legacy SDK compatibility boundary uses the authenticated session, serializes boolean parameters through real HTTP, requires identity encoding, disables automatic decompression and redirects for token and ticket authentication, rejects declared and streamed oversize bodies before JSON materialization, preserves bounded provider errors, and prefers a public SDK bounded-read method when present.
 
 ## TestClient Fixtures (conftest.py)
 

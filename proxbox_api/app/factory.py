@@ -56,6 +56,7 @@ from proxbox_api.routes.proxmox.cluster import router as px_cluster_router
 from proxbox_api.routes.proxmox.datacenter import router as px_datacenter_router
 from proxbox_api.routes.proxmox.firewall import router as px_firewall_router
 from proxbox_api.routes.proxmox.ha import router as px_ha_router
+from proxbox_api.routes.proxmox.metrics import router as px_metrics_router
 from proxbox_api.routes.proxmox.nodes import router as px_nodes_router
 from proxbox_api.routes.proxmox.replication import router as px_replication_router
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
@@ -469,6 +470,11 @@ def create_app() -> FastAPI:  # noqa: C901
         app.include_router(px_access_router, prefix="/proxmox", tags=["proxmox / access"])
         app.include_router(px_services_router, prefix="/proxmox", tags=["proxmox / services"])
         app.include_router(px_zfs_router, prefix="/proxmox", tags=["proxmox / zfs"])
+        app.include_router(
+            px_metrics_router,
+            prefix="/proxmox/metrics",
+            tags=["proxmox / metrics"],
+        )
         app.include_router(
             proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
         )

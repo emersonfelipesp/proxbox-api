@@ -551,6 +551,7 @@ async def resolve_proxmox_target_session(
     database_session: AsyncSession | Session,
     *,
     source: str = "database",
+    endpoint_id: int | None = None,
     name: str | None = None,
     domain: str | None = None,
     ip_address: str | None = None,
@@ -560,6 +561,7 @@ async def resolve_proxmox_target_session(
     proxmox_schemas = await load_proxmox_session_schemas(
         database_session=database_session,
         source=source,
+        endpoint_ids=[endpoint_id] if endpoint_id is not None else None,
     )
 
     selectors = (

@@ -33,6 +33,7 @@ Proxmox, cloud, and intent routes also depend on the relevant
 | `/ceph/v2` | Desired-state Ceph plan/apply/reconcile surface used by `netbox-ceph` |
 | `/ssh` | Short-lived SSH terminal sessions and WebSocket transport |
 | `/proxmox/services` | Read-only agentless systemd service-monitoring over SSH for a Proxmox endpoint |
+| `/proxmox/metrics` | Authenticated bounded InfluxDB v2 and direct Proxmox metrics query transports |
 
 ## PBS (`/pbs`)
 
@@ -192,6 +193,51 @@ exception.
 Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")`,
 itself dispatched by the matching netbox-rpc procedure; not intended to be
 called directly by end users.
+
+## Metrics queries (`/proxmox/metrics`)
+
+The standalone metrics route accepts one authenticated, short-lived query
+request and does not persist InfluxDB credentials or read Proxmox metric-server
+configuration. The caller supplies the InfluxDB v2 URL, organization, bucket,
+token, time window, measurement, optional field/tag predicates, optional
+aggregate-window function, and explicit row/response limits.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/proxmox/metrics/influx/query` | Execute a bounded structured Flux query and normalize annotated CSV or supported JSON into one stable response |
+| `POST` | `/proxmox/metrics/pull/query` | Resolve one configured endpoint, call only `cluster/metrics/export`, and normalize bounded canonical samples |
+
+The request has no raw Flux field. URL values must be HTTPS without embedded
+credentials, query strings, or fragments. The backend validates the resolved
+destination with the shared SSRF policy and pins the validated IP for the
+outbound connection; redirects and proxy environment variables are disabled.
+TLS verification remains required unless `PROXBOX_ALLOW_INSECURE_INFLUX_TLS` is
+explicitly enabled by the operator. Relative Influx durations and
+timezone-qualified RFC3339 timestamps are accepted for `start`/`stop`; timeout,
+row, filter, upstream response-byte, and normalized response-byte bounds are
+enforced by the schema and client.
+The response contains `columns`, `rows`, `row_count`, `truncated`,
+`query_window`, `captured_at`, and `response_format`. Upstream failures return
+stable `reason` values without upstream bodies, URLs, or credentials.
+
+The pull request accepts an exact endpoint ID or one selector and bounded time, object, metric,
+row, and byte filters. `history=true` requires `start_time`. Callers cannot
+supply a Proxmox path. The response uses canonical `object_id`, `metric`,
+`timestamp`, `value`, `metric_type`, and `source` fields and reports collapsed
+exact duplicates. Provider failures and malformed or conflicting rows map to
+secret-safe typed errors.
+
+The response byte bound is applied during the authenticated upstream stream,
+before JSON decoding. Identity encoding is required and automatic transport
+decompression is disabled. Redirects are rejected before an authenticated
+request can leave the selected endpoint, and boolean query parameters are
+encoded as Proxmox-compatible `0` or `1` values. The service supports the pinned
+`proxmox-sdk==0.0.13` through an isolated compatibility adapter and prefers the
+SDK's public bounded-read capability when a later published version provides it.
+
+This transport contract is intentionally separate from any metric-server
+configuration route. Configuration persistence, encryption, permissions, and
+consumer-specific proxy behavior remain outside proxbox-api.
 
 ## Cloud (`/cloud`)
 

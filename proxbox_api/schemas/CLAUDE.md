@@ -33,6 +33,8 @@ Top-level Pydantic schema package for plugin and API contracts.
   execution authority. Keep this module independent of route packages so
   endpoint and cloud schemas can import it without a cycle.
 - `zfs.py`: typed ZFS pool summary/detail contracts, recursive vdev tree nodes, and tier-selection metadata for `/proxmox/storage/zfs/*`.
+- `influx.py`: strict InfluxDB v2 query and normalized response contracts. The request has bounded URL, credentials, time, single-field or field-alias-set, filter, aggregation, row, and response-byte fields and intentionally has no raw Flux member.
+- `proxmox_metrics.py`: strict direct-pull contract with one endpoint selector, bounded time/object/metric/row/byte filters, and canonical Proxmox metric samples. It intentionally has no caller-supplied API path.
 - `netbox/`: NetBox session, endpoint, and payload schemas.
 - `virtualization/`: VM config and summary schemas.
 

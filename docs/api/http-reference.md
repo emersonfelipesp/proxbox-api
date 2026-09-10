@@ -375,6 +375,8 @@ Validation rules:
 - `GET /proxmox/nodes/{node}/storage/{storage}/content`
 - `GET /proxmox/storage/zfs/pools?node=` - Read-only ZFS pool health and capacity summaries. Tier 1 uses Proxmox REST `/nodes/{node}/disks/zfs` via `proxmox-sdk`; the response reports the selected source and attempted fallback tiers.
 - `GET /proxmox/storage/zfs/pools/{name}?node=` - Read-only ZFS pool detail including state/status/action/scan/errors and recursive vdev `children[]` from Proxmox REST `/nodes/{node}/disks/zfs/{name}`. InfluxDB and JSON-native SSH fallback tiers currently degrade gracefully when not configured/implemented.
+- `POST /proxmox/metrics/influx/query` - Authenticated, provider-neutral InfluxDB v2 query contract. The typed request builds bounded Flux from URL/org/bucket/token, time window, measurement, field/tag filters, optional aggregation, and row/response limits; raw Flux is not accepted. The normalized response supports annotated CSV and supported JSON with `columns`, `rows`, `row_count`, `truncated`, `query_window`, `captured_at`, and `response_format`.
+- `POST /proxmox/metrics/pull/query` - Authenticated direct Proxmox metrics pull. The typed request selects one configured endpoint, applies bounded time/object/metric/row/byte filters, and invokes only `cluster/metrics/export`.
 - `GET /proxmox/{top_level}` where `top_level` is one of `access`, `cluster`, `nodes`, `storage`, or `version`
 - `GET /proxmox/{node}/{type}/{vmid}/config`
 
@@ -386,6 +388,60 @@ Validation rules:
 - `GET /proxmox/nodes/{node}/network`
 - `GET /proxmox/nodes/{node}/qemu`
 - `GET /proxmox/replication`
+
+### Metrics query transports
+
+`POST /proxmox/metrics/influx/query` is authenticated by the normal
+`X-Proxbox-API-Key` middleware and queries the caller-selected InfluxDB v2
+endpoint. The token is used only for that upstream request; it is not stored,
+returned, or included in logs and errors. The backend does not call NetBox,
+netbox-monitoring, netbox-nms, or nms-backend for this contract.
+
+The request includes `url`, `org`, `bucket`, `token`, `measurement`, optional
+mutually exclusive `field` or bounded `fields[]`, `filters[]` (`key`, `value`, `scope` of `tag` or `field`, and `operator`
+of `==` or `!=`), optional `aggregation` (`every`, `function`), `start`, `stop`,
+`timeout_seconds`, `max_rows`, and `max_response_bytes`. URLs must use HTTPS and
+cannot contain credentials, query strings, or fragments. Time values are bounded relative
+Influx durations or timezone-qualified RFC3339 timestamps. The client adds an
+upstream `limit` of one row beyond the requested bound so the response can
+report `truncated=true` without returning extra rows.
+
+Successful responses normalize annotated CSV and the supported Influx JSON
+`results`/`tables` and `results`/`series` shapes. Empty valid results return an
+empty normalized response; empty bodies, malformed data, timeouts, TLS and
+transport failures, upstream HTTP failures, and oversized responses map to
+stable secret-safe error reasons. `max_response_bytes` bounds both the upstream
+body and the normalized JSON response, preventing repeated column names from
+amplifying a compact upstream table during serialization. The URL must use
+HTTPS. The shared SSRF policy
+rejects loopback, link-local, metadata, multicast, and other unsafe resolved
+addresses while permitting private IPv4 ranges for on-premises InfluxDB. The
+backend pins the validated address, disables redirects and proxy environment
+variables, and rejects `verify_ssl=false` unless
+`PROXBOX_ALLOW_INSECURE_INFLUX_TLS` is explicitly enabled. This query route is
+separate from metric server configuration and does not read or mutate that
+configuration.
+
+`POST /proxmox/metrics/pull/query` resolves exactly one existing endpoint from
+the database or NetBox endpoint source. It accepts an exact `endpoint_id` or
+one selector (`target_name`, `target_domain`, or `target_ip_address`), optional bounded
+`object_ids`, `object_prefixes`, and `metric_names`, plus `start_time`,
+`history`, `local_only`, `max_rows`, and `max_response_bytes`. History requires
+a start time. The implementation calls only `cluster/metrics/export`; callers
+cannot provide a Proxmox path. Rows are validated, sorted by timestamp/object/
+metric, and deduplicated by `(object_id, metric, timestamp)`. Conflicting
+duplicate identities and malformed, non-finite, oversized, or unbounded
+provider data fail with secret-safe reasons.
+
+The pull transport enforces the response-byte limit while streaming from the
+authenticated Proxmox HTTPS backend, before JSON materialization. It requests
+identity encoding, disables automatic decompression, rejects a declared or
+observed body over the limit, rejects transport-compressed responses, and does
+not follow redirects. Boolean query parameters use the Proxmox-compatible `0`
+and `1` encodings. The
+compatibility adapter automatically uses the SDK's public bounded-read method
+when available; the pinned `proxmox-sdk==0.0.13` follows the equivalent isolated
+legacy adapter.
 
 ### High-Availability (read-only)
 

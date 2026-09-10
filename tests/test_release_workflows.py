@@ -718,7 +718,7 @@ def test_gitea_package_publication_links_an_exact_release_manifest():
     )
     assert "scripts/release_artifacts.py manifest" in create_source
     assert "scripts/release_artifacts.py publish-manifest" in publish_source
-    assert '--owner emersonfelipesp --repository proxbox-api' in publish_source
+    assert "--owner emersonfelipesp --repository proxbox-api" in publish_source
     assert publish_step["env"]["GITEA_PACKAGE_TOKEN"] == "${{ secrets.PKG_TOKEN }}"
 
 

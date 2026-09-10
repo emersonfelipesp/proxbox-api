@@ -21,6 +21,7 @@ dependencies = [
     "sqlmodel==0.0.38",
     "pydantic==2.13.3",
     "httpx>=0.28.1",
+    "httpcore>=1.0.9",
     "aiosqlite>=0.20.0,<1.0.0",
     "cryptography>=50.0.0,<51.0.0",
     "bcrypt>=5.0.0,<6.0.0",

@@ -43,6 +43,7 @@ Cache invalidation is precise (not prefix-based): updating `/api/dcim/devices/55
   - `/netbox`
   - `/proxmox`
   - `/proxmox/cluster/ha/*` — read-only High-Availability aggregation across configured clusters; see [Cluster HA API](../api/cluster-ha.md).
+  - `/proxmox/metrics/influx/query` and `/proxmox/metrics/pull/query` — authenticated, bounded transports for InfluxDB v2 and the fixed Proxmox `cluster/metrics/export` operation; see [HTTP API Reference](../api/http-reference.md#metrics-query-transports).
   - `/proxmox/{qemu,lxc}/{vmid}/{start,stop,snapshot,migrate}` — operational write verbs (plus DELETE-to-cancel and GET-stream for migrate). Gated by `ProxmoxEndpoint.allow_writes`. See [HTTP API Reference — VM Operational Verbs](../api/http-reference.md#vm-operational-verbs).
   - `/dcim`
   - `/virtualization`
