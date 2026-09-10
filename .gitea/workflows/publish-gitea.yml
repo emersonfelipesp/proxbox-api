@@ -268,6 +268,8 @@ jobs:
       # abort with "fatal: $HOME not set" without this. mirror-host runs as root.
       HOME: /root
       GH_CONFIG_DIR: ${{ runner.temp }}/gh-config
+      GIT_CONFIG_GLOBAL: ${{ runner.temp }}/gitconfig
+      XDG_CONFIG_HOME: ${{ runner.temp }}/xdg-config
       VERSION: ${{ needs.validate-version.outputs.version }}
       TAG: ${{ needs.validate-version.outputs.tag }}
       IS_RC: ${{ needs.validate-version.outputs.is_rc }}
@@ -277,7 +279,8 @@ jobs:
       - name: Install GitHub CLI
         run: |
           set -euo pipefail
-          install -d -m 0700 "${GH_CONFIG_DIR}"
+          install -d -m 0700 "${GH_CONFIG_DIR}" "${XDG_CONFIG_HOME}"
+          install -m 0600 /dev/null "${GIT_CONFIG_GLOBAL}"
           if command -v gh >/dev/null 2>&1; then gh --version; exit 0; fi
           apt-get update -qq
           apt-get install -y ca-certificates curl gnupg

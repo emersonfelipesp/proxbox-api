@@ -696,7 +696,7 @@ def test_gitea_package_publication_checks_out_the_exact_tag_without_nodejs():
     assert "github.event_name == 'push'" in parsed["jobs"]["push-to-github"]["if"]
 
 
-def test_github_promotion_uses_a_private_writable_cli_config_directory():
+def test_github_promotion_uses_private_writable_cli_and_git_config():
     parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
     promotion_job = parsed["jobs"]["push-to-github"]
     install_step = next(
@@ -705,10 +705,13 @@ def test_github_promotion_uses_a_private_writable_cli_config_directory():
     install_source = str(install_step["run"])
 
     assert promotion_job["env"]["GH_CONFIG_DIR"] == "${{ runner.temp }}/gh-config"
-    assert 'install -d -m 0700 "${GH_CONFIG_DIR}"' in install_source
-    assert install_source.index('install -d -m 0700 "${GH_CONFIG_DIR}"') < install_source.index(
-        "gh --version"
-    )
+    assert promotion_job["env"]["GIT_CONFIG_GLOBAL"] == "${{ runner.temp }}/gitconfig"
+    assert promotion_job["env"]["XDG_CONFIG_HOME"] == "${{ runner.temp }}/xdg-config"
+    assert 'install -d -m 0700 "${GH_CONFIG_DIR}" "${XDG_CONFIG_HOME}"' in install_source
+    assert 'install -m 0600 /dev/null "${GIT_CONFIG_GLOBAL}"' in install_source
+    assert install_source.index(
+        'install -m 0600 /dev/null "${GIT_CONFIG_GLOBAL}"'
+    ) < install_source.index("gh --version")
 
 
 def test_gitea_package_publication_links_an_exact_release_manifest():
