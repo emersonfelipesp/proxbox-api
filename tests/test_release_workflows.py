@@ -714,6 +714,22 @@ def test_github_promotion_uses_private_writable_cli_and_git_config():
     ) < install_source.index("gh --version")
 
 
+def test_github_promotion_creates_and_pushes_the_verified_local_tag_ref():
+    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
+    steps = parsed["jobs"]["push-to-github"]["steps"]
+    checkout_source = str(
+        next(step for step in steps if step["name"] == "Checkout exact public tag without Node.js")[
+            "run"
+        ]
+    )
+    push_source = str(next(step for step in steps if step["name"] == "Push tag to GitHub")["run"])
+
+    assert '"refs/tags/${TAG}:refs/tags/${TAG}"' in checkout_source
+    assert 'git rev-parse "refs/tags/${TAG}^{commit}"' in checkout_source
+    assert 'git rev-parse "refs/tags/${TAG}"' in checkout_source
+    assert 'git push github "refs/tags/${TAG}:refs/tags/${TAG}"' in push_source
+
+
 def test_gitea_package_publication_links_an_exact_release_manifest():
     parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
     steps = parsed["jobs"]["publish-gitea"]["steps"]

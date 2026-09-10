@@ -276,7 +276,67 @@ def _mounted_fastapi_path(openapi_path: str, operation: dict[str, object]) -> st
     return mounted_path
 
 
-def _build_generated_endpoint(  # noqa: C901
+def _unique_parameter_name(base: str, used_names: set[str]) -> str:
+    candidate = base
+    suffix = 1
+    while candidate in used_names:
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _operation_signature_parameter(
+    parameter: dict[str, object], python_name: str
+) -> inspect.Parameter:
+    schema = parameter.get("schema") if isinstance(parameter.get("schema"), dict) else {}
+    annotation = _schema_to_annotation(schema)
+    description = parameter.get("description")
+    if parameter.get("in") == "path":
+        default = Path(..., description=description)
+    else:
+        required = bool(parameter.get("required"))
+        if not required:
+            annotation = annotation | None
+        original_name = parameter["name"]
+        alias = original_name if python_name != original_name else None
+        if original_name in {"source", "target_name", "target_domain", "target_ip_address"}:
+            alias = f"op_{original_name}"
+        default = Query(... if required else None, description=description, alias=alias)
+    return inspect.Parameter(
+        python_name,
+        inspect.Parameter.KEYWORD_ONLY,
+        annotation=annotation,
+        default=default,
+    )
+
+
+def _append_operation_parameters(
+    operation: dict[str, object],
+    signature_parameters: list[inspect.Parameter],
+    path_param_name_map: dict[str, str],
+) -> dict[str, str]:
+    used_parameter_names = {param.name for param in signature_parameters}
+    query_param_map: dict[str, str] = {}
+    for parameter in _operation_parameters(operation):
+        location = parameter.get("in")
+        original_name = parameter.get("name")
+        if not isinstance(original_name, str) or location not in {"path", "query"}:
+            continue
+        python_name = (
+            path_param_name_map.get(original_name, slugify_identifier(original_name))
+            if location == "path"
+            else slugify_identifier(original_name)
+        )
+        if python_name in used_parameter_names:
+            python_name = _unique_parameter_name(f"op_{python_name}", used_parameter_names)
+        if location == "query":
+            query_param_map[python_name] = original_name
+        signature_parameters.append(_operation_signature_parameter(parameter, python_name))
+        used_parameter_names.add(python_name)
+    return query_param_map
+
+
+def _build_generated_endpoint(
     *,
     openapi_path: str,
     method: str,
@@ -289,7 +349,6 @@ def _build_generated_endpoint(  # noqa: C901
     path_param_map: dict[str, str] = {
         python_name: original_name for original_name, python_name in path_param_name_map.items()
     }
-    query_param_map: dict[str, str] = {}
     signature_parameters: list[inspect.Parameter] = [
         inspect.Parameter(
             "_database_session",
@@ -335,70 +394,9 @@ def _build_generated_endpoint(  # noqa: C901
         ),
     ]
 
-    used_parameter_names = {param.name for param in signature_parameters}
-    control_query_aliases = {"source", "target_name", "target_domain", "target_ip_address"}
-
-    def unique_parameter_name(base: str) -> str:
-        candidate = base
-        suffix = 1
-        while candidate in used_parameter_names:
-            candidate = f"{base}_{suffix}"
-            suffix += 1
-        return candidate
-
-    for parameter in _operation_parameters(operation):
-        location = parameter.get("in")
-        original_name = parameter.get("name")
-        if not isinstance(original_name, str):
-            continue
-
-        schema = parameter.get("schema") if isinstance(parameter.get("schema"), dict) else {}
-        description = parameter.get("description")
-        required = bool(parameter.get("required"))
-        python_name = (
-            path_param_name_map[original_name]
-            if location == "path" and original_name in path_param_name_map
-            else slugify_identifier(original_name)
-        )
-        if python_name in used_parameter_names:
-            python_name = unique_parameter_name(f"op_{python_name}")
-        annotation = _schema_to_annotation(schema)
-        alias: str | None = original_name if python_name != original_name else None
-        if location == "query" and original_name in control_query_aliases:
-            alias = f"op_{original_name}"
-
-        if location == "path":
-            signature_parameters.append(
-                inspect.Parameter(
-                    python_name,
-                    inspect.Parameter.KEYWORD_ONLY,
-                    annotation=annotation,
-                    default=Path(
-                        ...,
-                        description=description,
-                    ),
-                )
-            )
-            used_parameter_names.add(python_name)
-            continue
-
-        if location == "query":
-            query_param_map[python_name] = original_name
-            if not required:
-                annotation = annotation | None
-            signature_parameters.append(
-                inspect.Parameter(
-                    python_name,
-                    inspect.Parameter.KEYWORD_ONLY,
-                    annotation=annotation,
-                    default=Query(
-                        ... if required else None,
-                        description=description,
-                        alias=alias,
-                    ),
-                )
-            )
-            used_parameter_names.add(python_name)
+    query_param_map = _append_operation_parameters(
+        operation, signature_parameters, path_param_name_map
+    )
 
     if request_model is not None:
         signature_parameters.append(
@@ -411,8 +409,9 @@ def _build_generated_endpoint(  # noqa: C901
         )
 
     async def generated_endpoint(**kwargs: object) -> object:
+        _require_generated_read(method)
         database_session = kwargs.pop("_database_session")
-        request_body = kwargs.pop("request_body", None)
+        kwargs.pop("request_body", None)
         source = kwargs.pop("source", "database")
         name = kwargs.pop("target_name", None)
         domain = kwargs.pop("target_domain", None)
@@ -439,17 +438,7 @@ def _build_generated_endpoint(  # noqa: C901
             }
 
             resource = target.session(_render_proxmox_path(openapi_path, path_values).lstrip("/"))
-            handler = getattr(resource, method.lower())
-
-            payload: dict[str, object] = {}
-            if request_body is not None:
-                payload.update(request_body.model_dump(by_alias=True, exclude_none=True))
-            payload.update(query_values)
-
-            if method.upper() == "GET":
-                result = await resolve_async(handler(**query_values))
-            else:
-                result = await resolve_async(handler(**payload))
+            result = await resolve_async(resource.get(**query_values))
         except ProxboxException:
             raise
         except Exception as error:
@@ -482,6 +471,32 @@ def _build_generated_endpoint(  # noqa: C901
         return_annotation=response_model or dict[str, object],
     )
     return generated_endpoint
+
+
+def _require_generated_read(method: str) -> None:
+    """Reject unsupported dispatch before resolving a target or its credentials."""
+    if method.upper() != "GET":
+        raise ProxboxException(
+            message="Generated Proxmox proxy routes are read-only.",
+            detail="Use a typed, audited RPC procedure for mutation operations.",
+            http_status_code=403,
+        )
+
+
+def _generated_operation_metadata(method: str, operation: dict[str, object]) -> dict[str, object]:
+    """Retain mutation schemas for discovery while documenting their runtime denial."""
+    if method.upper() == "GET":
+        return {"description": operation.get("description")}
+    notice = (
+        "Disabled: generated Proxmox proxy routes are read-only. "
+        "This operation returns HTTP 403 without resolving a target or its credentials. "
+        "Use a typed, audited RPC procedure for mutation operations."
+    )
+    return {
+        "description": f"{notice}\n\n{operation.get('description') or ''}".rstrip(),
+        "deprecated": True,
+        "responses": {403: {"description": notice}},
+    }
 
 
 def _remove_generated_routes(app: FastAPI, route_names: set[str]) -> None:
@@ -553,7 +568,7 @@ def _build_version_route_specs(
                     "methods": [method.upper()],
                     "name": base_route_name,
                     "summary": operation.get("summary"),
-                    "description": operation.get("description"),
+                    **_generated_operation_metadata(method, operation),
                     "response_model": response_model,
                     "tags": [f"{_GENERATED_ROUTE_TAG_PREFIX} / {version_tag}"],
                     # Only expose the latest version in Swagger UI; older versions
@@ -572,7 +587,7 @@ def _build_version_route_specs(
                         "methods": [method.upper()],
                         "name": alias_route_name,
                         "summary": operation.get("summary"),
-                        "description": operation.get("description"),
+                        **_generated_operation_metadata(method, operation),
                         "response_model": response_model,
                         "tags": [f"{_GENERATED_ROUTE_TAG_PREFIX} / {version_tag}"],
                         # Alias duplicates the versioned latest route; hide to avoid

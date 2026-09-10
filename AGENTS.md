@@ -11,6 +11,12 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code you are changing.
 
+## Proxmox Browser Console Sessions
+
+Read [`docs/api/console-sessions.md`](docs/api/console-sessions.md) and `proxbox_api/routes/proxmox/CLAUDE.md` before changing `POST /proxmox/console/sessions`, `ConsoleSessionRequest`, `ConsoleSessionResponse`, `_request_console_proxy()`, `_console_ticket()`, `_console_port()`, `_build_ws_url()`, or `ProxmoxSession.get_websocket_auth()`. This route returns private, short-lived Proxmox transport material only to the trusted `nms-backend` relay. Preserve the explicit QEMU/LXC mode matrix, local endpoint-ID meaning, stored TLS policy, full ticket encoding, exactly one API-token or password-session WebSocket authentication value, and the rule that tickets, upstream URLs, cookies, and authorization values never reach browser JavaScript or logs.
+
+Generated `/proxmox/api2/*` proxy dispatch is read-only. Every non-GET method is refused before target and credential resolution, including cached and rebuilt routes. Mutation schemas remain discoverable but deprecated with a documented 403; use dedicated typed, audited RPC procedures for supported writes. This method guard does not establish effect safety for all GET operations or change handwritten route authorization.
+
 ## Certified Stack Pairing
 
 Current pairing: `netbox-proxbox 0.0.26.post1 ... proxbox-api 0.0.21.post2 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.13`.
@@ -190,7 +196,7 @@ The official release pipeline for proxbox-api runs in this order:
 3. **Data-only request** — `.gitea/workflows/publish-gitea.yml` first requires the exact successful GitHub-hosted offline-image job for the same canonical `develop` SHA and verifies the source-SHA GitHub workflow bytes against the reviewed SHA-256 before trusting that job. The offline job pins every external action by immutable commit. It then builds and uploads the exact signed six-file request: the package wheel, package sdist, `release-manifest.json`, `release-request.json`, `runner-completion-attestation.json`, and `runner-completion-attestation.sig`. Workflow concurrency is global per repository. Validation and build have independent pinned repository-registration scope digests, and the completion statement binds the supervisor-derived build digest; the target client requires each role's evidence to match its pinned acceptance value. The workflow has no package or mirror credential and cannot publish or push tags.
 4. **Locked validation and publication** — dispatch `validate.yml` first, then the separate irreversible `publish.yml`, each with exactly the repository name, first-attempt target run ID, and request SHA-256. Its isolated builder verifies and seals the bytes; its isolated publisher uploads the exact package and promotes only RC tags to GitHub.
 5. **RC validation** — GitHub `push: tags: v*rc*` validates the exact Gitea bytes through TestPyPI.
-6. **Production gate** — link and verify the final Gitea package, then deploy through NMS using `latest_package` by default (or explicitly selected `main_branch`).
+6. **Production gate** — link and verify the final Gitea package, then deploy through the approved management gateway using `latest_package` by default (or explicitly selected `main_branch`).
 7. **Public promotion** — after production health validation, promote the final tag and create the GitHub Release. Its `release: published` event is the sole automatic authority for PyPI and then Docker Hub.
 
 The proxbox-api request build must first generate the release-only offline
@@ -252,7 +258,7 @@ install only the locked publisher dependency group with
 
 ### Immutability
 
-Package uploads never use `--skip-existing`. A consumed Gitea, TestPyPI, or PyPI version is never overwritten or retried with different bytes; advance to the next `rcN` or `postN` and record it in the release ledger. GitHub promotes the exact repository-linked Gitea wheel/sdist and requires immutable successful-NMS-deployment evidence for final publication.
+Package uploads never use `--skip-existing`. A consumed Gitea, TestPyPI, or PyPI version is never overwritten or retried with different bytes; advance to the next `rcN` or `postN` and record it in the release ledger. GitHub promotes the exact repository-linked Gitea wheel/sdist and requires immutable successful-production-deployment evidence for final publication.
 
 ## Code Quality Standards
 
@@ -308,7 +314,7 @@ Type mismatches block merge. Use `# type: ignore` only with justification.
 Before writing code, confirm:
 1. The feature is traceable to a GitHub issue (link it in the PR description)
 2. The design is documented (update nearest CLAUDE.md with route/schema changes)
-3. You've identified downstream impacts (netbox-proxbox plugin, NMS frontend, Firecracker host-agents)
+3. You've identified downstream impacts (netbox-proxbox plugin, management frontend, Firecracker host-agents)
 4. You've identified all derived requirements (e.g., "requires NetBox ≥X.Y.Z")
 
 ### Configuration Control
@@ -325,7 +331,7 @@ Changes to these configuration items require explicit PR description and CLAUDE.
 If your change touches Cloud provisioning:
 1. Verify the host-agent provisioning contract is documented
 2. Confirm `FirecrackerMicroVM` rows use `kind="firecracker"` and `instance_ref="firecracker:<id>"`
-3. Check that provisioning streams conform to the nms-backend contract
+3. Check that provisioning streams conform to the management backend contract
 4. Validate that netbox-proxbox inventory calls are compatible with the current plugin version
 
 Violating these invariants breaks production cloud provisioning.
@@ -345,9 +351,9 @@ GitHub git credentials through `gh auth setup-git`, and pushes only
 
 Branch-tier deploys run from Gitea through
 `.gitea/workflows/deploy-production.yml` on the `prod-deploy` runner hosted by
-the Gitea server (`10.0.30.96`). Pushes to `develop` deploy
+the configured Gitea server. Pushes to `develop` deploy
 `proxbox-api-staging` to `https://staging.backend.proxbox.nmulti.cloud`.
-Production is an NMS-dispatched manual workflow from canonical `main`, with
+Production is a management-dispatched manual workflow from canonical `main`, with
 `latest_package` as the default and `main_branch` as an explicit override. The
 runner uses fixed, allowlisted deployment gateways and emits protected package-
 deployment evidence only after production health, installed version, and exact
@@ -366,29 +372,24 @@ job env holds no secrets, so an omission reaches the registry with an empty
 bearer and fails as an opaque `HTTP 401`. `manifest` and `validate-attestation`
 are local-only and do not take the secret.
 
-The deployment target is `10.0.30.207`. Docker Compose metadata lives outside
+The deployment target is selected by the private inventory. Docker Compose metadata lives outside
 the repo under `/opt/nmulticloud/deploy`, with the production image built from
 this repo's `Dockerfile` raw uvicorn target. The container uses host networking,
 binds `PROXBOX_BIND_HOST=127.0.0.1`, listens on `PORT=18800`, and sets
 `UVICORN_WORKERS=4` to match the previous systemd unit. Runtime secrets stay
-outside Git in `/etc/nms/proxbox-api-production.env`, and SQLite state is
+outside Git in the operator-managed production environment file, and SQLite state is
 mounted from `/opt/nmulticloud/deploy/state/proxbox-api/database.db` through
 `PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db`.
 
 The staging container uses the sibling `proxbox-api-staging` deploy app,
 listens on `PORT=18801`, stores runtime secrets in
-`/etc/nms/proxbox-api-staging.env`, and mounts SQLite state from
+the operator-managed staging environment file, and mounts SQLite state from
 `/opt/nmulticloud/deploy/state/proxbox-api-staging/database.db`.
 
-Operational checks:
-
-```bash
-ssh nmc-prod-207 -- status proxbox-api
-ssh nmc-prod-207 -- status proxbox-api-staging
-ssh nmc-prod-207 -- health proxbox-api
-curl -fsS http://127.0.0.1:18800/health
-curl -fsS http://127.0.0.1:18801/health
-```
+Resolve deployment targets and run status, logs, and health checks through the
+authorized management tooling described by the operator's private workspace
+operations guide. Do not infer a host address from this public repository or
+bypass the management gateway with direct host commands.
 
 `proxbox-api-production.service` is the fallback systemd unit only during
 cutover or rollback. Do not restart it while the Docker container is healthy.
@@ -451,7 +452,7 @@ creating `dcim.MACAddress` rows or assigning `primary_mac_address`.
 
 Firecracker provisioning lives in `proxbox_api/routes/cloud/firecracker.py`,
 `proxbox_api/firecracker_agent/`, and `proxbox_api/schemas/firecracker.py`.
-`nms-backend` resolves NetBox Proxbox host/image inventory and creates the
+The management backend resolves NetBox Proxbox host/image inventory and creates the
 `FirecrackerMicroVM` row, then calls this backend at
 `POST /cloud/firecracker/provision` or
 `POST /cloud/firecracker/provision/stream`. This repo owns the host-agent HTTP
@@ -470,7 +471,7 @@ Live QEMU Cloud-Init template discovery lives in
 Proxmox cluster resources for the selected endpoint, filters QEMU VM templates,
 reads each template config, and returns only templates with a Cloud-Init drive
 or `cicustom` metadata by default. The route is read-only and is consumed by
-`nms-backend /cloud/vm/templates` for the NMS VM creation UI.
+the management backend's `/cloud/vm/templates` route for the VM creation UI.
 
 QEMU provisioning (`POST /cloud/vm/provision` and the SSE variant) accepts
 optional `sockets`, `bridge`, `vlan_tag`, and `disk_gb` fields. These are
@@ -571,7 +572,7 @@ Read-only preflight and response privacy rules:
   cover cleanup failures and cancellation so this remains evidence, not an
   assumption.
 - Preflight v1 and build response v2 remain supported through `0.0.21.x`; a
-  breaking replacement is no earlier than `0.0.22.0` and must be documented.
+  breaking replacement is no earlier than `v0.0.22.0` and must be documented.
   During that window, accept `storage` only as a compatibility alias for the
   canonical `vm_storage`; reject conflicts and do not emit `storage` in OpenAPI.
 
@@ -598,7 +599,7 @@ Execution rules:
   `qm importdisk` output instead of guessed from `pvesm list`.
 - Linux uses `virtio-scsi-single` + `scsi0`; the Windows-safe profile uses
   `sata0` + `e1000` for first boot before VirtIO drivers are installed.
-- The route is consumed by the NMS admin page
+- The route is consumed by the management admin page
   `/cloud/azure-to-nmulticloud-migration`.
 
 ## Primary Guide

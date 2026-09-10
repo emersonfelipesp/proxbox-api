@@ -26,6 +26,7 @@ docs/
 ├── architecture/               # System overview and design patterns
 ├── api/                        # HTTP and WebSocket API reference
 │   ├── http-reference.md
+│   ├── console-sessions.md      # Private Proxmox console-session broker for the trusted NMS relay
 │   ├── websocket-reference.md
 │   ├── cache.md                # Cache/reconcile plus aggregate auth capacity/row/reservation metrics
 │   └── cluster-ha.md
@@ -67,6 +68,7 @@ uv run mkdocs build
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
 - API reference in `docs/api/` should match the actual route signatures in `proxbox_api/routes/`.
+- Keep `api/console-sessions.md` and `pt-BR/api/console-sessions.md` synchronized with `proxbox_api/routes/proxmox/console.py`, `ProxmoxSession.get_websocket_auth()`, the trusted `nms-backend` relay contract, and `tests/proxmox/test_console_route.py`.
 - Auth-lockout documentation must distinguish bcrypt reservation-capacity 503s
   from bounded failure-row partition saturation. Keep the English and pt-BR
   cache metrics tables aligned with `get_auth_lockout_metrics()`.

@@ -138,7 +138,7 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   `cluster_links.sync_proxmox_cluster_netbox_link()` to set or repair every
   matching netbox-proxbox `ProxmoxCluster.netbox_cluster` row by exact cluster
   name. This backfills existing multi-endpoint plugin rows whose
-  `netbox_cluster` was previously null and keeps the NMS Cloud
+  `netbox_cluster` was previously null and keeps the cloud provisioning
   cluster-to-endpoint map resolvable after re-sync.
 - **Shared-MAC guest interfaces.** Guest-agent interfaces that share a Proxmox
   config NIC MAC are aggregated onto the single NetBox VMInterface for that

@@ -69,6 +69,12 @@ Firecracker host-agent provisioning is documented in
 [`docs/operations/firecracker.md`](docs/operations/firecracker.md), including
 the Cloud endpoints, SSE events, request shape, and response shape.
 
+The private Proxmox console-session broker is documented in
+[`docs/api/console-sessions.md`](docs/api/console-sessions.md), including the
+trusted-relay boundary, `vncproxy`/`termproxy` selection, ticket normalization,
+WebSocket authentication, URL construction, endpoint TLS policy, secret
+handling, and regression coverage.
+
 The Cloud Image Pipeline exposes a versioned, endpoint-scoped read-only
 preflight at `POST /cloud/templates/images/preflight`. Its v1 findings validate
 the exact persisted endpoint session, node, provider-derived storage content

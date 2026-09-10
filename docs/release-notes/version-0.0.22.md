@@ -15,6 +15,7 @@ proxbox-api 0.0.22 adds authenticated, bounded transports for querying Proxmox m
 - Verify the repository-linked Gitea release manifest after upload even when Gitea reports an already-applied package link as HTTP 400.
 - Isolate GitHub CLI configuration in the runner's private temporary directory so public tag promotion does not depend on the host root configuration.
 - Isolate Git global and XDG configuration in runner-private paths so GitHub credential-helper setup does not read or write host root files.
+- Materialize the verified fetched tag as the exact local tag ref before GitHub promotion, so the push preserves the annotated tag object instead of addressing a missing ref.
 
 ## Security and operational impact
 

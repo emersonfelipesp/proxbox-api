@@ -653,6 +653,9 @@ def test_generated_routes_appear_in_openapi():
     assert post_acl["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     assert "proxmox / live-generated / latest" in post_acl["tags"]
     assert "## Usage" in post_acl["description"]
+    assert "read-only" in post_acl["description"]
+    assert post_acl["deprecated"] is True
+    assert "403" in post_acl["responses"]
 
 
 def test_generated_proxy_route_forwards_request_and_validates_response(
@@ -673,7 +676,7 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
         session.add(
             ProxmoxEndpoint(
                 name="pve01",
-                ip_address="10.0.0.10",
+                ip_address="127.0.0.1",
                 domain="pve01.local",
                 port=8006,
                 username="root@pam",
@@ -696,22 +699,14 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
 
     _headers = {"X-Proxbox-API-Key": _TEST_API_KEY}
     with TestClient(app) as client:
-        response = client.post(
-            "/proxmox/api2/latest/access/acl",
-            json={
-                "path": "/vms",
-                "roles": "PVEAdmin",
-                "groups-autocreate": True,
-            },
+        response = client.get(
+            "/proxmox/api2/latest/cluster/resources",
+            params={"type": "vm"},
             headers=_headers,
         )
-        alias_response = client.post(
-            "/proxmox/api2/access/acl",
-            json={
-                "path": "/vms",
-                "roles": "PVEAdmin",
-                "groups-autocreate": True,
-            },
+        alias_response = client.get(
+            "/proxmox/api2/cluster/resources",
+            params={"type": "vm"},
             headers=_headers,
         )
 
@@ -719,12 +714,12 @@ def test_generated_proxy_route_forwards_request_and_validates_response(
 
     assert response.status_code == 200
     assert alias_response.status_code == 200
-    assert response.json()["path"] == "access/acl"
-    assert response.json()["payload"]["groups-autocreate"] is True
+    assert response.json()["path"] == "cluster/resources"
+    assert response.json()["params"] == {"type": "vm"}
     assert ProxyFakeProxmoxAPI.instances[-1].calls[-1] == (
-        "POST",
-        "access/acl",
-        {"path": "/vms", "roles": "PVEAdmin", "groups-autocreate": True},
+        "GET",
+        "cluster/resources",
+        {"type": "vm"},
     )
 
 
@@ -746,7 +741,7 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
         session.add(
             ProxmoxEndpoint(
                 name="pve01",
-                ip_address="10.0.0.10",
+                ip_address="127.0.0.1",
                 domain="pve01.local",
                 port=8006,
                 username="root@pam",
@@ -757,7 +752,7 @@ def test_generated_proxy_route_requires_explicit_selector_for_multiple_endpoints
         session.add(
             ProxmoxEndpoint(
                 name="pve02",
-                ip_address="10.0.0.11",
+                ip_address="::1",
                 domain="pve02.local",
                 port=8006,
                 username="root@pam",
@@ -871,6 +866,12 @@ def test_every_generated_proxy_route_has_mock_based_schema_validated_coverage(
 
     with TestClient(app) as client:
         response = client.request(case["method"], case["route_path"], **request_kwargs)
+
+    if case["method"] != "GET":
+        assert response.status_code == 403, response.text
+        assert fake_target.closed == 0
+        assert fake_target.session.calls == []
+        return
 
     assert response.status_code == 200, response.text
     assert fake_target.closed == 1

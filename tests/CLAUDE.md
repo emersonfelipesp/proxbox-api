@@ -15,8 +15,11 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 
 ## Test File Index
 
+`test_generated_write_boundary.py` provides the independent generated-proxy mutation denial matrix. It uses application authentication and checks that denied requests never resolve a target across explicit versions, aliases, in-process reuse, disk-cache reload, and forced rebuild. Keep its expected methods independent of the production policy. The exhaustive generated route suite forwards only reads and asserts no upstream mutation calls.
+
 | File | What it tests |
 |------|---------------|
+| `proxmox/test_console_route.py` | Private console-session broker: strict mode schema, endpoint loading, QEMU/LXC `vncproxy`/`termproxy` routing, ticket/port normalization, URL encoding, API-token and password-session WebSocket authentication, TLS policy, and sanitized failures. Keep aligned with `docs/api/console-sessions.md`. |
 | `test_proxmox_influx_metrics.py` | Bounded structured Flux generation, destination controls, upstream and normalized response-byte limits, response normalization, and secret-safe Influx failures. |
 | `test_proxmox_metrics_pull.py` | Fixed `cluster/metrics/export` routing, endpoint selection, request and response bounds, filtering, deterministic sorting/deduplication, session closure, authentication, and secret-safe pull failures. |
 | `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers |

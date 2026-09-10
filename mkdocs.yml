@@ -66,6 +66,7 @@ nav:
       - Caching: architecture/caching.md
   - API:
       - HTTP Reference: api/http-reference.md
+      - Proxmox Console Sessions: api/console-sessions.md
       - Service Routes: api/service-routes.md
       - WebSocket Reference: api/websocket-reference.md
       - Cache API: api/cache.md

@@ -33,7 +33,7 @@ All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. 
 
 ## Service Route Groups
 
-PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
+PBS, PDM, Ceph, intent, SSH, and the broader cloud management route groups are
 documented in [Service Routes](./service-routes.md). That page also explains
 `PROXBOX_FEATURES` sidecar-only mounting and the write gates used by cloud and
 intent routes.
@@ -233,13 +233,13 @@ shape and should validate detailed input locally against OpenAPI.
 
 Compatibility window: preflight v1 and secret-safe build response v2 remain
 supported through `0.0.21.x`. A breaking replacement cannot be introduced
-before `0.0.22.0` and must be documented first. Legacy raw build/output fields
+before `v0.0.22.0` and must be documented first. Legacy raw build/output fields
 were removed immediately from default responses as a security correction and
 are not covered by this compatibility window.
 
 ## Cloud Firecracker (`/cloud/firecracker`)
 
-These endpoints are called by `nms-backend` after it resolves the selected
+These endpoints are called by the management backend after it resolves the selected
 Firecracker host/image inventory from `netbox-proxbox` and creates the
 `FirecrackerMicroVM` row in NetBox.
 
@@ -275,7 +275,7 @@ optional `guest_ip`, and optional `detail`.
 ## Cloud Azure VHD Import (`/cloud/azure`)
 
 Operator-facing Azure managed-disk V2V planning and optional remote execution.
-This endpoint is consumed by the NMS page
+This endpoint is consumed by the management page
 `/cloud/azure-to-nmulticloud-migration`.
 
 - `POST /cloud/azure/vhd-imports` - Validate an Azure-exported VHD import
@@ -348,9 +348,11 @@ Attempting to create a second endpoint returns HTTP 400 with:
 
 ### Browser Console Session
 
-`POST /proxmox/console/sessions` creates the short-lived upstream session used by the trusted nms-backend console relay. The request selects an exact endpoint, node, VMID, workload type, and console type. QEMU supports `novnc` and `term`; LXC supports `term` only.
+`POST /proxmox/console/sessions` creates the short-lived upstream session used by the trusted management console relay. The request selects an exact endpoint, node, VMID, workload type, and console type. QEMU supports `novnc` and `term`; LXC supports `term` only.
 
-The response contains the one-time VNC ticket URL, endpoint TLS policy, and a bounded `websocket_auth` object. `websocket_auth.kind` is `authorization` for a Proxmox API-token endpoint or `cookie` for a password-session endpoint. Its `value` is sensitive service-to-service transport material. nms-backend stores it in its one-use Redis relay ticket and attaches it only to the upstream WebSocket handshake; it must never be returned to browser JavaScript or written to logs.
+The response contains the one-time VNC ticket URL, endpoint TLS policy, and a bounded `websocket_auth` object. `websocket_auth.kind` is `authorization` for a Proxmox API-token endpoint or `cookie` for a password-session endpoint. Its `value` is sensitive service-to-service transport material. The management backend stores it in its one-use Redis relay ticket and attaches it only to the upstream WebSocket handshake; it must never be returned to browser JavaScript or written to logs.
+
+See [Proxmox Console Sessions](console-sessions.md) for the complete request flow, response-field sensitivity, endpoint resolution, ticket normalization, WebSocket URL construction, authentication modes, TLS policy, failure behavior, security invariants, and tests.
 
 ### Endpoint configuration CRUD
 
@@ -395,7 +397,7 @@ Validation rules:
 `X-Proxbox-API-Key` middleware and queries the caller-selected InfluxDB v2
 endpoint. The token is used only for that upstream request; it is not stored,
 returned, or included in logs and errors. The backend does not call NetBox,
-netbox-monitoring, netbox-nms, or nms-backend for this contract.
+any separate monitoring or management plugin for this contract.
 
 The request includes `url`, `org`, `bucket`, `token`, `measurement`, optional
 mutually exclusive `field` or bounded `fields[]`, `filters[]` (`key`, `value`, `scope` of `tag` or `field`, and `operator`
@@ -615,7 +617,7 @@ not proxbox-api's own SQLite endpoint id.
 - `GET /proxmox/services/systemd?endpoint_id=&units=` — Read current `systemctl show` state for one or more systemd units. `units` is optional and repeatable/comma-separated; when omitted, the endpoint's NetBox `service_monitoring_units` value is used, falling back to the default 11-unit Proxmox set (`pve-cluster.service`, `corosync.service`, `pvedaemon.service`, `pveproxy.service`, `pvestatd.service`, `pve-firewall.service`, `pvescheduler.service`, `spiceproxy.service`, `qmeventd.service`, `pve-ha-lrm.service`, `pve-ha-crm.service`). Unit names must match `^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, contain no `..`, be ≤100 characters, and at most 32 units may be requested per call (`422` on violation). Returns `ProxmoxServicesResponse` (`endpoint_id`, `host`, `collected_at`, `reachable`, `services: list[ProxmoxServiceRecord]`, optional `error`). `reachable=false` (SSH transport unreachable) is a legitimate monitoring result returned as HTTP 200, not an error.
   - **Gated** on the NetBox `ProxmoxEndpoint` being `enabled`, `service_monitoring_enabled=true`, `allow_writes=true`, `access_methods="api_ssh"`, having complete SSH credentials, and netbox-rpc not disabled for the endpoint; otherwise `403` with a `service_monitoring_*` reason code. Unknown `endpoint_id` returns `404`.
   - Executes a fixed-argv `systemctl show --no-pager -p <prop> ... -- <unit> ...` command (no `sudo`); each unit name is additionally `shlex.quote`'d as defense in depth. Bounded by a 10-second SSH command timeout (`error.reason="command_timeout"` with `reachable=true` on expiry, not an exception).
-  - Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure; not intended to be called directly by end users.
+  - Called by the RPC executor's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure; not intended to be called directly by end users.
 
 ### SSH Terminal
 
@@ -645,6 +647,9 @@ See [Schema Management](../development/schema-management.md) for the full workfl
 
 Behavior:
 
+- Generated proxy dispatch is read-only: only `GET` is forwarded. Authenticated, schema-valid `POST`, `PUT`, and `DELETE` requests return HTTP 403 before target selection, credential resolution, or a Proxmox session is opened. Invalid requests can still return the normal authentication or schema-validation errors.
+- Mutation schemas remain visible for discovery, marked deprecated with an explicit 403 response. Existing clients must use supported typed, audited RPC procedures for mutations; an unsupported procedure is unavailable, not a reason to retry through a generated route. There is no generated-write opt-in flag or lease-header bypass.
+- The same denial applies to all explicit versions, the `latest` alias, in-process reuse, persisted cache reload, and forced rebuild. This method boundary does not certify every upstream `GET` as effect-free and does not change handcrafted lifecycle, console, Ceph, or Packer handlers.
 - Routes are built at startup for every generated version present under `proxbox_api/generated/proxmox/`.
 - The mounted route set is cached in `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
 - On `uvicorn --reload`, startup prefers that cache manifest so the previously mounted live route set is preserved in development.
@@ -691,7 +696,7 @@ Examples of generated route shapes:
 
 - `GET /proxmox/api2/latest/cluster/resources`
 - `GET /proxmox/api2/8.3/nodes/{node}/qemu/{vmid}/config`
-- `POST /proxmox/api2/latest/access/acl`
+- `POST /proxmox/api2/latest/access/acl` (disabled; valid authenticated requests return 403)
 - `GET /proxmox/api2/cluster/resources` as the compatibility alias for `latest`
 
 Refresh response shape:
@@ -711,7 +716,8 @@ Refresh response shape:
 
 Test coverage:
 
-- `tests/test_generated_proxmox_routes.py` runs a mock-based exhaustive route suite over every generated operation for every available version plus the `latest` alias.
+- `tests/test_generated_proxmox_routes.py` runs a mock-based exhaustive route suite over every generated operation for every available version plus the `latest` alias. Reads must forward and validate their responses; mutation requests must be denied without an upstream call.
+- `tests/test_generated_write_boundary.py` independently fixes the denied-method matrix and checks authentication, refusal before target resolution, all registration modes, and fail-closed handling of unrecognized methods.
 - `tests/test_pydantic_generator_models.py` verifies generated response models for array, scalar, `null`, and aliased object payloads.
 - `tests/test_session_and_helpers.py` verifies the typed proxmox helper layer and confirms the handcrafted sync dependencies return helper-validated payloads.
 

@@ -172,7 +172,7 @@ detalhes localmente contra o OpenAPI.
 
 Janela de compatibilidade: preflight v1 e resposta segura v2 permanecem
 suportados ate `0.0.21.x`. Uma substituicao breaking nao pode chegar antes de
-`0.0.22.0` e deve ser documentada primeiro. Campos brutos legados de
+`v0.0.22.0` e deve ser documentada primeiro. Campos brutos legados de
 build/output foram removidos imediatamente das respostas padrao como correcao
 de seguranca e nao fazem parte dessa janela.
 
@@ -318,6 +318,9 @@ Outros formatos de 403 usam `reason: "endpoint_id_required"` ou `reason: "endpoi
 
 Comportamento:
 
+- O encaminhamento gerado permite apenas `GET`. Requisições `POST`, `PUT` e `DELETE` autenticadas e válidas conforme o schema retornam HTTP 403 antes da seleção do destino, da resolução de credenciais ou da abertura de uma sessão Proxmox. Requisições inválidas ainda podem retornar os erros normais de autenticação ou validação.
+- Os schemas de mutação permanecem disponíveis para descoberta, marcados como descontinuados e com resposta 403 explícita. Clientes devem usar procedimentos RPC tipados e auditados que sejam suportados; um procedimento indisponível não autoriza tentar uma rota gerada. Não existe flag para habilitar essas escritas nem exceção por cabeçalho de lease.
+- A recusa vale para todas as versões, o alias `latest`, a reutilização em memória, a recarga do cache persistido e a reconstrução forçada. Esse limite por método não certifica que todo `GET` upstream seja livre de efeitos e não altera os handlers manuais de ciclo de vida, console, Ceph ou Packer.
 - As rotas sao montadas no startup para cada versao gerada disponivel em `proxbox_api/generated/proxmox/`.
 - O conjunto montado e armazenado em cache em `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
 - Em `uvicorn --reload`, o startup prefere esse manifest de cache para preservar o conjunto montado durante o desenvolvimento.
@@ -364,7 +367,7 @@ Exemplos de rotas geradas:
 
 - `GET /proxmox/api2/latest/cluster/resources`
 - `GET /proxmox/api2/8.3.0/nodes/{node}/qemu/{vmid}/config`
-- `POST /proxmox/api2/latest/access/acl`
+- `POST /proxmox/api2/latest/access/acl` (desabilitado; requisições autenticadas e válidas retornam 403)
 - `GET /proxmox/api2/cluster/resources` como alias de compatibilidade para `latest`
 
 Formato da resposta de refresh:
@@ -384,7 +387,8 @@ Formato da resposta de refresh:
 
 Cobertura de testes:
 
-- `tests/test_generated_proxmox_routes.py` executa um suite exaustivo de rotas mockadas para cada operacao gerada em todas as versoes disponiveis, mais o alias `latest`.
+- `tests/test_generated_proxmox_routes.py` executa uma suíte exaustiva de rotas mockadas para cada operação gerada em todas as versões disponíveis, mais o alias `latest`. Leituras devem ser encaminhadas e suas respostas validadas; mutações devem ser recusadas sem chamadas upstream.
+- `tests/test_generated_write_boundary.py` fixa uma matriz independente de métodos recusados e verifica autenticação, recusa antes da resolução do destino, modos de registro e rejeição de métodos desconhecidos.
 - `tests/test_pydantic_generator_models.py` verifica os modelos gerados para payloads array, scalar, `null` e object aliasados.
 - `tests/test_session_and_helpers.py` valida a camada de helpers tipados do Proxmox e confirma que os handlers de sync continuam retornando payloads validados.
 

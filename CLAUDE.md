@@ -22,9 +22,11 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Overview
 
-`proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, generated Proxmox proxy routes, and Firecracker host-agent provisioning for the NMS Cloud runtime. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.
+`proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, generated Proxmox proxy routes, and Firecracker host-agent provisioning for the cloud management runtime. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.
 
 ### Companion repos (cross-link map)
+
+Generated `/proxmox/api2/*` proxy dispatch is read-only. Every non-GET method is refused before target and credential resolution, including cached and rebuilt routes. Mutation schemas remain discoverable but deprecated with a documented 403; use dedicated typed, audited RPC procedures for supported writes. This method guard does not establish effect safety for all GET operations or change handwritten route authorization.
 
 - **`netbox-proxbox` v0.0.24** — the NetBox plugin that consumes this backend.
   Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
@@ -130,10 +132,10 @@ Open the nearest scoped guide for the code you are changing.
   authentication, and a single triggering-branch push. Do not broaden it to
   tags, `--all`, or `--mirror`.
 - `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
-  Pushes to `develop` deploy `proxbox-api-staging`; pushes to `main` deploy
-  `proxbox-api` through the `prod-deploy` runner on the Gitea server
-  (`10.0.30.96`). **Gated on CI**: a `verify-ci` job runs first and the deploy
-  job `needs` it, so a commit cannot reach staging or production unless the
+  Pushes to `develop` deploy `proxbox-api-staging`; production uses an authorized
+  manual dispatch from canonical `main` through the `prod-deploy` runner.
+  **Staging is gated on CI**: a `verify-ci` job runs first and the staging deploy
+  job `needs` it, so a commit cannot reach staging unless the
   `CI / Lint, smoke, and core coverage (push)` context is `success` for that
   **exact SHA**. Previously CI and deploy were sibling workflows on the same
   push -- they raced, and deploy never consulted CI
@@ -158,7 +160,7 @@ Open the nearest scoped guide for the code you are changing.
 ### Core layers
 
 - API and app composition (`proxbox_api/app/*`, `proxbox_api/main.py`, `proxbox_api/routes/*`): create the FastAPI app, register routers, mount middleware, expose WebSocket and SSE streams, and keep request handlers thin.
-- Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by `nms-backend`.
+- Firecracker host-agent layer (`proxbox_api/routes/cloud/firecracker.py`, `proxbox_api/firecracker_agent/`, `proxbox_api/schemas/firecracker.py`): validates Cloud provisioning payloads, including the caller-supplied host-agent URL through the shared SSRF guard, calls host-agent health/capacity/assets/create/action endpoints, and emits the streaming progress contract consumed by the management backend.
 - Authentication layer (`proxbox_api/auth.py`, `proxbox_api/routes/auth.py`): bcrypt-hashed API key storage, `X-Proxbox-API-Key` header enforcement via `APIKeyAuthMiddleware`, brute-force lockout, and bootstrap flow for first-time key registration.
 - Session and dependency layer (`proxbox_api/session/*`, `proxbox_api/dependencies.py`): create NetBox and Proxmox client sessions from database or plugin configuration.
 - Service layer (`proxbox_api/services/*`): implement synchronization workflows, object reconciliation, and reusable helper logic.
@@ -182,7 +184,7 @@ Open the nearest scoped guide for the code you are changing.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.
 5. Route handlers delegate remaining heavy work to service modules and schemas.
-6. Firecracker Cloud routes under `/cloud/firecracker/*` call a selected host-agent VM after `nms-backend` resolves NetBox Proxbox inventory and creates the `FirecrackerMicroVM` row.
+6. Firecracker Cloud routes under `/cloud/firecracker/*` call a selected host-agent VM after the management backend resolves NetBox Proxbox inventory and creates the `FirecrackerMicroVM` row.
 7. Sync and provisioning runs emit journal entries, structured logs, and optional WebSocket or SSE progress messages.
 
 ### Route Group Map
@@ -192,16 +194,16 @@ For the complete HTTP route reference including schemas and error shapes, see [`
 Key route groups mounted in `proxbox_api/app/factory.py`:
 
 - **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`): start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for QEMU and LXC guests. All gated by `ProxmoxEndpoint.allow_writes`.
-- **Browser console sessions** (`proxbox_api/routes/proxmox/console.py`, `POST /proxmox/console/sessions`): issue the one-time VNC/terminal ticket and return the endpoint TLS policy plus exactly one private WebSocket authentication value to the trusted nms-backend relay. API-token endpoints use an `Authorization` value and password sessions use a `PVEAuthCookie` value. This material must remain service-side and must never reach browser JavaScript or logs.
+- **Browser console sessions** (`proxbox_api/routes/proxmox/console.py`, `POST /proxmox/console/sessions`): issue the one-time VNC/terminal ticket and return the endpoint TLS policy plus exactly one private WebSocket authentication value to the trusted management relay. API-token endpoints use an `Authorization` value and password sessions use a `PVEAuthCookie` value. This material must remain service-side and must never reach browser JavaScript or logs. Read [`docs/api/console-sessions.md`](docs/api/console-sessions.md) before changing the request/response schema, endpoint ID semantics, `vncproxy`/`termproxy` selection, port normalization, URL encoding, authentication selection, or TLS propagation.
 - **Proxmox config tags** (`proxbox_api/routes/proxmox_tags.py`, mounted at `/proxmox`): `PUT/PATCH /proxmox/{qemu|lxc}/{vmid}/tags?endpoint_id=` replace or merge Proxmox guest config tags via `config.put(tags=...)`. Reuses `_gate` from `proxmox_actions` and tag helpers from `routes/intent/vm_tags.py`. Body: replace `{ "node", "tags" }`; merge `{ "node", "add"?, "remove"? }`.
 - **High-Availability** (`routes/proxmox/ha.py`, `/proxmox/cluster/ha/*`): status, resources, groups, rules, summary, disarm, arm, manager-status, CRS config.
 - **Firewall** (`routes/proxmox/firewall.py`, `/proxmox/firewall/*`): datacenter, node, and VM-level rules, security groups, IP sets, aliases, and options. Write endpoints gated by `allow_writes`.
 - **SDN** (`routes/proxmox/sdn.py`, `/proxmox/sdn/*`): controllers, zones, VNets, VNet subnets, fabrics, route-maps, prefix-lists, node runtime rows, read-only `create/stream` NetBox reconciliation, and optional `netbox_bgp` projection when `sync_mode_sdn_bgp` is enabled. Unsupported older clusters and missing optional BGP plugin APIs are skipped with warnings instead of failing the stream.
 - **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
-- **Service monitoring** (`routes/proxmox/services.py`, `/proxmox/services/*`): `GET /proxmox/services/systemd` reads systemd unit status (`Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `MainPID`, `ExecMainCode`, `ExecMainStatus`, `NRestarts`, `ActiveEnterTimestamp`, `UnitFileState`) for a Proxmox endpoint over SSH, using the endpoint's own registered SSH credential (agentless — no Proxmox-side agent required). Gated on: NetBox `ProxmoxEndpoint` enabled, `service_monitoring_enabled`, `allow_writes`, `access_methods=api_ssh`, complete SSH credentials, and netbox-rpc not disabled for the endpoint. Bounded 10s SSH command timeout; unit names are validated (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, no `..`, ≤100 chars, ≤32 units/request) and `shlex.quote`'d as defense in depth before the fixed-argv `systemctl show` command runs. `reachable=False` (SSH unreachable) is returned as HTTP 200 — a legitimate monitoring result — while unknown endpoint id / missing or disabled SSH credential / malformed unit request surface as 4xx. Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure, not meant to be called directly by end users. See `routes/proxmox/CLAUDE.md`.
+- **Service monitoring** (`routes/proxmox/services.py`, `/proxmox/services/*`): `GET /proxmox/services/systemd` reads systemd unit status (`Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `MainPID`, `ExecMainCode`, `ExecMainStatus`, `NRestarts`, `ActiveEnterTimestamp`, `UnitFileState`) for a Proxmox endpoint over SSH, using the endpoint's own registered SSH credential (agentless — no Proxmox-side agent required). Gated on: NetBox `ProxmoxEndpoint` enabled, `service_monitoring_enabled`, `allow_writes`, `access_methods=api_ssh`, complete SSH credentials, and netbox-rpc not disabled for the endpoint. Bounded 10s SSH command timeout; unit names are validated (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, no `..`, ≤100 chars, ≤32 units/request) and `shlex.quote`'d as defense in depth before the fixed-argv `systemctl show` command runs. `reachable=False` (SSH unreachable) is returned as HTTP 200 — a legitimate monitoring result — while unknown endpoint id / missing or disabled SSH credential / malformed unit request surface as 4xx. Called by the RPC executor's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure, not meant to be called directly by end users. See `routes/proxmox/CLAUDE.md`.
 - **Metrics queries** (`routes/proxmox/metrics.py`, `/proxmox/metrics/*`): authenticated bounded routes provide structured InfluxDB v2 queries and direct Proxmox pulls. The Influx route constructs escaped Flux server-side, accepts no arbitrary Flux, and bounds both upstream and normalized output bytes. The pull route resolves one configured endpoint and calls only `cluster/metrics/export`, with no caller-supplied path. Both enforce response and row bounds and map failures to secret-safe reasons. Pull response bytes are bounded during the authenticated upstream stream, boolean parameters use Proxmox-compatible encodings, and redirects are rejected; `services/proxmox_bounded.py` supplies an isolated compatibility path for pinned `proxmox-sdk==0.0.13` and prefers the SDK's public bounded-read method when available. See `routes/proxmox/CLAUDE.md`.
-- **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the NMS route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
+- **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the management route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
 - **Intent** (`routes/intent/`, `/intent/*`): plan, apply, deletion-requests, tag/untag pending-deletion.
 - **SSH Terminal** (`routes/ssh_terminal.py`, `/ssh/*`): `POST /ssh/sessions` creates a one-time ticket; WebSocket `/ssh/sessions/{session_id}/ws` bridges the PTY. `GET /ssh/host-key-fingerprint?host=&port=` scans a host's SSH key (no auth — public key only) and returns its canonical `SHA256:<base64>` fingerprint for pinned-fingerprint auto-fill in the NetBox plugin; the scan mirrors the terminal connect args so the value matches what the session later verifies. The terminal's `endpoint_id` is the **NetBox-side** `ProxmoxEndpoint` id, not the proxbox-api SQLite id, so the per-endpoint SSH access-method gate (`access_methods=api_ssh`) for the terminal is enforced in the `netbox-proxbox` plugin at the SSH-credential-serving endpoint — this route is intentionally not SQLite-gated. `POST /ssh/sessions` also accepts an **optional `one_shot_credential`** object (`username`, `port`, `known_host_fingerprint`, `password?`, `private_key?`) for **one-shot (unstored) sessions**: the NetBox plugin supplies inline credentials the operator typed into the Terminal modal for a single connection. The material lives only in the in-memory `TerminalSession` for the ticket TTL, is redacted from `repr()`/logs, and is **never persisted** — `fetch_terminal_credential` builds the credential from it and skips the netbox-proxbox stored-credential fetch entirely (the shared `hardware_discovery.fetch_credential` used by background discovery is untouched). A pinned `known_host_fingerprint` remains mandatory (an empty fingerprint canonicalizes to `SHA256:` and never matches). The field is additive/optional; older callers that omit it are unaffected. Requests without inline creds still fetch stored `NodeSSHCredential` / endpoint-fallback credentials as before.
 - **Transport access method** (`ProxmoxEndpoint.access_methods`, enum `proxbox_api/enum/proxmox.py::ProxmoxAccessMethod`): per-endpoint axis orthogonal to `allow_writes`. `api` (default, new endpoints) = Read+Write over API only; `api_ssh` = API + SSH. SSH-only is unrepresentable (two-value enum; create/update reject any other value with 422). Existing rows are backfilled to `api_ssh` on upgrade (non-breaking). Gates proxbox-api's own SQLite-id SSH paths (Cloud Image Build Pipeline, Azure VHD import) via `routes/proxmox/access_gate.py`. The value is pushed from the NetBox plugin and accepted on `POST/PUT /proxmox/endpoints`.
@@ -213,27 +215,24 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 
 Branch-tier deploys are Gitea-first. A push to Gitea `develop` deploys the
 staging backend at `https://staging.backend.proxbox.nmulti.cloud` via
-`proxbox-api-staging`. A push to Gitea `main` deploys production at
-`https://backend.proxbox.nmulti.cloud` via `proxbox-api`.
+`proxbox-api-staging`. Production uses an authorized manual dispatch from
+canonical `main`, selecting `latest_package` by default or `main_branch` as an
+explicit override. The management gateway supplies the protected request
+identity and digest; agents must not manufacture these fields or invoke a host
+deployment command directly.
 
-The workflow resolves the app from the triggering branch and calls:
-
-```bash
-ssh nmc-prod-207 -- deploy <proxbox-api|proxbox-api-staging> "$GITHUB_SHA"
-```
-
-The production host is `10.0.30.207`. Deploy host state is kept outside the
+The production host is selected by the private inventory. Deploy host state is kept outside the
 repository under `/opt/nmulticloud/deploy`:
 
 - Compose project: `nmc-proxbox-api`
 - Repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api`
 - Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
-- Runtime secrets: `/etc/nms/proxbox-api-production.env`
+- Runtime secrets: the operator-managed production environment file
 - SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
 - Staging compose project: `nmc-proxbox-api-staging`
 - Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
 - Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`
-- Staging runtime secrets: `/etc/nms/proxbox-api-staging.env`
+- Staging runtime secrets: the operator-managed staging environment file
 - Staging SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api-staging/database.db`
 
 The Docker runtime uses this repo's raw uvicorn image, host networking,
@@ -243,16 +242,10 @@ Nginx/TLS routing unchanged. Production mounts the state directory at
 `/var/lib/proxbox-api` and sets
 `PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db`.
 
-Useful operations:
-
-```bash
-ssh nmc-prod-207 -- status proxbox-api
-ssh nmc-prod-207 -- status proxbox-api-staging
-ssh nmc-prod-207 -- logs proxbox-api
-ssh nmc-prod-207 -- health proxbox-api
-curl -fsS http://127.0.0.1:18800/health
-curl -fsS http://127.0.0.1:18801/health
-```
+Resolve targets and run status, logs, and health checks through the authorized
+management tooling in the operator's private workspace operations guide. The
+public repository does not select deployment hosts or authorize direct host
+commands.
 
 `proxbox-api-production.service` remains the rollback fallback. Do not start it
 while the Docker container is healthy on port `18800`.
@@ -268,7 +261,7 @@ while the Docker container is healthy on port `18800`.
 ## Entry Points
 
 - ASGI app: `proxbox_api.main:app`
-- Typical server command: `uvicorn proxbox_api.main:app --host 0.0.0.0 --port 8000`
+- Typical server command: `uvicorn proxbox_api.main:app --host 127.0.0.1 --port 8000`
 - Docker entrypoint: the `Dockerfile` uses the same app module path.
 - CLI: `proxbox-proxmox-codegen` (`proxbox_api.proxmox_codegen.cli:main`) — Proxmox crawler/generator pipeline.
 - CLI: `proxbox-schema` (`proxbox_api.schema_cli:main`) — list, status, and generate NetBox-versioned schema artifacts.
@@ -310,7 +303,7 @@ the `netbox-proxbox` side, do all five — the existing fields in
 
 ### Required in `.env` (process-level, no plugin-settings equivalent)
 
-- `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: `0.0.0.0`). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
+- `PROXBOX_BIND_HOST`: bind address used by the Docker `raw` and `granian` images (default: all IPv4 interfaces). Set to `::` for IPv4 + IPv6 dual-stack. The container entrypoints sanitize surrounding ASCII quotes/whitespace, so a Compose list-form value such as `- PROXBOX_BIND_HOST="::"` is tolerated even though the YAML quotes are NOT stripped. The `nginx` image listens on both stacks regardless of this variable.
 - `PROXBOX_DATABASE_PATH`: optional SQLite database path override. Default is `/data/database.db` (a Docker volume mount point). Docker volumes should be mounted at `/data` to persist the database across container restarts and image upgrades. Production deployments can override this to `/var/lib/proxbox-api/database.db` if needed.
 - `PROXBOX_RATE_LIMIT`: max API requests per minute per IP address (default: 300). Read at app construction.
 - `PROXBOX_CORS_EXTRA_ORIGINS`: extra CORS origins (read at app construction).
@@ -556,7 +549,7 @@ This section establishes project-wide quality standards derived from industry-st
 Changes to routes, services, or schemas MUST include an updated architecture note in the closest CLAUDE.md explaining:
 - What interface or subsystem changed
 - Why the change is necessary (traceability to an issue or feature)
-- What downstream systems are affected (NetBox plugin, NMS frontend, Firecracker host-agents)
+- What downstream systems are affected (NetBox plugin, management frontend, Firecracker host-agents)
 - Any breaking changes or version floor bumps
 
 **Verification:** Before opening a PR, confirm:

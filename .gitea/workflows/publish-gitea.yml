@@ -303,8 +303,10 @@ jobs:
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           env -u GIT_ASKPASS -u SSH_ASKPASS \
             git -c credential.helper= -c http.extraHeader= fetch \
-            --no-tags --depth=1 origin "refs/tags/${TAG}"
+            --no-tags --depth=1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
           RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          test "$(git rev-parse "refs/tags/${TAG}^{commit}")" = "${RESOLVED_SHA}"
+          test "$(git rev-parse "refs/tags/${TAG}")" = "$(git rev-parse FETCH_HEAD)"
           case "${GITHUB_EVENT_NAME}" in
             push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}" ;;
             workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main" ;;
