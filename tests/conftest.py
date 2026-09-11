@@ -269,6 +269,32 @@ def auth_test_client(test_api_key, client_with_fake_netbox) -> TestClient:
 
 
 @pytest.fixture
+def legacy_interactive_app(monkeypatch, client_with_fake_netbox):
+    """Construct a fresh explicit legacy worker, never rearm a quiesced runtime."""
+    from proxbox_api.app.factory import create_app
+
+    monkeypatch.setenv("PROXBOX_EXECUTION_MODE", "legacy")
+    monkeypatch.setenv("PROXBOX_EXECUTION_GENERATION", "synthetic-legacy-test-generation")
+    legacy_app = create_app()
+    legacy_app.dependency_overrides.update(app.dependency_overrides)
+    return legacy_app
+
+
+@pytest.fixture
+def legacy_test_client(legacy_interactive_app):
+    """Exercise the real full legacy application without a service API key."""
+    with TestClient(legacy_interactive_app) as client:
+        yield client
+
+
+@pytest.fixture
+def legacy_auth_test_client(test_api_key, legacy_interactive_app):
+    """Exercise the real full legacy application with ordinary API authentication."""
+    with TestClient(legacy_interactive_app, headers={"X-Proxbox-API-Key": test_api_key}) as client:
+        yield client
+
+
+@pytest.fixture
 def db_engine(tmp_path: Path):
     sqlite_file = tmp_path / "test.db"
     engine = create_engine(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+from collections.abc import Awaitable, Callable
 from json import JSONDecodeError
 from typing import Annotated
 
@@ -17,6 +18,11 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
+from proxbox_api.services.interactive_policy import (
+    InteractiveDenied,
+    acquire_interactive_resource,
+    current_interactive_runtime,
+)
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox_core import ProxmoxSession
 from proxbox_api.settings_client import (
@@ -133,7 +139,7 @@ async def proxmox_sessions(  # noqa: C901
                 python_exception=str(error),
             ) from error
 
-    proxmox_schemas = await load_proxmox_session_schemas(
+    proxmox_schemas = await _load_request_schemas(
         database_session=database_session,
         source=source,
         endpoint_ids=endpoint_id_list,
@@ -142,7 +148,7 @@ async def proxmox_sessions(  # noqa: C901
     async def return_single_session(field: str, value: str) -> list[ProxmoxSession]:
         for proxmox_schema in proxmox_schemas:
             if value == getattr(proxmox_schema, field, None):
-                session = await ProxmoxSession.create(proxmox_schema)
+                session = await _create_request_session(proxmox_schema)
                 return [session]
 
         raise ProxboxException(
@@ -164,9 +170,11 @@ async def proxmox_sessions(  # noqa: C901
 
     try:
         sessions = await asyncio.gather(
-            *[ProxmoxSession.create(px_schema) for px_schema in proxmox_schemas]
+            *[_create_request_session(px_schema) for px_schema in proxmox_schemas]
         )
         return list(sessions)
+    except InteractiveDenied:
+        raise
     except Exception as error:
         raise ProxboxException(
             message="Could not return Proxmox Sessions", python_exception=f"{error}"
@@ -176,16 +184,57 @@ async def proxmox_sessions(  # noqa: C901
 async def proxmox_sessions_dep(
     sessions: Annotated[list[ProxmoxSession], Depends(proxmox_sessions)],
 ):
+    owner = current_interactive_runtime()
     try:
         yield sessions
     finally:
-        for session in sessions:
-            close_method = getattr(session, "aclose", None)
-            if callable(close_method):
-                try:
-                    await close_method()
-                except Exception as error:  # pragma: no cover
-                    logger.debug("Failed to clean up proxmox session: %s", error)
+        if owner is None:
+            await close_proxmox_sessions(sessions)
+
+
+async def _load_request_schemas(
+    *, database_session: AsyncSession | Session, source: str, endpoint_ids: list[int] | None
+) -> list[ProxmoxSessionSchema]:
+    async def load() -> list[ProxmoxSessionSchema]:
+        return await load_proxmox_session_schemas(
+            database_session=database_session, source=source, endpoint_ids=endpoint_ids
+        )
+
+    if current_interactive_runtime() is None:
+        return await load()
+
+    async def discard(schemas: list[ProxmoxSessionSchema]) -> None:
+        """Release late schema references without connecting or delivering them."""
+
+    return await _interactive_acquisition(load, discard)
+
+
+async def _create_request_session(schema: ProxmoxSessionSchema) -> ProxmoxSession:
+    if current_interactive_runtime() is None:
+        return await ProxmoxSession.create(schema)
+    return await _interactive_acquisition(
+        lambda: ProxmoxSession.create(schema), _close_interactive_session
+    )
+
+
+async def _interactive_acquisition[T](
+    acquisition: Callable[[], Awaitable[T]], close: Callable[[T], Awaitable[object]]
+) -> T:
+    try:
+        return await acquire_interactive_resource(acquisition, close)
+    except InteractiveDenied:
+        raise
+    except Exception:
+        raise ProxboxException(
+            message="Interactive Proxmox provider is unavailable.",
+            http_status_code=502,
+            redact_log_details=True,
+        ) from None
+
+
+async def _close_interactive_session(session: ProxmoxSession) -> None:
+    """Let the interactive owner retain cleanup failure as uncertainty."""
+    await session.aclose()
 
 
 async def close_proxmox_sessions(pxs: list[ProxmoxSession]) -> None:
@@ -239,6 +288,7 @@ def _parse_db_endpoint(
     endpoint: ProxmoxEndpoint,
     plugin_settings: dict[str, object] | None = None,
 ) -> ProxmoxSessionSchema:
+    current_interactive_runtime()
     settings = plugin_settings or {}
     password = _decrypt_db_secret(
         endpoint=endpoint,
@@ -342,6 +392,7 @@ async def _load_netbox_source_plugin_settings(
     if inspect.isawaitable(netbox_session):
         netbox_session = await netbox_session
 
+    current_interactive_runtime()
     plugin_settings = await asyncio.to_thread(
         get_settings,
         netbox_session=netbox_session,
@@ -424,6 +475,7 @@ def _parse_netbox_endpoint(
     endpoint: object,
     plugin_settings: dict[str, object] | None = None,
 ) -> ProxmoxSessionSchema:
+    current_interactive_runtime()
     ip = None
     ip_address_object = _netbox_field(endpoint, "ip_address")
     if ip_address_object:
@@ -475,6 +527,7 @@ async def load_proxmox_session_schemas(  # noqa: C901
         netbox_session, plugin_settings = await _load_netbox_source_plugin_settings(
             database_session
         )
+        current_interactive_runtime()
 
         try:
             url = "/api/plugins/proxbox/endpoints/proxmox/"
@@ -482,6 +535,7 @@ async def load_proxmox_session_schemas(  # noqa: C901
                 selected_ids = set(endpoint_ids)
                 netbox_endpoints_by_id: dict[int, object] = {}
                 for chunk in _chunk_endpoint_ids(endpoint_ids):
+                    current_interactive_runtime()
                     endpoints = await rest_list_async(
                         netbox_session,
                         url,

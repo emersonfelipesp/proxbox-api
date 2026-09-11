@@ -1,5 +1,17 @@
 # Referencia WebSocket da API
 
+
+O comportamento de sincronização e SSH abaixo exige
+`PROXBOX_EXECUTION_MODE=legacy` explícito. O padrão `rpc_only` encerra `/ws`,
+`/ws/virtual-machines` e `/ssh/sessions/{session_id}/ws` com código 1008 antes
+de efeitos, mesmo com ticket antigo válido. A sincronização legada exige um
+frame JSON com a chave de API em dez segundos, antes de tokens NetBox,
+conexões Proxmox, coletores ou gravação de tags. O SSH legado autentica o
+ticket de uso único antes de obter configurações de credenciais armazenadas.
+O contador mantém sua autenticação e seu comportamento independentes. Consulte
+[Limite interativo exclusivo de RPC](../operations/interactive-rpc-boundary.md)
+para encerramento e distinção entre prontidão local e da frota.
+
 `proxbox-api` expoe endpoints WebSocket para streaming de progresso de sync e feedback de execucao de comandos.
 
 ## `GET /` (WebSocket)

@@ -123,7 +123,9 @@ It then calls:
 - `vncproxy.post(websocket=1)` for a graphical QEMU console; or
 - `termproxy.post()` for QEMU and LXC terminal consoles.
 
-`resolve_async()` normalizes synchronous and asynchronous SDK result styles. The route does not start, stop, or mutate the guest configuration; it requests only the ephemeral Proxmox console proxy.
+`resolve_async()` normalizes synchronous and asynchronous SDK result styles. The route does not start, stop, or mutate the guest configuration, but its ephemeral console proxy grants future interactive write capability. The default `rpc_only` process policy therefore refuses this route before endpoint resolution, decryption, or connection. The successful contract described here requires explicit `legacy` mode and normal service authentication. See [Interactive RPC-Only Boundary](../operations/interactive-rpc-boundary.md).
+
+The request owns its Proxmox client through acquisition, proxy creation, private authentication, and cleanup. Late acquisitions are closed after cancellation; quiesce prevents further authentication requests and private response delivery. An ambiguous proxy outcome remains explicitly uncertain and is not described as rolled back.
 
 ## Response normalization
 
@@ -173,7 +175,7 @@ The request schema intentionally has no TLS-verification field. A caller cannot 
 | Request schema or LXC/noVNC violation | HTTP 422 before endpoint or Proxmox access |
 | Unknown local endpoint | HTTP 404 |
 | Stored endpoint cannot create a session | Sanitized HTTP 502 |
-| `ProxmoxAPIError` from `vncproxy`/`termproxy` | HTTP 502 with a broker detail intended only for the trusted backend; `nms-backend` maps it to a bounded browser-safe message |
+| `ProxmoxAPIError` from `vncproxy`/`termproxy` | Fixed HTTP 502 `Proxmox console request failed.`; upstream exception text is never returned |
 | Unexpected proxy-call exception | Fixed HTTP 502 `Proxmox console request failed.` |
 | Missing or malformed ticket/port | Fixed HTTP 502 `Proxmox did not return a ticket/port.` |
 | WebSocket authentication cannot be prepared | Fixed HTTP 502 `Unable to authenticate the Proxmox console stream.` |

@@ -22,6 +22,7 @@ from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.services.interactive_policy import owned_resource, require_interactive
 from proxbox_api.session.proxmox import ProxmoxSession
 from proxbox_api.session.proxmox_core import ProxmoxWebSocketAuth
 from proxbox_api.session.proxmox_providers import _parse_db_endpoint
@@ -104,6 +105,7 @@ def _build_ws_url(
 
 
 async def _open_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
+    require_interactive()
     schema = _parse_db_endpoint(endpoint)
     return await ProxmoxSession.create(schema)
 
@@ -133,6 +135,7 @@ async def _connect_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
 
 
 async def _request_console_proxy(px: ProxmoxSession, req: ConsoleSessionRequest) -> object:
+    require_interactive()
     guest = px.session.nodes(req.node)
     guest = guest.qemu(req.vmid) if req.vm_type == "qemu" else guest.lxc(req.vmid)
     try:
@@ -146,9 +149,9 @@ async def _request_console_proxy(px: ProxmoxSession, req: ConsoleSessionRequest)
             req.vm_type,
             req.vmid,
             req.console_type,
-            exc,
+            type(exc).__name__,
         )
-        raise HTTPException(status_code=502, detail=f"Proxmox console error: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Proxmox console request failed.") from exc
     except Exception as exc:
         logger.warning(
             "console: unexpected error for %s/%s/%s: %s",
@@ -217,11 +220,31 @@ async def create_console_session(
     db_session: SessionDep,
 ) -> ConsoleSessionResponse:
     """Create a one-time session for the trusted nms-backend relay."""
+    runtime = require_interactive()
     endpoint = await _load_endpoint(req, db_session)
-    px = await _connect_endpoint(endpoint)
+    async with owned_resource(lambda: _connect_endpoint(endpoint), _close_console_session) as px:
+        try:
+            response = await _console_response(req, endpoint, px)
+            require_interactive()
+            return response
+        except BaseException:
+            runtime.uncertain = True
+            raise
+
+
+async def _close_console_session(px: ProxmoxSession) -> None:
+    await px.aclose()
+
+
+async def _console_response(
+    req: ConsoleSessionRequest, endpoint: ProxmoxEndpoint, px: ProxmoxSession
+) -> ConsoleSessionResponse:
+    require_interactive()
     raw = await _request_console_proxy(px, req)
+    require_interactive()
     ticket, vnc_port = _console_ticket(raw, req)
     websocket_auth = await _console_websocket_auth(px, req.endpoint_id)
+    require_interactive()
     host = endpoint.host
     proxmox_port = endpoint.port
 

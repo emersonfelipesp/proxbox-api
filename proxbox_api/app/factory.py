@@ -78,6 +78,11 @@ from proxbox_api.services.auth_lockout import (
     resolve_auth_source_context,
     validate_auth_lockout_identity_key,
 )
+from proxbox_api.services.interactive_policy import (
+    ExecutionPolicy,
+    InteractiveBoundaryMiddleware,
+    InteractiveRuntime,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -290,7 +295,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         yield
     finally:
-        await database.dispose_database()
+        try:
+            await app.state.interactive_runtime.quiesce()
+        finally:
+            await database.dispose_database()
 
 
 async def _run_bootstrap_pass(app: FastAPI) -> None:
@@ -361,7 +369,7 @@ async def _run_bootstrap_pass(app: FastAPI) -> None:
     app.state.bootstrap_status = status
 
 
-def create_app() -> FastAPI:  # noqa: C901
+def create_app() -> FastAPI:
     """Build and configure the Proxbox FastAPI application."""
     auth_lockout_policy = AuthLockoutPolicy.from_env()
     app = FastAPI(
@@ -372,6 +380,7 @@ def create_app() -> FastAPI:  # noqa: C901
         docs_url=None,
         redoc_url=None,
     )
+    app.state.interactive_runtime = InteractiveRuntime(ExecutionPolicy.from_environment())
 
     def custom_openapi():
         return custom_openapi_builder(app)
@@ -435,6 +444,7 @@ def create_app() -> FastAPI:  # noqa: C901
     except ValueError:
         rate_limit = 300
     app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
+    app.add_middleware(InteractiveBoundaryMiddleware, runtime=app.state.interactive_runtime)
 
     register_exception_handlers(app)
 
@@ -450,9 +460,6 @@ def create_app() -> FastAPI:  # noqa: C901
     }
     sidecar_features = {"pbs", "ceph", "pdm"}
     sidecar_only = bool(features) and features.issubset(sidecar_features)
-    include_pbs = not features or "pbs" in features
-    include_ceph = not features or "ceph" in features
-    include_pdm = not features or "pdm" in features
 
     if not sidecar_only:
         register_cache_routes(app)
@@ -511,7 +518,13 @@ def create_app() -> FastAPI:  # noqa: C901
         )
         app.include_router(sync_active_router)
 
-    if include_pbs:
+    _register_optional_routers(app, features)
+    return app
+
+
+def _register_optional_routers(app: FastAPI, features: set[str]) -> None:
+    """Preserve independent optional sidecar registration and import failures."""
+    if not features or "pbs" in features:
         try:
             from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
             from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
@@ -521,21 +534,10 @@ def create_app() -> FastAPI:  # noqa: C901
             app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
             app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
 
-    if include_ceph:
-        try:
-            from proxbox_api.ceph import router as ceph_router  # noqa: PLC0415
-        except ImportError as exc:
-            logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
-        else:
-            app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
-        try:
-            from proxbox_api.ceph.v2_routes import router as ceph_v2_router  # noqa: PLC0415
-        except ImportError as exc:
-            logger.info("Ceph v2 subpackage unavailable; /ceph/v2/* routes disabled (%s)", exc)
-        else:
-            app.include_router(ceph_v2_router, prefix="/ceph/v2", tags=["ceph-v2"])
+    if not features or "ceph" in features:
+        _register_ceph_routers(app)
 
-    if include_pdm:
+    if not features or "pdm" in features:
         try:
             from proxbox_api.pdm import admin_router as pdm_admin_router  # noqa: PLC0415
             from proxbox_api.pdm import router as pdm_router  # noqa: PLC0415
@@ -545,4 +547,18 @@ def create_app() -> FastAPI:  # noqa: C901
             app.include_router(pdm_admin_router, prefix="/pdm", tags=["pdm"])
             app.include_router(pdm_router, prefix="/pdm", tags=["pdm"])
 
-    return app
+
+def _register_ceph_routers(app: FastAPI) -> None:
+    """Keep the two independent Ceph capabilities optional."""
+    try:
+        from proxbox_api.ceph import router as ceph_router
+    except ImportError as exc:
+        logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
+    else:
+        app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
+    try:
+        from proxbox_api.ceph.v2_routes import router as ceph_v2_router
+    except ImportError as exc:
+        logger.info("Ceph v2 subpackage unavailable; /ceph/v2/* routes disabled (%s)", exc)
+    else:
+        app.include_router(ceph_v2_router, prefix="/ceph/v2", tags=["ceph-v2"])

@@ -79,6 +79,7 @@ nav:
       - Overwrite Flags: sync/overwrite-flags.md
       - Scheduler Container: sync/scheduler-container.md
   - Operations:
+      - Interactive RPC-Only Boundary: operations/interactive-rpc-boundary.md
       - Database: operations/database.md
       - Custom Field Retirement: operations/custom-fields.md
       - Hardware Discovery: operations/hardware-discovery.md

@@ -1,5 +1,17 @@
 # WebSocket API Reference
 
+
+The synchronization and SSH behavior below requires explicit
+`PROXBOX_EXECUTION_MODE=legacy`. The default `rpc_only` closes `/ws`,
+`/ws/virtual-machines`, and `/ssh/sessions/{session_id}/ws` with code 1008
+before effects, even for a valid old ticket. Legacy synchronization requires
+an API-key JSON frame within ten seconds before NetBox token acquisition,
+Proxmox connections, collectors, or tag writes. Legacy SSH authenticates its
+one-use ticket before stored credential configuration is acquired. The counter
+WebSocket keeps its independent authentication and behavior. See
+[Interactive RPC-Only Boundary](../operations/interactive-rpc-boundary.md)
+for owned cleanup and the distinction between local and fleet cutover.
+
 `proxbox-api` exposes WebSocket endpoints for streaming sync progress and command execution feedback.
 
 ## `GET /` (WebSocket)

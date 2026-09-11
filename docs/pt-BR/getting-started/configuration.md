@@ -1,5 +1,24 @@
 # Configuracao
 
+
+## Política de execução interativa
+
+O padrão exclusivo do processo é `PROXBOX_EXECUTION_MODE=rpc_only`; somente
+`rpc_only` e `legacy` são aceitos. Configure `PROXBOX_EXECUTION_GENERATION` com
+uma geração compartilhada, sem segredos. Sua ausência permite iniciar o
+inventário, mas mantém a prontidão falsa. Configurações do plugin e flags do
+endpoint não substituem esses valores; mudanças no ambiente não alteram a
+política de uma aplicação já iniciada.
+
+```dotenv
+PROXBOX_EXECUTION_MODE=rpc_only
+PROXBOX_EXECUTION_GENERATION=geracao-escolhida-pelo-operador
+```
+
+Consulte [Limite interativo exclusivo de RPC](../operations/interactive-rpc-boundary.md)
+para compatibilidade legada, status local, encerramento e capacidades exigidas
+dos componentes parceiros. Este exemplo não autoriza ativação em produção.
+
 `proxbox-api` usa SQLite para configuracao local de bootstrap e dependencias em runtime.
 
 ## Localizacao do banco

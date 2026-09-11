@@ -1,5 +1,24 @@
 # Configuration
 
+
+## Interactive execution policy
+
+The process-only default is `PROXBOX_EXECUTION_MODE=rpc_only`. Only the exact
+values `rpc_only` and `legacy` are accepted. Configure a shared, non-secret
+`PROXBOX_EXECUTION_GENERATION` for coordinated cutover; its absence permits
+inventory startup but leaves readiness false. Plugin settings and endpoint
+flags cannot override either value, and changing the environment does not
+change a running application's policy.
+
+```dotenv
+PROXBOX_EXECUTION_MODE=rpc_only
+PROXBOX_EXECUTION_GENERATION=operator-selected-generation
+```
+
+See [Interactive RPC-Only Boundary](../operations/interactive-rpc-boundary.md)
+for legacy compatibility, local status, shutdown ownership, and required peer
+capabilities. No production activation is implied by this example.
+
 `proxbox-api` uses SQLite for local bootstrap configuration and runtime dependencies.
 
 ## Database Location
