@@ -221,6 +221,11 @@ explicit override. The management gateway supplies the protected request
 identity and digest; agents must not manufacture these fields or invoke a host
 deployment command directly.
 
+The release validator accepts only the host-issued receipt's complete signed
+schema. It pins the trusted public key in `.gitea/deploy-receipt-public.pem`,
+verifies its DER digest, and verifies the Ed25519 signature over canonical
+unsigned receipt bytes before production evidence can authorize promotion.
+
 The production host is selected by the private inventory. Deploy host state is kept outside the
 repository under `/opt/nmulticloud/deploy`:
 

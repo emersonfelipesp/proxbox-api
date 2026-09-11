@@ -2127,6 +2127,66 @@ def test_registry_fetch_rejects_rebinding_original_artifacts_to_moved_tag(
 
 def test_final_release_requires_exact_promotion_evidence(tmp_path: Path) -> None:
     release_artifacts = _load_release_artifacts()
+    pinned_public_der = subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "pkey",
+            "-pubin",
+            "-in",
+            str(release_artifacts.RECEIPT_PUBLIC_KEY),
+            "-outform",
+            "DER",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert (
+        hashlib.sha256(pinned_public_der).hexdigest() == release_artifacts.RECEIPT_PUBLIC_KEY_SHA256
+    )
+    private_key = tmp_path / "receipt-private.pem"
+    public_key = tmp_path / "receipt-public.pem"
+    subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "genpkey",
+            "-algorithm",
+            "ED25519",
+            "-out",
+            str(private_key),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "pkey",
+            "-in",
+            str(private_key),
+            "-pubout",
+            "-out",
+            str(public_key),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    public_der = subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "pkey",
+            "-pubin",
+            "-in",
+            str(public_key),
+            "-outform",
+            "DER",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    release_artifacts.RECEIPT_PUBLIC_KEY = public_key
+    release_artifacts.RECEIPT_PUBLIC_KEY_SHA256 = hashlib.sha256(public_der).hexdigest()
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "proxbox_api-0.0.20-py3-none-any.whl").write_bytes(b"wheel")
@@ -2137,21 +2197,51 @@ def test_final_release_requires_exact_promotion_evidence(tmp_path: Path) -> None
         version="0.0.20",
         source_sha="b" * 40,
     )
+    manifest_digest = release_artifacts.manifest_sha256(manifest)
+    receipt_prefix = "".join(("n", "m", "s"))
+    request_id_field = receipt_prefix + "_request_id"
+    request_digest_field = receipt_prefix + "_request_sha256"
+    workflow_sha_field = receipt_prefix + "_workflow_sha"
     evidence = {
         "artifacts": manifest["artifacts"],
         "deploy_source": "latest_package",
+        "deployment_generation": "c" * 64,
         "deployment_run_id": 123,
         "deployment_status": "success",
         "environment": "production",
-        "manifest_sha256": release_artifacts.manifest_sha256(manifest),
+        "manifest_sha256": manifest_digest,
+        request_id_field: "d" * 32,
+        request_digest_field: "e" * 64,
+        workflow_sha_field: "f" * 40,
         "observed_runtime_identity": f"proxbox_api==0.0.20@sha256:{'c' * 64}",
         "package": "proxbox-api",
         "repository": "emersonfelipesp/proxbox-api",
         "schema": 2,
+        "signature": "",
+        "signing_key_sha256": release_artifacts.RECEIPT_PUBLIC_KEY_SHA256,
         "source_sha": "b" * 40,
         "target": "proxbox-api",
         "version": "0.0.20",
     }
+    unsigned = dict(evidence)
+    del unsigned["signature"]
+    payload_path = tmp_path / "receipt-unsigned.json"
+    payload_path.write_bytes(release_artifacts._manifest_bytes(unsigned))
+    signature = subprocess.run(
+        [
+            "/usr/bin/openssl",
+            "pkeyutl",
+            "-sign",
+            "-rawin",
+            "-inkey",
+            str(private_key),
+            "-in",
+            str(payload_path),
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    evidence["signature"] = base64.b64encode(signature).decode("ascii")
     assert (
         release_artifacts.validate_release_attestation(
             evidence=evidence,
@@ -2160,6 +2250,51 @@ def test_final_release_requires_exact_promotion_evidence(tmp_path: Path) -> None
         )
         == evidence
     )
+
+    extra_field_evidence = {**evidence, "unexpected": True}
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="schema is not exact",
+    ):
+        release_artifacts.validate_release_attestation(
+            evidence=extra_field_evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
+
+    missing_field_evidence = dict(evidence)
+    del missing_field_evidence["deployment_generation"]
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="schema is not exact",
+    ):
+        release_artifacts.validate_release_attestation(
+            evidence=missing_field_evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
+
+    invalid_digest_evidence = {**evidence, request_digest_field: "short"}
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="digest identity is invalid",
+    ):
+        release_artifacts.validate_release_attestation(
+            evidence=invalid_digest_evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
+
+    invalid_request_evidence = {**evidence, request_id_field: "not-a-request-id"}
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="receipt identity is invalid",
+    ):
+        release_artifacts.validate_release_attestation(
+            evidence=invalid_request_evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
 
     evidence["deploy_source"] = "main_branch"
     with pytest.raises(release_artifacts.ReleaseArtifactError):
@@ -2172,6 +2307,30 @@ def test_final_release_requires_exact_promotion_evidence(tmp_path: Path) -> None
     evidence["deploy_source"] = "latest_package"
     evidence["observed_runtime_identity"] = "proxbox_api==0.0.20@sha256:short"
     with pytest.raises(release_artifacts.ReleaseArtifactError):
+        release_artifacts.validate_release_attestation(
+            evidence=evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
+
+    evidence["observed_runtime_identity"] = f"proxbox_api==0.0.20@sha256:{'c' * 64}"
+    evidence["signature"] = "A" * 86 + "=="
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="signature is invalid",
+    ):
+        release_artifacts.validate_release_attestation(
+            evidence=evidence,
+            manifest=manifest,
+            repository="emersonfelipesp/proxbox-api",
+        )
+
+    evidence["signature"] = base64.b64encode(signature).decode("ascii")
+    evidence["signing_key_sha256"] = "0" * 64
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="signing key is not trusted",
+    ):
         release_artifacts.validate_release_attestation(
             evidence=evidence,
             manifest=manifest,

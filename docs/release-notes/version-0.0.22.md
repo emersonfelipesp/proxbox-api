@@ -29,7 +29,7 @@ The release is additive. Existing synchronization routes and configuration remai
 
 ## Validation
 
-The feature passed focused metrics tests, the complete backend suite with coverage above the repository threshold, Ruff lint and formatting, compile checks, strict documentation builds, lock verification, per-function cyclomatic complexity analysis, three capped adversarial review rounds, staging health and OpenAPI probes, and authentication-boundary checks. The release-publishing recovery path also has positive and fail-closed regression coverage for Gitea's link response. Release candidate and final package evidence are recorded by the release workflows.
+The feature passed focused metrics tests, the complete backend suite with coverage above the repository threshold, Ruff lint and formatting, compile checks, strict documentation builds, lock verification, per-function cyclomatic complexity analysis, three capped adversarial review rounds, staging health and OpenAPI probes, and authentication-boundary checks. The release-publishing recovery path also has positive and fail-closed regression coverage for Gitea's link response. Production promotion validates the host-issued receipt's complete signed schema, pinned public-key identity, and Ed25519 signature before accepting or publishing deployment evidence. Release candidate and final package evidence are recorded by the release workflows.
 
 ## Known limitations
 

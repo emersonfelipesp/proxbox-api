@@ -358,7 +358,10 @@ Production is a management-dispatched manual workflow from canonical `main`, wit
 runner uses fixed, allowlisted deployment gateways and emits protected package-
 deployment evidence only after production health, installed version, and exact
 active image identity succeed. The workflow exports the root-issued schema-2
-receipt and cannot construct successful-production evidence itself.
+receipt and cannot construct successful-production evidence itself. The release
+validator requires the receipt's complete signed schema, pins the trusted public
+key in `.gitea/deploy-receipt-public.pem`, verifies its DER digest, and verifies
+the Ed25519 signature over canonical unsigned receipt bytes before promotion.
 
 ```bash
 /opt/nmulticloud/deploy/bin/deploy-app-package \

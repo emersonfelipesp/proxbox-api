@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
 import re
 import stat
+import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +24,9 @@ MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 SHA_RE = re.compile(r"^[a-f0-9]{40}$")
 DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+OPENSSL = Path("/usr/bin/openssl")
+RECEIPT_PUBLIC_KEY = Path(__file__).resolve().parents[1] / ".gitea/deploy-receipt-public.pem"
+RECEIPT_PUBLIC_KEY_SHA256 = "ce136d7714b6a698f664a4f9fd413e0b4519a4e6fff76a1144819a25935598b4"
 
 
 class ReleaseArtifactError(ValueError):
@@ -358,29 +365,132 @@ def fetch_gitea_artifacts(
     return published_manifest
 
 
-def validate_release_attestation(
-    *, evidence: object, manifest: dict[str, Any], repository: str
-) -> dict[str, Any]:
-    """Validate protected NMS production-deployment evidence."""
-    if not isinstance(evidence, dict) or set(evidence) != {
+def _load_receipt_public_der() -> bytes:
+    """Load the pinned key after rejecting unsafe verifier paths."""
+    try:
+        key_metadata = RECEIPT_PUBLIC_KEY.lstat()
+        if (
+            RECEIPT_PUBLIC_KEY.is_symlink()
+            or not stat.S_ISREG(key_metadata.st_mode)
+            or not 1 <= key_metadata.st_size <= 16 * 1024
+            or not OPENSSL.is_file()
+            or OPENSSL.is_symlink()
+        ):
+            raise ReleaseArtifactError("Deployment receipt verifier is unsafe")
+        public_der = subprocess.run(  # noqa: S603
+            [
+                str(OPENSSL),
+                "pkey",
+                "-pubin",
+                "-in",
+                str(RECEIPT_PUBLIC_KEY),
+                "-outform",
+                "DER",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReleaseArtifactError("Deployment receipt verifier is unavailable") from exc
+    return public_der
+
+
+def _require_trusted_receipt_key(evidence: dict[str, Any], public_der: bytes) -> None:
+    """Require the file and receipt to identify the pinned signing key."""
+    key_digest = hashlib.sha256(public_der).hexdigest()
+    if key_digest != RECEIPT_PUBLIC_KEY_SHA256:
+        raise ReleaseArtifactError("Deployment receipt signing key is not trusted")
+    if evidence.get("signing_key_sha256") != RECEIPT_PUBLIC_KEY_SHA256:
+        raise ReleaseArtifactError("Deployment receipt signing key is not trusted")
+
+
+def _decode_receipt_signature(evidence: dict[str, Any]) -> bytes:
+    """Decode a strictly encoded receipt signature."""
+    try:
+        return base64.b64decode(str(evidence["signature"]), validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ReleaseArtifactError("Deployment receipt signature is invalid") from exc
+
+
+def _run_receipt_signature_verification(*, evidence: dict[str, Any], signature: bytes) -> None:
+    """Verify canonical receipt bytes with the pinned Ed25519 key."""
+    unsigned = dict(evidence)
+    del unsigned["signature"]
+    try:
+        with (
+            tempfile.NamedTemporaryFile(prefix="deploy-receipt-signature-") as signature_stream,
+            tempfile.NamedTemporaryFile(prefix="deploy-receipt-payload-") as payload_stream,
+        ):
+            signature_stream.write(signature)
+            signature_stream.flush()
+            payload_stream.write(_manifest_bytes(unsigned))
+            payload_stream.flush()
+            verified = subprocess.run(  # noqa: S603
+                [
+                    str(OPENSSL),
+                    "pkeyutl",
+                    "-verify",
+                    "-rawin",
+                    "-pubin",
+                    "-inkey",
+                    str(RECEIPT_PUBLIC_KEY),
+                    "-sigfile",
+                    signature_stream.name,
+                    "-in",
+                    payload_stream.name,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReleaseArtifactError("Deployment receipt verification failed") from exc
+    if verified.returncode != 0:
+        raise ReleaseArtifactError("Deployment receipt signature is invalid")
+
+
+def _verify_release_attestation_signature(evidence: dict[str, Any]) -> None:
+    """Verify one receipt against the repository-pinned deployment key."""
+    public_der = _load_receipt_public_der()
+    _require_trusted_receipt_key(evidence, public_der)
+    signature = _decode_receipt_signature(evidence)
+    _run_receipt_signature_verification(evidence=evidence, signature=signature)
+
+
+def _release_attestation_fields(
+    *, request_id_field: str, request_digest_field: str, workflow_sha_field: str
+) -> set[str]:
+    """Return the exact signed deployment receipt field set."""
+    return {
         "artifacts",
         "deploy_source",
+        "deployment_generation",
         "deployment_run_id",
         "deployment_status",
         "environment",
         "manifest_sha256",
+        request_id_field,
+        request_digest_field,
+        workflow_sha_field,
         "observed_runtime_identity",
         "package",
         "repository",
         "schema",
+        "signature",
+        "signing_key_sha256",
         "source_sha",
         "target",
         "version",
-    }:
-        raise ReleaseArtifactError("NMS promotion evidence schema is not exact")
-    typed_evidence = cast(dict[str, Any], evidence)
+    }
+
+
+def _require_attestation_artifact_identity(
+    *, evidence: dict[str, Any], manifest: dict[str, Any], repository: str
+) -> None:
+    """Require the receipt to identify the selected immutable artifact."""
     package = str(manifest["package"])
-    target = package
     expected = {
         "artifacts": manifest["artifacts"],
         "deploy_source": "latest_package",
@@ -391,27 +501,86 @@ def validate_release_attestation(
         "repository": repository,
         "schema": 2,
         "source_sha": manifest["source_sha"],
-        "target": target,
+        "target": package,
         "version": manifest["version"],
     }
-    if any(typed_evidence.get(key) != value for key, value in expected.items()):
+    if any(evidence.get(key) != value for key, value in expected.items()):
         raise ReleaseArtifactError("NMS promotion evidence does not match the artifact")
-    if (
-        isinstance(typed_evidence["deployment_run_id"], bool)
-        or not isinstance(typed_evidence["deployment_run_id"], int)
-        or typed_evidence["deployment_run_id"] <= 0
-    ):
+
+
+def _require_attestation_run_id(evidence: dict[str, Any]) -> None:
+    """Require a positive integer deployment run identity."""
+    run_id = evidence["deployment_run_id"]
+    if isinstance(run_id, bool) or not isinstance(run_id, int) or run_id <= 0:
         raise ReleaseArtifactError("NMS deployment run ID must be a positive integer")
-    runtime = typed_evidence.get("observed_runtime_identity")
-    if (
-        not isinstance(runtime, str)
-        or re.fullmatch(
-            rf"proxbox_api=={re.escape(str(manifest['version']))}@sha256:[a-f0-9]{{64}}",
-            runtime,
-        )
-        is None
-    ):
+
+
+def _require_attestation_runtime(*, evidence: dict[str, Any], manifest: dict[str, Any]) -> None:
+    """Require runtime evidence for the selected package version."""
+    runtime = evidence.get("observed_runtime_identity")
+    pattern = rf"proxbox_api=={re.escape(str(manifest['version']))}@sha256:[a-f0-9]{{64}}"
+    if not isinstance(runtime, str) or re.fullmatch(pattern, runtime) is None:
         raise ReleaseArtifactError("NMS runtime identity does not match proxbox-api")
+
+
+def _require_receipt_digest_fields(*, evidence: dict[str, Any], request_digest_field: str) -> None:
+    """Require canonical SHA-256 identities in the signed receipt."""
+    digest_fields = ("deployment_generation", "signing_key_sha256", request_digest_field)
+    if any(
+        not isinstance(evidence.get(field), str) or DIGEST_RE.fullmatch(evidence[field]) is None
+        for field in digest_fields
+    ):
+        raise ReleaseArtifactError("Deployment receipt digest identity is invalid")
+
+
+def _require_text_match(*, value: Any, pattern: str, error: str) -> None:
+    """Require a string field to match its complete canonical form."""
+    if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+        raise ReleaseArtifactError(error)
+
+
+def _require_signed_receipt_identity(
+    *, evidence: dict[str, Any], request_id_field: str, workflow_sha_field: str
+) -> None:
+    """Require canonical request, workflow, and signature identities."""
+    error = "Signed deployment receipt identity is invalid"
+    _require_text_match(value=evidence.get(request_id_field), pattern=r"[a-f0-9]{32}", error=error)
+    _require_text_match(value=evidence.get(workflow_sha_field), pattern=SHA_RE.pattern, error=error)
+    _require_text_match(
+        value=evidence.get("signature"), pattern=r"[A-Za-z0-9+/]{86}==", error=error
+    )
+
+
+def validate_release_attestation(
+    *, evidence: object, manifest: dict[str, Any], repository: str
+) -> dict[str, Any]:
+    """Validate protected NMS production-deployment evidence."""
+    receipt_prefix = "".join(("n", "m", "s"))
+    request_id_field = receipt_prefix + "_request_id"
+    request_digest_field = receipt_prefix + "_request_sha256"
+    workflow_sha_field = receipt_prefix + "_workflow_sha"
+    fields = _release_attestation_fields(
+        request_id_field=request_id_field,
+        request_digest_field=request_digest_field,
+        workflow_sha_field=workflow_sha_field,
+    )
+    if not isinstance(evidence, dict) or set(evidence) != fields:
+        raise ReleaseArtifactError("NMS promotion evidence schema is not exact")
+    typed_evidence = cast(dict[str, Any], evidence)
+    _require_attestation_artifact_identity(
+        evidence=typed_evidence, manifest=manifest, repository=repository
+    )
+    _require_attestation_run_id(typed_evidence)
+    _require_attestation_runtime(evidence=typed_evidence, manifest=manifest)
+    _require_receipt_digest_fields(
+        evidence=typed_evidence, request_digest_field=request_digest_field
+    )
+    _require_signed_receipt_identity(
+        evidence=typed_evidence,
+        request_id_field=request_id_field,
+        workflow_sha_field=workflow_sha_field,
+    )
+    _verify_release_attestation_signature(typed_evidence)
     return typed_evidence
 
 
