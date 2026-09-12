@@ -3971,11 +3971,11 @@
 | 3941 | http | GET | /virtualization/virtual-machines/snapshots/all/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:195 create&#95;all&#95;virtual&#95;machine&#95;snapshots&#95;stream | - |
 | 3942 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/snapshots/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:262 create&#95;virtual&#95;machine&#95;snapshots&#95;by&#95;id&#95;stream | - |
 | 3943 | http | GET | /virtualization/virtual-machines/task-history/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/task&#95;history&#95;vm.py:20 create&#95;all&#95;virtual&#95;machine&#95;task&#95;histories&#95;stream | - |
-| 3944 | http | GET | /virtualization/virtual-machines/create-test | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:1772 create&#95;test | - |
-| 3945 | http | GET | /virtualization/virtual-machines/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:1803 create&#95;virtual&#95;machines | - |
-| 3946 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4691 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id | - |
-| 3947 | http | GET | /virtualization/virtual-machines/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4771 create&#95;virtual&#95;machines&#95;stream | - |
-| 3948 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:5094 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id&#95;stream | - |
+| 3944 | http | GET | /virtualization/virtual-machines/create-test | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:1803 create&#95;test | - |
+| 3945 | http | GET | /virtualization/virtual-machines/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:1834 create&#95;virtual&#95;machines | - |
+| 3946 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4722 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id | - |
+| 3947 | http | GET | /virtualization/virtual-machines/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4802 create&#95;virtual&#95;machines&#95;stream | - |
+| 3948 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:5125 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id&#95;stream | - |
 | 3949 | http | GET | /extras/bootstrap-status | proxbox&#95;api/routes/extras/&#95;&#95;init&#95;&#95;.py:12 get&#95;netbox&#95;bootstrap&#95;status | - |
 | 3950 | http | POST | /intent/plan | proxbox&#95;api/routes/intent/plan.py:79 plan | - |
 | 3951 | http | POST | /intent/apply | proxbox&#95;api/routes/intent/apply.py:129 apply&#95;intent | - |
