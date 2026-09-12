@@ -193,6 +193,37 @@ def prepared_vm_result_key(prepared: PreparedVMState) -> tuple[str, int, str]:
     return (prepared.cluster_name, vmid, vm_type)
 
 
+def validate_vm_platform_relations(
+    prepared_vms: list[PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+) -> None:
+    """Validate creation-only platform relations before selecting an engine."""
+
+    payloads = [prepared.desired_payload for prepared in prepared_vms]
+    payloads.extend(netbox_snapshot)
+    for payload in payloads:
+        if "platform" not in payload:
+            continue
+        NetBoxVirtualMachineCreateBody.model_validate(
+            {
+                "name": "platform-relation-validation",
+                "status": "active",
+                "platform": payload["platform"],
+            }
+        )
+
+
+def attach_reconciliation_flags(
+    operations: list[NetBoxVMOperation],
+    flags: dict[str, bool],
+) -> list[NetBoxVMOperation]:
+    """Retain queue policy for stale-snapshot CREATE recovery during dispatch."""
+
+    for operation in operations:
+        operation.reconciliation_flags = dict(flags)
+    return operations
+
+
 def build_vm_operation_queue_python(  # noqa: C901
     prepared_vms: list[PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
@@ -238,6 +269,12 @@ def build_vm_operation_queue_python(  # noqa: C901
 
         desired_state = NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
         desired_payload = desired_state.model_dump(exclude_none=True, by_alias=True)
+        # Platform is creation-only in `_compute_vm_patchable_fields`. Validate it so
+        # nested current NetBox relations cannot abort reconciliation, but keep it out
+        # of the existing-record diff so inferred guest OS data never overwrites an
+        # operator-selected platform. The Rust normalizer enforces the same boundary by
+        # omitting platform from its desired/current diff payloads.
+        desired_payload.pop("platform", None)
         if not supports_virtual_machine_type_field:
             desired_payload.pop("virtual_machine_type", None)
         current_state = NetBoxVirtualMachineCreateBody.model_validate(
@@ -265,6 +302,9 @@ def build_vm_operation_queue_python(  # noqa: C901
             existing_description = existing_record.get("description")
             if isinstance(existing_description, str) and existing_description:
                 patch_payload.pop("description", None)
+            existing_comments = existing_record.get("comments")
+            if isinstance(existing_comments, str) and existing_comments:
+                patch_payload.pop("comments", None)
         if not overwrite_vm_tags:
             existing_tags = existing_record.get("tags")
             if isinstance(existing_tags, list) and existing_tags:
@@ -312,6 +352,11 @@ def build_vm_operation_queue(
 ) -> list[NetBoxVMOperation]:
     """Engine-neutral VM operation-queue entry point."""
 
+    # Platform never enters an existing-record diff, including in the Rust engine.
+    # Validate the creation-only relation before engine selection so malformed or
+    # schema-drifted NetBox values fail identically in python, compare, and rust modes.
+    validate_vm_platform_relations(prepared_vms, netbox_snapshot)
+
     flags = {
         "overwrite_vm_role": overwrite_vm_role,
         "overwrite_vm_type": overwrite_vm_type,
@@ -323,7 +368,8 @@ def build_vm_operation_queue(
     engine = _reconciliation_engine()
 
     if engine == "rust":
-        return _build_vm_operation_queue_with_rust(prepared_vms, netbox_snapshot, flags)
+        operations = _build_vm_operation_queue_with_rust(prepared_vms, netbox_snapshot, flags)
+        return attach_reconciliation_flags(operations, flags)
 
     py_ops = build_vm_operation_queue_python(
         prepared_vms,
@@ -332,7 +378,7 @@ def build_vm_operation_queue(
     )
 
     if engine == "python" or not rust_available():
-        return py_ops
+        return attach_reconciliation_flags(py_ops, flags)
 
     try:
         rust_ops = _build_vm_operation_queue_with_rust(prepared_vms, netbox_snapshot, flags)
@@ -341,7 +387,7 @@ def build_vm_operation_queue(
         logger.exception("Rust reconciliation failed in compare mode; returning Python output")
         if _reconciliation_compare_strict():
             raise AssertionError("Rust reconciliation failed in compare mode") from exc
-        return py_ops
+        return attach_reconciliation_flags(py_ops, flags)
 
     normalized_py_ops = _normalize_ops(py_ops)
     normalized_rust_ops = _normalize_ops(rust_ops)
@@ -352,7 +398,7 @@ def build_vm_operation_queue(
         if _reconciliation_compare_strict():
             raise AssertionError(f"Rust/Python reconciliation mismatch:\n{diff}")
 
-    return py_ops
+    return attach_reconciliation_flags(py_ops, flags)
 
 
 def _build_vm_operation_queue_with_rust(

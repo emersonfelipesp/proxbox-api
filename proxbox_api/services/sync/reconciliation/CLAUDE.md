@@ -59,6 +59,9 @@ plugin-settings only; backend environment variables must not override it.
   `overwrite_vm_tags=True`.
 - Keep relation handling tolerant of both integer IDs and nested objects with
   `id`.
+- Validate the creation-only `platform` relation before engine selection. The
+  Python, compare, and Rust modes must all reject non-positive scalar or nested
+  IDs even though platform is omitted from existing-record diff payloads.
 - If NetBox lacks the `virtual_machine_type` field, do not generate a patch for
   that field.
 

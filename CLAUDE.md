@@ -22,6 +22,16 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Overview
 
+The explicit developer-only mounted operation inventory is documented in
+`docs/operations/operation-inventory.md`; its nearest implementation guide is
+`proxbox_api/operation_inventory/CLAUDE.md`. Preserve all twenty-two feature
+inputs and fifteen reachable states, ordered duplicates, generated identities,
+and exact locked source evidence. Generation, drift verification, and unresolved
+coverage readiness are separate commands. The inventory does not authorize
+execution, classify effects from methods, or activate the RPC-only cutover.
+Generated contract tables stay under `contracts/` and are embedded into the
+handwritten bilingual documentation by restricted build-time snippets.
+
 `proxbox-api` is a FastAPI backend that connects Proxmox inventory and lifecycle data to NetBox objects. It serves REST, SSE, and WebSocket endpoints for discovery, synchronization, endpoint management, generated Proxmox proxy routes, and Firecracker host-agent provisioning for the cloud management runtime. The same repository also includes a standalone `nextjs-ui/` frontend for endpoint administration.
 
 ### Companion repos (cross-link map)

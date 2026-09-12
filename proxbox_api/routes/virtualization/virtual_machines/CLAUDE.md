@@ -165,6 +165,16 @@ Main synchronization endpoints for virtual machines and related resources.
   as success even when a stale existing record is present. Coverage:
   `tests/test_vm_sync_reconciliation_queue.py`.
 
+- **CREATE recovery respects the existing-VM ownership allowlist.** A VM queued
+  as CREATE can be re-resolved during dispatch when the snapshot was stale or
+  incomplete. Recovery reclassifies the resolved existing record through the
+  Python queue with the original engine-neutral overwrite flags. It must never
+  PATCH creation-only `platform`, must preserve operator-owned type,
+  description, and comments when their overwrite flags are false, and must
+  merge rather than replace operator tags when tag overwrite is enabled.
+  Coverage:
+  `tests/test_vm_sync_reconciliation_queue.py::test_dispatch_create_recovery_preserves_existing_operator_platform`.
+
 - **Concurrent VM operation dispatch.** `_dispatch_vm_operation_queue` runs all
   queued CREATE/UPDATE/GET operations concurrently via `asyncio.gather`, bounded
   by an `asyncio.Semaphore` whose width comes from `resolve_netbox_write_concurrency()`

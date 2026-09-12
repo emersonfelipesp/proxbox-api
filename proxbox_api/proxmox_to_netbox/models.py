@@ -1127,6 +1127,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
         "site",
         "virtual_machine_type",
         "role",
+        "platform",
         mode="before",
     )
     @classmethod
@@ -1145,6 +1146,8 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
             raise ValueError("virtual_machine_type must be positive when provided")
         if self.role is not None and self.role <= 0:
             raise ValueError("role must be positive when provided")
+        if self.platform is not None and self.platform <= 0:
+            raise ValueError("platform must be positive when provided")
         return self
 
     @field_validator("tags", mode="before")

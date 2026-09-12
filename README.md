@@ -60,6 +60,14 @@ uv run mkdocs serve   # after syncing with --extra docs
 
 Project documentation is available under `docs/` and built with MkDocs Material.
 
+The [mounted operation inventory](docs/operations/operation-inventory.md)
+publishes the actual ordered HTTP and WebSocket registrations for all twenty-two
+reviewed feature-mode inputs. Generate or verify it explicitly with
+`python scripts/mounted_operation_inventory.py generate` or `verify` in the
+unchanged locked environment. The separate `readiness` command fails while
+caller, effect, authorization, transport, and audit coverage remains unresolved.
+Inventory generation does not authorize execution or activate the RPC-only cutover.
+
 The VM reconciliation engine is documented in
 [`docs/sync/reconciliation-architecture.md`](docs/sync/reconciliation-architecture.md).
 Python is the default engine; the optional Rust engine is for compare-mode validation and explicit

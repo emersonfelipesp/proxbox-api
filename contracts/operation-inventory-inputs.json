@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "generated_versions": ["latest", "8.1", "8.2", "8.3", "9.1"],
+  "optional_routers": [
+    {"feature":"pbs","module":"proxbox_api.pbs.admin","prefix":"/pbs"},
+    {"feature":"pbs","module":"proxbox_api.pbs.routes","prefix":"/pbs"},
+    {"feature":"ceph","module":"proxbox_api.ceph.routes","prefix":"/ceph"},
+    {"feature":"ceph","module":"proxbox_api.ceph.v2_routes","prefix":"/ceph/v2"},
+    {"feature":"pdm","module":"proxbox_api.pdm.admin","prefix":"/pdm"},
+    {"feature":"pdm","module":"proxbox_api.pdm.routes","prefix":"/pdm"}
+  ],
+  "modes": [
+    {"name":"default-all","raw":"","core":true,"sidecars":["pbs","ceph","pdm"],"equivalent":null},
+    {"name":"pbs","raw":"pbs","core":false,"sidecars":["pbs"],"equivalent":null},
+    {"name":"ceph","raw":"ceph","core":false,"sidecars":["ceph"],"equivalent":null},
+    {"name":"pdm","raw":"pdm","core":false,"sidecars":["pdm"],"equivalent":null},
+    {"name":"pbs-ceph","raw":"pbs,ceph","core":false,"sidecars":["pbs","ceph"],"equivalent":null},
+    {"name":"pbs-pdm","raw":"pbs,pdm","core":false,"sidecars":["pbs","pdm"],"equivalent":null},
+    {"name":"ceph-pdm","raw":"ceph,pdm","core":false,"sidecars":["ceph","pdm"],"equivalent":null},
+    {"name":"all-sidecars","raw":"pbs,ceph,pdm","core":false,"sidecars":["pbs","ceph","pdm"],"equivalent":null},
+    {"name":"unknown-core","raw":"unknown","core":true,"sidecars":[],"equivalent":null},
+    {"name":"core-pbs","raw":"core,pbs","core":true,"sidecars":["pbs"],"equivalent":null},
+    {"name":"core-ceph","raw":"core,ceph","core":true,"sidecars":["ceph"],"equivalent":null},
+    {"name":"core-pdm","raw":"core,pdm","core":true,"sidecars":["pdm"],"equivalent":null},
+    {"name":"core-pbs-ceph","raw":"core,pbs,ceph","core":true,"sidecars":["pbs","ceph"],"equivalent":null},
+    {"name":"core-pbs-pdm","raw":"core,pbs,pdm","core":true,"sidecars":["pbs","pdm"],"equivalent":null},
+    {"name":"core-ceph-pdm","raw":"core,ceph,pdm","core":true,"sidecars":["ceph","pdm"],"equivalent":null},
+    {"name":"core-all","raw":"core,pbs,ceph,pdm","core":true,"sidecars":["pbs","ceph","pdm"],"equivalent":"default-all"},
+    {"name":"blank-tokens","raw":" , \t,\n, ","core":true,"sidecars":["pbs","ceph","pdm"],"equivalent":"default-all"},
+    {"name":"normalized-sidecar","raw":" PBS ,pBs,,\tPBS ","core":false,"sidecars":["pbs"],"equivalent":"pbs"},
+    {"name":"normalized-subset","raw":" CePh, PBS,ceph, ","core":false,"sidecars":["pbs","ceph"],"equivalent":"pbs-ceph"},
+    {"name":"normalized-all","raw":" PDM,CEPH,pbs,PDM, ","core":false,"sidecars":["pbs","ceph","pdm"],"equivalent":"all-sidecars"},
+    {"name":"normalized-unknown","raw":" Unknown,UNKNOWN, ","core":true,"sidecars":[],"equivalent":"unknown-core"},
+    {"name":"normalized-core","raw":" cOrE, PBS,pbs,, ","core":true,"sidecars":["pbs"],"equivalent":"core-pbs"}
+  ]
+}

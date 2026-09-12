@@ -23,6 +23,7 @@ from proxbox_api.proxmox_to_netbox.guest_os import (
     platform_slug,
     resolve_platform_name,
 )
+from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualMachineCreateBody
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
@@ -207,6 +208,41 @@ def test_reconciler_diff_can_see_the_current_platform() -> None:
     """Without this the field could never be patched even with the gate on."""
     normalized = normalize_current_virtual_machine_payload({"name": "vm1", "platform": 7})
     assert normalized["platform"] == 7
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ({"id": 2, "name": "Ubuntu 22.04", "slug": "ubuntu-22-04"}, 2),
+        (2, 2),
+        (None, None),
+    ],
+)
+def test_reconciler_validates_netbox_platform_relation_shapes(
+    platform: object, expected: int | None
+) -> None:
+    """NetBox returns existing relations as nested objects, not only scalar IDs."""
+    current = normalize_current_virtual_machine_payload(
+        {
+            "name": "vm1",
+            "status": {"value": "active", "label": "Active"},
+            "platform": platform,
+        }
+    )
+
+    validated = NetBoxVirtualMachineCreateBody.model_validate(current)
+
+    assert validated.platform == expected
+
+
+@pytest.mark.parametrize("platform", [0, -1, {"id": 0}, {"id": -1}])
+def test_reconciler_rejects_non_positive_platform_ids(platform: object) -> None:
+    current = normalize_current_virtual_machine_payload(
+        {"name": "vm1", "status": "active", "platform": platform}
+    )
+
+    with pytest.raises(ValueError, match="platform must be positive when provided"):
+        NetBoxVirtualMachineCreateBody.model_validate(current)
 
 
 def test_guest_agent_refinement_is_opt_in() -> None:

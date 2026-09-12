@@ -81,6 +81,13 @@ uv run mkdocs build
   and `docs/pt-BR/sync/reconciliation-architecture.md`; keep them aligned
   with `proxbox_api/services/sync/reconciliation/` and `proxbox-reconcile-rs/`.
 - Do not store generated artifacts or runtime data in `docs/`.
+- `operations/operation-inventory.md` and its `pt-BR` counterpart embed the
+  generated mounted-registration tables from `contracts/` through restricted
+  fail-on-missing snippets. Keep the exact allowed table paths in `mkdocs.yml`
+  and the standard-library-only pre-build consistency hook aligned. Missing,
+  stale or symlinked evidence must fail the build; do not replace the published
+  matrix with an unrendered source link or import the application in the hook.
+  Generation and parent caller/effect readiness remain separate gates.
 
 ## Async / Performance Developer Guide
 

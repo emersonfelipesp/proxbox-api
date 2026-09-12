@@ -19,6 +19,7 @@ def _prepared_vm(
     vmid: int,
     memory: int,
     endpoint_id: int = 500,
+    platform: object | None = None,
 ) -> sync_vm._PreparedVMState:
     desired_payload = {
         "name": f"vm-{vmid}",
@@ -32,6 +33,8 @@ def _prepared_vm(
         "tags": [99],
         "description": "Synced from Proxmox node pve01",
     }
+    if platform is not None:
+        desired_payload["platform"] = platform
     return sync_vm._PreparedVMState(
         cluster_name=cluster_name,
         resource={"name": f"vm-{vmid}", "vmid": vmid, "type": "qemu"},
@@ -298,6 +301,205 @@ async def test_dispatch_vm_operation_queue_runs_writes_sequentially(monkeypatch)
     assert resolved[("cluster-a", 202, "qemu")]["id"] == 4202
     assert resolved[("cluster-a", 201, "qemu")]["id"] == 3201
     assert resolved[("cluster-a", 203, "qemu")]["id"] == 4203
+
+
+@pytest.mark.asyncio
+async def test_dispatch_preserves_existing_operator_platform(monkeypatch):
+    prepared = _prepared_vm(
+        cluster_name="cluster-a",
+        vmid=204,
+        memory=2048,
+        platform=8,
+    )
+    snapshot = [
+        {
+            "id": 4204,
+            "name": "vm-204",
+            "status": "active",
+            "cluster": {"id": 1, "name": "cluster-a"},
+            "device": {"id": 10},
+            "role": {"id": 20},
+            "platform": {"id": 7, "name": "Operator platform"},
+            "vcpus": 2,
+            "memory": 2048,
+            "disk": 30,
+            "tags": [{"id": 99}],
+            "proxmox_endpoint_id": 500,
+            "proxmox_vm_id": 204,
+            "proxmox_vm_type": "qemu",
+            "description": "Synced from Proxmox node pve01",
+        }
+    ]
+    queue = sync_vm._build_vm_operation_queue([prepared], snapshot)
+
+    async def _unexpected_patch(*_args, **_kwargs):
+        pytest.fail("an operator-owned platform must not reach the NetBox PATCH boundary")
+
+    async def _no_role_snapshots(*_args, **_kwargs):
+        return VMRoleSnapshotScan(values={}, unverified_vm_ids=frozenset())
+
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _unexpected_patch)
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _no_role_snapshots)
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert [operation.method for operation in queue] == ["GET"]
+    assert failed_keys == set()
+    assert resolved[("cluster-a", 204, "qemu")]["platform"]["id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_recovery_preserves_existing_operator_platform(monkeypatch):
+    prepared = _prepared_vm(
+        cluster_name="cluster-a",
+        vmid=205,
+        memory=2048,
+        platform=8,
+    )
+    existing_record = {
+        "id": 4205,
+        "name": "vm-205",
+        "status": "active",
+        "cluster": {"id": 1, "name": "cluster-a"},
+        "device": {"id": 10},
+        "role": {"id": 20},
+        "platform": {"id": 7, "name": "Operator platform"},
+        "vcpus": 2,
+        "memory": 2048,
+        "disk": 30,
+        "tags": [{"id": 99}],
+        "description": "Synced from Proxmox node pve01",
+    }
+
+    async def _resolve_existing(*_args, **_kwargs):
+        return type(
+            "Resolution",
+            (),
+            {"record": existing_record, "record_id": 4205, "source": "sidecar"},
+        )()
+
+    async def _unexpected_patch(*_args, **_kwargs):
+        pytest.fail("a CREATE recovery must not patch an operator-owned platform")
+
+    async def _role_snapshots(*_args, **_kwargs) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={4205: 20}, unverified_vm_ids=frozenset())
+
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _resolve_existing)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _unexpected_patch)
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _role_snapshots)
+
+    queue = [sync_vm._NetBoxVMOperation(method="CREATE", prepared=prepared)]
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert failed_keys == set()
+    assert resolved[("cluster-a", 205, "qemu")]["platform"]["id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_recovery_honors_false_ownership_flags(monkeypatch):
+    prepared = _prepared_vm(
+        cluster_name="cluster-a",
+        vmid=206,
+        memory=2048,
+        platform=8,
+    )
+    prepared.desired_payload.update(
+        {
+            "virtual_machine_type": 55,
+            "tags": [99],
+            "description": "Desired description",
+            "comments": "Desired full comments",
+        }
+    )
+    existing_record = {
+        **prepared.desired_payload,
+        "id": 4206,
+        "cluster": {"id": 1},
+        "device": {"id": 10},
+        "role": {"id": 20},
+        "virtual_machine_type": {"id": 77},
+        "platform": {"id": 7, "name": "Operator platform"},
+        "tags": [{"id": 7}],
+        "description": "Operator description",
+        "comments": "Operator full comments",
+    }
+
+    async def _resolve_existing(*_args, **_kwargs):
+        return type(
+            "Resolution",
+            (),
+            {"record": existing_record, "record_id": 4206, "source": "sidecar"},
+        )()
+
+    async def _unexpected_patch(*_args, **_kwargs):
+        pytest.fail("false overwrite flags must preserve every operator-owned VM field")
+
+    async def _role_snapshots(*_args, **_kwargs) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={4206: 20}, unverified_vm_ids=frozenset())
+
+    queue = sync_vm._build_vm_operation_queue(
+        [prepared],
+        [],
+        overwrite_vm_type=False,
+        overwrite_vm_tags=False,
+        overwrite_vm_description=False,
+    )
+    assert [operation.method for operation in queue] == ["CREATE"]
+
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _resolve_existing)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _unexpected_patch)
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _role_snapshots)
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert failed_keys == set()
+    recovered = resolved[("cluster-a", 206, "qemu")]
+    assert recovered["virtual_machine_type"]["id"] == 77
+    assert recovered["platform"]["id"] == 7
+    assert recovered["tags"] == [{"id": 7}]
+    assert recovered["description"] == "Operator description"
+    assert recovered["comments"] == "Operator full comments"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_create_recovery_merges_operator_tags(monkeypatch):
+    prepared = _prepared_vm(cluster_name="cluster-a", vmid=207, memory=2048)
+    existing_record = {
+        **prepared.desired_payload,
+        "id": 4207,
+        "cluster": {"id": 1},
+        "device": {"id": 10},
+        "role": {"id": 20},
+        "tags": [{"id": 7}],
+    }
+    patch_payloads: list[dict[str, object]] = []
+
+    async def _resolve_existing(*_args, **_kwargs):
+        return type(
+            "Resolution",
+            (),
+            {"record": existing_record, "record_id": 4207, "source": "sidecar"},
+        )()
+
+    async def _patch(_nb, _path, _record_id, payload):
+        patch_payloads.append(dict(payload))
+        return {**existing_record, **payload}
+
+    async def _role_snapshots(*_args, **_kwargs) -> VMRoleSnapshotScan:
+        return VMRoleSnapshotScan(values={4207: 20}, unverified_vm_ids=frozenset())
+
+    queue = sync_vm._build_vm_operation_queue([prepared], [])
+    assert [operation.method for operation in queue] == ["CREATE"]
+
+    monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _resolve_existing)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _patch)
+    monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _role_snapshots)
+
+    resolved, failed_keys = await sync_vm._dispatch_vm_operation_queue(object(), queue)
+
+    assert failed_keys == set()
+    assert patch_payloads == [{"tags": [7, 99]}]
+    assert resolved[("cluster-a", 207, "qemu")]["tags"] == [7, 99]
 
 
 @pytest.mark.asyncio
@@ -595,16 +797,16 @@ async def test_dispatch_create_re_adopts_sidecar_vm(monkeypatch):
             },
         )()
 
-    async def _fake_reconcile(*_args, **kwargs):
-        assert "role" not in kwargs["patchable_fields"]
-        calls.append(kwargs["existing_record"]["id"])
-        return {"id": kwargs["existing_record"]["id"], **kwargs["payload"]}
+    async def _fake_patch(_nb, _path, record_id, payload):
+        assert "role" not in payload
+        calls.append(f"patch:{record_id}")
+        return {"id": record_id, **payload}
 
     async def _fake_role_snapshots(*_args, **_kwargs) -> VMRoleSnapshotScan:
         return VMRoleSnapshotScan(values={6101: 11})
 
     monkeypatch.setattr(sync_vm, "rest_create_async", _unexpected_create)
-    monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
     monkeypatch.setattr(sync_vm, "resolve_virtual_machine_by_sync_state", _fake_resolver)
     monkeypatch.setattr(sync_vm, "scan_vm_last_synced_role_ids", _fake_role_snapshots)
     monkeypatch.setattr(sync_vm, "resolve_netbox_write_concurrency", lambda: 1)
@@ -619,7 +821,7 @@ async def test_dispatch_create_re_adopts_sidecar_vm(monkeypatch):
     )
 
     assert failed_keys == set()
-    assert calls == [6101]
+    assert calls == ["patch:6101"]
     assert resolved[("cluster-a", 301, "qemu")]["id"] == 6101
     assert resolved[("cluster-a", 301, "qemu")]["memory"] == 2048
     assert queue[0].role_snapshot_id_to_write is None

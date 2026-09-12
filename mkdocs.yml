@@ -39,7 +39,17 @@ plugins:
           name: Portugues (Brasil)
           build: true
 
+hooks:
+  - scripts/operation_inventory_docs.py
+
 markdown_extensions:
+  - pymdownx.snippets:
+      base_path:
+        - contracts/mounted-operations.en.md
+        - contracts/mounted-operations.pt-BR.md
+      restrict_base_path: true
+      check_paths: true
+      url_download: false
   - admonition
   - toc:
       permalink: true
@@ -79,6 +89,7 @@ nav:
       - Overwrite Flags: sync/overwrite-flags.md
       - Scheduler Container: sync/scheduler-container.md
   - Operations:
+      - Operation Inventory: operations/operation-inventory.md
       - Database: operations/database.md
       - Custom Field Retirement: operations/custom-fields.md
       - Hardware Discovery: operations/hardware-discovery.md

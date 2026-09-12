@@ -50,6 +50,11 @@ That means:
   `ensure_name` validator falls back to a deterministic `vm-<vmid>` so a
   nameless NetBox `VirtualMachine` is never created (a nameless record cannot be
   matched back to Proxmox by the single-VM sync route).
+- `NetBoxVirtualMachineCreateBody` normalizes every optional NetBox relation,
+  including `platform`, from either a scalar primary key or the nested object
+  returned by NetBox. Keep new relation fields in the shared `mode="before"`
+  validator and the positive-ID invariant; otherwise existing-record
+  reconciliation can fail before it reaches the diff or write boundary.
 
 - **The choice and status normalizers unwrap `Enum` members.** `_choice_value`,
   `_status_value`, `_content_type_value`, and `_relation_id` all route through

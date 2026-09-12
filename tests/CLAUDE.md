@@ -15,6 +15,13 @@ Unit, integration, and end-to-end tests for the `proxbox_api` backend package. A
 
 ## Test File Index
 
+`operation_inventory/` owns the independent mounted-route oracle, strict wire
+and coverage validation, all twenty-two inputs and fifteen reachable states,
+generated/optional completeness, source provenance, subprocess isolation,
+documentation rendering and drift mutations. Its expected route counts and
+normalization cases must not be derived from production constants. Keep the
+real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
+
 `test_generated_write_boundary.py` provides the independent generated-proxy mutation denial matrix. It uses application authentication and checks that denied requests never resolve a target across explicit versions, aliases, in-process reuse, disk-cache reload, and forced rebuild. Keep its expected methods independent of the production policy. The exhaustive generated route suite forwards only reads and asserts no upstream mutation calls.
 
 | File | What it tests |

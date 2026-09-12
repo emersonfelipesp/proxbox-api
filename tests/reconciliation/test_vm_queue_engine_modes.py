@@ -171,6 +171,43 @@ def test_rust_mode_raises_when_native_extension_is_unavailable(monkeypatch) -> N
         build_vm_operation_queue([_prepared_vm()], [])
 
 
+@pytest.mark.parametrize("engine", ["python", "compare", "rust"])
+@pytest.mark.parametrize("relation_source", ["desired", "current"])
+@pytest.mark.parametrize("platform", [0, -1, {"id": 0}, {"id": -1}])
+def test_all_engine_modes_reject_non_positive_platform_relations(
+    monkeypatch,
+    engine: str,
+    relation_source: str,
+    platform: object,
+) -> None:
+    rust_calls = 0
+
+    def _unexpected_rust_build(input_bytes: bytes) -> bytes:
+        nonlocal rust_calls
+        rust_calls += 1
+        return _rust_output("GET")
+
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {
+            "reconciliation_engine": engine,
+            "reconciliation_compare_strict": True,
+        },
+    )
+    monkeypatch.setattr(rust_bridge, "_rust_build", _unexpected_rust_build)
+    desired_platform = platform if relation_source == "desired" else 7
+    current_platform = platform if relation_source == "current" else {"id": 7}
+
+    with pytest.raises(ValueError, match="platform must be positive when provided"):
+        build_vm_operation_queue(
+            [_prepared_vm(platform=desired_platform)],
+            [_snapshot_vm(platform=current_platform)],
+        )
+
+    assert rust_calls == 0
+
+
 def test_adapter_uses_vm_type_for_qemu_lxc_same_vmid() -> None:
     prepared = [
         _prepared_vm(vmid=100, vm_type="qemu", name="qemu-100"),

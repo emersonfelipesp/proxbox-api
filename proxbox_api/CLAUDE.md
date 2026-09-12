@@ -80,6 +80,12 @@ tags. The paired NetBox plugin owns the permission-gated human bulk-delete page.
 
 ## Extension Guidance
 
+The `operation_inventory/` package is developer-only mounted-route evidence,
+not a runtime service. Read its scoped guide before changing the pinned lazy
+router adapter, strict contracts, source provenance or coverage readiness.
+Invoke it only through `scripts/mounted_operation_inventory.py`; never import
+the extractor from lifespan, startup, request dependencies or managed handlers.
+
 - Keep route modules thin and move reusable logic into services or utility modules.
 - Add new request and response models to `schemas/` before wiring route code.
 - Keep generated artifacts and contract snapshots out of manual edits unless you are debugging the generator.

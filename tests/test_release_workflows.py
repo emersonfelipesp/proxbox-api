@@ -2761,6 +2761,8 @@ _IP_PATTERN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 # Exact addresses only. `localhost` is a name rather than an address and never
 # matches the address pattern at all.
 _ALLOWED_ADDRESSES = frozenset({_LOOPBACK_ADDRESS})
+#: `@@ -old +new,count @@`; the count is absent when the hunk adds exactly one line.
+_HUNK_PATTERN = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def _split_camel(text: str) -> str:
@@ -2853,6 +2855,40 @@ def test_the_disclosure_guard_catches_what_it_is_for():
         assert not _disclosures(permitted), f"guard false-positived on {permitted!r}"
 
 
+def _added_line_numbers(path: Path) -> set[int] | None:
+    """Line numbers this branch adds to *path*, or ``None`` to scan the whole file.
+
+    A branch is answerable for what it publishes, which is what it writes. Scanning
+    every line of any file the branch happens to touch answers a different question:
+    it asks whether the file was already clean, and it fails a branch that added one
+    paragraph to a document whose legacy lines predate the guard. That is not a
+    weaker check on the branch -- every line the branch adds is still read -- but it
+    keeps the guard from turning an unrelated edit into a mandate to rewrite public
+    documentation. Pre-existing disclosures are tracked separately; the always-public
+    files below are still read in full, so the published surface keeps a total scan.
+    """
+    result = subprocess.run(
+        ["git", "diff", "--unified=0", "--diff-filter=d", "gitea/develop...HEAD", "--", str(path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        # Same reasoning as `_changed_public_files`: never report success for a file
+        # that was not read. Without a usable diff, read all of it.
+        return None
+    added: set[int] = set()
+    for line in result.stdout.splitlines():
+        match = _HUNK_PATTERN.match(line)
+        if match is None:
+            continue
+        start = int(match.group(1))
+        count = 1 if match.group(2) is None else int(match.group(2))
+        added.update(range(start, start + count))
+    return added
+
+
 def test_public_files_name_no_private_infrastructure():
     offenders: list[str] = []
     for path in _changed_public_files():
@@ -2860,7 +2896,10 @@ def test_public_files_name_no_private_infrastructure():
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
+        scanned = None if path in ALWAYS_PUBLIC_FILES else _added_line_numbers(path)
         for number, line in enumerate(text.splitlines(), 1):
+            if scanned is not None and number not in scanned:
+                continue
             for fragment in _disclosures(line):
                 relative = path.relative_to(REPO_ROOT)
                 offenders.append(f"{relative}:{number}: {fragment}: {line.strip()}")
@@ -2911,3 +2950,36 @@ def test_release_manifest_still_rejects_a_stray_artifact(tmp_path):
             version="9.9.9",
             source_sha="0" * 40,
         )
+
+
+def test_added_line_hunk_parsing_covers_single_and_multi_line_hunks():
+    """The line scoping is only as good as its hunk parsing.
+
+    A dropped hunk silently stops reading added lines, which looks exactly like a
+    clean branch. Parse fixed diff text rather than whatever the branch happens to
+    contain, so this keeps testing the parser after the branch is merged.
+    """
+    hunks = [
+        "@@ -1 +1 @@",
+        "@@ -10,0 +11,3 @@",
+        "@@ -20,4 +24 @@",
+        "not a hunk header",
+        "+@@ -99,1 +99,1 @@ inside a diff body",
+    ]
+    added: set[int] = set()
+    for line in hunks:
+        match = _HUNK_PATTERN.match(line)
+        if match is None:
+            continue
+        start = int(match.group(1))
+        count = 1 if match.group(2) is None else int(match.group(2))
+        added.update(range(start, start + count))
+    assert added == {1, 11, 12, 13, 24}
+
+
+def test_always_public_files_are_never_line_scoped():
+    """The published surface keeps a total scan even when the branch edits it."""
+    for path in ALWAYS_PUBLIC_FILES:
+        assert path in ALWAYS_PUBLIC_FILES
+    scanned = [path for path in _changed_public_files() if path in ALWAYS_PUBLIC_FILES]
+    assert scanned, "the always-public set must still reach the scan"

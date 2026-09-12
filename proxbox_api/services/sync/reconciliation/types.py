@@ -32,6 +32,8 @@ class NetBoxVMOperation:
     prepared: PreparedVMState
     existing_record: dict[str, object] | None = None
     patch_payload: dict[str, object] = field(default_factory=dict)
+    # Engine-neutral overwrite policy retained for stale-snapshot CREATE recovery.
+    reconciliation_flags: dict[str, bool] = field(default_factory=dict)
     # Set by the engine-neutral dispatch policy after it compares the current
     # role with durable sidecar evidence. The caller persists this only after
     # the NetBox operation succeeds.

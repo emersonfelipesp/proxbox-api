@@ -97,6 +97,9 @@ from proxbox_api.services.sync.reconciliation.vm_queue import (
     build_vm_operation_queue as _build_vm_operation_queue,
 )
 from proxbox_api.services.sync.reconciliation.vm_queue import (
+    build_vm_operation_queue_python as _build_vm_operation_queue_python,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
     build_vm_snapshot_identity_indexes as _build_vm_snapshot_identity_indexes,
 )
 from proxbox_api.services.sync.reconciliation.vm_queue import (
@@ -1085,7 +1088,9 @@ async def _dispatch_vm_operation_queue(
                     snapshot_read.snapshot_id if snapshot_read is not None else None
                 ),
                 desired_role_id=_relation_id(operation.prepared.desired_payload.get("role")),
-                overwrite_vm_role=overwrite_vm_role,
+                overwrite_vm_role=operation.reconciliation_flags.get(
+                    "overwrite_vm_role", overwrite_vm_role
+                ),
             )
         operation.role_snapshot_id_to_write = (
             decision.snapshot_value if decision.write_snapshot else None
@@ -1147,39 +1152,65 @@ async def _dispatch_vm_operation_queue(
                     )
                     if existing_resolution is not None:
                         existing_record = _to_mapping(existing_resolution.record)
-                        desired_payload, patchable_fields, decision = apply_role_snapshot_policy(
-                            existing_record=existing_record,
-                            existing_snapshot_id=(
-                                snapshot_read := _snapshot_read_for(existing_record)
-                            ).snapshot_id,
-                            desired_payload=operation.prepared.desired_payload,
-                            patchable_fields=operation.prepared.desired_payload.keys(),
-                            overwrite_vm_role=overwrite_vm_role,
-                            snapshot_read_verified=snapshot_read.verified,
-                        )
-                        operation.role_snapshot_id_to_write = (
-                            decision.snapshot_value if decision.write_snapshot else None
-                        )
-                        operation.role_snapshot_previous_id = snapshot_read.snapshot_id
-                        operation.role_previous_id = _relation_id(existing_record.get("role"))
-                        operation.role_write_applied = decision.write_role
-                        reconciled = await rest_reconcile_async(
-                            nb,
-                            "/api/virtualization/virtual-machines/",
-                            lookup=operation.prepared.lookup,
-                            payload=desired_payload,
-                            schema=NetBoxVirtualMachineCreateBody,
-                            patchable_fields=patchable_fields,
-                            current_normalizer=lambda record: (
-                                _normalize_current_virtual_machine_payload(
-                                    record,
-                                    supports_virtual_machine_type_field=True,
-                                )
+                        recovery_flags = {
+                            "overwrite_vm_role": operation.reconciliation_flags.get(
+                                "overwrite_vm_role", overwrite_vm_role
                             ),
-                            strict_lookup=True,
-                            existing_record=existing_resolution.record,
+                            "overwrite_vm_type": operation.reconciliation_flags.get(
+                                "overwrite_vm_type", True
+                            ),
+                            "overwrite_vm_tags": operation.reconciliation_flags.get(
+                                "overwrite_vm_tags", True
+                            ),
+                            "overwrite_vm_description": operation.reconciliation_flags.get(
+                                "overwrite_vm_description", True
+                            ),
+                            "overwrite_vm_custom_fields": operation.reconciliation_flags.get(
+                                "overwrite_vm_custom_fields", overwrite_vm_custom_fields
+                            ),
+                            "supports_virtual_machine_type_field": operation.reconciliation_flags.get(
+                                "supports_virtual_machine_type_field", True
+                            ),
+                        }
+                        recovery_operation = _build_vm_operation_queue_python(
+                            [operation.prepared],
+                            [
+                                {
+                                    **existing_record,
+                                    **operation.prepared.sync_state_fields,
+                                }
+                            ],
+                            **recovery_flags,
                         )
-                        resolved_records[key] = _to_mapping(reconciled)
+                        recovery_patch_payload = dict(recovery_operation[0].patch_payload)
+                        decision = _role_decision(operation, existing_record)
+                        if decision.write_role:
+                            recovery_patch_payload["role"] = decision.role_value
+                        else:
+                            recovery_patch_payload.pop("role", None)
+                        if not recovery_patch_payload:
+                            resolved_records[key] = existing_record
+                            return
+                        record_id = _relation_id(existing_record.get("id"))
+                        if record_id is None:
+                            raise ProxboxException(
+                                message="Cannot recover existing VM without NetBox id",
+                                python_exception=(
+                                    f"cluster={operation.prepared.cluster_name} vmid={vmid}"
+                                ),
+                            )
+                        reconciled = await _patch_vm_with_disk_aggregate_retry(
+                            nb,
+                            record_id=record_id,
+                            payload=recovery_patch_payload,
+                            cluster_name=operation.prepared.cluster_name,
+                            vmid=vmid,
+                        )
+                        resolved_records[key] = _to_mapping(reconciled) or {
+                            **existing_record,
+                            **recovery_patch_payload,
+                            "id": record_id,
+                        }
                         return
                     decision = _role_decision(operation, None)
                     created = await rest_create_async(

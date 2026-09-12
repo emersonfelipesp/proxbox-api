@@ -17,6 +17,8 @@ Utility and maintenance scripts for the `proxbox-api` project. These are one-off
 
 | File | Role |
 |------|------|
+| `mounted_operation_inventory.py` | Explicit isolated `generate`, `verify`, and `readiness` commands for the maintained mounted-operation contracts. The child denies sockets, database access and external writes before importing the application; it never runs lifespan or handlers. |
+| `operation_inventory_docs.py` | Standard-library-only MkDocs pre-build integrity and source check. It does not import the application and fails on missing, stale or symlinked inventory evidence before restricted snippets render. |
 | `refresh_schemas.py` | Regenerates the Proxmox and NetBox OpenAPI schema snapshots in `proxbox_api/generated/`. Run this when a new Proxmox or NetBox version is targeted. |
 | `prepare_offline_release.py` | Converts the reviewed `Dockerfile.release` plus a CI-populated wheelhouse into the canonical schema-2 offline context embedded only in release sdists. |
 | `verify_offline_release_sdist.py` | Streams a bounded release sdist into a new context, rehashes its exact offline wheelhouse/lock, and permits only the two literal pinned base images plus declared-stage `COPY --from` sources before the network-disabled CI Docker build. The release gate separately binds that required GitHub job to the reviewed source-SHA workflow bytes. |

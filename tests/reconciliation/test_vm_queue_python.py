@@ -20,6 +20,7 @@ def _prepared_vm(
     tags: list[object] | None = None,
     endpoint_id: int = 500,
     role: object = 20,
+    platform: object | None = None,
     description: str | None = "Synced from Proxmox node pve01",
 ) -> PreparedVMState:
     desired_payload = {
@@ -34,6 +35,8 @@ def _prepared_vm(
         "tags": tags if tags is not None else [99],
         "description": description,
     }
+    if platform is not None:
+        desired_payload["platform"] = platform
     return PreparedVMState(
         cluster_name=cluster_name,
         resource={"name": desired_payload["name"], "vmid": vmid, "type": vm_type},
@@ -62,6 +65,7 @@ def _snapshot_vm(
     tags: list[object] | None = None,
     endpoint_id: int = 500,
     role: object = 20,
+    platform: object | None = None,
     description: str | None = "Synced from Proxmox node pve01",
     include_virtual_machine_type: bool = True,
     virtual_machine_type: object = 55,
@@ -82,6 +86,8 @@ def _snapshot_vm(
     }
     if vmid is not None:
         record["proxmox_vm_id"] = vmid
+    if platform is not None:
+        record["platform"] = platform
     if vm_type is not None:
         record["proxmox_vm_type"] = vm_type
     if include_virtual_machine_type:
@@ -259,6 +265,24 @@ def test_relation_as_int_and_nested_object_compare_equal() -> None:
     queue = _queue(prepared, snapshot)
 
     assert [op.method for op in queue] == ["GET"]
+
+
+def test_existing_operator_platform_is_normalized_but_never_patched() -> None:
+    prepared = [_prepared_vm(vmid=117, name="qemu-117", platform=8)]
+    snapshot = [
+        _snapshot_vm(
+            record_id=2117,
+            vmid=117,
+            name="qemu-117",
+            platform={"id": 7, "name": "Operator platform"},
+        )
+    ]
+
+    queue = _queue(prepared, snapshot)
+
+    assert [op.method for op in queue] == ["GET"]
+    assert queue[0].patch_payload == {}
+    assert queue[0].existing_record == snapshot[0]
 
 
 def test_untyped_snapshot_record_matches_only_when_unambiguous() -> None:

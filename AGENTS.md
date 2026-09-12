@@ -11,6 +11,19 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 Use the root `CLAUDE.md` first, then open the nearest scoped guide for the code you are changing.
 
+## Mounted Operation Inventory
+
+Read `proxbox_api/operation_inventory/CLAUDE.md` and
+`docs/operations/operation-inventory.md` before changing the offline inventory,
+its explicit developer CLI, contract inputs, schemas, rendered tables, or
+build-only documentation consistency hook. Preserve every ordered registration,
+collision, WebSocket and generated version/alias. All twenty-two fixed feature
+inputs remain required; they represent fifteen reachable states, and the
+all-disabled state is unreachable. Never infer effects from HTTP methods or
+equate successful generation with caller/effect readiness. Keep generated
+artifacts under `contracts/`, not `docs/`, and regenerate them after changing
+their complete source closure. No inventory module belongs in runtime startup.
+
 ## Proxmox Browser Console Sessions
 
 Read [`docs/api/console-sessions.md`](docs/api/console-sessions.md) and `proxbox_api/routes/proxmox/CLAUDE.md` before changing `POST /proxmox/console/sessions`, `ConsoleSessionRequest`, `ConsoleSessionResponse`, `_request_console_proxy()`, `_console_ticket()`, `_console_port()`, `_build_ws_url()`, or `ProxmoxSession.get_websocket_auth()`. This route returns private, short-lived Proxmox transport material only to the trusted `nms-backend` relay. Preserve the explicit QEMU/LXC mode matrix, local endpoint-ID meaning, stored TLS policy, full ticket encoding, exactly one API-token or password-session WebSocket authentication value, and the rule that tickets, upstream URLs, cookies, and authorization values never reach browser JavaScript or logs.
