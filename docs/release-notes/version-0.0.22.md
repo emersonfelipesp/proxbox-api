@@ -16,6 +16,9 @@ proxbox-api 0.0.22 adds authenticated, bounded transports for querying Proxmox m
 - Isolate GitHub CLI configuration in the runner's private temporary directory so public tag promotion does not depend on the host root configuration.
 - Isolate Git global and XDG configuration in runner-private paths so GitHub credential-helper setup does not read or write host root files.
 - Materialize the verified fetched tag as the exact local tag ref before GitHub promotion, so the push preserves the annotated tag object instead of addressing a missing ref.
+- Normalize NetBox virtual-machine `platform` relations from either scalar IDs or nested relation objects before reconciliation, while preserving the platform as creation-only for existing VMs and rejecting non-positive IDs consistently across queue engines.
+- Preserve the originating overwrite policy during stale CREATE recovery so operator-managed platform, type, tags, description, and comments retain their configured ownership semantics.
+- Validate the production deployment host's complete signed schema-2 receipt, including exact artifact, runtime, request, workflow, digest, trusted Ed25519 key, and signature identities, before publishing promotion evidence.
 
 ## Security and operational impact
 
@@ -29,7 +32,7 @@ The release is additive. Existing synchronization routes and configuration remai
 
 ## Validation
 
-The feature passed focused metrics tests, the complete backend suite with coverage above the repository threshold, Ruff lint and formatting, compile checks, strict documentation builds, lock verification, per-function cyclomatic complexity analysis, three capped adversarial review rounds, staging health and OpenAPI probes, and authentication-boundary checks. The release-publishing recovery path also has positive and fail-closed regression coverage for Gitea's link response. Production promotion validates the host-issued receipt's complete signed schema, pinned public-key identity, and Ed25519 signature before accepting or publishing deployment evidence. Release candidate and final package evidence are recorded by the release workflows.
+The feature passed focused metrics tests, the complete backend suite with coverage above the repository threshold, Ruff lint and formatting, compile checks, strict documentation builds, lock verification, per-function cyclomatic complexity analysis, three capped adversarial review rounds, staging health and OpenAPI probes, and authentication-boundary checks. The release-publishing recovery path also has positive and fail-closed regression coverage for Gitea's link response. The VM reconciliation repair passed focused Python and Rust parity coverage, the complete core suite, and the capped three-round adversarial review. Production promotion validates the host-issued receipt's complete signed schema, pinned public-key identity, and Ed25519 signature before accepting or publishing deployment evidence. Release candidate `0.0.22rc7` completed immutable package publication, signed package-first production deployment, and a full virtual-machine synchronization that passed the formerly failing nested-platform record. Final package evidence is recorded by the release workflows.
 
 ## Known limitations
 

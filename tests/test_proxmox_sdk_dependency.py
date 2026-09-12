@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PROXBOX_API_VERSION = "0.0.22rc7"
+PROXBOX_API_VERSION = "0.0.22"
 PROXMOX_SDK_VERSION = "0.0.13"
 NETBOX_SDK_VERSION = "0.0.13"
 
