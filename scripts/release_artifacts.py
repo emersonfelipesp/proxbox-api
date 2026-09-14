@@ -651,13 +651,20 @@ def publish_gitea_attestation(
         "https://git.nmulti.cloud/api/v1/packages/"
         f"{_quoted(owner)}/generic/{_quoted(package)}/-/link/{_quoted(repository)}"
     )
-    _request(
-        link_url,
-        token=token,
-        maximum=MAX_RESPONSE_BYTES,
-        method="POST",
-        payload=b"",
-    )
+    try:
+        _request(
+            link_url,
+            token=token,
+            maximum=MAX_RESPONSE_BYTES,
+            method="POST",
+            payload=b"",
+        )
+    except ReleaseArtifactError:
+        # Gitea may apply the repository link and still answer HTTP 400 when
+        # the package was linked automatically or a retry observes the link.
+        # The authenticated read-back below remains fail-closed because it
+        # validates the exact repository, package, version, and signed bytes.
+        pass
     verified = fetch_gitea_attestation(
         owner=owner, repository=repository, manifest=manifest, token=token
     )

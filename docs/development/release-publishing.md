@@ -152,9 +152,11 @@ sequenceDiagram
   consumed by any package index, fix forward with the next `.postN` or `rcN`.
 - Gitea can apply a generic package's repository link and still answer HTTP 400
   when the package was linked automatically or a retry observes the link. The
-  manifest publisher treats that response as ambiguous and continues only when
-  an authenticated read-back proves the exact owner, repository, package,
-  version, filename, size, digest, and canonical manifest bytes.
+  manifest and deployment-attestation publishers treat that response as
+  ambiguous and continue only when an authenticated read-back proves the exact
+  owner, repository, package, version, file identity, and bytes. Manifest
+  read-back also proves the inventory size and digest; attestation read-back
+  validates the complete signed completion-evidence schema.
 - PyPI publication must pass package reinstall validation before Docker images
   are published.
 - Docker image tags use the same version as the PyPI package that passed

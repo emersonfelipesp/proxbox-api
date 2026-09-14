@@ -1525,6 +1525,83 @@ def test_manifest_publish_rejects_unverified_link_conflict(
         )
 
 
+def test_attestation_publish_accepts_link_conflict_after_exact_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_artifacts = _load_release_artifacts()
+    manifest = {"package": "proxbox-api", "version": "0.0.22"}
+    evidence = {"deployment_status": "success"}
+    requests: list[tuple[str, str]] = []
+
+    def request(url: str, *, method: str = "GET", **_kwargs: object) -> bytes:
+        requests.append((method, url))
+        if "/-/link/" in url:
+            raise release_artifacts.ReleaseArtifactError("Registry request failed")
+        return b""
+
+    monkeypatch.setattr(release_artifacts, "_request", request)
+    monkeypatch.setattr(
+        release_artifacts,
+        "validate_release_attestation",
+        lambda **_kwargs: evidence,
+    )
+    monkeypatch.setattr(
+        release_artifacts,
+        "fetch_gitea_attestation",
+        lambda **_kwargs: evidence,
+    )
+
+    assert (
+        release_artifacts.publish_gitea_attestation(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            manifest=manifest,
+            evidence=evidence,
+            token="registry-token",
+        )
+        == evidence
+    )
+    assert [method for method, _url in requests] == ["PUT", "POST"]
+
+
+def test_attestation_publish_rejects_unverified_link_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_artifacts = _load_release_artifacts()
+    manifest = {"package": "proxbox-api", "version": "0.0.22"}
+    evidence = {"deployment_status": "success"}
+
+    def request(url: str, **_kwargs: object) -> bytes:
+        if "/-/link/" in url:
+            raise release_artifacts.ReleaseArtifactError("Registry request failed")
+        return b""
+
+    def reject_readback(**_kwargs: object) -> dict[str, object]:
+        raise release_artifacts.ReleaseArtifactError(
+            "Gitea deployment attestation identity is invalid"
+        )
+
+    monkeypatch.setattr(release_artifacts, "_request", request)
+    monkeypatch.setattr(
+        release_artifacts,
+        "validate_release_attestation",
+        lambda **_kwargs: evidence,
+    )
+    monkeypatch.setattr(release_artifacts, "fetch_gitea_attestation", reject_readback)
+
+    with pytest.raises(
+        release_artifacts.ReleaseArtifactError,
+        match="Gitea deployment attestation identity is invalid",
+    ):
+        release_artifacts.publish_gitea_attestation(
+            owner="emersonfelipesp",
+            repository="proxbox-api",
+            manifest=manifest,
+            evidence=evidence,
+            token="registry-token",
+        )
+
+
 def test_ci_gate_binds_latest_actions_run_to_authenticated_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
