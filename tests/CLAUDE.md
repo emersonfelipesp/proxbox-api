@@ -50,6 +50,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
 | `test_logger_settings.py` | Logger configuration via env vars |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
+| `test_dependency_security.py` | Minimum secure Next.js UI and mkdocs-material manifest and lockfile resolutions |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_cloud_image_pipeline.py` | Cloud Image Pipeline catalog/rendering, delimiter-proof encoded writes, typed source recipes, legacy storage, secret-safe ASGI validation, exact isolated SSH argv/host-key pinning, HTTP auth, broad-write + narrow-packer gate ordering, and execution/direct-SDK boundaries |

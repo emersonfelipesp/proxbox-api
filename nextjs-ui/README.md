@@ -38,3 +38,15 @@ npm run dev
 npm run build
 npm run start
 ```
+
+## Dependency verification
+
+After changing frontend dependencies, regenerate the lockfile and verify the clean dependency graph and production build:
+
+```bash
+npm install
+npm ci
+npm audit --audit-level=low
+npm run lint
+npm run build
+```
