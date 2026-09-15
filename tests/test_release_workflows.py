@@ -327,7 +327,10 @@ def test_gitea_promotion_history_guard_uses_trusted_base_workflow():
     promotion_job = workflow["jobs"]["promotion-history"]
     assert "promotion-history" not in primary_workflow["jobs"]
     assert workflow["on"] == {
-        "pull_request_target": {"types": ["opened", "synchronize", "reopened", "edited"]}
+        "pull_request_target": {
+            "branches": ["main"],
+            "types": ["opened", "synchronize", "reopened", "edited"],
+        }
     }
     assert workflow["permissions"] == {"contents": "read"}
     assert {key: promotion_job[key] for key in ("name", "runs-on", "timeout-minutes")} == {

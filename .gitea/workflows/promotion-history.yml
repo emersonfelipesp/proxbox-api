@@ -6,6 +6,8 @@ name: Promotion history guard
 # PRs cannot weaken this read-only job in the same change they ask it to validate.
 on:
   pull_request_target:
+    branches:
+      - main
     types:
       - opened
       - synchronize
