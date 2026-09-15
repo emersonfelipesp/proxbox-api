@@ -286,6 +286,13 @@ returns HTTP 409 `approval_replayed` with `approval_id`, `plan_id`, and
 ordered `events`, or stream `GET /ceph/v2/operations/{id}/events`, to recover
 the durable status. `GET /ceph/v2/approvals/{approval_id}` exposes only safe
 metadata and the linked run ID; it never exposes the raw token or token hash.
+The request must carry a non-empty trusted `X-Proxbox-Actor` matching the
+approval's requester or approver, compared case-insensitively. Missing actor
+identity is rejected by required-header validation; a blank identity returns
+`actor_required`. An unrelated actor receives the same 404 as an unknown
+approval so the lookup does not disclose approval existence or participant
+identities. The authenticated gateway must overwrite, not merely forward, this
+header.
 Never treat the 409 as permission to issue another mutation.
 
 If a `running`/`dispatching` run stops renewing its durable lease, the next
