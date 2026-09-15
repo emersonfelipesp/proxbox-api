@@ -280,7 +280,7 @@ class ProxmoxSession:
                         f"Proxmox '{self.domain}:{self.http_port}' using token name '{self.token_name}'."
                     ),
                     detail="Unknown error.",
-                    python_exception=f"{__name__}: {error}",
+                    python_exception=f"{type(error).__name__}: [REDACTED]",
                     redact_log_details=True,
                 )
 
@@ -323,7 +323,7 @@ class ProxmoxSession:
                 if not isinstance(error, Exception):
                     raise
                 logger.info(
-                    "Proxmox connection using domain failed, trying IP %s error_type=%s",
+                    "Proxmox connection using domain failed; trying configured IP %s error_type=%s",
                     self.ip_address,
                     type(error).__name__,
                 )
@@ -343,7 +343,7 @@ class ProxmoxSession:
             raise ProxboxException(
                 message=error_message,
                 detail=detail,
-                python_exception=f"{error}",
+                python_exception=f"{type(error).__name__}: [REDACTED]",
                 redact_log_details=True,
             ) from error
 
@@ -394,10 +394,9 @@ class ProxmoxSession:
     def _describe_auth_error(error: Exception) -> str:
         """Map a Proxmox SDK auth failure to a user-visible detail string.
 
-        When the SDK raises ``ResourceException``, surface the upstream
-        status code, the Proxmox response body, and any structured
-        ``errors`` dict so operators can distinguish wrong-realm,
-        expired-token, missing-privilege, and connection failures.
+        When the SDK raises ``ResourceException``, retain its HTTP status and
+        structured error field names so operators can distinguish common auth
+        failures. Never expose the provider response body or structured values.
         """
         try:
             from proxmox_sdk.sdk.exceptions import ResourceException
@@ -407,25 +406,22 @@ class ProxmoxSession:
         if isinstance(error, ResourceException):
             status_code = getattr(error, "status_code", None)
             status_message = getattr(error, "status_message", "") or ""
-            content = (getattr(error, "content", "") or "").strip()
             errors = getattr(error, "errors", None)
             parts: list[str] = []
             if status_code:
                 parts.append(f"HTTP {status_code} {status_message}".strip())
             elif status_message:
                 parts.append(status_message)
-            if content:
-                parts.append(content)
             if errors:
-                try:
-                    parts.append(json.dumps(errors, sort_keys=True))
-                except (TypeError, ValueError):
-                    parts.append(str(errors))
+                if isinstance(errors, Mapping):
+                    safe_fields = sorted(str(key) for key in errors)
+                    parts.append("fields=" + ",".join(safe_fields))
+                else:
+                    parts.append("structured provider errors present")
             if parts:
                 return " — ".join(parts)
 
-        text = str(error).strip()
-        return text or "Unknown error."
+        return f"{type(error).__name__}: Proxmox authentication failed."
 
     def _build_auth_kwargs(self, auth_method: str) -> dict[str, object]:
         """Build authentication kwargs for Proxmox API."""

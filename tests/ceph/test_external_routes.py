@@ -2,29 +2,19 @@
 
 from __future__ import annotations
 
-import pytest
 
-from proxbox_api.main import app
-from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
-
-
-@pytest.fixture
-def ext_client(auth_test_client):
-    app.dependency_overrides[proxmox_sessions_dep] = lambda: []
-    yield auth_test_client
-    app.dependency_overrides.pop(proxmox_sessions_dep, None)
-
-
-def test_external_provider_listed_in_capabilities(ext_client) -> None:
-    resp = ext_client.get("/ceph/v2/capabilities", params={"provider": "external"})
+async def test_external_provider_listed_in_capabilities(ceph_http_client) -> None:
+    resp = await ceph_http_client.get("/ceph/v2/capabilities", params={"provider": "external"})
     assert resp.status_code == 200
     provider = resp.json()["providers"][0]
     assert provider["provider"] == "external"
     assert provider["supported"] is True
+    assert provider["apply"] is False
+    assert provider["destructive_operations"] is False
 
 
-def test_register_list_external_cluster_redacts_secrets(ext_client) -> None:
-    create = ext_client.post(
+async def test_register_list_external_cluster_redacts_secrets(ceph_http_client) -> None:
+    create = await ceph_http_client.post(
         "/ceph/v2/external/clusters",
         json={
             "name": "lab-ceph",
@@ -41,22 +31,22 @@ def test_register_list_external_cluster_redacts_secrets(ext_client) -> None:
     assert "rgw_secret_key" not in out and "topsecret" not in create.text
     cluster_id = out["id"]
 
-    dup = ext_client.post("/ceph/v2/external/clusters", json={"name": "lab-ceph"})
+    dup = await ceph_http_client.post("/ceph/v2/external/clusters", json={"name": "lab-ceph"})
     assert dup.status_code == 409
 
-    listed = ext_client.get("/ceph/v2/external/clusters")
+    listed = await ceph_http_client.get("/ceph/v2/external/clusters")
     assert listed.status_code == 200
     assert any(c["name"] == "lab-ceph" and c["has_rgw_credentials"] for c in listed.json())
     assert cluster_id > 0
 
 
-def test_external_cluster_capability_detection(ext_client) -> None:
-    create = ext_client.post(
+async def test_external_cluster_capability_detection(ceph_http_client) -> None:
+    create = await ceph_http_client.post(
         "/ceph/v2/external/clusters",
         json={"name": "lab-2", "cluster_ref": "ext:2", "ceph_version_hint": "18.2.4"},
     )
     cluster_id = create.json()["id"]
-    caps = ext_client.post(f"/ceph/v2/external/clusters/{cluster_id}/capabilities")
+    caps = await ceph_http_client.post(f"/ceph/v2/external/clusters/{cluster_id}/capabilities")
     assert caps.status_code == 200
     provider = caps.json()["providers"][0]
     assert provider["provider"] == "external"
@@ -64,12 +54,12 @@ def test_external_cluster_capability_detection(ext_client) -> None:
     assert provider["apply"] is False
 
 
-def test_capabilities_missing_cluster_404(ext_client) -> None:
-    resp = ext_client.post("/ceph/v2/external/clusters/9999/capabilities")
+async def test_capabilities_missing_cluster_404(ceph_http_client) -> None:
+    resp = await ceph_http_client.post("/ceph/v2/external/clusters/9999/capabilities")
     assert resp.status_code == 404
 
 
-def test_external_metrics_warns_without_provider(ext_client) -> None:
-    resp = ext_client.get("/ceph/v2/metrics", params={"provider": "external"})
+async def test_external_metrics_warns_without_provider(ceph_http_client) -> None:
+    resp = await ceph_http_client.get("/ceph/v2/metrics", params={"provider": "external"})
     assert resp.status_code == 200
     assert any("external cluster" in w for w in resp.json()["warnings"])

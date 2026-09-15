@@ -4,8 +4,11 @@ Use the repository's isolated unchanged-lock environment. These tests contain
 independent fixed route counts and feature inputs, a real nested lazy-router
 HTTP/WebSocket/mount oracle, small actual generated-route fixtures, strict wire
 and provenance mutations, coverage and source drift checks, bilingual rendered
-Markdown checks, and fixed child-process isolation probes. They do not enter
-lifespan or contact sockets, providers, NetBox or Proxmox.
+Markdown checks, and fixed child-process isolation probes. One isolated
+regression enters the application lifespan with database, NetBox, and cleanup
+side effects replaced, then compares the actual default mounted sequence with
+the committed inventory. No test contacts sockets, providers, NetBox, or
+Proxmox.
 
 Keep expected values independent of production constants. The complete artifact
 test fails if the generated contract is absent; it does not skip or silently

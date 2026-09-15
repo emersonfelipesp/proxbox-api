@@ -36,7 +36,17 @@ All requests except bootstrap endpoints require the `X-Proxbox-API-Key` header. 
 PBS, PDM, Ceph, intent, SSH, and the broader cloud management route groups are
 documented in [Service Routes](./service-routes.md). That page also explains
 `PROXBOX_FEATURES` sidecar-only mounting and the write gates used by cloud and
-intent routes.
+intent routes. Ceph v2 mutations additionally require the durable, two-person,
+single-use flow in
+[Ceph v2 Write Approval and Recovery](../operations/ceph-write-approvals.md),
+including both default-off execution flags, a stable endpoint configuration
+revision, exact operation-node and typed-payload binding, owner-bound leases,
+provider-global unique node-consistent UPIDs, repeated-cancellation-safe durable
+checkpoints, and unknown-outcome recovery. `netbox-ceph` supplies the canonical
+proxbox-api endpoint ID resolved from its plugin endpoint; it never substitutes
+the plugin primary key. Dashboard and
+external providers are read/plan/reconcile-only until durable write authority
+exists.
 
 ## Cloud Image Pipeline (`/cloud/templates/images`)
 
@@ -352,6 +362,27 @@ Attempting to create a second endpoint returns HTTP 400 with:
 
 The response contains the one-time VNC ticket URL, endpoint TLS policy, and a bounded `websocket_auth` object. `websocket_auth.kind` is `authorization` for a Proxmox API-token endpoint or `cookie` for a password-session endpoint. Its `value` is sensitive service-to-service transport material. The management backend stores it in its one-use Redis relay ticket and attaches it only to the upstream WebSocket handshake; it must never be returned to browser JavaScript or written to logs.
 
+`POST /proxmox/console/browser-sessions` is the distinct standalone browser
+contract. It accepts the same endpoint and guest selector plus an exact HTTPS
+`origin`, then returns only `stream_token`, `websocket_path`, `expires_at`, and
+`console_type`. `websocket_path` is exactly
+`/proxmox/console/browser-stream` and never contains the token. Connect with the
+same serialized `Origin` and offer exactly `binary` plus
+`proxbox-token.<stream_token>`; the server accepts only `binary`. Query-token,
+missing, duplicate, malformed, and extra token protocols are rejected before
+upstream access. Shared SQLite state is
+Fernet-encrypted, expires after 30 seconds, and is atomically consumed once
+across workers. The route is unavailable when encryption is not configured;
+the lab-only plaintext credential setting does not weaken this boundary.
+The upstream connector disables ambient proxies and refuses all WebSocket
+redirects before any second connection, preventing credential replay.
+
+The relay supports QEMU noVNC, QEMU terminal, and LXC terminal. For noVNC it
+performs the RFB 3.8 VNC challenge response on the server and advertises the
+post-authenticated stream to the browser, so the Proxmox ticket never enters
+browser memory. The relay uses the endpoint's persisted `verify_ssl` value and
+never accepts a request-level TLS override.
+
 See [Proxmox Console Sessions](console-sessions.md) for the complete request flow, response-field sensitivity, endpoint resolution, ticket normalization, WebSocket URL construction, authentication modes, TLS policy, failure behavior, security invariants, and tests.
 
 ### Endpoint configuration CRUD
@@ -628,19 +659,21 @@ Implemented in `proxbox_api/routes/ssh_terminal.py`. Provides a browser-based SS
 
 ### Viewer and generated contract helpers
 
-- `POST /proxmox/viewer/generate` - Crawl the Proxmox API Viewer and generate OpenAPI + Pydantic artifacts. Accepts `version_tag`, `workers`, `persist`, and other tuning query parameters.
-- `GET /proxmox/viewer/openapi` - Return the generated Proxmox OpenAPI document.
+- `POST /proxmox/viewer/generate` - Development-only. It is absent and returns HTTP 404 unless the process starts with `PROXBOX_RUNTIME_CODEGEN_ENABLED=true`. When enabled, it crawls the Proxmox API Viewer and generates OpenAPI and Pydantic artifacts. Invalid or non-contained version tags return HTTP 422 before crawling or writing files. Bundled tags are immutable and return HTTP 409 when `persist=true`; update them only by installing a replacement package. Non-default-source artifacts are stored under `custom/<version_tag>/` for inspection only.
+- `GET /proxmox/viewer/openapi` - Return a bundled Proxmox OpenAPI document by default. The `regenerate=true` and unknown-tag generation paths return HTTP 404 unless runtime code generation is enabled.
 - `GET /proxmox/viewer/openapi/embedded` - Return an embedded subset of the generated OpenAPI.
 - `GET /proxmox/viewer/integration/contracts` - Report Proxmox and NetBox schema contract sources.
-- `POST /proxmox/viewer/routes/refresh` - Rebuild runtime-generated Proxmox routes from disk without restarting. Accepts optional `version_tag` to rebuild a single version.
+- `POST /proxmox/viewer/routes/refresh` - Development-only. It is absent and returns HTTP 404 unless runtime code generation is enabled. When enabled, it rebuilds runtime-generated Proxmox routes from disk without restarting.
 - `GET /proxmox/viewer/schema-status` - Report available bundled schema versions and active background generation tasks. Accepts optional `version_tag` to inspect a specific version.
-- `GET /proxmox/viewer/pydantic` - Return generated Pydantic v2 model source code.
+- `GET /proxmox/viewer/pydantic` - Render Pydantic v2 model source from a validated bundled OpenAPI document by default. Rendering runs off the event loop, is cached by schema digest, is limited to 2 MiB, and is rate-limited to six requests per minute per source. The route never reads persisted Python source.
 
 See [Schema Management](../development/schema-management.md) for the full workflow guide and the `proxbox-schema` CLI reference.
 
 ### Runtime-generated live proxy routes
 
-`proxbox-api` mounts runtime-generated Proxmox proxy routes from the embedded generated OpenAPI contract under:
+`proxbox-api` mounts runtime-generated Proxmox proxy routes from bundled OpenAPI
+contracts under the following paths. `PROXBOX_RUNTIME_CODEGEN_ENABLED` defaults
+to `false`; production must keep it disabled.
 
 - `/proxmox/api2/{version_tag}/*`
 - `/proxmox/api2/*` as a compatibility alias to `latest`
@@ -650,14 +683,44 @@ Behavior:
 - Generated proxy dispatch is read-only: only `GET` is forwarded. Authenticated, schema-valid `POST`, `PUT`, and `DELETE` requests return HTTP 403 before target selection, credential resolution, or a Proxmox session is opened. Invalid requests can still return the normal authentication or schema-validation errors.
 - Mutation schemas remain visible for discovery, marked deprecated with an explicit 403 response. Existing clients must use supported typed, audited RPC procedures for mutations; an unsupported procedure is unavailable, not a reason to retry through a generated route. There is no generated-write opt-in flag or lease-header bypass.
 - The same denial applies to all explicit versions, the `latest` alias, in-process reuse, persisted cache reload, and forced rebuild. This method boundary does not certify every upstream `GET` as effect-free and does not change handcrafted lifecycle, console, Ceph, or Packer handlers.
-- Routes are built at startup for every generated version present under `proxbox_api/generated/proxmox/`.
-- The mounted route set is cached in `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
-- On `uvicorn --reload`, startup prefers that cache manifest so the previously mounted live route set is preserved in development.
-- Routes are rebuilt on demand with `POST /proxmox/viewer/routes/refresh`.
+- With the default setting, route registration and schema discovery read
+  bundled schemas only. The user-generated directory is not scanned for
+  schemas. `GET /proxmox/viewer/pydantic` also renders bundled schemas only.
+- With `PROXBOX_RUNTIME_CODEGEN_ENABLED=true`, startup additionally admits
+  non-conflicting user versions whose `provenance.json` digest matches
+  `openapi.json`. Bundled tags always take precedence.
+- Provenance sidecars detect corruption; they do not authenticate artifacts.
+  A process running as the same operating-system user can forge an artifact and
+  its digest. Production therefore keeps runtime code generation disabled.
+- The mounted route set is cached under the configured user-generated schema
+  directory in `runtime_generated_routes_cache.json`, with a separate
+  provenance sidecar. This derived cache is the only runtime file written there
+  under the default setting.
+- In an opted-in development process, startup uses the cache only when its provenance,
+  document limits, and authoritative schema digests validate. Otherwise it
+  rebuilds from eligible artifacts without replacing an already mounted
+  last-known-good route set.
+- Route refresh persists the complete cache and provenance before swapping the
+  mounted routes and OpenAPI schema, so a persistence failure preserves the
+  authoritative in-process route set.
+- Routes are rebuilt on demand with `POST /proxmox/viewer/routes/refresh` only
+  when runtime code generation is enabled.
 - `POST /proxmox/viewer/routes/refresh` with no query parameters rebuilds all available generated versions.
 - `POST /proxmox/viewer/routes/refresh?version_tag=8.3` rebuilds only that mounted version.
 - The unversioned `/proxmox/api2/*` alias forwards to the `latest` generated contract.
 - Request bodies and responses are validated with runtime-generated Pydantic models.
+- Runtime route loading constructs those models directly from OpenAPI data and never evaluates the rendered Python source artifact.
+- Startup quarantines user-generated `pydantic_models.py` files and legacy
+  route caches without valid provenance, plus orphan cache provenance sidecars.
+  Quarantine uses an interprocess lock and no-follow, no-clobber moves.
+  Operators can run the same upgrade step with `proxbox-schema quarantine-legacy`.
+- OpenAPI documents are rejected before persistence, cache restoration, or
+  model construction when they exceed the fixed byte, depth, path, operation,
+  property, model, or metadata-string limits. Field-name collisions, reserved
+  Pydantic names, and duplicate operation-derived model names are also rejected.
+- Registration rejects more than 8 eligible versions, more than 32 MiB of
+  aggregate OpenAPI bytes, more than 16,384 aggregate models, or more than
+  32,768 aggregate routes before constructing models or a cache.
 - Generated response models cover object, array, scalar, and `null` response schemas.
 - For array responses whose items are objects, generation emits `{Operation}ResponseItem` plus `RootModel[list[{Operation}ResponseItem]]` so Swagger shows concrete item fields.
 - Generated routes appear in FastAPI `/docs` and `/openapi.json`.
@@ -674,7 +737,12 @@ Path parameter normalization:
 
 Version discovery:
 
-- A version is mountable only when `proxbox_api/generated/proxmox/<version-tag>/openapi.json` exists.
+- By default, a version is mountable only when
+  `proxbox_api/generated/proxmox/<version-tag>/openapi.json` exists in the
+  installed package. A bundled tag, including `latest`, can be refreshed only
+  through package replacement.
+- With the development opt-in, a non-conflicting user version may also be
+  mounted after its provenance and limits validate.
 - Non-version entries such as `__pycache__` and files at the root of `generated/proxmox/` are ignored.
 
 Target selection:

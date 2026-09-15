@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable
+from typing import TypeVar, cast
+
+T = TypeVar("T")
 
 
-async def maybe_await(value: object) -> object:
+async def maybe_await(value: T | Awaitable[T]) -> T:
     """Await async SQLModel results while tolerating sync test sessions."""
     if inspect.isawaitable(value):
-        return await value
+        return cast("T", await value)
     return value

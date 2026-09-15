@@ -45,5 +45,5 @@ def test_collect_mode_restores_the_previous_value_after_a_failure(monkeypatch):
 
     monkeypatch.setattr(runtime_generated, "register_generated_proxmox_routes", refuse)
     with pytest.raises(RuntimeError, match="route registration failed"):
-        collection._collect_mode(ROOT, inputs.modes[8], {}, {}, {})
+        collection._collect_mode(ROOT, inputs.modes[8], {}, {}, {}, runtime_codegen=True)
     assert os.environ["PROXBOX_FEATURES"] == "core"

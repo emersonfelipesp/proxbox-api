@@ -2,7 +2,13 @@
 
 Este documento é o guia canônico de implementação do `proxbox-api` para o broker privado de sessões usado pelo console do Proxmox no NMS. Ele explica como o serviço seleciona um guest, solicita um ticket de `vncproxy` ou `termproxy`, monta a URL WebSocket upstream, fornece um único valor de autenticação limitado ao relay confiável, preserva a política TLS do endpoint e trata falhas.
 
-Este endpoint é exclusivamente serviço a serviço. A resposta contém credenciais temporárias e nunca pode ser devolvida diretamente ao JavaScript do navegador. O `nms-backend` é o consumidor confiável: ele guarda a resposta em um ticket Redis de uso único no servidor e fornece ao navegador somente um token opaco do stream do NMS.
+O endpoint existente `/sessions` é exclusivamente serviço a serviço. A resposta contém credenciais temporárias e nunca pode ser devolvida diretamente ao JavaScript do navegador. O consumidor confiável existente e seu contrato permanecem inalterados.
+
+Implantações autônomas de código aberto podem usar o contrato separado
+`/browser-sessions` com `/browser-stream`. Nesse modo, o proxbox-api mantém o
+estado de uso único e o WebSocket do navegador. Todo o material privado da
+sessão upstream fica criptografado no SQLite compartilhado, e a resposta contém
+somente dados opacos e seguros para o navegador.
 
 ## Responsabilidade e limite de confiança
 
@@ -68,6 +74,40 @@ A resposta `ConsoleSessionResponse` é material privado de transporte:
 
 A rota retorna os dados necessários para um relay confiável abrir o WebSocket do Proxmox. Ela não é um contrato público de sessão para o navegador. O `nms-backend` transforma essa resposta em um contrato público muito menor.
 
+### Contrato autônomo para o navegador
+
+`POST /proxmox/console/browser-sessions` recebe o mesmo seletor exato de
+endpoint, guest e modo, além da `origin` HTTPS serializada do NetBox. A resposta
+contém somente `stream_token`, `websocket_path`, `expires_at` e `console_type`.
+O caminho é exatamente `/proxmox/console/browser-stream` e nunca contém o
+token.
+
+O navegador conecta usando exatamente o mesmo cabeçalho `Origin` e oferece
+exatamente os subprotocolos WebSocket `binary` e
+`proxbox-token.<stream_token>`. O servidor aceita somente `binary`, portanto
+nunca devolve o protocolo portador. Tokens são proibidos na URI e na query
+string porque alvos de requisição normalmente são registrados em logs de
+acesso. Formas ausentes, duplicadas, malformadas, extras ou em query string são
+rejeitadas antes do acesso upstream. O token contém 32 bytes aleatórios, expira em
+30 segundos, é persistido somente como digest SHA-256 e é consumido de forma
+atômica sob uma transação de escrita SQLite. Digests desconhecidos são
+rejeitados por uma leitura indexada antes da solicitação de qualquer bloqueio
+de escrita. Um digest existente é lido novamente sob `BEGIN IMMEDIATE` antes da
+exclusão, o que preserva exatamente um consumidor bem-sucedido sem permitir que
+tentativas com tokens aleatórios disputem o bloqueio de escrita. O registro contém apenas digest,
+timestamps e um ciphertext Fernet com ticket, URL upstream, autenticação,
+política TLS, Origin e seletor do guest. Há no máximo 1.024 registros ativos.
+Sessões expiradas, repetidas, malformadas, com Origin divergente ou negadas pela
+política falham de forma fechada.
+
+A rota autônoma também exige que o registro local atual de `ProxmoxEndpoint`
+esteja habilitado em create e consume. Desabilitar o endpoint depois da emissão
+consome e rejeita o token antes de qualquer conexão upstream. Essa regra vale
+somente para o navegador e não altera o contrato existente do broker exclusivo para serviços.
+
+`PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` não vale para o relay. Sem uma chave
+Fernet configurada, a criação retorna uma resposta fixa 503.
+
 ## Mapa do código
 
 | Arquivo ou símbolo | Responsabilidade |
@@ -83,6 +123,9 @@ A rota retorna os dados necessários para um relay confiável abrir o WebSocket 
 | `_build_ws_url()` | Codifica o ticket e monta a URL exata de `vncwebsocket`. |
 | `create_console_session()` | Orquestra todo o fluxo do endpoint até a resposta privada. |
 | `ProxmoxSession.get_websocket_auth()` | Seleciona `Authorization` de token da API ou `PVEAuthCookie` de sessão por senha. |
+| `BrowserConsoleRelaySession` | Registro SQLite compartilhado com digest, timestamps e payload criptografado. |
+| `services/console_relay.py` | Limites, persistência Fernet, handshake upstream, mediação RFB, relay de frames, timeouts e cancelamento determinístico. |
+| `services/console_relay_policy.py` | Ponto de extensão inativo em create/consume para a política RPC-only revisada separadamente. |
 
 Os símbolos da rota ficam em `proxbox_api/routes/proxmox/console.py`; a autenticação da sessão fica em `proxbox_api/session/proxmox_core.py`.
 
@@ -93,6 +136,10 @@ Os símbolos da rota ficam em `proxbox_api/routes/proxmox/console.py`; a autenti
 `_connect_endpoint()` passa o registro por `_parse_db_endpoint()` e chama `ProxmoxSession.create()`. A configuração persistida fornece host, porta, credenciais, modo de autenticação e `verify_ssl`. Uma falha registra somente o ID do endpoint e a classe da exceção e retorna HTTP 502 com `Unable to connect to Proxmox endpoint.`.
 
 O navegador nunca pode selecionar ou substituir credenciais e políticas TLS persistidas.
+
+O relay autônomo preserva `verify_ssl` somente dentro do payload criptografado.
+Ele também desabilita proxies WebSocket vindos do ambiente para impedir que a
+autenticação privada seja redirecionada por configuração ambiente.
 
 ## Aquisição do ticket
 
@@ -121,6 +168,28 @@ O upgrade WebSocket exige o ticket na URL e a autenticação da sessão ativa. `
 Os valores de `ProxmoxWebSocketAuth` e `ConsoleWebSocketAuth` usam `repr=False`. A rota fornece a credencial somente ao relay. O `nms-backend` valida novamente o tipo e os limites, guarda o valor no ticket de uso único e o anexa somente ao handshake upstream.
 
 Não adicione um segundo campo de autenticação e não exponha o valor em logs, respostas ao navegador ou URLs.
+
+## WebSocket autônomo e autenticação RFB
+
+Os dois WebSockets negociam `binary`; o navegador também oferece o protocolo
+portador descrito acima. Tamanho de token, cabeçalho de
+autenticação, ticket, URL, frame de handshake e frame de aplicação, além de
+TTL, quantidade, fila e timeouts, possuem limites fixos. Frames binários e de
+texto mantêm o tipo nas duas direções. Quando uma direção termina, a tarefa par
+é cancelada e ambas são aguardadas antes do fechamento com motivo fixo sem
+segredos.
+
+O conector upstream desabilita proxies de ambiente e recusa todos os redirects
+WebSocket (`300`, `301`, `302`, `303`, `307` e `308`) antes de uma segunda
+conexão, inclusive redirects para a mesma origem. Assim, credenciais de
+autorização ou cookie nunca são repetidas para o destino do redirect.
+
+No QEMU noVNC, o proxbox-api executa a autenticação VNC do RFB 3.8 no servidor:
+seleciona o tipo de segurança 2, calcula a resposta DES com o ticket privado e
+confirma o sucesso upstream. Somente então oferece o tipo 1 (None) ao navegador
+já autenticado pelo token e vinculado à Origin. O ticket nunca chega ao
+navegador. Consoles de terminal QEMU e LXC entram diretamente no relay de
+frames; LXC noVNC continua inválido.
 
 ## Montagem da URL WebSocket
 
@@ -154,15 +223,32 @@ Preserve estas invariantes:
 - forneça exatamente um tipo/valor de autenticação e mantenha segredos fora de repr e logs;
 - não reutilize `ConsoleSessionResponse` como contrato público do navegador; e
 - mantenha a sanitização de erros na fronteira do relay.
+- exija Fernet para todo estado autônomo, sem fallback para texto puro;
+- mantenha token opaco, de uso único, curto, limitado, com digest em repouso e
+  consumo atômico entre workers;
+- vincule o consumo à Origin HTTPS exata e a exatamente um protocolo
+  `proxbox-token.<stream_token>` junto de `binary`, sem colocar o token na URI
+  nem devolver o protocolo portador;
+- desabilite proxies de ambiente e recuse todo redirect upstream antes de uma
+  segunda conexão;
+- preserve o ponto de política em create e consume sem ativar a política
+  RPC-only pendente; e
+- faça a autenticação VNC de QEMU noVNC no servidor.
 
 ## Cobertura de regressão
 
-`tests/proxmox/test_console_route.py` cobre autenticação por token e senha, os três modos compatíveis, seleção de `vncproxy`/`termproxy`, lookup e falhas do endpoint, normalização de respostas e portas, codificação da URL, política TLS, erros do Proxmox e rejeição de LXC/noVNC.
+`tests/proxmox/test_console_route.py` cobre o broker privado.
+`tests/proxmox/test_browser_console_relay.py` cobre os três modos, validação de
+tipo/Origin, criptografia, consumo atômico entre sessões independentes,
+expiração/replay, payload malformado, política, subprotocolo, mediação RFB,
+token fora de URI/log, rejeição de query token, não repetição de credenciais em
+redirects, atividade assimétrica, frames bidirecionais, cancelamento/limpeza e
+falhas sanitizadas.
 
 Execute:
 
 ```bash
-uv run pytest -q tests/proxmox/test_console_route.py
+uv run pytest -q tests/proxmox/test_console_route.py tests/proxmox/test_browser_console_relay.py
 ```
 
 Ao alterar o broker, mantenha este guia, a referência HTTP, o `README.md` e os arquivos de contexto de LLM sincronizados; confira os contratos com o `nms-backend`; teste token, senha, QEMU noVNC, QEMU terminal e LXC terminal; e confirme que nenhum segredo entrou em schema público, repr, log ou resposta ao navegador.

@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
+from fastapi.routing import iter_route_contexts
 from fastapi.testclient import TestClient
 
 from proxbox_api import __version__
@@ -18,6 +20,7 @@ from proxbox_api.proxmox_codegen.pipeline import (
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
+from proxbox_api.runtime_settings import runtime_codegen_enabled
 
 
 def test_read_root():
@@ -76,6 +79,54 @@ def test_create_app_skips_static_mount_when_directory_is_missing(monkeypatch):
     test_app = factory.create_app()
 
     assert not any(getattr(route, "path", None) == "/static" for route in test_app.routes)
+
+
+def _route_methods(application, path: str) -> set[str]:
+    return {
+        method
+        for context in iter_route_contexts(application.routes)
+        for route in [
+            getattr(getattr(context, "_route_context", None), "starlette_route", None) or context
+        ]
+        if getattr(route, "path", None) == path
+        for method in getattr(route, "methods", set())
+    }
+
+
+def test_runtime_codegen_routes_are_absent_from_route_table_by_default(monkeypatch):
+    monkeypatch.delenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", raising=False)
+
+    application = factory.create_app()
+
+    assert _route_methods(application, "/proxmox/viewer/generate") == set()
+    assert _route_methods(application, "/proxmox/viewer/routes/refresh") == set()
+    assert _route_methods(application, "/proxmox/viewer/openapi") == {"GET"}
+    assert _route_methods(application, "/proxmox/viewer/pydantic") == {"GET"}
+
+
+def test_runtime_codegen_routes_require_explicit_true_opt_in(monkeypatch):
+    monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", "true")
+
+    application = factory.create_app()
+
+    assert _route_methods(application, "/proxmox/viewer/generate") == {"POST"}
+    assert _route_methods(application, "/proxmox/viewer/routes/refresh") == {"POST"}
+    assert runtime_codegen_enabled() is True
+
+
+def test_pydantic_viewer_endpoint_has_six_per_minute_source_limit():
+    application = FastAPI()
+
+    @application.get("/proxmox/viewer/pydantic")
+    async def _pydantic_probe():
+        return "ok"
+
+    application.add_middleware(factory.RateLimitMiddleware, requests_per_minute=100)
+
+    with TestClient(application) as client:
+        responses = [client.get("/proxmox/viewer/pydantic") for _ in range(7)]
+
+    assert [response.status_code for response in responses] == [200] * 6 + [429]
 
 
 def test_openapi_generation_pipeline_from_sample_capture():
@@ -209,6 +260,7 @@ def test_generate_bundle_persists_artifacts(tmp_path: Path, monkeypatch):
     assert (tmp_path / "latest" / "raw_capture.json").exists()
     assert (tmp_path / "latest" / "openapi.json").exists()
     assert (tmp_path / "latest" / "pydantic_models.py").exists()
+    assert (tmp_path / "latest" / "provenance.json").exists()
     assert (tmp_path / "latest" / "crawl_checkpoint.json").exists()
 
 

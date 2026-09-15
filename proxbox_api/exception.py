@@ -20,11 +20,13 @@ class ProxboxException(Exception):
         *,
         http_status_code: int | None = None,
         redact_log_details: bool = False,
+        public_python_exception: str | None = None,
     ):
         super().__init__(message)
         self.message = message
         self.detail = detail
         self.python_exception = python_exception
+        self.public_python_exception = public_python_exception
         # When a caller re-wraps an upstream failure it can preserve the real
         # status code here so the exception handler does not flatten, e.g., a
         # NetBox 502 down to the class default 400. Omitted -> class default.

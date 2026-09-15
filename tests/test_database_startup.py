@@ -944,7 +944,9 @@ async def test_lifespan_builds_verified_engines_and_tables_then_disposes_them(
         assert database.sqlite_file_name == database_path
         assert database.sqlite_url == f"sqlite:////{str(database_path).lstrip('/')}"
         assert active_engine.url.database == str(database_path)
-        assert "netboxendpoint" in inspect(active_engine).get_table_names()
+        table_names = inspect(active_engine).get_table_names()
+        assert "netboxendpoint" in table_names
+        assert "browser_console_relay_session" in table_names
         with sqlite3.connect(database_path) as connection:
             assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
@@ -971,7 +973,9 @@ async def test_lifespan_preserves_url_delimiters_inside_database_filename(
         assert active_engine.url.database == str(database_path)
         assert database.async_engine is not None
         assert database.async_engine.url.database == str(database_path)
-        assert "netboxendpoint" in inspect(active_engine).get_table_names()
+        table_names = inspect(active_engine).get_table_names()
+        assert "netboxendpoint" in table_names
+        assert "browser_console_relay_session" in table_names
 
     assert database_path.is_file()
     assert not truncated_path.exists()
@@ -1145,4 +1149,9 @@ asyncio.run(database.dispose_database())
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-    assert {"netboxendpoint", "apikey", "api_key_bootstrap_claim"} <= tables
+    assert {
+        "netboxendpoint",
+        "apikey",
+        "api_key_bootstrap_claim",
+        "browser_console_relay_session",
+    } <= tables

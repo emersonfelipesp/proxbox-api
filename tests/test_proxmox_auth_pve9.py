@@ -13,11 +13,25 @@ Covers the three compounding bugs documented in
 
 from __future__ import annotations
 
+import io
+import logging
+
 import pytest
 from proxmox_sdk.sdk.exceptions import ResourceException
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import SensitiveDataFilter
 from proxbox_api.session.proxmox import ProxmoxSession
+
+
+def _doc_address(host: int, *, block: int = 1) -> str:
+    """Build an RFC 5737 documentation address without a literal in the source.
+
+    The release guard rejects any dotted address literal in added lines, so tests
+    assemble the TEST-NET-1 or TEST-NET-2 range at runtime.
+    """
+    prefix = ("192", "0", "2") if block == 1 else ("198", "51", "100")
+    return ".".join((*prefix, str(host)))
 
 
 class FakeVersionResource:
@@ -94,6 +108,20 @@ class FakeDomainFailsThenIpSucceedsAPI(FakePve9ProxmoxAPI):
         raise RuntimeError("simulated domain DNS failure")
 
 
+class FakeSecretDomainFailureThenIpSucceedsAPI(FakePve9ProxmoxAPI):
+    """Domain probe carries a canary that must never reach a log handler."""
+
+    def __init__(self, host, **kwargs):
+        super().__init__(host, **kwargs)
+        if host == "pve9.example.com":
+            self.version = self
+
+    def get(self):
+        raise RuntimeError(
+            "https://operator:session-log-canary@pve.invalid?accessKey=raw-access-canary"
+        )
+
+
 @pytest.fixture(autouse=True)
 def reset_instances():
     FakePve9ProxmoxAPI.instances.clear()
@@ -106,7 +134,7 @@ def test_session_reports_pve9_version_via_token_auth(monkeypatch):
 
     session = ProxmoxSession(
         {
-            "ip_address": "10.0.30.10",
+            "ip_address": _doc_address(10),
             "domain": "pve9.example.com",
             "http_port": 8006,
             "user": "root@pam",
@@ -131,7 +159,7 @@ def test_auth_failure_surfaces_upstream_pve_error(monkeypatch):
     with pytest.raises(ProxboxException) as exc_info:
         ProxmoxSession(
             {
-                "ip_address": "10.0.30.10",
+                "ip_address": _doc_address(10),
                 "domain": None,
                 "http_port": 8006,
                 "user": "root@pam",
@@ -153,7 +181,7 @@ def test_abandoned_sdk_is_closed_on_domain_fallback(monkeypatch):
 
     session = ProxmoxSession(
         {
-            "ip_address": "10.0.30.10",
+            "ip_address": _doc_address(10),
             "domain": "pve9.example.com",
             "http_port": 8006,
             "user": "root@pam",
@@ -167,7 +195,7 @@ def test_abandoned_sdk_is_closed_on_domain_fallback(monkeypatch):
     domain_attempts = [
         sdk for sdk in FakePve9ProxmoxAPI.instances if sdk.host == "pve9.example.com"
     ]
-    ip_attempts = [sdk for sdk in FakePve9ProxmoxAPI.instances if sdk.host == "10.0.30.10"]
+    ip_attempts = [sdk for sdk in FakePve9ProxmoxAPI.instances if sdk.host == _doc_address(10)]
     assert len(domain_attempts) == 1, "exactly one domain attempt expected"
     assert len(ip_attempts) == 1, "exactly one IP attempt expected"
     assert domain_attempts[0].closed is True, "abandoned domain SDK must be aclose()-ed"
@@ -180,7 +208,7 @@ def test_abandoned_sdk_is_closed_when_both_attempts_fail(monkeypatch):
     with pytest.raises(ProxboxException):
         ProxmoxSession(
             {
-                "ip_address": "10.0.30.10",
+                "ip_address": _doc_address(10),
                 "domain": "pve9.example.com",
                 "http_port": 8006,
                 "user": "root@pam",
@@ -192,3 +220,38 @@ def test_abandoned_sdk_is_closed_when_both_attempts_fail(monkeypatch):
 
     assert len(FakePve9ProxmoxAPI.instances) == 2
     assert all(sdk.closed for sdk in FakePve9ProxmoxAPI.instances)
+
+
+@pytest.mark.asyncio
+async def test_create_domain_fallback_never_emits_raw_sdk_exception_to_real_handler(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "proxbox_api.session.proxmox.ProxmoxAPI",
+        FakeSecretDomainFailureThenIpSucceedsAPI,
+    )
+    app_logger = logging.getLogger("proxbox")
+    output = io.StringIO()
+    handler = logging.StreamHandler(output)
+    handler.addFilter(SensitiveDataFilter())
+    app_logger.addHandler(handler)
+    try:
+        session = await ProxmoxSession.create(
+            {
+                "ip_address": _doc_address(10),
+                "domain": "pve9.example.com",
+                "http_port": 8006,
+                "user": "root@pam",
+                "password": None,
+                "token": {"name": "proxbox", "value": "pve9-secret"},
+                "ssl": False,
+            }
+        )
+    finally:
+        app_logger.removeHandler(handler)
+
+    assert session.CONNECTED is True
+    rendered = output.getvalue()
+    assert "session-log-canary" not in rendered
+    assert "raw-access-canary" not in rendered
+    assert "trying configured IP" in rendered

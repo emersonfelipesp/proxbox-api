@@ -122,7 +122,7 @@ def verify_artifacts(root: Path) -> None:
         if _sha(contracts / name) != expected:
             raise ValueError("Inventory artifact digest is stale")
     inventory = _json(contracts / "mounted-operations.json")
-    if type(inventory.get("schema_version")) is not int or inventory["schema_version"] != 1:
+    if type(inventory.get("schema_version")) is not int or inventory["schema_version"] != 2:
         raise ValueError("Unsupported inventory schema")
     _check_sources(root, inventory)
     _check_callables(root, inventory)

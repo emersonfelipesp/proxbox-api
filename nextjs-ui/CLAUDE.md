@@ -39,13 +39,6 @@ Standalone Next.js frontend for managing one NetBox endpoint and multiple Proxmo
 - Update `lib/types.ts` when backend contracts change.
 - Keep styling in `app/globals.css` aligned with the current design tokens and theme behavior.
 
-## Dependency Security
-
-- Keep Next.js and `eslint-config-next` aligned on the same patched release. The current supported version is 16.3.4.
-- Regenerate `package-lock.json` with npm after every dependency change. Do not use cross-major overrides to suppress audit findings.
-- Run `npm ci`, `npm audit --audit-level=low`, `npm run lint`, and `npm run build` after changing the dependency graph.
-- `tests/test_dependency_security.py` pins the minimum secure resolutions for the application and toolchain packages covered by the current advisory set.
-
 ## Verification
 
 Run these after editing this directory:

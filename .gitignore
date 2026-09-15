@@ -1,5 +1,6 @@
 # Local scratch dir at repo root only (not docs/development/)
 /development/
+/.tmp/
 pynetbox_api/
 pynetbox_api
 # Ignore pem files
@@ -61,6 +62,7 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+junit.xml
 *.cover
 *.py,cover
 .hypothesis/
@@ -157,3 +159,4 @@ dmypy.json
 # Docker compose
 docker-compose.override.yml
 .env.test
+.tmp/

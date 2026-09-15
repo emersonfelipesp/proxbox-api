@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from hashlib import sha256
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import Session
@@ -20,12 +22,14 @@ from proxbox_api.main import app
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
 )
+from proxbox_api.proxmox_codegen.security import MAX_PROPERTIES_PER_SCHEMA
 from proxbox_api.proxmox_codegen.utils import pascal_case
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
     available_proxmox_sdk_versions,
     load_proxmox_generated_openapi,
 )
+from proxbox_api.routes.proxmox import runtime_generated
 from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_routes,
     generated_proxmox_route_state,
@@ -1010,12 +1014,13 @@ def test_register_generated_routes_uses_persisted_cache_on_reload(tmp_path, monk
     )
     monkeypatch.setattr(
         "proxbox_api.routes.proxmox.runtime_generated.available_proxmox_sdk_versions",
-        lambda: [],
+        lambda: ["latest"],
     )
     monkeypatch.setattr(
         "proxbox_api.routes.proxmox.runtime_generated.load_proxmox_generated_openapi",
-        lambda version_tag="latest": {},
+        lambda version_tag="latest": TEST_GENERATED_OPENAPI,
     )
+    monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", "true")
 
     register_generated_proxmox_routes(
         app,
@@ -1027,6 +1032,7 @@ def test_register_generated_routes_uses_persisted_cache_on_reload(tmp_path, monk
     state = generated_proxmox_route_state()
 
     assert cache_path.exists()
+    assert (generated_root / "runtime_generated_routes_cache.provenance.json").exists()
     assert result["cache_source"] == "runtime-cache"
     assert state["loaded_from_cache"] is True
     assert "/proxmox/api2/latest/cluster/resources" in app.openapi()["paths"]
@@ -1059,3 +1065,127 @@ def test_register_generated_routes_writes_cache_manifest(tmp_path, monkeypatch):
     assert payload["mounted_versions"] == ["latest", "8.3.0"]
     assert payload["documents"]["latest"]["info"]["version"] == "test-generated"
     assert payload["documents"]["8.3.0"]["info"]["version"] == "8.3.0-generated"
+    assert (generated_root / "runtime_generated_routes_cache.provenance.json").exists()
+
+
+def test_route_cache_write_is_skipped_until_content_changes(tmp_path, monkeypatch):
+    cache_path = tmp_path / "runtime_generated_routes_cache.json"
+    documents = {"latest": TEST_GENERATED_OPENAPI}
+    writes: list[Path] = []
+    real_write = runtime_generated._write_atomic_regular_file
+
+    def _count_write(path: Path, data: bytes) -> None:
+        writes.append(path)
+        real_write(path, data)
+
+    monkeypatch.setattr(runtime_generated, "proxmox_generated_route_cache_path", lambda: cache_path)
+    monkeypatch.setattr(runtime_generated, "_write_atomic_regular_file", _count_write)
+
+    runtime_generated._write_generated_route_cache(
+        documents=documents,
+        alias_version_tag="latest",
+    )
+    original_bytes = cache_path.read_bytes()
+    original_provenance = cache_path.with_name(
+        "runtime_generated_routes_cache.provenance.json"
+    ).read_bytes()
+
+    runtime_generated._write_generated_route_cache(
+        documents=documents,
+        alias_version_tag="latest",
+    )
+
+    assert len(writes) == 2
+    assert cache_path.read_bytes() == original_bytes
+    assert (
+        cache_path.with_name("runtime_generated_routes_cache.provenance.json").read_bytes()
+        == original_provenance
+    )
+
+    changed = json.loads(json.dumps(TEST_GENERATED_OPENAPI))
+    changed["info"]["version"] = "changed"
+    runtime_generated._write_generated_route_cache(
+        documents={"latest": changed},
+        alias_version_tag="latest",
+    )
+
+    assert len(writes) == 4
+    assert cache_path.read_bytes() != original_bytes
+
+
+def test_runtime_cache_rejects_over_limit_document_with_matching_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    cache_path = tmp_path / "runtime_generated_routes_cache.json"
+    provenance_path = tmp_path / "runtime_generated_routes_cache.provenance.json"
+    oversized_document = json.loads(json.dumps(TEST_GENERATED_OPENAPI))
+    response_schema = oversized_document["paths"]["/cluster/resources"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    response_schema["properties"] = {
+        f"field-{index}": {"type": "string"} for index in range(MAX_PROPERTIES_PER_SCHEMA + 1)
+    }
+    cache_path.write_text(
+        json.dumps(
+            {
+                "cache_format": 2,
+                "generated_at": "2026-09-14T00:00:00+00:00",
+                "alias_version_tag": "latest",
+                "mounted_versions": ["latest"],
+                "documents": {"latest": oversized_document},
+            }
+        ),
+        encoding="utf-8",
+    )
+    provenance_path.write_text(
+        json.dumps(
+            {
+                "source_url": "proxbox://runtime-generated-route-cache",
+                "generated_at": "2026-09-14T00:00:00+00:00",
+                "sha256": sha256(cache_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        runtime_generated,
+        "proxmox_generated_route_cache_path",
+        lambda: cache_path,
+    )
+
+    assert runtime_generated._read_generated_route_cache() is None
+
+
+def test_cache_persistence_failure_preserves_routes_openapi_and_global_state(
+    tmp_path,
+    monkeypatch,
+):
+    application = FastAPI()
+    cache_path = tmp_path / "runtime_generated_routes_cache.json"
+    monkeypatch.setattr(runtime_generated, "proxmox_generated_route_cache_path", lambda: cache_path)
+    register_generated_proxmox_routes(
+        application,
+        openapi_documents={"latest": TEST_GENERATED_OPENAPI},
+    )
+    prior_routes = list(application.router.routes)
+    prior_state = generated_proxmox_route_state()
+    prior_openapi = {"sentinel": "authoritative"}
+    application.openapi_schema = prior_openapi
+
+    def _fail_provenance(*args, **kwargs):
+        raise OSError("synthetic provenance write failure")
+
+    monkeypatch.setattr(
+        runtime_generated, "_write_generated_route_cache_provenance", _fail_provenance
+    )
+
+    with pytest.raises(OSError, match="synthetic provenance write failure"):
+        register_generated_proxmox_routes(
+            application,
+            openapi_documents={"8.3.0": TEST_GENERATED_OPENAPI_V83},
+        )
+
+    assert application.router.routes == prior_routes
+    assert application.openapi_schema is prior_openapi
+    assert generated_proxmox_route_state() == prior_state

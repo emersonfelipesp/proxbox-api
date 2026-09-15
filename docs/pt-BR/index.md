@@ -20,6 +20,7 @@ Esta documentacao cobre instalacao, configuracao, arquitetura, referencias de AP
 - Sincronizacao de VM, interfaces, IPs, discos, storages e backups para o NetBox.
 - Leitura de High-Availability agregada por cluster — ver [API de HA do cluster](api/cluster-ha.md).
 - Verbos operacionais de VM (start / stop / snapshot / migrate) com gate `ProxmoxEndpoint.allow_writes`, idempotencia, auditoria em journal e progresso SSE no migrate — ver [Referencia HTTP — Verbos Operacionais de VM](api/http-reference.md#verbos-operacionais-de-vm).
+- Escritas Ceph v2 fail-closed com sessao privada do endpoint/node exatos, payload estrito por operacao, aprovacao independente, lease vinculado ao dono, UPID global ao provider, checkpoints resistentes a cancelamento repetido e recuperacao segura de ambiguidade — ver [Aprovacao e Recuperacao de Escritas Ceph v2](operations/ceph-write-approvals.md).
 - Inspecao de logs do admin, cache e fluxo full-update.
 
 ## Idioma

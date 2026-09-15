@@ -22,9 +22,13 @@ from proxbox_api.ceph.dashboard_client import (
     build_dashboard_client,
     dashboard_sdk_importable,
 )
-from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephProviderAdapter
+from proxbox_api.ceph.v2_providers.base import (
+    CephCapabilityUnsupported,
+    CephProviderAdapter,
+    CephProviderBoundaryError,
+    CephWriteGateDenied,
+)
 from proxbox_api.ceph.v2_providers.dashboard_writer import (
-    execute_dashboard_operation,
     operation_kinds,
 )
 from proxbox_api.ceph.v2_schemas import (
@@ -110,19 +114,18 @@ class DashboardCephProviderAdapter(CephProviderAdapter):
     # -- capabilities ------------------------------------------------------- #
     async def capabilities(self) -> ProviderCapabilities:
         importable = dashboard_sdk_importable()
-        kinds = {"noop": True}
-        kinds.update(operation_kinds(importable))
-        if importable:
-            notes = [
-                "Direct Ceph Dashboard provider: reads inventory and applies pool / "
-                "RBD writes through the Dashboard REST API. No Proxmox endpoint "
-                "required. Destructive operations require confirm_destructive."
-            ]
-        else:
+        kinds = operation_kinds(False)
+        if not importable:
             notes = [
                 "Ceph Dashboard provider is inactive: the installed proxmox-sdk does "
                 "not ship proxmox_sdk.ceph.providers. Pin proxmox-sdk>=0.0.11 to "
-                "enable Dashboard-backed reads and writes."
+                "enable Dashboard-backed reads."
+            ]
+        else:
+            notes = [
+                "Ceph Dashboard reads and plans are available, but apply and destructive "
+                "capabilities remain false until Dashboard endpoint selection, revision, "
+                "credential, and write authority are durably bound to the canonical plan."
             ]
         return ProviderCapabilities(
             provider=self.provider,
@@ -130,11 +133,11 @@ class DashboardCephProviderAdapter(CephProviderAdapter):
             read_state=importable,
             diff=importable,
             plan=importable,
-            apply=importable,
+            apply=False,
             reconcile=importable,
             metrics=importable,
             operation_kinds=kinds,
-            destructive_operations=importable,
+            destructive_operations=False,
             notes=notes,
         )
 
@@ -164,8 +167,8 @@ class DashboardCephProviderAdapter(CephProviderAdapter):
             )
             try:
                 health = _plain(await client.health())
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"health: {type(exc).__name__}: {exc}")
+            except Exception:  # noqa: BLE001 - raw diagnostics are secret-bearing
+                errors.append(_safe_diagnostic("health"))
             for kind, reader in collectors:
                 try:
                     for item in await reader():
@@ -173,15 +176,15 @@ class DashboardCephProviderAdapter(CephProviderAdapter):
                         ref = _resource_ref(kind, summary)
                         if ref:
                             resources.append({"kind": kind, "target_ref": ref, "summary": summary})
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"{kind}: {type(exc).__name__}: {exc}")
+                except Exception:  # noqa: BLE001 - raw diagnostics are secret-bearing
+                    errors.append(_safe_diagnostic(kind))
         finally:
             await _safe_close(client)
 
         cluster = {
             "provider": self.provider,
-            "name": config.base_url,
-            "host": config.base_url,
+            "name": "configured-dashboard",
+            "host": "[REDACTED]",
             "health": health,
             "errors": errors,
         }
@@ -246,29 +249,30 @@ class DashboardCephProviderAdapter(CephProviderAdapter):
         *,
         confirm_destructive: bool,
     ) -> dict[str, Any]:
+        op_key = f"{operation.kind}:{operation.action}"
+        if operation_kinds(True).get(op_key) is not True:
+            raise CephCapabilityUnsupported(
+                "Ceph Dashboard write adapter rejected an unsupported operation."
+            )
         if operation.action == "noop":
             return {
                 "operation_id": operation.id,
                 "result": "noop",
                 "target_ref": operation.target_ref,
             }
-        if not dashboard_sdk_importable():
-            raise CephCapabilityUnsupported(
-                "The installed proxmox-sdk does not ship the Ceph Dashboard client; "
-                "pin proxmox-sdk>=0.0.11 to enable Dashboard-backed Ceph writes."
-            )
-        config = self._endpoint
-        if config is None:
-            raise CephCapabilityUnsupported(
-                "No Ceph Dashboard endpoint is configured to apply the operation."
-            )
-        client = self._make_client(config)
-        try:
-            return await execute_dashboard_operation(
-                client, operation, confirm_destructive=confirm_destructive
-            )
-        finally:
-            await _safe_close(client)
+        raise CephWriteGateDenied(
+            "durable_provider_write_gate_unavailable",
+            "Ceph Dashboard writes require durable endpoint and write authority binding.",
+        )
+
+    def declares_synchronous_success(
+        self,
+        operation: ProviderOperation,  # noqa: ARG002
+        result: dict[str, Any],
+    ) -> bool:
+        """Dashboard calls without a task ref are synchronous only when explicit."""
+
+        return result.get("result") == "applied" and not result.get("provider_task_ref")
 
     async def reconcile(self, scope: dict[str, Any]) -> dict[str, Any]:
         live = await self.read_state(scope)
@@ -316,8 +320,16 @@ async def _safe_close(client: Any) -> None:
         return
     try:
         await close()
-    except Exception as exc:  # noqa: BLE001 - best-effort session cleanup
-        logger.debug("Dashboard client close failed: %s", exc)
+    except Exception:  # noqa: BLE001 - best-effort session cleanup
+        logger.debug("Dashboard client close failed")
+
+
+def _safe_diagnostic(kind: str) -> str:
+    failure = CephProviderBoundaryError(
+        "provider_read_unavailable",
+        "Ceph provider data could not be read safely.",
+    )
+    return f"{kind}: {failure.reason} correlation_id={failure.correlation_id}"
 
 
 __all__ = ["DashboardCephProviderAdapter"]

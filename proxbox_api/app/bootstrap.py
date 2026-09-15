@@ -10,6 +10,7 @@ from sqlmodel import select
 
 from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.database import (
+    CephProviderTaskClaimMigrationError,
     DatabaseConfigurationError,
     DatabaseStartupError,
     NetBoxEndpoint,
@@ -56,6 +57,20 @@ def _configure_backend_file_logging() -> None:
     )
 
 
+def _refuse_ceph_task_claim_collision(error: CephProviderTaskClaimMigrationError) -> None:
+    """Record one stable fatal reason and abort every database bootstrap path."""
+
+    global init_ok, last_init_error
+
+    init_ok = False
+    last_init_error = str(error)
+    logger.critical(
+        "bootstrap: ambiguous Ceph provider task evidence; refusing startup",
+        extra={"reason_code": last_init_error},
+    )
+    raise error
+
+
 def init_database_and_netbox() -> None:
     """Create tables if needed, open a DB session, and configure the default NetBox client."""
     global netbox_session, database_session, netbox_endpoints, init_ok, last_init_error
@@ -78,6 +93,8 @@ def init_database_and_netbox() -> None:
                 "startup_lock_path": str(target.startup_lock_path),
             },
         )
+    except CephProviderTaskClaimMigrationError as error:
+        _refuse_ceph_task_claim_collision(error)
     except (DatabaseConfigurationError, DatabaseStartupError) as error:
         last_init_error = str(error)
         logger.error("bootstrap: fatal database configuration or verification error: %s", error)

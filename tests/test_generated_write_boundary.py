@@ -25,6 +25,7 @@ DENIAL = {
 
 @pytest.fixture
 def generated_boundary(monkeypatch, tmp_path):
+    monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", "true")
     document = {
         "openapi": "3.1.0",
         "info": {"title": "Boundary test", "version": "latest"},

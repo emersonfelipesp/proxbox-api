@@ -72,8 +72,8 @@ async def validate_dashboard_endpoint(
     client = client_factory(config) if client_factory else build_dashboard_client(config)
     try:
         caps = await client.capabilities()
-    except Exception as exc:  # noqa: BLE001 - surface probe failure as an error string
-        return False, f"{type(exc).__name__}: {exc}"
+    except Exception:  # noqa: BLE001 - provider diagnostics may contain credentials
+        return False, "Ceph Dashboard endpoint validation failed."
     finally:
         close = getattr(client, "close", None)
         if close is not None:
@@ -82,5 +82,4 @@ async def validate_dashboard_endpoint(
             except Exception:  # noqa: BLE001 - best-effort cleanup
                 pass
     available = bool(getattr(caps, "available", False))
-    notes = getattr(caps, "notes", []) or []
-    return available, (None if available else (notes[0] if notes else "dashboard unavailable"))
+    return available, (None if available else "Ceph Dashboard endpoint is unavailable.")

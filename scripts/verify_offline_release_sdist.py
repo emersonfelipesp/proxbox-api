@@ -26,6 +26,14 @@ PINNED_IMAGES = (
     "ghcr.io/astral-sh/uv:0.11.28@sha256:"
     "0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa",
 )
+ALLOWED_PASSIVE_INSTRUCTIONS = {
+    "CMD",
+    "ENTRYPOINT",
+    "ENV",
+    "EXPOSE",
+    "VOLUME",
+    "WORKDIR",
+}
 
 
 # The two exact commands the release image is allowed to run to populate its
@@ -35,105 +43,239 @@ PINNED_IMAGES = (
 # the network for its dependencies.
 OFFLINE_SYNC_COMMAND = "uv pip sync --python /app/.venv/bin/python --offline --no-index --find-links /root/.cache/uv --require-hashes /root/.cache/uv/offline-requirements.txt"
 PROJECT_INSTALL_COMMAND = "uv pip install --python /app/.venv/bin/python --offline --no-index --find-links /root/.cache/uv --no-deps ."
+ALLOWED_PASSIVE_LINES = {
+    ("WORKDIR", "/app"),
+    ("ENV", 'PATH="/app/.venv/bin:$PATH"'),
+    ("ENV", "PORT=8000"),
+    ("ENV", "PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db"),
+    ("ENV", "PROXBOX_BIND_HOST=0.0.0.0"),
+    ("ENV", "PYTHONUNBUFFERED=1"),
+    ("ENV", "UV_COMPILE_BYTECODE=1"),
+    ("ENV", "UV_LINK_MODE=copy"),
+    ("ENV", "UV_PYTHON_DOWNLOADS=never"),
+    ("EXPOSE", "8000"),
+    ("VOLUME", '["/data"]'),
+    ("ENTRYPOINT", '["/usr/local/bin/docker-entrypoint-raw.sh"]'),
+    ("CMD", "[]"),
+}
+ALLOWED_COPY_FIELDS = {
+    ("--from=uv-source", "/uv", "/usr/local/bin/uv"),
+    ("docker/build-cache", "/root/.cache/uv"),
+    ("README.md", "pyproject.toml", "uv.lock", "./"),
+    ("proxbox_api", "./proxbox_api"),
+    ("docker/entrypoint-raw.sh", "/usr/local/bin/docker-entrypoint-raw.sh"),
+}
+POST_SYNC_INSTRUCTIONS = (
+    ("RUN", OFFLINE_SYNC_COMMAND),
+    ("RUN", PROJECT_INSTALL_COMMAND),
+    ("COPY", "docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh"),
+    ("RUN", "chmod 0555 /usr/local/bin/docker-entrypoint-raw.sh"),
+    ("EXPOSE", "8000"),
+    ("VOLUME", '["/data"]'),
+    ("ENTRYPOINT", '["/usr/local/bin/docker-entrypoint-raw.sh"]'),
+    ("CMD", "[]"),
+)
+EXPECTED_DOCKERFILE_INSTRUCTIONS = (
+    ("FROM", f"{PINNED_IMAGES[1]} AS uv-source"),
+    ("FROM", f"{PINNED_IMAGES[0]} AS raw"),
+    ("COPY", "--from=uv-source /uv /usr/local/bin/uv"),
+    ("WORKDIR", "/app"),
+    ("ENV", 'PATH="/app/.venv/bin:$PATH"'),
+    ("ENV", "PORT=8000"),
+    ("ENV", "PROXBOX_DEFAULT_DATABASE_PATH=/data/database.db"),
+    ("ENV", "PROXBOX_BIND_HOST=0.0.0.0"),
+    ("ENV", "PYTHONUNBUFFERED=1"),
+    ("ENV", "UV_COMPILE_BYTECODE=1"),
+    ("ENV", "UV_LINK_MODE=copy"),
+    ("ENV", "UV_PYTHON_DOWNLOADS=never"),
+    ("COPY", "docker/build-cache /root/.cache/uv"),
+    ("COPY", "README.md pyproject.toml uv.lock ./"),
+    ("COPY", "proxbox_api ./proxbox_api"),
+    *POST_SYNC_INSTRUCTIONS,
+)
 
 
 class OfflineSdistError(ValueError):
     """Raised when a release sdist is not one safe offline Docker context."""
 
 
-def validate_dockerfile(dockerfile: str) -> list[str]:  # noqa: C901
-    """Return exact immutable base images from one restricted Dockerfile."""
-    stages: set[str] = set()
-    images: list[str] = []
-    current_stage = -1
-    cache_copy_stage: int | None = None
-    offline_sync_stage: int | None = None
-    project_install_stage: int | None = None
-    allowed_passive = {"CMD", "ENTRYPOINT", "ENV", "EXPOSE", "VOLUME", "WORKDIR"}
-    for raw_line in dockerfile.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("#"):
-            if re.match(r"^#\s*(?:syntax|escape|check)\s*=", line, re.IGNORECASE):
-                raise OfflineSdistError("Dockerfile parser directives are forbidden")
-            continue
-        if raw_line.rstrip().endswith("\\"):
-            raise OfflineSdistError("Dockerfile continuations are forbidden")
-        instruction, _, arguments = line.partition(" ")
-        instruction = instruction.upper()
-        arguments = arguments.strip()
-        if instruction == "ARG":
-            raise OfflineSdistError("Dockerfile build arguments are forbidden")
-        if instruction == "ADD":
-            raise OfflineSdistError("Dockerfile ADD is forbidden")
-        if instruction == "FROM":
-            fields = arguments.split()
-            if (
-                len(fields) != 3
-                or fields[1].upper() != "AS"
-                or "$" in fields[0]
-                or fields[0] not in PINNED_IMAGES
-                or re.fullmatch(r"[a-z][a-z0-9._-]{0,63}", fields[2]) is None
-            ):
-                raise OfflineSdistError("Dockerfile FROM is not exact and immutable")
-            alias = fields[2]
-            if alias in stages or fields[0] in images:
-                raise OfflineSdistError("Dockerfile stage identity is ambiguous")
-            stages.add(alias)
-            images.append(fields[0])
-            current_stage += 1
-            continue
-        if instruction == "RUN":
-            if arguments == OFFLINE_SYNC_COMMAND:
-                if (
-                    current_stage < 0
-                    or cache_copy_stage != current_stage
-                    or offline_sync_stage is not None
-                ):
-                    raise OfflineSdistError(
-                        "Dockerfile offline sync does not follow one cache copy"
-                    )
-                offline_sync_stage = current_stage
-            elif arguments == PROJECT_INSTALL_COMMAND:
-                if offline_sync_stage != current_stage or project_install_stage is not None:
-                    raise OfflineSdistError(
-                        "Dockerfile project install does not follow the offline sync"
-                    )
-                project_install_stage = current_stage
-            elif arguments != "chmod 0555 /usr/local/bin/docker-entrypoint-raw.sh":
-                raise OfflineSdistError("Dockerfile RUN is not allowlisted")
-            continue
-        if instruction != "COPY":
-            if instruction not in allowed_passive:
-                raise OfflineSdistError("Dockerfile instruction is not allowlisted")
-            continue
-        fields = arguments.split()
-        if len(fields) < 2 or any("$" in field for field in fields):
-            raise OfflineSdistError("Dockerfile COPY is not a literal local copy")
-        flags = [field for field in fields if field.startswith("--")]
-        if len(flags) > 1 or any(not field.startswith("--from=") for field in flags):
-            raise OfflineSdistError("Dockerfile COPY flags are not allowlisted")
-        if flags:
-            source_stage = flags[0].split("=", 1)[1]
-            if source_stage not in stages:
-                raise OfflineSdistError("Dockerfile COPY uses an external source")
-        sources = [field for field in fields if not field.startswith("--")][:-1]
-        if not sources or any(
-            source.startswith(("http://", "https://", "git@", "ssh://")) for source in sources
-        ):
-            raise OfflineSdistError("Dockerfile COPY source is not local")
-        if fields == ["docker/build-cache", "/root/.cache/uv"]:
-            if current_stage < 0 or cache_copy_stage is not None:
-                raise OfflineSdistError("Dockerfile offline cache copy is ambiguous")
-            cache_copy_stage = current_stage
-    if sorted(images) != sorted(PINNED_IMAGES) or len(images) != len(PINNED_IMAGES):
+class _DockerfileState:
+    """Track ordering and identity while reading Dockerfile instructions."""
+
+    def __init__(self) -> None:
+        self.instructions: list[tuple[str, str]] = []
+        self.stages: set[str] = set()
+        self.stage_images: dict[str, str] = {}
+        self.stage_indexes: dict[str, int] = {}
+        self.images: list[str] = []
+        self.current_stage = -1
+        self.uv_copy_stage: int | None = None
+        self.cache_copy_stage: int | None = None
+        self.offline_sync_stage: int | None = None
+        self.project_install_stage: int | None = None
+
+
+def _parse_dockerfile_line(raw_line: str) -> tuple[str, str] | None:
+    """Return one normalized instruction, ignoring blank lines and comments."""
+    line = raw_line.strip()
+    if not line:
+        return None
+    if line.startswith("#"):
+        if re.match(r"^#\s*(?:syntax|escape|check)\s*=", line, re.IGNORECASE):
+            raise OfflineSdistError("Dockerfile parser directives are forbidden")
+        return None
+    if raw_line.rstrip().endswith("\\"):
+        raise OfflineSdistError("Dockerfile continuations are forbidden")
+    instruction, _, arguments = line.partition(" ")
+    return instruction.upper(), arguments.strip()
+
+
+def _read_from(state: _DockerfileState, arguments: str) -> None:
+    """Validate and record one immutable build stage."""
+    fields = arguments.split()
+    if (
+        len(fields) != 3
+        or fields[1].upper() != "AS"
+        or "$" in fields[0]
+        or fields[0] not in PINNED_IMAGES
+        or re.fullmatch(r"[a-z][a-z0-9._-]{0,63}", fields[2]) is None
+    ):
+        raise OfflineSdistError("Dockerfile FROM is not exact and immutable")
+    alias = fields[2]
+    if alias in state.stages or fields[0] in state.images:
+        raise OfflineSdistError("Dockerfile stage identity is ambiguous")
+    state.stages.add(alias)
+    state.images.append(fields[0])
+    state.current_stage += 1
+    state.stage_images[alias] = fields[0]
+    state.stage_indexes[alias] = state.current_stage
+
+
+def _read_offline_sync(state: _DockerfileState) -> None:
+    """Record the exact dependency sync after its cache copy."""
+    if (
+        state.current_stage < 0
+        or state.cache_copy_stage != state.current_stage
+        or state.offline_sync_stage is not None
+    ):
+        raise OfflineSdistError("Dockerfile offline sync does not follow one cache copy")
+    state.offline_sync_stage = state.current_stage
+
+
+def _read_project_install(state: _DockerfileState) -> None:
+    """Record the exact project install after its dependency sync."""
+    if state.offline_sync_stage != state.current_stage or state.project_install_stage is not None:
+        raise OfflineSdistError("Dockerfile project install does not follow the offline sync")
+    state.project_install_stage = state.current_stage
+
+
+def _read_run(state: _DockerfileState, arguments: str) -> None:
+    """Validate one RUN instruction and update ordering state."""
+    if arguments == OFFLINE_SYNC_COMMAND:
+        _read_offline_sync(state)
+    elif arguments == PROJECT_INSTALL_COMMAND:
+        _read_project_install(state)
+    elif arguments != "chmod 0555 /usr/local/bin/docker-entrypoint-raw.sh":
+        raise OfflineSdistError("Dockerfile RUN is not allowlisted")
+
+
+def _copy_fields(arguments: str) -> list[str]:
+    """Parse a COPY instruction into literal fields."""
+    fields = arguments.split()
+    if len(fields) < 2 or any("$" in field for field in fields):
+        raise OfflineSdistError("Dockerfile COPY is not a literal local copy")
+    return fields
+
+
+def _validate_copy_flags(fields: list[str], stages: set[str]) -> None:
+    """Allow at most one internal-stage COPY flag."""
+    flags = [field for field in fields if field.startswith("--")]
+    if len(flags) > 1 or any(not field.startswith("--from=") for field in flags):
+        raise OfflineSdistError("Dockerfile COPY flags are not allowlisted")
+    if flags and flags[0].split("=", 1)[1] not in stages:
+        raise OfflineSdistError("Dockerfile COPY uses an external source")
+
+
+def _validate_copy_sources(fields: list[str]) -> None:
+    """Require every COPY source to be a literal local path."""
+    sources = [field for field in fields if not field.startswith("--")][:-1]
+    if not sources or any(
+        source.startswith(("http://", "https://", "git@", "ssh://")) for source in sources
+    ):
+        raise OfflineSdistError("Dockerfile COPY source is not local")
+
+
+def _read_copy(state: _DockerfileState, arguments: str) -> None:
+    """Validate one COPY instruction and record the offline cache copy."""
+    fields = _copy_fields(arguments)
+    _validate_copy_flags(fields, state.stages)
+    _validate_copy_sources(fields)
+    if tuple(fields) not in ALLOWED_COPY_FIELDS:
+        raise OfflineSdistError("Dockerfile COPY is not allowlisted")
+    if fields == ["--from=uv-source", "/uv", "/usr/local/bin/uv"]:
+        if state.current_stage < 0 or state.uv_copy_stage is not None:
+            raise OfflineSdistError("Dockerfile uv copy is ambiguous")
+        state.uv_copy_stage = state.current_stage
+    if fields != ["docker/build-cache", "/root/.cache/uv"]:
+        return
+    if state.current_stage < 0 or state.cache_copy_stage is not None:
+        raise OfflineSdistError("Dockerfile offline cache copy is ambiguous")
+    state.cache_copy_stage = state.current_stage
+
+
+def _read_instruction(state: _DockerfileState, instruction: str, arguments: str) -> None:
+    """Dispatch one normalized instruction to its restricted reader."""
+    state.instructions.append((instruction, arguments))
+    if instruction == "ARG":
+        raise OfflineSdistError("Dockerfile build arguments are forbidden")
+    if instruction == "ADD":
+        raise OfflineSdistError("Dockerfile ADD is forbidden")
+    if instruction == "FROM":
+        _read_from(state, arguments)
+        return
+    if instruction == "RUN":
+        _read_run(state, arguments)
+        return
+    if instruction == "COPY":
+        _read_copy(state, arguments)
+        return
+    if instruction not in ALLOWED_PASSIVE_INSTRUCTIONS:
+        raise OfflineSdistError("Dockerfile instruction is not allowlisted")
+    if (instruction, arguments) not in ALLOWED_PASSIVE_LINES:
+        raise OfflineSdistError("Dockerfile instruction plan is not exact")
+
+
+def _finish_dockerfile(state: _DockerfileState) -> list[str]:
+    """Check final image and offline-install consistency."""
+    images = sorted(state.images)
+    if images != sorted(PINNED_IMAGES) or len(images) != len(PINNED_IMAGES):
         raise OfflineSdistError("release Dockerfile image pins are incomplete")
-    if cache_copy_stage is None or offline_sync_stage != cache_copy_stage:
+    expected_stages = {"raw": PINNED_IMAGES[0], "uv-source": PINNED_IMAGES[1]}
+    if state.stage_images != expected_stages:
+        raise OfflineSdistError("Dockerfile release stage aliases are not exact")
+    raw_stage = state.stage_indexes["raw"]
+    if state.uv_copy_stage != raw_stage:
+        raise OfflineSdistError("Dockerfile does not copy uv into the release target")
+    if state.cache_copy_stage is None or state.offline_sync_stage != state.cache_copy_stage:
         raise OfflineSdistError("Dockerfile does not consume its offline cache")
-    if project_install_stage != cache_copy_stage:
+    if state.project_install_stage != state.cache_copy_stage:
         raise OfflineSdistError("Dockerfile does not install the project offline")
-    return sorted(images)
+    if state.cache_copy_stage != raw_stage:
+        raise OfflineSdistError("Dockerfile offline install does not target raw")
+    if tuple(state.instructions) != EXPECTED_DOCKERFILE_INSTRUCTIONS:
+        raise OfflineSdistError("Dockerfile instruction plan is not exact")
+    return images
+
+
+def validate_dockerfile(dockerfile: str) -> list[str]:
+    """Return exact immutable base images from one restricted Dockerfile."""
+    state = _DockerfileState()
+    for raw_line in dockerfile.splitlines():
+        parsed = _parse_dockerfile_line(raw_line)
+        if parsed is None:
+            continue
+        _read_instruction(state, *parsed)
+    return _finish_dockerfile(state)
 
 
 def _sha256(path: Path) -> str:

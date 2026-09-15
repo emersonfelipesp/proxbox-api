@@ -2,22 +2,35 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from pathlib import Path
+import threading
+from hashlib import sha256
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_codegen.apidoc_parser import PROXMOX_API_VIEWER_URL
-from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle_async
+from proxbox_api.proxmox_codegen.pipeline import (
+    codegen_output_directory,
+    generate_proxmox_codegen_bundle_async,
+    is_default_codegen_source,
+)
+from proxbox_api.proxmox_codegen.pydantic_generator import (
+    generate_pydantic_models_from_openapi,
+)
+from proxbox_api.proxmox_codegen.security import (
+    VERSION_TAG_PATTERN,
+    SchemaLimitError,
+    validate_version_tag,
+)
 from proxbox_api.proxmox_to_netbox.netbox_schema import netbox_openapi_schema_source
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     DEFAULT_PROXMOX_OPENAPI_TAG,
-    get_bundled_generated_dir,
     get_user_generated_dir,
+    has_bundled_proxmox_schema,
     load_proxmox_generated_openapi,
-    proxmox_generated_openapi_path,
 )
 from proxbox_api.routes.proxmox.runtime_generated import (
     generated_proxmox_route_state,
@@ -26,7 +39,21 @@ from proxbox_api.routes.proxmox.runtime_generated import (
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import validate_endpoint_url
 
+common_router = APIRouter()
+runtime_codegen_router = APIRouter()
+bundled_only_router = APIRouter()
 router = APIRouter()
+
+MAX_RENDERED_PYDANTIC_BYTES = 2 * 1024 * 1024
+_RENDERED_PYDANTIC_CACHE: dict[str, str] = {}
+_RENDERED_PYDANTIC_CACHE_LOCK = threading.Lock()
+
+
+def _validate_version_tag_for_request(version_tag: str) -> str:
+    try:
+        return validate_version_tag(version_tag)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 def _enforce_codegen_source_url(source_url: str) -> None:
@@ -45,11 +72,11 @@ def _enforce_codegen_source_url(source_url: str) -> None:
         )
 
 
-@router.post("/generate")
+@runtime_codegen_router.post("/generate")
 async def generate_viewer_codegen_artifacts(
     persist: bool = Query(
         default=True,
-        description="Persist generated artifacts under proxbox_api/generated/proxmox.",
+        description="Persist generated artifacts under the configured user schema directory.",
     ),
     workers: int = Query(
         default=10,
@@ -81,11 +108,21 @@ async def generate_viewer_codegen_artifacts(
     ),
     version_tag: str = Query(
         default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        pattern=VERSION_TAG_PATTERN,
         description="Version tag used for generated artifacts subdirectory.",
     ),
 ):
     """Run Proxmox API Viewer to OpenAPI and Pydantic generation pipeline."""
 
+    version_tag = _validate_version_tag_for_request(version_tag)
+    if persist and has_bundled_proxmox_schema(version_tag):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Version tag '{version_tag}' is bundled and immutable. "
+                "Choose a new version_tag or set persist=false for an inspection-only generation."
+            ),
+        )
     _enforce_codegen_source_url(source_url)
     try:
         output_dir = None
@@ -103,8 +140,14 @@ async def generate_viewer_codegen_artifacts(
         )
         viewer_capture = bundle.capture.get("viewer", {})
         completeness = bundle.capture.get("completeness", {})
+        inspection_only = not is_default_codegen_source(source_url)
         return {
-            "message": "Generation completed",
+            "message": (
+                "Generation completed. Custom-source artifacts are inspection-only and are not "
+                "used for runtime route registration."
+                if inspection_only
+                else "Generation completed"
+            ),
             "source_url": bundle.source_url,
             "version_tag": bundle.version_tag,
             "generated_at": bundle.generated_at,
@@ -122,7 +165,17 @@ async def generate_viewer_codegen_artifacts(
                 "fallback_method_count": completeness.get("fallback_method_count"),
                 "missing_from_viewer": len(completeness.get("missing_from_viewer", [])),
             },
-            "output_dir": (str(Path(output_dir) / bundle.version_tag) if output_dir else None),
+            "output_dir": (
+                str(
+                    codegen_output_directory(
+                        output_dir,
+                        source_url=source_url,
+                        version_tag=bundle.version_tag,
+                    )
+                )
+                if output_dir
+                else None
+            ),
             "retry": {
                 "retry_count": retry_count,
                 "retry_backoff": retry_backoff,
@@ -136,7 +189,7 @@ async def generate_viewer_codegen_artifacts(
         )
 
 
-@router.get("/openapi")
+@runtime_codegen_router.get("/openapi")
 async def proxmox_viewer_openapi(
     regenerate: bool = Query(
         default=False,
@@ -177,14 +230,12 @@ async def proxmox_viewer_openapi(
 ):
     """Return generated OpenAPI schema for Proxmox API viewer endpoints."""
 
+    version_tag = _validate_version_tag_for_request(version_tag)
     try:
-        output_dir = get_user_generated_dir()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        openapi_path = proxmox_generated_openapi_path(version_tag=version_tag)
-        if regenerate or not openapi_path.exists():
+        if regenerate:
             _enforce_codegen_source_url(source_url)
             bundle = await generate_proxmox_codegen_bundle_async(
-                output_dir=output_dir,
+                output_dir=None,
                 source_url=source_url,
                 version_tag=version_tag,
                 worker_count=workers,
@@ -194,7 +245,20 @@ async def proxmox_viewer_openapi(
             )
             return bundle.openapi
 
-        return json.loads(openapi_path.read_text(encoding="utf-8"))
+        schema = load_proxmox_generated_openapi(version_tag=version_tag)
+        if schema:
+            return schema
+        _enforce_codegen_source_url(source_url)
+        bundle = await generate_proxmox_codegen_bundle_async(
+            output_dir=None,
+            source_url=source_url,
+            version_tag=version_tag,
+            worker_count=workers,
+            retry_count=retry_count,
+            retry_backoff_seconds=retry_backoff,
+            checkpoint_every=checkpoint_every,
+        )
+        return bundle.openapi
     except Exception as error:
         raise ProxboxException(
             message="Failed to load generated OpenAPI schema.",
@@ -202,7 +266,29 @@ async def proxmox_viewer_openapi(
         )
 
 
-@router.get("/openapi/embedded")
+@bundled_only_router.get("/openapi")
+async def proxmox_viewer_bundled_openapi(
+    regenerate: bool = Query(
+        default=False,
+        description="Unavailable unless runtime code generation is explicitly enabled.",
+    ),
+    version_tag: str = Query(
+        default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        description="Bundled artifact version tag to load.",
+    ),
+):
+    """Return an immutable bundled OpenAPI schema without generation fallback."""
+
+    if regenerate:
+        raise HTTPException(status_code=404, detail="Runtime code generation is disabled.")
+    version_tag = _validate_version_tag_for_request(version_tag)
+    schema = load_proxmox_generated_openapi(version_tag=version_tag, allow_user=False)
+    if not schema:
+        raise HTTPException(status_code=404, detail="Bundled Proxmox OpenAPI schema not found.")
+    return schema
+
+
+@common_router.get("/openapi/embedded")
 async def proxmox_viewer_openapi_embedded(
     version_tag: str = Query(
         default=DEFAULT_PROXMOX_OPENAPI_TAG,
@@ -211,6 +297,7 @@ async def proxmox_viewer_openapi_embedded(
 ):
     """Return generated Proxmox OpenAPI as consumed by custom FastAPI OpenAPI extension."""
 
+    version_tag = _validate_version_tag_for_request(version_tag)
     schema = load_proxmox_generated_openapi(version_tag=version_tag)
     if not schema:
         raise ProxboxException(
@@ -220,7 +307,7 @@ async def proxmox_viewer_openapi_embedded(
     return schema
 
 
-@router.get("/integration/contracts")
+@common_router.get("/integration/contracts")
 async def proxmox_netbox_integration_contracts():
     """Report Proxmox and NetBox schema contract sources for transformation workflows."""
 
@@ -232,10 +319,11 @@ async def proxmox_netbox_integration_contracts():
     }
 
 
-@router.post("/routes/refresh")
+@runtime_codegen_router.post("/routes/refresh")
 async def refresh_generated_proxmox_routes(
     version_tag: str | None = Query(
         default=None,
+        pattern=VERSION_TAG_PATTERN,
         description="Optional generated artifact version tag to rebuild. Omit to rebuild all available versions.",
     ),
 ):
@@ -243,13 +331,15 @@ async def refresh_generated_proxmox_routes(
 
     from proxbox_api.main import app
 
-    normalized_version_tag = version_tag if isinstance(version_tag, str) else None
+    normalized_version_tag = (
+        _validate_version_tag_for_request(version_tag) if isinstance(version_tag, str) else None
+    )
     result = register_generated_proxmox_routes(app, version_tag=normalized_version_tag)
     result["state"] = generated_proxmox_route_state()
     return result
 
 
-@router.get("/schema-status")
+@common_router.get("/schema-status")
 async def schema_generation_status(
     version_tag: str | None = Query(
         default=None,
@@ -271,6 +361,7 @@ async def schema_generation_status(
     available = available_proxmox_sdk_versions()
 
     if version_tag is not None:
+        version_tag = _validate_version_tag_for_request(version_tag)
         gen_status = get_generation_status(version_tag)
         return {
             "version_tag": version_tag,
@@ -284,7 +375,7 @@ async def schema_generation_status(
     }
 
 
-@router.get("/pydantic", response_class=PlainTextResponse)
+@runtime_codegen_router.get("/pydantic", response_class=PlainTextResponse)
 async def proxmox_viewer_pydantic_models(
     regenerate: bool = Query(
         default=False,
@@ -325,18 +416,12 @@ async def proxmox_viewer_pydantic_models(
 ):
     """Return generated Pydantic v2 models source code for Proxmox API endpoints."""
 
+    version_tag = _validate_version_tag_for_request(version_tag)
     try:
-        output_dir = get_user_generated_dir()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        models_path = output_dir / version_tag / "pydantic_models.py"
-        if not models_path.exists():
-            bundled = get_bundled_generated_dir() / version_tag / "pydantic_models.py"
-            if bundled.exists():
-                models_path = bundled
-        if regenerate or not models_path.exists():
+        if regenerate:
             _enforce_codegen_source_url(source_url)
             bundle = await generate_proxmox_codegen_bundle_async(
-                output_dir=output_dir,
+                output_dir=None,
                 source_url=source_url,
                 version_tag=version_tag,
                 worker_count=workers,
@@ -344,10 +429,77 @@ async def proxmox_viewer_pydantic_models(
                 retry_backoff_seconds=retry_backoff,
                 checkpoint_every=checkpoint_every,
             )
-            return bundle.pydantic_models_code
-        return models_path.read_text(encoding="utf-8")
+            return await _render_pydantic_models(bundle.openapi)
+        schema = load_proxmox_generated_openapi(version_tag=version_tag)
+        if not schema:
+            raise ProxboxException(
+                message="Generated Proxmox OpenAPI schema not found.",
+                detail="Run /proxmox/viewer/generate first.",
+            )
+        return await _render_pydantic_models(schema)
     except Exception as error:
         raise ProxboxException(
             message="Failed to load generated Pydantic models.",
             python_exception=str(error),
         )
+
+
+def _rendered_schema_digest(schema: dict[str, object]) -> str:
+    encoded = json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _render_pydantic_models_bounded(schema: dict[str, object]) -> str:
+    digest = _rendered_schema_digest(schema)
+    with _RENDERED_PYDANTIC_CACHE_LOCK:
+        cached = _RENDERED_PYDANTIC_CACHE.get(digest)
+    if cached is not None:
+        return cached
+
+    rendered = generate_pydantic_models_from_openapi(schema)
+    rendered_bytes = rendered.encode("utf-8")
+    if len(rendered_bytes) > MAX_RENDERED_PYDANTIC_BYTES:
+        raise SchemaLimitError(
+            "Rendered Pydantic source exceeds "
+            f"MAX_RENDERED_PYDANTIC_BYTES ({MAX_RENDERED_PYDANTIC_BYTES})."
+        )
+    with _RENDERED_PYDANTIC_CACHE_LOCK:
+        _RENDERED_PYDANTIC_CACHE[digest] = rendered
+    return rendered
+
+
+async def _render_pydantic_models(schema: dict[str, object]) -> str:
+    return await asyncio.to_thread(_render_pydantic_models_bounded, schema)
+
+
+@bundled_only_router.get("/pydantic", response_class=PlainTextResponse)
+async def proxmox_viewer_bundled_pydantic_models(
+    version_tag: str = Query(
+        default=DEFAULT_PROXMOX_OPENAPI_TAG,
+        description="Bundled artifact version tag to load.",
+    ),
+):
+    """Render models only from an immutable bundled OpenAPI schema."""
+
+    version_tag = _validate_version_tag_for_request(version_tag)
+    try:
+        schema = load_proxmox_generated_openapi(version_tag=version_tag, allow_user=False)
+        if not schema:
+            raise HTTPException(status_code=404, detail="Bundled Proxmox OpenAPI schema not found.")
+        return await _render_pydantic_models(schema)
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise ProxboxException(
+            message="Failed to load generated Pydantic models.",
+            python_exception=str(error),
+        ) from error
+
+
+router.include_router(common_router)
+router.include_router(bundled_only_router)

@@ -7,9 +7,9 @@ one branch-aware contract when persistence is added.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from proxbox_api.ceph.inventory import (
     fetch_rbd_inventory,
@@ -23,11 +23,9 @@ from proxbox_api.ceph.schemas import (
     CephSyncResponse,
     CephSyncSummary,
 )
+from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
-
-if TYPE_CHECKING:
-    from proxbox_api.session.proxmox import ProxmoxSession
+from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
 
 router = APIRouter()
 
@@ -41,6 +39,23 @@ _RGW_INVENTORY_KEYS = (
     "pools",
 )
 _RBD_INVENTORY_KEYS = ("pools", "images", "snapshots", "clones")
+
+
+async def _require_ceph_sessions(pxs: ProxmoxSessionsDep) -> list[ProxmoxSession]:
+    """Reject an unconfigured Ceph probe with an actionable response."""
+    if pxs:
+        return pxs
+    raise ProxboxException(
+        message="No Proxmox endpoint is configured for Ceph status",
+        detail={
+            "reason": "ceph_endpoint_not_configured",
+            "message": "Configure at least one Proxmox endpoint before querying Ceph status.",
+        },
+        http_status_code=404,
+    )
+
+
+CephStatusSessionsDep = Annotated[list[ProxmoxSession], Depends(_require_ceph_sessions)]
 
 
 def _session_name(px: ProxmoxSession) -> str:
@@ -70,7 +85,9 @@ def _node_names(px: ProxmoxSession) -> list[str]:
     node_name = getattr(px, "node_name", None)
     if node_name:
         return [str(node_name)]
-    return ["localhost"]
+    # An invented localhost is unsafe for any consumer that later persists a
+    # node as mutation authority. Unknown discovery stays unknown.
+    return []
 
 
 def _client_class() -> Any:
@@ -115,7 +132,7 @@ def _count_payload(payload: Any) -> int:
 
 
 @router.get("/status", response_model=CephStatusResponse)
-async def ceph_status(pxs: ProxmoxSessionsDep) -> CephStatusResponse:
+async def ceph_status(pxs: CephStatusSessionsDep) -> CephStatusResponse:
     """Report Ceph reachability/health for each resolved Proxmox endpoint."""
     items: list[CephStatusItem] = []
     for px in pxs:

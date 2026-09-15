@@ -1,12 +1,14 @@
 # Mounted operation inventory
 
 The maintained inventory records registrations, not permission to execute them.
-It constructs the real application and explicitly registers generated routes in
-an isolated offline child. It never enters lifespan, initializes a database,
+It constructs the real application in every default feature mode, explicitly
+registers the bundled generated routes in each mode, and separately records the
+development-only `PROXBOX_RUNTIME_CODEGEN_ENABLED=true` registration set in an
+isolated offline child. It never enters lifespan, initializes a database,
 invokes a route or dependency, or contacts a managed system. The child does not
 inherit credentials, explicitly disables dotenv loading, and rejects socket
-operations and writes outside its temporary output directory. This Python audit guard is a developer safety
-boundary, not a production syscall sandbox.
+operations and writes outside its temporary output directory. This Python audit
+guard is a developer safety boundary, not a production syscall sandbox.
 
 ## Generate and verify
 
@@ -40,8 +42,13 @@ states: seven nonempty sidecar-only subsets and eight core-present subsets.
 Default-all and explicit core-all are equivalent. The sixteenth Boolean state,
 with neither core nor sidecars, is unreachable: empty input selects all features
 and unknown-only input selects core. Whitespace, case, and repeated tokens are
-explicit regression cases. Generated routes appear in every selected mode,
-because real lifespan registers them independently of the core selection.
+explicit regression cases. Every default mode contains the bundled generated
+`/proxmox/api2/*` versions and aliases because lifespan mounts them regardless
+of the development opt-in or core feature selection. A separate ordered
+registration set records the development opt-in's viewer differences. At
+runtime, that opt-in may also admit provenance-verified user artifacts; the
+committed offline inventory remains bound to reviewed bundled documents and
+never reads the user-generated directory.
 
 The version-aware adapter is pinned to the reviewed FastAPI and Starlette pair.
 Framework upgrades require an adapter review and the nested HTTP, WebSocket,
@@ -68,9 +75,10 @@ gate, authentication behavior, SSH policy, or deployment behavior changes here.
 
 ## Registration table
 
-The mode summary covers every input. The detailed table retains every default
-registration; the machine artifact retains the complete ordered sequence for
-each mode. The build checks source and table integrity before embedding these
-local generated snippets. Missing, stale, or symlinked inputs fail the build.
+The mode summary covers every default input. The detailed tables retain every
+default registration and every development-opt-in addition; the machine
+artifact retains each complete ordered sequence. The build checks source and
+table integrity before embedding these local generated snippets. Missing,
+stale, or symlinked inputs fail the build.
 
 --8<-- "mounted-operations.en.md"

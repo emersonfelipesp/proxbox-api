@@ -183,6 +183,8 @@ def test_get_logs_errors_only_includes_error_related_logs_across_levels():
 
 
 def test_configure_buffer_logger_is_idempotent():
+    from proxbox_api.logger import SensitiveDataFilter
+
     logger = logging.getLogger("proxbox.test.log-buffer")
     original_handlers = list(logger.handlers)
     original_level = logger.level
@@ -196,7 +198,50 @@ def test_configure_buffer_logger_is_idempotent():
 
         handlers = [handler for handler in logger.handlers if isinstance(handler, LogBufferHandler)]
         assert len(handlers) == 1
+        filters = [
+            filter_ for filter_ in handlers[0].filters if isinstance(filter_, SensitiveDataFilter)
+        ]
+        assert len(filters) == 1
     finally:
+        logger.handlers[:] = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
+def test_configured_debug_buffer_redacts_nested_values_and_tracebacks():
+    """DEBUG records reaching only the admin buffer still cross the secret filter."""
+
+    from proxbox_api.log_buffer import get_log_buffer
+
+    logger = logging.getLogger("proxbox.test.log-buffer-debug-redaction")
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    buffer = get_log_buffer()
+    buffer.clear()
+    message_canary = "CEPH-BUFFER-MESSAGE-CANARY"
+    traceback_canary = "CEPH-BUFFER-TRACEBACK-CANARY"
+
+    try:
+        logger.handlers.clear()
+        configure_buffer_logger(logger.name)
+        try:
+            raise RuntimeError(f"privateKey={traceback_canary}")
+        except RuntimeError:
+            logger.debug(
+                "ceph audit=%s",
+                {"privateKey": message_canary, "safe": "visible"},
+                exc_info=True,
+            )
+
+        assert buffer.count == 1
+        rendered = repr(buffer.buffer[-1].to_dict())
+        assert message_canary not in rendered
+        assert traceback_canary not in rendered
+        assert "[REDACTED]" in rendered
+        assert "visible" in rendered
+    finally:
+        buffer.clear()
         logger.handlers[:] = original_handlers
         logger.setLevel(original_level)
         logger.propagate = original_propagate

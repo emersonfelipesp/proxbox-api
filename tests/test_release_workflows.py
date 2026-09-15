@@ -233,6 +233,16 @@ def test_primary_ci_enforces_repository_coverage_ratchet():
     }
 
 
+def _assert_contains_all(text: str, *needles: str) -> None:
+    missing = [needle for needle in needles if needle not in text]
+    assert not missing, f"missing expected text: {missing}"
+
+
+def _assert_contains_none(text: str, *needles: str) -> None:
+    present = [needle for needle in needles if needle in text]
+    assert not present, f"found forbidden text: {present}"
+
+
 def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
     workflow_source = _read(GITEA_CI_WORKFLOW_PATH)
     workflow = yaml.safe_load(workflow_source)
@@ -240,46 +250,61 @@ def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
     steps = {step["name"]: step for step in quality_job["steps"] if "name" in step}
 
     assert quality_job["runs-on"] == "ci-untrusted-python312"
-    assert "${{ secrets." not in workflow_source
-    assert "prod-deploy" not in workflow_source
-    assert "mirror-host" not in workflow_source
-    assert "curl " not in workflow_source
+    _assert_contains_none(workflow_source, "${{ secrets.", "prod-deploy", "mirror-host", "curl ")
 
     checkout_step = steps["Checkout"]
-    assert checkout_step["uses"] == ("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd")
-    assert checkout_step["with"]["persist-credentials"] is False
+    assert checkout_step == {
+        "name": "Checkout",
+        "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+        "with": {"persist-credentials": False},
+    }
 
     coverage_step = steps["Core tests with coverage"]
     coverage_command = coverage_step["run"]
-    assert "--ignore=tests/e2e" in coverage_command
-    assert "--ignore=tests/test_generated_proxmox_routes.py" in coverage_command
-    assert "--cov=proxbox_api" in coverage_command
-    assert "--cov-report=xml:coverage.xml" in coverage_command
+    _assert_contains_all(
+        coverage_command,
+        "--ignore=tests/e2e",
+        "--ignore=tests/test_generated_proxmox_routes.py",
+        "--cov=proxbox_api",
+        "--cov-report=xml:coverage.xml",
+        "-n 8",
+        "--dist worksteal",
+        "-qq",
+        "--color=no",
+        "-rfE",
+        "--durations=25",
+        "--junitxml=junit.xml",
+    )
     # The Gitea gate deliberately runs statement-only coverage so coverage.py
     # can use its low-overhead sysmon core on Python 3.12; branch coverage
     # stays in the GitHub-hosted .github/ CI. The worker count is pinned
     # because the runner containers have an 8-CPU quota while os.cpu_count()
     # reports the host's cores.
-    assert "--cov-branch" not in coverage_command
-    assert "--cov-report=term-missing" not in coverage_command
-    assert "-n 8" in coverage_command
-    assert "--dist worksteal" in coverage_command
+    _assert_contains_none(coverage_command, "--cov-branch", "--cov-report=term-missing")
     assert coverage_step["env"]["COVERAGE_CORE"] == "sysmon"
 
     upload_step = steps["Upload coverage report"]
-    assert upload_step["if"] == "${{ always() }}"
     # The Gitea gate pins upload-artifact v3: Gitea's artifact service speaks
     # the v3 protocol only, and the v4 action fails with GHESNotSupportedError
     # after an otherwise-green run. The GitHub workflow keeps its v4 pin.
-    assert upload_step["uses"] == (
-        "actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32"
-    )
-    assert upload_step["with"] == {
-        "name": "coverage-py312-gitea",
-        "path": "coverage.xml",
-        "if-no-files-found": "error",
-        "retention-days": 14,
+    # Gitea caps a job log at roughly 120 KB, and a 3,400-test run's progress
+    # output alone exceeds that, so the gate keeps pytest quiet, disables
+    # colour, and preserves the failure summary in a JUnit report that is
+    # uploaded even when the tests fail. Both files ride in one upload step:
+    # a second invocation of the upload action in the same job failed on the
+    # runner while reading its cached action checkout.
+    assert upload_step == {
+        "name": "Upload coverage report",
+        "if": "${{ always() }}",
+        "uses": "actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32",
+        "with": {
+            "name": "coverage-py312-gitea",
+            "path": "coverage.xml\njunit.xml\n",
+            "if-no-files-found": "error",
+            "retention-days": 14,
+        },
     }
+    assert "Upload test report" not in steps
 
 
 def _publish_jobs() -> dict[str, dict]:
@@ -608,6 +633,158 @@ def test_release_sdist_uses_a_pinned_network_free_docker_contract():
     assert "PINNED_IMAGES" in preparer_source
 
 
+@pytest.mark.parametrize(
+    ("loader", "error_name"),
+    (
+        (_load_offline_release_preparer, "OfflineReleaseError"),
+        (_load_offline_sdist_verifier, "OfflineSdistError"),
+    ),
+)
+def test_release_dockerfile_validators_bind_every_install_to_raw(loader, error_name):
+    validator = loader()
+    error = getattr(validator, error_name)
+    uv_image, raw_image = validator.PINNED_IMAGES[1], validator.PINNED_IMAGES[0]
+    cache = "COPY docker/build-cache /root/.cache/uv"
+    uv_copy = "COPY --from=uv-source /uv /usr/local/bin/uv"
+    sync = f"RUN {validator.OFFLINE_SYNC_COMMAND}"
+    install = f"RUN {validator.PROJECT_INSTALL_COMMAND}"
+
+    alias_swapped = "\n".join(
+        (
+            f"FROM {uv_image} AS raw",
+            f"FROM {raw_image} AS build",
+            cache,
+            sync,
+            install,
+        )
+    )
+    with pytest.raises(error, match="Dockerfile release stage aliases are not exact"):
+        validator.validate_dockerfile(alias_swapped)
+
+    install_before_raw = "\n".join(
+        (
+            f"FROM {uv_image} AS uv-source",
+            cache,
+            sync,
+            install,
+            f"FROM {raw_image} AS raw",
+            uv_copy,
+        )
+    )
+    with pytest.raises(error, match="Dockerfile offline install does not target raw"):
+        validator.validate_dockerfile(install_before_raw)
+
+    no_uv_copy = "\n".join(
+        (
+            f"FROM {uv_image} AS uv-source",
+            f"FROM {raw_image} AS raw",
+            cache,
+            sync,
+            install,
+        )
+    )
+    with pytest.raises(
+        error,
+        match="Dockerfile does not copy uv into the release target",
+    ):
+        validator.validate_dockerfile(no_uv_copy)
+
+    duplicate_uv_copy = "\n".join(
+        (
+            f"FROM {uv_image} AS uv-source",
+            f"FROM {raw_image} AS raw",
+            uv_copy,
+            uv_copy,
+            cache,
+            sync,
+            install,
+        )
+    )
+    with pytest.raises(error, match="Dockerfile uv copy is ambiguous"):
+        validator.validate_dockerfile(duplicate_uv_copy)
+
+
+@pytest.mark.parametrize(
+    ("loader", "error_name"),
+    (
+        (_load_offline_release_preparer, "OfflineReleaseError"),
+        (_load_offline_sdist_verifier, "OfflineSdistError"),
+    ),
+)
+@pytest.mark.parametrize(
+    ("hostile_instruction", "error_pattern"),
+    (
+        (
+            "COPY --from=uv-source /uv /app/.venv/bin/uvicorn",
+            "Dockerfile COPY is not allowlisted",
+        ),
+        ('ENTRYPOINT ["/bin/sh"]', "Dockerfile instruction plan is not exact"),
+        ("ENV UV_DRY_RUN=1", "Dockerfile instruction plan is not exact"),
+    ),
+)
+def test_release_dockerfile_validators_reject_instruction_plan_mutations(
+    loader, error_name, hostile_instruction, error_pattern
+):
+    validator = loader()
+    error = getattr(validator, error_name)
+    dockerfile = _read(REPO_ROOT / "Dockerfile.release")
+    mutated = dockerfile.replace("CMD []", f"{hostile_instruction}\nCMD []")
+
+    with pytest.raises(error, match=error_pattern):
+        validator.validate_dockerfile(mutated)
+
+    overwrite_before_install = dockerfile.replace(
+        f"RUN {validator.PROJECT_INSTALL_COMMAND}",
+        "COPY --from=uv-source /uv /app/.venv/bin/uvicorn\n"
+        f"RUN {validator.PROJECT_INSTALL_COMMAND}",
+    )
+    with pytest.raises(error, match="Dockerfile COPY is not allowlisted"):
+        validator.validate_dockerfile(overwrite_before_install)
+
+
+def _render_dockerfile_instructions(instructions: list[tuple[str, str]]) -> str:
+    return "\n".join(f"{instruction} {arguments}" for instruction, arguments in instructions)
+
+
+@pytest.mark.parametrize(
+    ("loader", "error_name"),
+    (
+        (_load_offline_release_preparer, "OfflineReleaseError"),
+        (_load_offline_sdist_verifier, "OfflineSdistError"),
+    ),
+)
+def test_release_dockerfile_validators_require_the_complete_canonical_plan(loader, error_name):
+    validator = loader()
+    error = getattr(validator, error_name)
+    canonical = list(validator.EXPECTED_DOCKERFILE_INSTRUCTIONS)
+    mutations: list[list[tuple[str, str]]] = []
+
+    for index in range(len(canonical)):
+        mutations.append(canonical[:index] + canonical[index + 1 :])
+        mutations.append(
+            canonical[:index] + [canonical[index], canonical[index]] + canonical[index + 1 :]
+        )
+    for index in range(len(canonical) - 1):
+        reordered = canonical.copy()
+        reordered[index], reordered[index + 1] = reordered[index + 1], reordered[index]
+        mutations.append(reordered)
+    for end in range(1, len(canonical)):
+        mutations.append(canonical[:end])
+
+    for copy_instruction in (
+        ("COPY", "README.md pyproject.toml uv.lock ./"),
+        ("COPY", "proxbox_api ./proxbox_api"),
+        ("COPY", "docker/entrypoint-raw.sh /usr/local/bin/docker-entrypoint-raw.sh"),
+    ):
+        moved = [instruction for instruction in canonical if instruction != copy_instruction]
+        moved.insert(1, copy_instruction)
+        mutations.append(moved)
+
+    for mutation in mutations:
+        with pytest.raises(error):
+            validator.validate_dockerfile(_render_dockerfile_instructions(mutation))
+
+
 def test_release_offline_sdist_job_builds_the_extracted_context_without_network():
     workflow = _read(CI_WORKFLOW_PATH)
     parsed = yaml.safe_load(workflow)
@@ -812,14 +989,7 @@ def test_offline_sdist_verifier_rejects_variable_copy_sources_and_unsafe_members
     accepted = tmp_path / "accepted.tar.gz"
     make_sdist(
         accepted,
-        (
-            f"FROM {verifier.PINNED_IMAGES[1]} AS uv-source\n"
-            f"FROM {verifier.PINNED_IMAGES[0]} AS raw\n"
-            "COPY --from=uv-source /uv /usr/local/bin/uv\n"
-            "COPY docker/build-cache /root/.cache/uv\n"
-            f"RUN {verifier.OFFLINE_SYNC_COMMAND}\n"
-            f"RUN {verifier.PROJECT_INSTALL_COMMAND}\n"
-        ).encode(),
+        _read(REPO_ROOT / "Dockerfile.release").encode(),
     )
     output = verifier.extract_and_verify(accepted, tmp_path / "accepted", version)
     assert (output / "docker/offline-build-inputs.json").is_file()
@@ -863,14 +1033,7 @@ def test_offline_release_preparer_binds_exact_inputs(tmp_path: Path, monkeypatch
     cache_root = tmp_path / "docker" / "build-cache"
     lock_output = tmp_path / "docker" / "offline-build-inputs.json"
     cache_root.mkdir(parents=True)
-    dockerfile = (
-        f"FROM {preparer.PINNED_IMAGES[1]} AS uv-source\n"
-        f"FROM {preparer.PINNED_IMAGES[0]} AS raw\n"
-        "COPY --from=uv-source /uv /usr/local/bin/uv\n"
-        "COPY docker/build-cache /root/.cache/uv\n"
-        f"RUN {preparer.OFFLINE_SYNC_COMMAND}\n"
-        f"RUN {preparer.PROJECT_INSTALL_COMMAND}\n"
-    )
+    dockerfile = _read(REPO_ROOT / "Dockerfile.release")
     dockerfile_source.write_text(dockerfile, encoding="utf-8")
     uv_lock.write_text("version = 1\n", encoding="utf-8")
     wheel = cache_root / "dependency-1.0-py3-none-any.whl"

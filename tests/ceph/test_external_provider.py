@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from proxbox_api.ceph.dashboard_client import DashboardEndpointConfig
@@ -9,13 +11,14 @@ from proxbox_api.ceph.prometheus import PrometheusSourceConfig
 from proxbox_api.ceph.rgw_client import RGWAdminConfig
 from proxbox_api.ceph.v2_providers import dashboard as dash_mod
 from proxbox_api.ceph.v2_providers import external as ext_mod
-from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported
+from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported, CephWriteGateDenied
 from proxbox_api.ceph.v2_providers.external import ExternalCephProviderAdapter
 from proxbox_api.ceph.v2_schemas import ProviderOperation
 
 DASH = DashboardEndpointConfig(base_url="https://ceph:8443", username="a", password="b")
 PROM = PrometheusSourceConfig(url="http://prom:9090")
 RGW = RGWAdminConfig(base_url="http://rgw:8080", access_key="AK", secret_key="SK")
+prometheus_provider_module = importlib.import_module("proxbox_api.ceph.v2_providers.prometheus")
 
 
 class _FakeDashboard:
@@ -90,10 +93,14 @@ async def test_capabilities_report_configured_providers(monkeypatch) -> None:
     )
     caps = await adapter.capabilities()
     assert caps.supported is True
-    assert caps.apply is True and caps.metrics is True
-    assert caps.operation_kinds.get("pool:create") is True
-    assert caps.operation_kinds.get("rgw_user:create") is True
+    assert caps.apply is False and caps.destructive_operations is False
+    assert caps.metrics is True
+    assert caps.operation_kinds.get("pool:create") is False
+    assert caps.operation_kinds.get("rgw_user:create") is False
+    assert caps.operation_kinds.get("rgw_user:noop") is True
+    assert "noop" not in caps.operation_kinds
     assert "18.2.4" in caps.notes[0]
+    assert any("durably bound" in note for note in caps.notes)
 
 
 async def test_capabilities_none_configured() -> None:
@@ -101,6 +108,28 @@ async def test_capabilities_none_configured() -> None:
     assert caps.supported is True
     assert caps.apply is False and caps.read_state is False
     assert "none" in caps.notes[0]
+
+
+async def test_capabilities_and_apply_are_default_off_without_trusted_gateway(
+    monkeypatch,
+) -> None:
+    _enable_sdks(monkeypatch)
+    monkeypatch.delenv("PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY", raising=False)
+    fake = _FakeDashboard()
+    adapter = ExternalCephProviderAdapter(
+        dashboard=DASH,
+        dashboard_client_factory=lambda _c: fake,
+    )
+
+    caps = await adapter.capabilities()
+    assert caps.apply is False
+    assert caps.operation_kinds["pool:create"] is False
+    with pytest.raises(CephWriteGateDenied, match="durable selector"):
+        await adapter.apply(
+            ProviderOperation(kind="pool", target_ref="rbd", action="create"),
+            confirm_destructive=False,
+        )
+    assert fake.calls == []
 
 
 async def test_read_state_merges_dashboard_and_rgw(monkeypatch) -> None:
@@ -118,19 +147,47 @@ async def test_read_state_merges_dashboard_and_rgw(monkeypatch) -> None:
     assert state["summary"]["health"] == "HEALTH_OK"
 
 
-async def test_apply_routes_pool_to_dashboard(monkeypatch) -> None:
+async def test_rgw_read_and_close_diagnostics_are_secret_free(monkeypatch, caplog) -> None:
+    _enable_sdks(monkeypatch)
+    canary = "https://operator:rgw-secret@rgw.invalid?token=rgw-canary"
+
+    class _FailingRGW(_FakeRGW):
+        async def list_users(self):
+            raise RuntimeError(canary)
+
+        async def list_buckets(self):
+            raise RuntimeError(canary)
+
+        async def close(self):
+            raise RuntimeError(canary)
+
+    adapter = ExternalCephProviderAdapter(
+        rgw=RGW,
+        rgw_client_factory=lambda _c: _FailingRGW(),
+    )
+    state = await adapter.read_state({})
+    serialized = repr(state)
+
+    assert "rgw-secret" not in serialized
+    assert "rgw-canary" not in serialized
+    assert "RuntimeError" not in serialized
+    assert "rgw-secret" not in caplog.text
+    assert "rgw-canary" not in caplog.text
+
+
+async def test_apply_pool_stays_closed_without_durable_authority(monkeypatch) -> None:
     _enable_sdks(monkeypatch)
     fake = _FakeDashboard()
     adapter = ExternalCephProviderAdapter(dashboard=DASH, dashboard_client_factory=lambda _c: fake)
     op = ProviderOperation(
         kind="pool", target_ref="rbd", action="create", after_summary={"pool_name": "rbd"}
     )
-    res = await adapter.apply(op, confirm_destructive=False)
-    assert res["result"] == "applied"
-    assert "pool_create" in fake.calls
+    with pytest.raises(CephWriteGateDenied, match="durable selector"):
+        await adapter.apply(op, confirm_destructive=False)
+    assert fake.calls == []
 
 
-async def test_apply_routes_rgw_user_to_rgw(monkeypatch) -> None:
+async def test_apply_rgw_user_stays_closed_without_durable_authority(monkeypatch) -> None:
     _enable_sdks(monkeypatch)
     fake = _FakeRGW()
     adapter = ExternalCephProviderAdapter(rgw=RGW, rgw_client_factory=lambda _c: fake)
@@ -140,23 +197,23 @@ async def test_apply_routes_rgw_user_to_rgw(monkeypatch) -> None:
         action="create",
         after_summary={"display_name": "Alice"},
     )
-    res = await adapter.apply(op, confirm_destructive=False)
-    assert res["result"] == "applied"
-    assert fake.calls[0][0] == "create_user"
+    with pytest.raises(CephWriteGateDenied, match="durable selector"):
+        await adapter.apply(op, confirm_destructive=False)
+    assert fake.calls == []
 
 
 async def test_apply_rgw_delete_requires_confirmation(monkeypatch) -> None:
     _enable_sdks(monkeypatch)
     adapter = ExternalCephProviderAdapter(rgw=RGW, rgw_client_factory=lambda _c: _FakeRGW())
     op = ProviderOperation(kind="rgw_user", target_ref="alice", action="delete")
-    with pytest.raises(ValueError, match="destructive"):
+    with pytest.raises(CephWriteGateDenied, match="durable selector"):
         await adapter.apply(op, confirm_destructive=False)
 
 
 async def test_apply_pool_without_dashboard_is_unsupported() -> None:
     adapter = ExternalCephProviderAdapter(rgw=RGW, rgw_client_factory=lambda _c: _FakeRGW())
     op = ProviderOperation(kind="pool", target_ref="rbd", action="create")
-    with pytest.raises(CephCapabilityUnsupported, match="Dashboard"):
+    with pytest.raises(CephWriteGateDenied, match="durable selector"):
         await adapter.apply(op, confirm_destructive=False)
 
 
@@ -170,6 +227,14 @@ async def test_apply_unknown_kind_unsupported(monkeypatch) -> None:
         await adapter.apply(op, confirm_destructive=False)
 
 
+async def test_apply_unknown_noop_is_rejected() -> None:
+    adapter = ExternalCephProviderAdapter()
+    op = ProviderOperation(kind="unknown", target_ref="target", action="noop")
+
+    with pytest.raises(CephCapabilityUnsupported, match="unsupported operation"):
+        await adapter.apply(op, confirm_destructive=False)
+
+
 async def test_metrics_prefers_prometheus(monkeypatch) -> None:
     snap_dict = {"cluster_health": "HEALTH_WARN", "captured_at": "2026-01-01T00:00:00Z"}
 
@@ -178,7 +243,7 @@ async def test_metrics_prefers_prometheus(monkeypatch) -> None:
 
         return CephMetricSnapshot.model_validate(snap_dict)
 
-    monkeypatch.setattr("proxbox_api.ceph.v2_providers.prometheus.fetch_snapshot", fake_fetch)
+    monkeypatch.setattr(prometheus_provider_module, "fetch_snapshot", fake_fetch)
     adapter = ExternalCephProviderAdapter(prometheus=PROM)
     metrics = await adapter.metrics({})
     assert metrics["cluster_health"] == "HEALTH_WARN"

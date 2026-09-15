@@ -11,7 +11,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Context
 
-This is the standalone Next.js 16.3.4 frontend for managing NetBox and Proxmox endpoint configuration as part of the `proxbox-api` project.
+This is the standalone Next.js 16.2.1 frontend for managing NetBox and Proxmox endpoint configuration as part of the `proxbox-api` project.
 
 **Parent project**: see `/root/nms/proxbox-api/CLAUDE.md` for the backend architecture and repo-wide rules.
 
@@ -41,7 +41,7 @@ nextjs-ui/
 
 ## Stack
 
-- Next.js 16.3.4 with the App Router
+- Next.js 16.2.1 with the App Router
 - React 19.2.4
 - TypeScript 5.x
 - Tailwind CSS 4.x
@@ -65,13 +65,6 @@ nextjs-ui/
 1. Install dependencies with `npm install` if needed.
 2. Run the app with `npm run dev`.
 3. Verify the UI at `http://localhost:3000`.
-
-## Dependency Security
-
-- Keep Next.js and `eslint-config-next` aligned on the same patched release. The current supported version is 16.3.4.
-- Regenerate `package-lock.json` with npm after every dependency change. Do not use cross-major overrides to suppress audit findings.
-- Run `npm ci`, `npm audit --audit-level=low`, `npm run lint`, and `npm run build` after changing the dependency graph.
-- The repository regression suite verifies the minimum secure dependency resolutions in `tests/test_dependency_security.py`.
 
 ## Verification
 

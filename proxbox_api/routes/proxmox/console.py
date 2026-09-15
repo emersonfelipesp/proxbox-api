@@ -11,23 +11,28 @@ Security model:
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
+from ipaddress import AddressValueError, IPv6Address
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import SplitResult, quote, urlsplit
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi import APIRouter, HTTPException, WebSocket
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.services import console_relay, console_relay_policy
 from proxbox_api.session.proxmox import ProxmoxSession
 from proxbox_api.session.proxmox_core import ProxmoxWebSocketAuth
 from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 console_router = APIRouter()
+_NODE_NAME_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?")
 
 
 class ConsoleSessionRequest(BaseModel):
@@ -37,7 +42,7 @@ class ConsoleSessionRequest(BaseModel):
 
     endpoint_id: int = Field(ge=1, description="proxbox-api ProxmoxEndpoint database ID")
     vmid: int = Field(ge=1, description="Proxmox VM or CT ID")
-    node: str = Field(min_length=1, description="Proxmox node name")
+    node: str = Field(min_length=1, max_length=255, description="Proxmox node name")
     vm_type: Literal["qemu", "lxc"] = Field(
         description="VM type: qemu (QEMU/KVM) or lxc (container)"
     )
@@ -54,6 +59,13 @@ class ConsoleSessionRequest(BaseModel):
         if self.vm_type == "lxc" and self.console_type == "novnc":
             raise ValueError("LXC containers do not support novnc; use console_type='term'")
         return self
+
+    @field_validator("node")
+    @classmethod
+    def validate_node_path_segment(cls, value: str) -> str:
+        if not value.isascii() or _NODE_NAME_PATTERN.fullmatch(value) is None:
+            raise ValueError("node must be a safe Proxmox node name")
+        return value
 
 
 class ConsoleWebSocketAuth(BaseModel):
@@ -76,6 +88,60 @@ class ConsoleSessionResponse(BaseModel):
     websocket_auth: ConsoleWebSocketAuth
 
 
+class BrowserConsoleSessionRequest(ConsoleSessionRequest):
+    """Browser relay request bound to one exact serialized HTTPS Origin."""
+
+    origin: str = Field(min_length=1, max_length=console_relay.MAX_ORIGIN_LENGTH)
+
+    @field_validator("origin")
+    @classmethod
+    def validate_https_origin(cls, value: str) -> str:
+        _validate_origin_text(value)
+        try:
+            parsed = urlsplit(value)
+        except ValueError as exc:
+            raise ValueError("origin must be a valid HTTPS origin") from exc
+        _validate_origin_authority(parsed)
+        _validate_origin_shape(value, parsed)
+        return value
+
+
+def _validate_origin_text(value: str) -> None:
+    if value != value.strip() or not value.isascii():
+        raise ValueError("origin must be an ASCII HTTPS origin")
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("origin must be an ASCII HTTPS origin")
+
+
+def _validate_origin_authority(parsed: SplitResult) -> None:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("origin must be a valid HTTPS origin") from exc
+    if not parsed.hostname or parsed.username is not None or parsed.password is not None:
+        raise ValueError("origin must be a valid HTTPS origin")
+    if any(character.isspace() for character in parsed.hostname):
+        raise ValueError("origin must be a valid HTTPS origin")
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError("origin must be a valid HTTPS origin")
+
+
+def _validate_origin_shape(value: str, parsed: SplitResult) -> None:
+    if parsed.scheme != "https" or value != f"https://{parsed.netloc}":
+        raise ValueError("origin must be a valid HTTPS origin")
+    if parsed.path or parsed.query or parsed.fragment:
+        raise ValueError("origin must be a valid HTTPS origin")
+
+
+class BrowserConsoleSessionResponse(BaseModel):
+    """Only browser-safe routing data; no Proxmox transport material."""
+
+    stream_token: str
+    websocket_path: str
+    expires_at: datetime
+    console_type: Literal["novnc", "term"]
+
+
 def _response_websocket_auth(auth: ProxmoxWebSocketAuth) -> ConsoleWebSocketAuth:
     """Translate the session-layer value into the bounded API contract."""
     return ConsoleWebSocketAuth(kind=auth.kind, value=auth.value)
@@ -96,11 +162,29 @@ def _build_ws_url(
       wss://{host}:{port}/api2/json/nodes/{node}/{vm_type}/{vmid}/vncwebsocket
         ?port={vnc_port}&vncticket={encoded_ticket}
     """
+    authority_host = _websocket_authority_host(host)
+    encoded_node = quote(node, safe="")
     encoded_ticket = quote(ticket, safe="")
     return (
-        f"wss://{host}:{port}/api2/json/nodes/{node}/{vm_type}/{vmid}"
+        f"wss://{authority_host}:{port}/api2/json/nodes/{encoded_node}/{vm_type}/{vmid}"
         f"/vncwebsocket?port={vnc_port}&vncticket={encoded_ticket}"
     )
+
+
+def _websocket_authority_host(host: str) -> str:
+    bracketed = host.startswith("[") and host.endswith("]")
+    raw_host = host[1:-1] if bracketed else host
+    if ":" not in raw_host:
+        if bracketed:
+            raise HTTPException(status_code=502, detail="Invalid Proxmox console host.")
+        return raw_host
+    try:
+        address = IPv6Address(raw_host)
+    except AddressValueError as exc:
+        raise HTTPException(status_code=502, detail="Invalid Proxmox console host.") from exc
+    if address.scope_id is not None:
+        raise HTTPException(status_code=502, detail="Invalid Proxmox console host.")
+    return f"[{address.compressed}]"
 
 
 async def _open_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
@@ -146,9 +230,9 @@ async def _request_console_proxy(px: ProxmoxSession, req: ConsoleSessionRequest)
             req.vm_type,
             req.vmid,
             req.console_type,
-            exc,
+            type(exc).__name__,
         )
-        raise HTTPException(status_code=502, detail=f"Proxmox console error: {exc}") from exc
+        raise HTTPException(status_code=502, detail="Proxmox console error.") from exc
     except Exception as exc:
         logger.warning(
             "console: unexpected error for %s/%s/%s: %s",
@@ -218,6 +302,15 @@ async def create_console_session(
 ) -> ConsoleSessionResponse:
     """Create a one-time session for the trusted nms-backend relay."""
     endpoint = await _load_endpoint(req, db_session)
+    return await _create_console_session_for_endpoint(req, endpoint)
+
+
+async def _create_console_session_for_endpoint(
+    req: ConsoleSessionRequest,
+    endpoint: ProxmoxEndpoint,
+) -> ConsoleSessionResponse:
+    """Broker private Proxmox state for one already resolved endpoint."""
+
     px = await _connect_endpoint(endpoint)
     raw = await _request_console_proxy(px, req)
     ticket, vnc_port = _console_ticket(raw, req)
@@ -245,3 +338,130 @@ async def create_console_session(
         verify_ssl=endpoint.verify_ssl,
         websocket_auth=websocket_auth,
     )
+
+
+@console_router.post(
+    "/browser-sessions",
+    response_model=BrowserConsoleSessionResponse,
+    status_code=201,
+)
+async def create_browser_console_session(
+    req: BrowserConsoleSessionRequest,
+    db_session: SessionDep,
+) -> BrowserConsoleSessionResponse:
+    """Create encrypted one-use state for the standalone browser relay."""
+
+    endpoint = await _load_endpoint(req, db_session)
+    try:
+        console_relay_policy.require_console_relay_endpoint_enabled(endpoint)
+        console_relay_policy.require_console_relay_policy(endpoint, stage="create")
+    except console_relay_policy.ConsoleRelayPolicyDenied as exc:
+        raise HTTPException(status_code=403, detail="Browser console access is denied.") from exc
+    try:
+        console_relay.require_relay_encryption()
+    except console_relay.ConsoleRelayUnavailable as exc:
+        logger.warning("console relay: encryption preflight refused: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Browser console relay is unavailable.",
+        ) from exc
+    try:
+        private = await _create_console_session_for_endpoint(req, endpoint)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Browser console session is unavailable.",
+        ) from exc
+
+    try:
+        payload = console_relay.ConsoleRelayPayload(
+            endpoint_id=req.endpoint_id,
+            vmid=req.vmid,
+            node=req.node,
+            vm_type=req.vm_type,
+            console_type=req.console_type,
+            origin=req.origin,
+            ws_url=private.ws_url,
+            ticket=private.ticket,
+            verify_ssl=private.verify_ssl,
+            auth_kind=private.websocket_auth.kind,
+            auth_value=private.websocket_auth.value,
+        )
+        token, expires_at = await console_relay.create_relay_session(db_session, payload)
+    except (ValidationError, console_relay.ConsoleRelayUnavailable) as exc:
+        logger.warning("console relay: create refused: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Browser console relay is unavailable.",
+        ) from exc
+    return BrowserConsoleSessionResponse(
+        stream_token=token,
+        websocket_path="/proxmox/console/browser-stream",
+        expires_at=datetime.fromtimestamp(expires_at, tz=timezone.utc),
+        console_type=req.console_type,
+    )
+
+
+async def _close_browser_socket(websocket: WebSocket, *, code: int, reason: str) -> None:
+    try:
+        await websocket.close(code=code, reason=reason)
+    except Exception:
+        return
+
+
+def _browser_stream_token(websocket: WebSocket) -> str:
+    if websocket.scope.get("query_string"):
+        raise console_relay.ConsoleRelayRejected("Browser console session is invalid.")
+    return console_relay.parse_browser_subprotocols(websocket.headers.get("sec-websocket-protocol"))
+
+
+@console_router.websocket("/browser-stream")
+async def browser_console_stream(
+    websocket: WebSocket,
+    db_session: SessionDep,
+) -> None:
+    """Consume one Origin-bound token and relay the selected Proxmox console."""
+
+    upstream: console_relay.RelayUpstream | None = None
+    accepted = False
+    try:
+        token = _browser_stream_token(websocket)
+        payload = await console_relay.consume_relay_session(db_session, token)
+        console_relay.validate_origin_binding(payload.origin, websocket.headers.get("origin"))
+        endpoint = await db_session.get(ProxmoxEndpoint, payload.endpoint_id)
+        if endpoint is None:
+            raise console_relay.ConsoleRelayRejected("Browser console session is invalid.")
+        try:
+            console_relay_policy.require_console_relay_endpoint_enabled(endpoint)
+            console_relay_policy.require_console_relay_policy(endpoint, stage="consume")
+        except console_relay_policy.ConsoleRelayPolicyDenied as exc:
+            raise console_relay.ConsoleRelayRejected("Browser console session is invalid.") from exc
+
+        upstream = await console_relay.open_upstream(payload)
+        if upstream.subprotocol != "binary":
+            raise console_relay.ConsoleRelayProtocolError("Console stream failed.")
+        await websocket.accept(subprotocol="binary")
+        accepted = True
+        if payload.console_type == "novnc":
+            await console_relay.mediate_rfb_auth(websocket, upstream, payload.ticket)
+        await console_relay.relay_frames(websocket, upstream)
+    except console_relay.ConsoleRelayRejected as exc:
+        logger.warning("console relay: browser session rejected: %s", type(exc).__name__)
+        await _close_browser_socket(
+            websocket,
+            code=1008,
+            reason="Browser console session rejected.",
+        )
+    except Exception as exc:
+        logger.warning("console relay: stream failed: %s", type(exc).__name__)
+        await _close_browser_socket(
+            websocket,
+            code=1011,
+            reason="Console stream unavailable.",
+        )
+    else:
+        if accepted:
+            await _close_browser_socket(websocket, code=1000, reason="Console relay closed.")
+    finally:
+        if upstream is not None:
+            await console_relay.close_upstream(upstream)

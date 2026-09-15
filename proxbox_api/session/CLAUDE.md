@@ -34,6 +34,11 @@ Session management utilities for NetBox and Proxmox API clients.
 
 - Keep connection bootstrapping deterministic and avoid hidden global state.
 - Normalize upstream connection errors into `ProxboxException`.
+- Never pass raw SDK exception objects or their text to loggers. Emit a fixed,
+  redacted error class/status diagnostic, and keep the handler-level
+  `SensitiveDataFilter` effective for deferred string, mapping, and exception
+  arguments so access keys, private keys, URLs, and provider response bodies
+  cannot be rendered after the call site.
 - Preserve structured connection details for callers while setting
   `redact_log_details=True` for session-created exceptions so raw SDK error text
   never enters constructor debug logs; owned log sites should emit error types only.

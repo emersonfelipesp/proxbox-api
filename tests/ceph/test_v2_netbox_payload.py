@@ -1,11 +1,11 @@
-"""End-to-end contract tests for the netbox-ceph CephOperation payload (issue #226).
+"""Read/plan contract tests for the netbox-ceph CephOperation payload.
 
 Proves that the payload the ``netbox-ceph`` orchestrator posts to
-``/ceph/v2/plan`` and ``/ceph/v2/apply`` is coerced into a real
-:class:`DesiredStateBundle`, flows through the Proxmox adapter ``diff`` into a
-``ProviderOperation``, and is executed by the Proxmox write executor — the full
-NetBox -> Proxmox Ceph write chain, with an injected fake ``CephWrite`` (no live
-cluster).
+``/ceph/v2/plans`` carries its resolved proxbox-api endpoint ID through the real
+HTTP route, is coerced into a :class:`DesiredStateBundle`, and flows through the
+Proxmox adapter ``diff`` into a ``ProviderOperation``. Write authorization is
+deliberately covered by the HTTP approval tests; legacy ``confirmed`` fields
+are not execution authority.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 
 from proxbox_api.ceph.v2_providers.proxmox import ProxmoxCephProviderAdapter
 from proxbox_api.ceph.v2_providers.proxmox_writer import execute_operation
-from proxbox_api.ceph.v2_schemas import ApplyRequest, PlanRequest
+from proxbox_api.ceph.v2_schemas import PlanRequest
 
 
 def _netbox_operation_payload(
@@ -25,20 +25,37 @@ def _netbox_operation_payload(
     target_ref: str = "rbd",
     desired: dict[str, Any] | None = None,
     *,
+    endpoint_id: int = 41,
     is_destructive: bool = False,
     confirmed: bool = False,
 ) -> dict[str, Any]:
-    """Mirror ``netbox_ceph.api.views._operation_payload`` output."""
+    """Mirror ``netbox_ceph.services.operation_actions.operation_payload``."""
+    desired_payload = desired if desired is not None else {"size": 3, "pg_num": 128}
     return {
         "id": 1,
         "cluster_id": 7,
         "provider_id": 3,
         "provider_kind": "proxmox",
         "provider_name": "pve-cluster",
+        "provider": "proxmox",
+        "endpoint_id": endpoint_id,
         "operation_type": operation_type,
         "target_kind": target_kind,
         "target_ref": target_ref,
-        "desired": desired if desired is not None else {"size": 3, "pg_num": 128},
+        "execution_node": "node1",
+        "desired": desired_payload,
+        "desired_state": {
+            "objects": [
+                {
+                    "kind": target_kind,
+                    "target_ref": target_ref,
+                    "action": operation_type,
+                    "provider": "proxmox",
+                    "node": "node1",
+                    "payload": desired_payload,
+                }
+            ]
+        },
         "is_destructive": is_destructive,
         "confirmation_required": is_destructive,
         "confirmed": confirmed,
@@ -54,14 +71,6 @@ class _FakeWrite:
         self.calls.append(("pool_create", (node, name), kwargs))
         return "UPID:pool_create"
 
-    async def pool_delete(
-        self, node: str, name: str, *, confirm_destroy: bool = False, **kwargs: Any
-    ) -> str:
-        if not confirm_destroy:
-            raise ValueError("pool_delete is destructive; pass confirm_destroy=True")
-        self.calls.append(("pool_delete", (node, name), {"confirm_destroy": confirm_destroy}))
-        return "UPID:pool_delete"
-
 
 # --------------------------------------------------------------------------- #
 # Schema coercion
@@ -76,24 +85,12 @@ def test_plan_request_coerces_netbox_operation_into_bundle() -> None:
     assert obj.kind == "pool"
     assert obj.action == "create"
     assert obj.target_ref == "rbd"
+    assert obj.node == "node1"
     assert obj.payload == {"size": 3, "pg_num": 128}
     assert obj.provider == "proxmox"
+    assert request.endpoint_id == 41
     # branch id threads through from source_branch_schema_id
     assert request.source_branch_schema_id == "branch-abc"
-
-
-def test_apply_request_maps_confirmed_to_confirm_destructive() -> None:
-    confirmed = ApplyRequest.model_validate(
-        _netbox_operation_payload(operation_type="delete", is_destructive=True, confirmed=True)
-    )
-    assert confirmed.confirm_destructive is True
-    assert confirmed.desired_state is not None
-    assert confirmed.desired_state.objects[0].action == "delete"
-
-    unconfirmed = ApplyRequest.model_validate(
-        _netbox_operation_payload(operation_type="delete", is_destructive=True, confirmed=False)
-    )
-    assert unconfirmed.confirm_destructive is False
 
 
 def test_plan_request_without_target_kind_is_unaffected() -> None:
@@ -105,7 +102,7 @@ def test_plan_request_without_target_kind_is_unaffected() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Full chain: payload -> coercion -> adapter.diff -> executor
+# Read/plan chain: payload -> coercion -> adapter.diff -> executor mapping
 # --------------------------------------------------------------------------- #
 
 
@@ -119,6 +116,7 @@ async def test_full_chain_pool_create() -> None:
     assert op.kind == "pool"
     assert op.action == "create"
     assert op.target_ref == "rbd"
+    assert op.node == "node1"
     assert op.after_summary == {"size": 3, "pg_num": 128}
 
     write = _FakeWrite()
@@ -130,25 +128,54 @@ async def test_full_chain_pool_create() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_chain_pool_delete_requires_confirmation() -> None:
-    payload = _netbox_operation_payload(
-        operation_type="delete", is_destructive=True, confirmed=True
-    )
-    apply_request = ApplyRequest.model_validate(payload)
+async def test_netbox_shaped_identical_pool_is_canonical_noop_without_dispatch() -> None:
+    request = PlanRequest.model_validate(_netbox_operation_payload(operation_type="update"))
     adapter = ProxmoxCephProviderAdapter([])
-    # live state contains the pool so diff plans a delete
-    live = {"resources": [{"kind": "pool", "target_ref": "rbd", "summary": {"size": 3}}]}
-    operations = await adapter.diff(apply_request.desired_state, live)
-    op = operations[0]
-    assert op.action == "delete"
+    live = {
+        "resources": [
+            {
+                "kind": "pool",
+                "target_ref": "rbd",
+                "node": "node1",
+                "summary": {"size": 3, "pg_num": 128},
+            }
+        ]
+    }
+
+    operations = await adapter.diff(request.desired_state, live)
+
+    assert len(operations) == 1
+    assert operations[0].action == "noop"
+    assert operations[0].node == "node1"
+    assert operations[0].after_summary == {"size": 3, "pg_num": 128}
 
     write = _FakeWrite()
-    # confirmed=True -> confirm_destructive=True satisfies the executor
-    result = await execute_operation(
-        write, op, "node1", confirm_destructive=apply_request.confirm_destructive
-    )
-    assert result["upid"] == "UPID:pool_delete"
+    result = await execute_operation(write, operations[0], "node1", confirm_destructive=False)
+    assert result["result"] == "noop"
+    assert write.calls == []
 
-    # And without confirmation the destructive write is refused.
-    with pytest.raises(ValueError, match="destructive"):
-        await execute_operation(_FakeWrite(), op, "node1", confirm_destructive=False)
+
+@pytest.mark.asyncio
+async def test_netbox_shaped_changed_pool_remains_update() -> None:
+    request = PlanRequest.model_validate(
+        _netbox_operation_payload(
+            operation_type="update",
+            desired={"size": 2, "pg_num": 128},
+        )
+    )
+    adapter = ProxmoxCephProviderAdapter([])
+    live = {
+        "resources": [
+            {
+                "kind": "pool",
+                "target_ref": "rbd",
+                "node": "node1",
+                "summary": {"size": 3, "pg_num": 128},
+            }
+        ]
+    }
+
+    operations = await adapter.diff(request.desired_state, live)
+
+    assert operations[0].action == "update"
+    assert operations[0].after_summary == {"size": 2, "pg_num": 128}

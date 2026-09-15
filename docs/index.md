@@ -21,6 +21,7 @@ This documentation covers installation, configuration, architecture, API referen
 - High-Availability readout across every configured cluster — see [Cluster HA API](api/cluster-ha.md).
 - VM operational verbs (start / stop / snapshot / migrate) gated by `ProxmoxEndpoint.allow_writes`, with idempotency, journal auditing, and SSE progress for migrate — see [HTTP API Reference — VM Operational Verbs](api/http-reference.md#vm-operational-verbs).
 - Optional PBS, PDM, Ceph, intent, SSH, and NMS Cloud route groups - see [Service Routes](api/service-routes.md).
+- Fail-closed Ceph v2 writes with a privately bound exact endpoint/session/node, strict per-operation payloads, independent single-use approval, owner-bound leases, provider-global node-consistent UPIDs, repeated-cancellation-safe checkpoints, and ambiguity-safe recovery — see [Ceph v2 Write Approval and Recovery](operations/ceph-write-approvals.md).
 - Admin log inspection, cache inspection, and full-update orchestration.
 
 ## Audience

@@ -217,7 +217,15 @@ class LogBufferHandler(logging.Handler):
             resource_id = getattr(record, "resource_id", None)
 
             expandable = None
-            if record.exc_info:
+            if record.exc_text:
+                # SensitiveDataFilter (attached to the console/file handlers,
+                # which run before this one) pre-renders a value-free redacted
+                # traceback; prefer it so the buffer never re-formats the raw
+                # exception value.
+                expandable = {
+                    "traceback": _redact_pii(record.exc_text),
+                }
+            elif record.exc_info:
                 raw_traceback = "".join(traceback.format_exception(*record.exc_info))
                 expandable = {
                     "traceback": _redact_pii(raw_traceback),
@@ -442,7 +450,13 @@ def configure_buffer_logger(logger_name: str = "proxbox", level: int = logging.D
         logger_name: Name of the logger to attach the handler to
         level: Logging level to set on the logger
     """
+    # Import locally so the low-level buffer module remains usable while the
+    # application logger is being initialized.
+    from proxbox_api.logger import SensitiveDataFilter
+
     buffer = get_log_buffer()
+    if not any(isinstance(filter_, SensitiveDataFilter) for filter_ in buffer.filters):
+        buffer.addFilter(SensitiveDataFilter())
     target_logger = logging.getLogger(logger_name)
     if buffer not in target_logger.handlers:
         target_logger.addHandler(buffer)

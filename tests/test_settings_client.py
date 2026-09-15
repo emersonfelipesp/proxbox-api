@@ -2,10 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 
+import pytest
+
 from proxbox_api import runtime_settings, settings_client
+from proxbox_api.ceph import timing as ceph_timing
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", " TRUE "])
+def test_runtime_codegen_process_opt_in_accepts_only_true_values(monkeypatch, value):
+    monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", value)
+
+    assert runtime_settings.runtime_codegen_enabled() is True
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "false", "no", "off", "invalid"])
+def test_runtime_codegen_process_opt_in_defaults_off(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", value)
+
+    assert runtime_settings.runtime_codegen_enabled() is False
 
 
 def test_get_default_settings_exposes_backend_log_file_path():
@@ -25,6 +46,9 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["cloud_customer_bridge"] == ""
     assert settings["cloud_customer_vlan_tag"] is None
     assert settings["cloud_customer_gateway"] == ""
+    assert settings["ceph_task_timeout"] == 300.0
+    assert settings["ceph_task_poll_interval"] == 1.0
+    assert settings["ceph_run_lease_seconds"] == 360.0
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -61,6 +85,11 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "cloud_customer_bridge": "vmbr1",
         "cloud_customer_vlan_tag": 2050,
         "cloud_customer_gateway": "168.0.98.1",
+        "backup_batch_delay_ms": 0,
+        "bulk_batch_delay_ms": 0,
+        "ceph_task_timeout": 420.5,
+        "ceph_task_poll_interval": 2.5,
+        "ceph_run_lease_seconds": 480.0,
     }
 
     mock_response = MagicMock()
@@ -88,6 +117,11 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["cloud_customer_bridge"] == "vmbr1"
     assert settings["cloud_customer_vlan_tag"] == 2050
     assert settings["cloud_customer_gateway"] == "168.0.98.1"
+    assert settings["backup_batch_delay_ms"] == 0
+    assert settings["bulk_batch_delay_ms"] == 0
+    assert settings["ceph_task_timeout"] == 420.5
+    assert settings["ceph_task_poll_interval"] == 2.5
+    assert settings["ceph_run_lease_seconds"] == 480.0
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):
@@ -144,6 +178,52 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
     assert settings["reconciliation_engine"] == "compare"
     assert settings["reconciliation_compare_strict"] is True
     assert settings["netbox_openapi_persist"] is False
+
+
+@pytest.mark.asyncio
+async def test_ceph_timing_snapshot_is_bounded_off_loop_and_does_not_cache_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A contended cold cache must neither block the loop nor poison global settings."""
+
+    for name in (
+        "PROXBOX_CEPH_TASK_TIMEOUT",
+        "PROXBOX_CEPH_TASK_POLL_INTERVAL",
+        "PROXBOX_CEPH_RUN_LEASE_SECONDS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(ceph_timing, "_SETTINGS_TIMEOUT_SECONDS", 0.05)
+
+    condition = settings_client._SETTINGS_CONDITION
+    with condition:
+        previous = (
+            settings_client._SETTINGS_CACHE,
+            settings_client._SETTINGS_CACHE_TIME,
+            settings_client._SETTINGS_FETCH_IN_PROGRESS,
+        )
+        settings_client._SETTINGS_CACHE = None
+        settings_client._SETTINGS_CACHE_TIME = 0.0
+        settings_client._SETTINGS_FETCH_IN_PROGRESS = True
+
+    ticks = 0
+    try:
+        task = asyncio.create_task(ceph_timing.resolve_ceph_timing_settings())
+        while not task.done():
+            ticks += 1
+            await asyncio.sleep(0.005)
+        snapshot = await task
+
+        assert snapshot == ceph_timing.CephTimingSettings()
+        assert ticks >= 3
+        assert settings_client._SETTINGS_CACHE is None
+    finally:
+        with condition:
+            (
+                settings_client._SETTINGS_CACHE,
+                settings_client._SETTINGS_CACHE_TIME,
+                settings_client._SETTINGS_FETCH_IN_PROGRESS,
+            ) = previous
+            condition.notify_all()
 
 
 def test_delete_orphans_runtime_bool_prefers_env_over_settings(monkeypatch):

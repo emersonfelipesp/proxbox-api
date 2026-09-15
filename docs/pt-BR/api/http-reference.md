@@ -31,6 +31,23 @@ Todas as requisicoes, exceto os endpoints de bootstrap, requerem o header `X-Pro
 - `GET /admin/logs` - Buffer de logs em memoria com filtros opcionais para `level`, `limit`, `offset`, `since` e `operation_id`.
 - `GET /admin/logs/stream` - Stream SSE de logs em tempo real. Suporta os parametros `level`, `errors_only`, `operation_id` e `newer_than_id`.
 
+## Escritas Ceph v2
+
+Mutacoes Ceph v2 exigem endpoint Proxmox exato, `allow_writes` atual, plano
+canonico persistido com revisao estavel da configuracao, aprovador diferente e
+token opaco de uso unico. Os flags `PROXBOX_ENABLE_CEPH_V2_WRITES` e
+`PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY` sao falsos por padrao e ambos devem ser
+habilitados. Apply inline e confirmacoes booleanas/previsiveis nao autorizam
+escrita; leases expirados e UPIDs ausentes/invalidos viram `outcome_unknown`.
+Cada operacao Proxmox vincula um node exato, usa payload tipado por kind/action
+e exige um UPID completo, globalmente unico no provider e consistente com esse
+node. Checkpoints duraveis sobrevivem a cancelamentos repetidos. `netbox-ceph`
+resolve o ID canonico do endpoint backend; a PK do plugin nao o substitui. Dashboard e
+external permanecem somente leitura/plan/reconcile ate existir autoridade
+duravel de escrita.
+Consulte
+[Aprovacao e Recuperacao de Escritas Ceph v2](../operations/ceph-write-approvals.md)
+para contratos, erros, recuperacao, rollout e rollback.
 ## Pipeline de imagens Cloud (`/cloud/templates/images`)
 
 ### Preflight somente leitura
@@ -302,16 +319,18 @@ Outros formatos de 403 usam `reason: "endpoint_id_required"` ou `reason: "endpoi
 
 ### Helpers do viewer e do contrato gerado
 
-- `POST /proxmox/viewer/generate`
-- `GET /proxmox/viewer/openapi`
+- `POST /proxmox/viewer/generate` - Exclusivo para desenvolvimento. O endpoint nao existe e retorna HTTP 404, a menos que o processo inicie com `PROXBOX_RUNTIME_CODEGEN_ENABLED=true`. Quando habilitado, valores de `version_tag` invalidos ou que nao permanecem contidos retornam HTTP 422 antes do crawler ou de qualquer escrita. Com `persist=true`, tags do pacote sao imutaveis e retornam HTTP 409; atualize-as somente instalando outro pacote. Origens nao padrao ficam em `custom/<version_tag>/` apenas para inspecao.
+- `GET /proxmox/viewer/openapi` - Retorna somente um documento incluido no pacote por padrao. Os caminhos `regenerate=true` e de geracao para tag desconhecida retornam HTTP 404 sem o opt-in.
 - `GET /proxmox/viewer/openapi/embedded`
 - `GET /proxmox/viewer/integration/contracts`
-- `POST /proxmox/viewer/routes/refresh`
-- `GET /proxmox/viewer/pydantic`
+- `POST /proxmox/viewer/routes/refresh` - Exclusivo para desenvolvimento. O endpoint nao existe e retorna HTTP 404 sem o opt-in.
+- `GET /proxmox/viewer/pydantic` - Renderiza um schema incluido e validado por padrao. O trabalho ocorre fora do event loop, usa cache pelo digest do schema, tem limite de 2 MiB e aceita seis requisicoes por minuto por origem. A rota nunca le codigo-fonte Python persistido.
 
 ### Rotas live geradas em runtime
 
-`proxbox-api` monta rotas Proxmox geradas em runtime a partir do OpenAPI embutido sob:
+`proxbox-api` monta rotas Proxmox geradas em runtime a partir dos contratos
+OpenAPI incluidos nos caminhos abaixo. `PROXBOX_RUNTIME_CODEGEN_ENABLED` e
+`false` por padrao e deve permanecer desabilitado em producao.
 
 - `/proxmox/api2/{version_tag}/*`
 - `/proxmox/api2/*` como alias de compatibilidade para `latest`
@@ -321,14 +340,21 @@ Comportamento:
 - O encaminhamento gerado permite apenas `GET`. Requisições `POST`, `PUT` e `DELETE` autenticadas e válidas conforme o schema retornam HTTP 403 antes da seleção do destino, da resolução de credenciais ou da abertura de uma sessão Proxmox. Requisições inválidas ainda podem retornar os erros normais de autenticação ou validação.
 - Os schemas de mutação permanecem disponíveis para descoberta, marcados como descontinuados e com resposta 403 explícita. Clientes devem usar procedimentos RPC tipados e auditados que sejam suportados; um procedimento indisponível não autoriza tentar uma rota gerada. Não existe flag para habilitar essas escritas nem exceção por cabeçalho de lease.
 - A recusa vale para todas as versões, o alias `latest`, a reutilização em memória, a recarga do cache persistido e a reconstrução forçada. Esse limite por método não certifica que todo `GET` upstream seja livre de efeitos e não altera os handlers manuais de ciclo de vida, console, Ceph ou Packer.
-- As rotas sao montadas no startup para cada versao gerada disponivel em `proxbox_api/generated/proxmox/`.
-- O conjunto montado e armazenado em cache em `proxbox_api/generated/proxmox/runtime_generated_routes_cache.json`.
-- Em `uvicorn --reload`, o startup prefere esse manifest de cache para preservar o conjunto montado durante o desenvolvimento.
-- As rotas sao reconstruidas sob demanda com `POST /proxmox/viewer/routes/refresh`.
+- Com a configuracao padrao, o registro de rotas e a descoberta leem somente schemas incluidos. O diretorio de usuario nao e examinado para schemas, e `GET /proxmox/viewer/pydantic` tambem renderiza somente schemas incluidos.
+- Com `PROXBOX_RUNTIME_CODEGEN_ENABLED=true`, o startup tambem admite versoes de usuario sem conflito cujo digest em `provenance.json` corresponde a `openapi.json`. As tags incluidas sempre tem precedencia.
+- Sidecars de proveniencia detectam corrupcao; eles nao autenticam artefatos. Um processo com o mesmo usuario do sistema operacional pode forjar o artefato e seu digest. Por isso, a producao mantem a geracao em runtime desabilitada.
+- O conjunto montado e armazenado em `runtime_generated_routes_cache.json` no diretorio de usuario, com um sidecar separado. Esse cache derivado e o unico arquivo escrito ali em runtime com a configuracao padrao.
+- Em um processo de desenvolvimento com opt-in, o startup usa o cache somente quando a proveniencia, os limites e os digests dos schemas autoritativos sao validos. Caso contrario, ele reconstrui sem substituir o conjunto last-known-good.
+- A atualizacao persiste o cache completo e sua proveniencia antes de trocar as rotas e o schema OpenAPI montados. Uma falha de persistencia preserva o conjunto autoritativo em memoria.
+- As rotas sao reconstruidas sob demanda com `POST /proxmox/viewer/routes/refresh` somente quando o opt-in esta habilitado.
 - `POST /proxmox/viewer/routes/refresh` sem query params reconstrui todas as versoes disponiveis.
 - `POST /proxmox/viewer/routes/refresh?version_tag=8.3.0` reconstrui apenas essa versao.
 - O alias sem versao `/proxmox/api2/*` encaminha para o contrato `latest`.
 - Request bodies e responses sao validados com modelos Pydantic gerados em runtime.
+- O carregamento das rotas constroi esses modelos diretamente dos dados OpenAPI e nunca avalia o artefato de codigo-fonte Python renderizado.
+- O startup coloca em quarentena arquivos `pydantic_models.py`, caches legados sem proveniencia valida e sidecars orfaos. A quarentena usa um lock entre processos e movimentos sem seguir links nem sobrescrever destinos. O operador pode executar a mesma etapa com `proxbox-schema quarantine-legacy`.
+- Documentos OpenAPI sao rejeitados antes da persistencia, restauracao do cache ou construcao dos modelos quando excedem os limites fixos de bytes, profundidade, paths, operacoes, propriedades, modelos ou strings de metadados. Colisoes de nomes de campos, nomes reservados do Pydantic e nomes duplicados de modelos derivados de operacoes tambem sao rejeitados.
+- O registro rejeita mais de 8 versoes elegiveis, mais de 32 MiB de OpenAPI agregado, mais de 16.384 modelos agregados ou mais de 32.768 rotas agregadas antes de construir modelos ou o cache.
 - Os modelos gerados cobrem schemas de resposta object, array, scalar e `null`.
 - Para respostas em array cujos itens sao objetos, a geracao emite `{Operation}ResponseItem` junto com `RootModel[list[{Operation}ResponseItem]]`.
 - As rotas geradas aparecem no `/docs` e no `/openapi.json` do FastAPI.
@@ -345,7 +371,8 @@ Normalizacao de path parameters:
 
 Descoberta de versao:
 
-- Uma versao so pode ser montada quando `proxbox_api/generated/proxmox/<version-tag>/openapi.json` existe.
+- Por padrao, uma versao so pode ser montada quando `proxbox_api/generated/proxmox/<version-tag>/openapi.json` existe no pacote instalado. Uma tag incluida, inclusive `latest`, so pode ser atualizada pela substituicao do pacote.
+- Com o opt-in de desenvolvimento, uma versao de usuario sem conflito tambem pode ser montada depois que a proveniencia e os limites forem validados.
 - Entradas como `__pycache__` e arquivos na raiz de `generated/proxmox/` sao ignorados.
 
 Selecao de target:

@@ -13,6 +13,8 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 Unit, integration, and end-to-end tests for the `proxbox_api` backend package. All tests run against the `proxbox_api` package with dependency-injected mocks for NetBox and Proxmox sessions. The `tests/e2e/` subdirectory holds API-level end-to-end tests that wire the full FastAPI app to a `proxmox-sdk` mock (HTTP container or in-process backend) — they use `httpx.AsyncClient`, not Playwright.
 
+`test_release_workflows.py` covers both standalone offline-release Dockerfile validators. Keep the target-binding cases paired: exact `uv-source` and `raw` aliases, the uv binary copy, the cache copy, dependency sync, and project install must all prove that `docker build --target raw` executes the validated offline path. The canonical-plan mutations must also remain paired so a later copy, environment change, or runtime-entry override cannot invalidate the installed raw image after its milestones pass. An accepted parser shape that moves or invalidates those operations is a release-boundary bypass.
+
 ## Test File Index
 
 `operation_inventory/` owns the independent mounted-route oracle, strict wire
@@ -27,6 +29,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | File | What it tests |
 |------|---------------|
 | `proxmox/test_console_route.py` | Private console-session broker: strict mode schema, endpoint loading, QEMU/LXC `vncproxy`/`termproxy` routing, ticket/port normalization, URL encoding, API-token and password-session WebSocket authentication, TLS policy, and sanitized failures. Keep aligned with `docs/api/console-sessions.md`. |
+| `proxmox/test_browser_console_relay.py` | Standalone browser console relay: supported mode matrix, HTTPS Origin validation and exact binding, Fernet-only shared SQLite state, atomic one-use consumption across sessions, expiry/replay/capacity/length bounds, URI-free token subprotocol transport, access-log/query-token checks, redirect credential non-replay, policy seams, `binary` negotiation, RFB 3.8 VNC authentication mediation, binary/text frame relay, deterministic cancellation/cleanup, malformed payloads, and secret-safe failures. |
 | `test_proxmox_influx_metrics.py` | Bounded structured Flux generation, destination controls, upstream and normalized response-byte limits, response normalization, and secret-safe Influx failures. |
 | `test_proxmox_metrics_pull.py` | Fixed `cluster/metrics/export` routing, endpoint selection, request and response bounds, filtering, deterministic sorting/deduplication, session closure, authentication, and secret-safe pull failures. |
 | `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers |
@@ -37,6 +40,9 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_bridge_interfaces.py` | VM bridge interface mapping and reconciliation |
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
+| `ceph/test_v2_orchestration.py` | Ceph v2 HTTP safety contract: exact endpoint/session/node, real mapped `netbox-ceph` request, strict per-pair payloads, durable plan, actor/approval binding, recursive persistence/API/SSE exception/non-JSON redaction, unique node-consistent UPIDs, expiry/tamper/replay, audit recovery, and read-only reconcile |
+| `ceph/test_v2_proxmox_writer.py` | Proxmox Ceph writer mapping, exact no-fallback node binding, typed live node-membership refresh and secret-safe failure boundary, post-gate owner CAS before dispatch, immutable timing normalization, deadline-bounded status calls/sleeps, strict payload rejection, SDK-proven synchronous completion typing, independent gate/heartbeat sessions, and exhaustive common per-mutation gate coverage |
+| `ceph/test_v2_approval_concurrency.py` | Atomic approval race, same/cross-endpoint sequential/concurrent provider-global task-claim uniqueness, dedicated real AsyncSession gate/audit failure matrix, double/triple-cancellation-safe dispatch/task/synchronous/cancellation evidence, persisted lease-duration heartbeat behavior, database-clock delayed-CAS rejection, inherited custom/duck adapter dispatch compatibility, expiry recovery, and stale-worker rejection; exact AsyncSession path runs on CI Python 3.12 and has a narrow local Python 3.14 aiosqlite skip |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
 | `test_database_startup.py` | Typed SQLite path/URL resolution, raw-query truncation refusal, inaccessible/default/explicit legacy-auth guard, canonical claim validation, single-worker audited override/marker/reuse refusal, four-process override rejection and schema serialization, fatal migration/post-schema reads, WAL/write rollback, runtime lease, read-only failures, import safety, and lifespan contracts |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
@@ -47,10 +53,9 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_health.py` | Health check and root metadata endpoints |
 | `test_hardware_discovery_nic_mac.py` | Default-off physical-NIC MAC opt-in, dual-gate resolution, native `dcim.MACAddress` reconciliation, interface targeting, and per-NIC failure isolation |
 | `test_individual_sync.py` | Individual per-object sync service and dry-run workflows |
-| `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination |
-| `test_logger_settings.py` | Logger configuration via env vars |
+| `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination, idempotent sensitive-data filtering, nested secret aliases, and traceback redaction |
+| `test_logger_settings.py` | Logger configuration plus real-handler recursive key/URL/extra/exception/traceback redaction canaries |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
-| `test_dependency_security.py` | Minimum secure Next.js UI and mkdocs-material manifest and lockfile resolutions |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_cloud_image_pipeline.py` | Cloud Image Pipeline catalog/rendering, delimiter-proof encoded writes, typed source recipes, legacy storage, secret-safe ASGI validation, exact isolated SSH argv/host-key pinning, HTTP auth, broad-write + narrow-packer gate ordering, and execution/direct-SDK boundaries |
@@ -59,7 +64,9 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
 | `test_role_resolution.py` | VM default-role hierarchy, durable role-snapshot truth table, and verified compensation retries |
+| `test_proxmox_auth_pve9.py` | PVE 9 authentication/session fallback plus an effective logger-handler canary proving raw SDK exception secrets are not rendered |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
+| `test_codegen_no_source_evaluation.py` | Runtime model construction without source evaluation, AST-based dynamic-execution prohibitions, hostile-alias integration oracle, bundled-first and provenance resolution, custom-source isolation, schema resource limits, unsafe shape rejection, route validation ordering, quarantine, literal-safe rendering, and symlink-aware artifact path containment |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
 | `test_proxmox_to_netbox_contracts.py` | VM mapper behavior and generated schema availability checks |
@@ -171,6 +178,15 @@ on protected branches. The long-term target is 85%.
 - Reconciliation fixtures must stay deterministic. Include `vm_type` in VM
   identity expectations so QEMU and LXC resources with the same VMID do not
   collide.
+- Ceph approval concurrency must retain the real AsyncSession/gather proof for
+  the pinned Python 3.12 CI runtime. Python 3.14 may skip only that exact test
+  because its local aiosqlite connection worker does not complete; keep the
+  independent two-connection SQLite race active on every runtime.
+- Provider task claims must remain permanent, provider-global, and atomically
+  committed with the first submission event. Retain same/cross-endpoint
+  sequential and independent-connection concurrent reuse tests, deterministic
+  legacy-collision migration refusal, plus double/triple cancellation injection
+  at dispatch, claim, completion, and cancellation checkpoints.
 - Packer preflight fakes must reject every non-GET method. Use realistic
   Proxmox configured content (`images`, `rootdir`, `iso`, `vztmpl`, `backup`,
   `snippets`); never model `import` as configured storage content because it is

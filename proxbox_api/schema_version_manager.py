@@ -7,10 +7,13 @@ import threading
 from typing import TYPE_CHECKING
 
 from proxbox_api.logger import logger
+from proxbox_api.proxmox_codegen.security import validate_version_tag
 from proxbox_api.proxmox_to_netbox.proxmox_schema import (
     available_proxmox_sdk_versions,
-    proxmox_generated_openapi_path,
+    has_bundled_proxmox_schema,
+    load_proxmox_generated_openapi,
 )
+from proxbox_api.runtime_settings import runtime_codegen_enabled
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -53,10 +56,10 @@ def extract_release_tag(version_info: dict | str | None) -> str | None:
     return None
 
 
-def has_schema_for_release(release_tag: str) -> bool:
+def has_schema_for_release(release_tag: str, *, allow_user: bool | None = None) -> bool:
     """Check whether a generated OpenAPI schema exists for this release tag."""
-    path = proxmox_generated_openapi_path(version_tag=release_tag)
-    return path.exists()
+    release_tag = validate_version_tag(release_tag)
+    return bool(load_proxmox_generated_openapi(version_tag=release_tag, allow_user=allow_user))
 
 
 def get_generation_status(version_tag: str) -> dict[str, object] | None:
@@ -84,9 +87,19 @@ async def ensure_schema_for_version(
     release_tag = extract_release_tag(version_info)
     if release_tag is None:
         return {"status": "skipped", "reason": "could not determine Proxmox release version"}
+    try:
+        release_tag = validate_version_tag(release_tag)
+    except ValueError:
+        return {"status": "skipped", "reason": "Proxmox release version is invalid"}
 
     if has_schema_for_release(release_tag):
         return {"status": "available", "version_tag": release_tag}
+    if not runtime_codegen_enabled():
+        return {
+            "status": "unavailable",
+            "version_tag": release_tag,
+            "reason": "runtime code generation is disabled",
+        }
 
     # Check whether generation is already in progress
     with _generation_lock:
@@ -115,6 +128,19 @@ async def ensure_schema_for_version(
 
 def _start_background_generation(app: FastAPI, version_tag: str) -> None:
     """Launch a background asyncio task to generate the schema and register routes."""
+    version_tag = validate_version_tag(version_tag)
+    if not runtime_codegen_enabled():
+        logger.info(
+            "Skipped background generation for Proxmox version %s because runtime codegen is disabled.",
+            version_tag,
+        )
+        return
+    if has_bundled_proxmox_schema(version_tag):
+        logger.info(
+            "Skipped background generation for immutable bundled Proxmox version %s.",
+            version_tag,
+        )
+        return
     with _generation_lock:
         _generation_tasks[version_tag] = {"status": "pending", "error": None}
 
@@ -128,6 +154,13 @@ def _start_background_generation(app: FastAPI, version_tag: str) -> None:
 
 async def _generate_and_register(app: FastAPI, version_tag: str) -> None:
     """Background coroutine: generate schema then register routes without app restart."""
+    version_tag = validate_version_tag(version_tag)
+    if not runtime_codegen_enabled():
+        logger.info(
+            "Skipped background generation for Proxmox version %s because runtime codegen is disabled.",
+            version_tag,
+        )
+        return
     from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle_async
     from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 

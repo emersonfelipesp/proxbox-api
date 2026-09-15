@@ -171,6 +171,26 @@ def is_encryption_enabled() -> bool:
     return _get_encryption_key() is not None
 
 
+def stable_keyed_fingerprint(payload: bytes, *, purpose: str) -> str:
+    """Return a stable, purpose-separated HMAC without exposing server key material.
+
+    Safety-sensitive durable bindings use the already configured credential
+    encryption key as their server-held root. Rotating that key intentionally
+    invalidates outstanding bindings. Callers must fail closed when encryption
+    is not configured; an unkeyed digest is not a substitute.
+    """
+
+    key = _get_encryption_key()
+    if key is None:
+        raise ProxboxException(
+            message=(
+                "Credential encryption must be configured before creating durable safety bindings."
+            )
+        )
+    context_key = hmac.new(key, purpose.encode("utf-8"), hashlib.sha256).digest()
+    return hmac.new(context_key, payload, hashlib.sha256).hexdigest()
+
+
 def derive_service_signing_key(context: str) -> bytes:
     """Derive a purpose-bound HMAC key without exposing credential key material.
 

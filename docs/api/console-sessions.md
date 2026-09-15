@@ -2,7 +2,13 @@
 
 This document is the canonical `proxbox-api` implementation guide for the private console-session broker used by the NMS browser console. It explains how the service selects a Proxmox guest, requests a `vncproxy` or `termproxy` ticket, constructs the upstream WebSocket URL, exports one bounded authentication value to the trusted relay, preserves endpoint TLS policy, and handles failures.
 
-This endpoint is service-to-service. Its response contains short-lived credentials and must never be returned directly to browser JavaScript. `nms-backend` is the trusted consumer: it stores the response in a one-time server-side Redis relay ticket and exposes only an opaque NMS stream token to the browser.
+The existing `/sessions` endpoint is service-to-service. Its response contains short-lived credentials and must never be returned directly to browser JavaScript. The existing trusted service consumer and its contract remain unchanged.
+
+Open-source standalone deployments can instead use the distinct
+`/browser-sessions` plus `/browser-stream` contract. proxbox-api then owns the
+one-use relay state and browser WebSocket. It encrypts the complete private
+upstream session in shared SQLite and returns only opaque browser-safe routing
+data.
 
 ## Contents
 
@@ -85,6 +91,62 @@ The successful `ConsoleSessionResponse` is private transport material:
 
 The route deliberately returns enough data for a trusted relay to open the Proxmox WebSocket. It is not a public browser-session schema. `nms-backend` must transform it into its much smaller public response.
 
+### Standalone browser contract
+
+`POST /proxmox/console/browser-sessions` accepts the same exact endpoint,
+guest, and mode selector plus a serialized HTTPS NetBox `origin`:
+
+```json
+{
+  "endpoint_id": 1,
+  "vmid": 544,
+  "node": "pve01",
+  "vm_type": "qemu",
+  "console_type": "novnc",
+  "origin": "https://netbox.example"
+}
+```
+
+Its response contains exactly:
+
+```json
+{
+  "stream_token": "opaque-random-one-use-value",
+  "websocket_path": "/proxmox/console/browser-stream",
+  "expires_at": "2026-09-14T14:00:30Z",
+  "console_type": "novnc"
+}
+```
+
+The browser connects to the returned path with the same exact `Origin` header
+and offers exactly `binary` plus
+`proxbox-token.<stream_token>` as WebSocket subprotocols. The server accepts
+only `binary`, so it never echoes the bearer protocol. Tokens are forbidden in
+the URI and query string because request targets are commonly access-logged.
+Missing, duplicate, malformed, extra, or query-string token forms are rejected
+before upstream access. Tokens contain 32 random bytes, have a fixed 30-second
+TTL, are stored only as SHA-256 digests, and are consumed atomically under a
+SQLite write transaction. Unknown digests are rejected by an indexed read
+before any write lock is requested. A matching digest is then re-read under
+`BEGIN IMMEDIATE` before deletion, preserving exactly one successful consumer
+without letting random token probes contend for the database write lock. The database row contains only the
+digest, timestamps, and one Fernet ciphertext. The ciphertext holds the ticket,
+upstream URL, authentication value, TLS policy, Origin, and guest binding. At
+most 1,024 live rows are retained. Expired, replayed, malformed, wrong-Origin,
+and policy-denied sessions fail closed.
+
+The standalone route also requires the current local `ProxmoxEndpoint` row to
+remain enabled at both creation and consumption. Disabling an endpoint after a
+token is issued burns and rejects that token before any upstream connection.
+This browser-only check does not change the existing service-only broker contract.
+
+`PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` does not apply to relay state. Browser
+session creation returns a fixed 503 response until a Fernet key resolves from
+the normal encryption-key chain. Creation performs an encrypt/decrypt preflight
+before requesting a Proxmox ticket, so unavailable Fernet state cannot consume
+an upstream proxy worker. Capacity remains enforced atomically when the final
+encrypted row is inserted.
+
 ## Source map
 
 | File or symbol | Responsibility |
@@ -99,6 +161,11 @@ The route deliberately returns enough data for a trusted relay to open the Proxm
 | `proxbox_api/routes/proxmox/console.py::_console_websocket_auth()` | Obtains and translates the active session's private WebSocket authentication. |
 | `proxbox_api/routes/proxmox/console.py::_build_ws_url()` | Percent-encodes the ticket and constructs the exact Proxmox `vncwebsocket` URL. |
 | `proxbox_api/routes/proxmox/console.py::create_console_session()` | Orchestrates the complete endpoint-to-private-response flow. |
+| `proxbox_api/routes/proxmox/console.py::create_browser_console_session()` | Converts the private broker result into encrypted one-use shared state and a browser-safe response. |
+| `proxbox_api/routes/proxmox/console.py::browser_console_stream()` | Atomically consumes the token, rechecks the endpoint policy seam, binds Origin/subprotocol, and owns relay cleanup. |
+| `proxbox_api/database.py::BrowserConsoleRelaySession` | Shared SQLite row containing only token digest, timestamps, and encrypted payload. |
+| `proxbox_api/services/console_relay.py` | State limits, Fernet storage, upstream handshake, RFB mediation, frame relay, timeouts, and deterministic cancellation. |
+| `proxbox_api/services/console_relay_policy.py` | Inactive create/consume seam reserved for the separately reviewed RPC-only policy. |
 | `proxbox_api/session/proxmox_core.py::ProxmoxSession.get_websocket_auth()` | Selects API-token `Authorization` or password-session `PVEAuthCookie` transport. |
 
 ## Endpoint and Proxmox session resolution
@@ -166,6 +233,40 @@ wss://{host}:{proxmox_port}/api2/json/nodes/{node}/{vm_type}/{vmid}/vncwebsocket
 
 The request schema intentionally has no TLS-verification field. A caller cannot downgrade certificate verification per console request. Prefer verified certificates; use a persisted `verify_ssl=false` endpoint only when the deployment has explicitly accepted that endpoint-specific risk.
 
+The standalone relay carries this boolean only inside its encrypted payload.
+It creates a default verified TLS context when true and a hostname/certificate-
+disabled context only when the persisted endpoint value is false. Environment
+WebSocket proxies are disabled so private authentication cannot be redirected
+through ambient proxy configuration.
+Every upstream WebSocket redirect status (`300`, `301`, `302`, `303`, `307`,
+or `308`) is refused after the first handshake and before a second connection,
+including same-origin redirects. Authorization and cookie credentials are
+therefore never replayed to a redirect target.
+
+## Standalone WebSocket and RFB behavior
+
+Both upstream and browser WebSockets must negotiate `binary`; the browser also
+offers the one bearer token protocol described above. Authentication
+headers, tickets, URLs, handshake messages, application frames, queue depth,
+open/handshake/idle/close times, token count, and TTL all have fixed bounds.
+Binary and text application frames retain their frame kind in both directions.
+When either relay direction finishes, the peer task is cancelled and both are
+awaited before the upstream and browser are closed with fixed, secret-free
+reasons.
+
+The two frame directions share one connection-wide idle deadline. A valid frame
+received in either direction refreshes it, so output-only and input-only
+consoles remain active; the relay closes only after both directions are idle.
+
+QEMU noVNC requires one extra trust-boundary step. proxbox-api completes the
+upstream RFB 3.8 VNC authentication itself: it selects security type 2,
+calculates the DES challenge response from the private ticket, verifies the
+upstream success result, and then advertises security type 1 (None) to the
+already authenticated, Origin-bound browser connection. Subsequent RFB bytes
+are relayed unchanged. The browser therefore never receives or computes with
+the Proxmox ticket. QEMU and LXC terminal sessions do not speak RFB and enter
+the bounded frame relay directly.
+
 ## Failure and logging behavior
 
 | Condition | Result |
@@ -187,11 +288,27 @@ Logs identify the endpoint or guest tuple and exception class needed for service
 - Keep `endpoint_id` defined as the local proxbox-api database ID.
 - Keep request models `extra="forbid"` and the QEMU/LXC mode matrix explicit.
 - Obtain host, port, credentials, authentication mode, and TLS policy from the stored endpoint only.
+- Bracket IPv6 WebSocket authorities and validate plus percent-encode the node
+  as one path segment.
 - Percent-encode the complete ticket with `safe=""`.
 - Return exactly one bounded authentication kind/value and keep secret values out of repr and logs.
 - Do not add credentials to query parameters beyond Proxmox's required one-time `vncticket` in the private upstream URL.
 - Keep the browser-facing schema in `nms-backend`; do not reuse `ConsoleSessionResponse` as a public contract.
 - Keep failures sanitized across the relay boundary.
+- Store standalone state only when Fernet encryption is configured; the
+  plaintext credential opt-in is never sufficient.
+- Keep the random token opaque, fixed-length, digest-only at rest, one-use,
+  short-lived, count-bounded, and atomically consumed across workers.
+- Bind consumption to the exact HTTPS Origin and exactly one dedicated token
+  protocol alongside `binary`; never place the token in a URI or echo it.
+- Disable ambient WebSocket proxies and refuse every upstream redirect before
+  a second connection can replay private credentials.
+- Re-evaluate the focused endpoint policy seam at create and consume. Keep it
+  inactive until the separately reviewed RPC-only policy is merged.
+- Require the current endpoint to be enabled at create and consume without
+  adding that browser-only rule to the existing service-only broker.
+- Complete QEMU noVNC VNC authentication server-side; never send the ticket or
+  challenge response inputs to browser JavaScript.
 
 ## Regression coverage
 
@@ -208,10 +325,21 @@ Logs identify the endpoint or guest tuple and exception class needed for service
 - exact percent-encoding and WebSocket URL construction; and
 - private response fields including endpoint TLS policy.
 
+`tests/proxmox/test_browser_console_relay.py` adds native and mounted-ASGI
+coverage for the three supported modes, strict type/Origin validation,
+encryption absence, encrypted canaries, count/TTL/length bounds, independent-
+session atomic consumption, expiry and replay, malformed ciphertext payloads,
+URI-free token transport, malformed/duplicate protocol rejection, access-log
+canaries, query-token rejection, upstream redirect refusal and credential
+non-replay,
+policy denial, `binary` negotiation, exact Origin binding, RFB 3.8 mediation,
+bidirectional binary/text frames, cancellation/cleanup, and sanitized upstream
+failure behavior.
+
 Run the focused gate with:
 
 ```bash
-uv run pytest -q tests/proxmox/test_console_route.py
+uv run pytest -q tests/proxmox/test_console_route.py tests/proxmox/test_browser_console_relay.py
 ```
 
 ## Change checklist

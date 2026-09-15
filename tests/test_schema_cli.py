@@ -32,12 +32,81 @@ def test_list_command_prints_bundled_versions(
     assert "Available Proxmox OpenAPI schema versions" in captured.out
 
 
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_default_discovery_never_reads_user_generated_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    def unexpected_user_directory():
+        raise AssertionError("default CLI discovery read the user-generated directory")
+
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.get_user_generated_dir",
+        unexpected_user_directory,
+    )
+
+    assert _run(monkeypatch, command) == 0
+
+
+@pytest.mark.parametrize("command", ["list", "status"])
+def test_include_user_requires_runtime_codegen_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    monkeypatch.delenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", raising=False)
+
+    rc = _run(monkeypatch, command, "--include-user")
+
+    assert rc == 2
+    assert "--include-user requires PROXBOX_RUNTIME_CODEGEN_ENABLED=true" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [("list", "user-generated"), ("status", "User-generated versions: 9.1-user")],
+)
+def test_include_user_labels_user_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+    command: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", "true")
+    paths = {}
+    for version in ("8.3", "9.1-user"):
+        path = tmp_path / version / "openapi.json"
+        path.parent.mkdir()
+        path.write_text("{}", encoding="utf-8")
+        paths[version] = path
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.available_proxmox_sdk_versions",
+        lambda **kwargs: ["8.3", "9.1-user"],
+    )
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.has_bundled_proxmox_schema",
+        lambda version: version == "8.3",
+    )
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.proxmox_generated_openapi_path",
+        lambda version_tag, **kwargs: paths[version_tag],
+    )
+    monkeypatch.setattr(
+        "proxbox_api.schema_version_manager.get_all_generation_statuses",
+        lambda: {},
+    )
+
+    assert _run(monkeypatch, command, "--include-user") == 0
+    assert expected in capsys.readouterr().out
+
+
 def test_list_command_returns_one_when_no_versions(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
         "proxbox_api.proxmox_to_netbox.proxmox_schema.available_proxmox_sdk_versions",
-        lambda: [],
+        lambda **kwargs: [],
     )
     rc = _run(monkeypatch, "list")
     captured = capsys.readouterr()
@@ -50,7 +119,7 @@ def test_status_command_reports_versions_and_tasks(
 ) -> None:
     monkeypatch.setattr(
         "proxbox_api.proxmox_to_netbox.proxmox_schema.available_proxmox_sdk_versions",
-        lambda: ["8.3", "8.4"],
+        lambda **kwargs: ["8.3", "8.4"],
     )
     monkeypatch.setattr(
         "proxbox_api.schema_version_manager.get_all_generation_statuses",
@@ -68,7 +137,7 @@ def test_status_command_with_no_tasks(
 ) -> None:
     monkeypatch.setattr(
         "proxbox_api.proxmox_to_netbox.proxmox_schema.available_proxmox_sdk_versions",
-        lambda: ["8.3"],
+        lambda **kwargs: ["8.3"],
     )
     monkeypatch.setattr(
         "proxbox_api.schema_version_manager.get_all_generation_statuses",
@@ -84,7 +153,8 @@ def test_generate_skips_when_schema_exists(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(
-        "proxbox_api.schema_version_manager.has_schema_for_release", lambda tag: True
+        "proxbox_api.schema_version_manager.has_schema_for_release",
+        lambda tag, **kwargs: True,
     )
     rc = _run(monkeypatch, "generate", "8.4")
     captured = capsys.readouterr()
@@ -98,7 +168,8 @@ def test_generate_invokes_pipeline_and_reports_summary(
     tmp_path,
 ) -> None:
     monkeypatch.setattr(
-        "proxbox_api.schema_version_manager.has_schema_for_release", lambda tag: False
+        "proxbox_api.schema_version_manager.has_schema_for_release",
+        lambda tag, **kwargs: False,
     )
 
     class _FakeBundle:
@@ -144,7 +215,8 @@ def test_generate_returns_one_when_pipeline_raises(
     tmp_path,
 ) -> None:
     monkeypatch.setattr(
-        "proxbox_api.schema_version_manager.has_schema_for_release", lambda tag: False
+        "proxbox_api.schema_version_manager.has_schema_for_release",
+        lambda tag, **kwargs: False,
     )
 
     def boom(**kwargs: Any) -> None:
@@ -158,3 +230,38 @@ def test_generate_returns_one_when_pipeline_raises(
     captured = capsys.readouterr()
     assert rc == 1
     assert "Generation failed: crawler offline" in captured.err
+
+
+def test_generate_refuses_bundled_version_even_with_force(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.has_bundled_proxmox_schema",
+        lambda tag: True,
+    )
+
+    rc = _run(monkeypatch, "generate", "8.3", "--force")
+    captured = capsys.readouterr()
+
+    assert rc == 1
+    assert "is immutable" in captured.err
+
+
+def test_quarantine_legacy_command_reports_renamed_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    quarantined = tmp_path / "pydantic_models.py.quarantined-20260914T000000Z"
+    monkeypatch.setattr(
+        "proxbox_api.proxmox_to_netbox.proxmox_schema.quarantine_legacy_codegen_artifacts",
+        lambda: [quarantined],
+    )
+
+    rc = _run(monkeypatch, "quarantine-legacy")
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "Quarantined 1 legacy Proxmox codegen artifact" in captured.out
+    assert str(quarantined) in captured.out

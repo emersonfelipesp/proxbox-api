@@ -13,12 +13,12 @@ from proxbox_api.routes.proxmox import console
 from proxbox_api.session.proxmox_core import ProxmoxSession, ProxmoxWebSocketAuth, SensitiveString
 
 
-def _make_endpoint(db_engine) -> int:
+def _make_endpoint(db_engine, *, ip_address: str = "pve.example.test") -> int:
     """Insert a minimal ProxmoxEndpoint into the test DB and return its PK."""
     with Session(db_engine) as session:
         endpoint = ProxmoxEndpoint(
             name="test-pve-console",
-            ip_address="10.0.0.1",
+            ip_address=ip_address,
             port=8006,
             username="root@pam",
             verify_ssl=False,
@@ -141,7 +141,7 @@ def test_novnc_qemu_returns_200_with_ws_url(auth_test_client, db_engine):
     assert data["ws_url"].startswith("wss://")
     assert "ABCTICKET123" in data["ws_url"]
     assert "vncwebsocket" in data["ws_url"]
-    assert data["proxmox_host"] == "10.0.0.1"
+    assert data["proxmox_host"] == "pve.example.test"
     assert data["proxmox_port"] == 8006
     assert data["console_type"] == "novnc"
     assert data["verify_ssl"] is False
@@ -149,6 +149,51 @@ def test_novnc_qemu_returns_200_with_ws_url(auth_test_client, db_engine):
         "kind": "authorization",
         "value": "PVEAPIToken=test@pve!console=secret",
     }
+
+
+def test_private_session_brackets_ipv6_websocket_authority(auth_test_client, db_engine):
+    endpoint_id = _make_endpoint(db_engine, ip_address="2001:db8::8")
+    fake_px = _FakePx({"ticket": "IPV6TICKET", "port": 5900})
+
+    with patch(
+        "proxbox_api.routes.proxmox.console._open_session",
+        new=AsyncMock(return_value=fake_px),
+    ):
+        response = auth_test_client.post(
+            "/proxmox/console/sessions",
+            json={
+                "endpoint_id": endpoint_id,
+                "vmid": 100,
+                "node": "pve.ipv6-01",
+                "vm_type": "qemu",
+                "console_type": "novnc",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ws_url"].startswith(
+        "wss://[2001:db8::8]:8006/api2/json/nodes/pve.ipv6-01/qemu/100/"
+    )
+
+
+@pytest.mark.parametrize("node", ["../pve01", "pve01/../../access", "pve%2Fescape", "pve 01"])
+def test_private_session_rejects_unsafe_node_path_segment(
+    auth_test_client,
+    db_engine,
+    node,
+):
+    response = auth_test_client.post(
+        "/proxmox/console/sessions",
+        json={
+            "endpoint_id": _make_endpoint(db_engine),
+            "vmid": 100,
+            "node": node,
+            "vm_type": "qemu",
+            "console_type": "novnc",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_term_lxc_returns_200(auth_test_client, db_engine):

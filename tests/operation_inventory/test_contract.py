@@ -41,7 +41,7 @@ def minimal():
     }
     key = digest(operation)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "operations": {key: operation},
         "provenance": {
             "python": "3.12.13",
@@ -59,6 +59,10 @@ def minimal():
                 "registrations": [{"index": 0, "operation": key}, {"index": 1, "operation": key}],
             }
         ],
+        "runtime_codegen_opt_in": {
+            "setting": "PROXBOX_RUNTIME_CODEGEN_ENABLED=true",
+            "registrations": [{"index": 0, "operation": key}],
+        },
     }
 
 
@@ -86,7 +90,7 @@ def test_hostile_raw_documents_fail(raw):
         parse(raw)
 
 
-@pytest.mark.parametrize("value", [1.0, True, "1", 2, None])
+@pytest.mark.parametrize("value", [1.0, True, "1", 3, None])
 def test_schema_version_aliases_fail(minimal, value):
     minimal["schema_version"] = value
     with pytest.raises((InventoryError, ValidationError)):

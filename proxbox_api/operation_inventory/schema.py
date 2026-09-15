@@ -185,6 +185,17 @@ class Mode(StrictRecord):
     registrations: list[Registration]
 
 
+class RuntimeCodegenOptIn(StrictRecord):
+    setting: Literal["PROXBOX_RUNTIME_CODEGEN_ENABLED=true"]
+    registrations: list[Registration]
+
+
+def _registration_references(registrations: list[Registration], *, context: str) -> set[str]:
+    if [row.index for row in registrations] != list(range(len(registrations))):
+        raise ValueError(f"{context} registration order is incomplete")
+    return {row.operation for row in registrations}
+
+
 class Dependency(StrictRecord):
     name: Text
     version: Text
@@ -199,10 +210,11 @@ class Provenance(StrictRecord):
 
 
 class Inventory(StrictRecord):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     provenance: Provenance
     operations: dict[Digest, Operation]
     modes: list[Mode]
+    runtime_codegen_opt_in: RuntimeCodegenOptIn
 
     @model_validator(mode="after")
     def complete_references(self) -> Self:
@@ -213,9 +225,13 @@ class Inventory(StrictRecord):
             raise ValueError("Duplicate mode")
         referenced: set[str] = set()
         for mode in self.modes:
-            if [row.index for row in mode.registrations] != list(range(len(mode.registrations))):
-                raise ValueError("Registration order is incomplete")
-            referenced.update(row.operation for row in mode.registrations)
+            referenced.update(_registration_references(mode.registrations, context="Mode"))
+        referenced.update(
+            _registration_references(
+                self.runtime_codegen_opt_in.registrations,
+                context="Runtime codegen",
+            )
+        )
         if referenced != self.operations.keys():
             raise ValueError("Missing or orphan operation")
         for key, operation in self.operations.items():

@@ -29,8 +29,12 @@ def artifact_tree(tmp_path, minimal):
     operation["handler"]["source"] = source(root / "fixture.py", root).model_dump()
     key = digest(operation)
     minimal["operations"] = {key: operation}
-    for row in minimal["modes"][0]["registrations"]:
-        row["operation"] = key
+    for registrations in (
+        minimal["modes"][0]["registrations"],
+        minimal["runtime_codegen_opt_in"]["registrations"],
+    ):
+        for row in registrations:
+            row["operation"] = key
     for name in ("pyproject.toml", "uv.lock", "contracts/operation-inventory-inputs.json"):
         (root / name).write_text("{}")
     minimal["provenance"]["sources"] = [
@@ -202,8 +206,12 @@ def test_readiness_current_source_and_dependency_checks(artifact_tree, monkeypat
     operation["handler"]["source"] = source(root / "fixture.py", root).model_dump()
     key = digest(operation)
     wire["operations"] = {key: operation}
-    for row in wire["modes"][0]["registrations"]:
-        row["operation"] = key
+    for registrations in (
+        wire["modes"][0]["registrations"],
+        wire["runtime_codegen_opt_in"]["registrations"],
+    ):
+        for row in registrations:
+            row["operation"] = key
     wire["provenance"]["sources"] = [
         source(root / name, root).model_dump()
         for name in (

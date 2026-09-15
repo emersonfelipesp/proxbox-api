@@ -238,7 +238,7 @@ See [Authentication](./authentication.md) for complete documentation on:
 
 Most runtime tunables now resolve in the order **environment variable > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. The settings cache TTL is 5 minutes, so changes made on the NetBox plugin settings page take effect on the next sync run without restarting the backend. Setting an environment variable still works as an override; leaving it unset means the plugin settings page is the authoritative source.
 
-A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, `PROXBOX_AUTH_MAX_ACTIVE_KEYS`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` / `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`, `PROXBOX_TRUSTED_PROXIES`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
+A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, `PROXBOX_AUTH_MAX_ACTIVE_KEYS`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` / `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`, `PROXBOX_TRUSTED_PROXIES`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, `PROXBOX_RUNTIME_CODEGEN_ENABLED`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
 
 ## Environment Variables
 
@@ -255,6 +255,9 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent Proxmox VM config fetches during VM and virtual-disk sync. |
 | `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Per-call timeout (seconds, range 1-600) for the QEMU guest-agent `network-get-interfaces` request. Interface-dense guests (many VRRP/alias interfaces) can be slow to enumerate; raise this if guest-agent interface fetches time out. Maps to the `ProxboxPluginSettings.guest_agent_timeout` plugin field. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Optional env override for `ProxboxPluginSettings.reconciliation_engine`. Valid values are `python`, `compare`, and `rust`. |
+| `PROXBOX_CEPH_TASK_TIMEOUT` | `300` | Maximum total wait for a submitted Proxmox Ceph task (range 1-3600). Maps to `ProxboxPluginSettings.ceph_task_timeout`; one immutable value bounds every status call and sleep. |
+| `PROXBOX_CEPH_TASK_POLL_INTERVAL` | `1` | Delay between Ceph task-status checks (range 0.1-60). Maps to `ProxboxPluginSettings.ceph_task_poll_interval` and is normalized to at most the task timeout. |
+| `PROXBOX_CEPH_RUN_LEASE_SECONDS` | `360` | Renewable durable Ceph run lease (range 1-3600). Maps to `ProxboxPluginSettings.ceph_run_lease_seconds` and is persisted on each operation run so later settings changes cannot alter in-flight heartbeat or recovery behavior. Heartbeat cadence is independent of provider polling. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync, virtual disks) / `4` (snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. Task-history reconciliation uses bounded bulk requests instead of per-VM write dispatch. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
@@ -276,9 +279,9 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `5` | Number of VM interfaces synced per NetBox write batch. Reduce to lower write pressure. Mapped to `ProxboxPluginSettings.interface_batch_size`. |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `100` | Milliseconds to wait between interface write batches. Mapped to `ProxboxPluginSettings.interface_batch_delay_ms`. |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `5` | Backup sync batch size. Reduce to lower NetBox write pressure during backup sync. |
-| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches. |
+| `PROXBOX_BACKUP_BATCH_DELAY_MS` | `200` | Delay in milliseconds between backup batches; `0` disables the delay. |
 | `PROXBOX_BULK_BATCH_SIZE` | `50` | Per-batch size for bulk VM-related sync requests (volumes, backups). |
-| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay in milliseconds between bulk batches. |
+| `PROXBOX_BULK_BATCH_DELAY_MS` | `500` | Delay in milliseconds between bulk batches; `0` disables the delay. |
 | `PROXBOX_NETBOX_GET_CACHE_TTL` | `60` | TTL (seconds) for the in-memory NetBox GET response cache. Set `0` to disable caching. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `4096` | Maximum entries kept in the NetBox GET cache before LRU eviction kicks in. |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Maximum total bytes held in the NetBox GET cache before LRU eviction kicks in. |
@@ -286,11 +289,12 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `true` | Whether the resolved NetBox OpenAPI schema is cached on disk at `proxbox_api/generated/netbox/openapi.json`. Set to `0`/`false`/`no`/`off` to run schema resolution **fully in-memory** — the fetched document is kept in a process-local store instead of being written to (or read from) the filesystem (read-only filesystems, no-disk-write deployments). Maps to the `ProxboxPluginSettings.netbox_openapi_persist` plugin field; resolves env override > plugin setting > default. See [NetBox OpenAPI schema cache](#netbox-openapi-schema-cache) below. |
 | `hardware_discovery_sync_nic_macs` (plugin setting) | `false` | Plugin-only opt-in for native physical-NIC `dcim.MACAddress` and `primary_mac_address` reconciliation. Requires `hardware_discovery_enabled=true`; no environment override. A missing field from an older netbox-proxbox release is treated as `false`. |
 | `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override output directory for the schema generator CLI (`proxbox-schema generate`). |
+| `PROXBOX_RUNTIME_CODEGEN_ENABLED` | `false` | Development-only process opt-in. When false, the HTTP generation and route-refresh endpoints are absent, and route registration, schema discovery, and Pydantic rendering use bundled schemas only. Production must leave this disabled because provenance sidecars detect corruption but cannot authenticate files writable by the same operating-system user. |
 | `PROXBOX_CORS_EXTRA_ORIGINS` | (empty) | Comma-separated extra CORS origins added to the runtime allowlist. |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | unset | When set to `1`, `true`, or `yes`, HTTP 500 responses include internal exception details. |
 | `PROXBOX_STRICT_STARTUP` | unset | When set to `1`, `true`, or `yes`, startup fails if generated Proxmox routes cannot be mounted. |
 | `PROXBOX_SKIP_NETBOX_BOOTSTRAP` | unset | When set to `1`, `true`, or `yes`, skips creating the default NetBox client during app startup. |
-| `PROXBOX_ENCRYPTION_KEY` | unset | Secret key for encrypting credentials at rest. See [Credential Encryption](#credential-encryption) below. |
+| `PROXBOX_ENCRYPTION_KEY` | unset | Secret key for encrypting credentials and standalone browser-console relay state at rest. The browser relay fails closed when no key resolves, even if plaintext credential storage is enabled. See [Credential Encryption](#credential-encryption) below. |
 | `PROXBOX_ENCRYPTION_KEY_FILE` | unset | Optional path to a local key file used only after the environment and plugin-setting sources are empty. Lets operators mount a process-level fallback secret; the default path is `<repo_root>/data/encryption.key`. |
 | `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` | unset | Explicitly permits credential writes when no encryption key is configured. Off by default: startup and non-credential operations remain available, but credential writes fail closed. Use only in isolated labs. |
 
@@ -410,6 +414,19 @@ smaller server-side pool.
 ## Credential Encryption
 
 proxbox-api stores NetBox API tokens and Proxmox passwords/token values in a local SQLite database. When an encryption key is configured, these fields are encrypted at rest using **Fernet** (AES-128-CBC with HMAC-SHA256).
+
+The same key encrypts the complete private payload for
+`POST /proxmox/console/browser-sessions`: upstream URL, ticket, authentication,
+TLS policy, exact Origin binding, and guest selector. Only a SHA-256 digest of
+the random one-use token and its timestamps remain outside the ciphertext.
+Unlike legacy credential fields, browser-console relay state has no plaintext
+compatibility mode and creation returns 503 until encryption is configured.
+The public WebSocket path never contains this bearer token; the browser offers
+it as exactly one `proxbox-token.<stream_token>` protocol alongside `binary`.
+The upstream connection ignores ambient proxies and refuses redirects before a
+second connection can replay the encrypted authorization or cookie value.
+The service proves the configured Fernet key can encrypt and decrypt before it
+requests the short-lived upstream Proxmox ticket.
 
 ### Key resolution order
 

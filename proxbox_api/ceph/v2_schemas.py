@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ProviderName = Literal["proxmox", "dashboard", "rgw_admin", "rbd", "prometheus", "external"]
 ValidationSeverity = Literal["info", "warning", "error"]
-OperationStatus = Literal["pending", "running", "completed", "failed", "blocked", "cancelled"]
+OperationStatus = Literal[
+    "pending",
+    "running",
+    "dispatching",
+    "completed",
+    "failed",
+    "blocked",
+    "cancelled",
+    "outcome_unknown",
+]
 
 
 _BUNDLE_KIND_KEYS = {
@@ -28,6 +38,86 @@ _BUNDLE_KIND_KEYS = {
     "keys": "key",
     "users": "user",
 }
+
+_OPAQUE_CREDENTIAL_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
+_SECRET_FIELD_FRAGMENTS = (
+    "access_key",
+    "api_key",
+    "authentication",
+    "authorization",
+    "cookie",
+    "credential",
+    "passphrase",
+    "password",
+    "passwd",
+    "private_key",
+    "rgw_access_key",
+    "secret",
+    "token",
+)
+_SECRET_FIELD_NAMES = {"auth", "key", "keys", "pwd", "set_cookie"}
+_TARGET_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?:^|[?&\s;,])(?:api[_-]?key|(?:api|access)[_-]?tokens?|client[_-]?secrets?|auth(?:entication|orization)?|cookie|"
+    r"credentials?|keys?|pass(?:phrase|word|wd)?|pwd|secret|tokens?|"
+    r"(?:rgw[_-]?)?access[_-]?key|private[_-]?key)\s*[:=]",
+    re.IGNORECASE,
+)
+
+
+def normalized_field_name(value: object) -> str:
+    """Canonicalize snake/kebab/spaced/camel-case field names alike."""
+
+    raw = str(value).strip()
+    camel_split = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", raw)
+    acronym_split = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", camel_split)
+    return re.sub(r"[^a-z0-9]+", "_", acronym_split.lower()).strip("_")
+
+
+def is_secret_field_name(value: object) -> bool:
+    """Return whether an untrusted mapping key denotes secret material."""
+
+    normalized = normalized_field_name(value)
+    return normalized in _SECRET_FIELD_NAMES or any(
+        fragment in normalized for fragment in _SECRET_FIELD_FRAGMENTS
+    )
+
+
+def validate_credential_ref(value: object) -> str:
+    """Validate a credential pointer as an opaque identifier, never a secret/URL."""
+
+    ref = str(value or "").strip()
+    if not ref or not _OPAQUE_CREDENTIAL_REF_RE.fullmatch(ref) or "://" in ref or "@" in ref:
+        raise ValueError(
+            "credential_ref must be an opaque 1-255 character identifier, not a URL or secret"
+        )
+    return ref
+
+
+def sanitize_operation_value(value: Any) -> Any:
+    """Remove secret values from operation-owned nested mappings.
+
+    ``credential_ref`` is the only credential-shaped field retained and is
+    validated as a safe opaque pointer. All other credential/key/token aliases
+    keep their key for diagnostics but never retain their value.
+    """
+
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            normalized = normalized_field_name(name)
+            if normalized == "credential_ref":
+                safe[name] = validate_credential_ref(item)
+            elif is_secret_field_name(name):
+                safe[name] = "[REDACTED]"
+            else:
+                safe[name] = sanitize_operation_value(item)
+        return safe
+    if isinstance(value, list | tuple | set):
+        return [sanitize_operation_value(item) for item in value]
+    return value
 
 
 class DesiredObject(BaseModel):
@@ -121,13 +211,19 @@ class ValidationResponse(BaseModel):
 class ProviderOperation(BaseModel):
     """One intended provider operation in a deterministic Ceph v2 plan."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     id: str | None = None
     provider: str = "proxmox"
     kind: str = Field(..., min_length=1)
     target_ref: str = ""
     action: str = "ensure"
+    node: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+    )
     is_destructive: bool = False
     supported: bool = True
     blocked_reason: str | None = None
@@ -137,7 +233,7 @@ class ProviderOperation(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce_operation(cls, data: Any) -> Any:
+    def _coerce_operation(cls, data: Any) -> Any:  # noqa: C901 - compatibility canonicalizer
         if not isinstance(data, dict):
             return data
         values = dict(data)
@@ -149,7 +245,39 @@ class ProviderOperation(BaseModel):
             after = values.get("after") or values.get("payload") or values.get("spec")
             if isinstance(after, dict):
                 values["after_summary"] = after
+        after_summary = values.get("after_summary")
+        metadata = values.get("metadata")
+        if values.get("node") is None:
+            for candidate in (after_summary, metadata):
+                if isinstance(candidate, dict) and candidate.get("node") not in (None, ""):
+                    values["node"] = candidate["node"]
+                    break
+        # ``node`` used to arrive inside the untyped payload. Canonicalize that
+        # compatibility shape into the immutable top-level plan binding so it
+        # is validated and never silently discarded by the writer.
+        if isinstance(after_summary, dict) and "node" in after_summary:
+            values["after_summary"] = {
+                key: item for key, item in after_summary.items() if key != "node"
+            }
+        for key in ("before_summary", "after_summary", "metadata"):
+            raw = values.get(key)
+            if isinstance(raw, dict):
+                values[key] = sanitize_operation_value(raw)
         return values
+
+    @field_validator("target_ref")
+    @classmethod
+    def _reject_secret_target_ref(cls, value: str) -> str:
+        cleaned = value.strip()
+        lowered = cleaned.casefold()
+        if (
+            "@" in cleaned
+            or "bearer " in lowered
+            or any(f"{name}=" in lowered for name in _SECRET_FIELD_FRAGMENTS)
+            or _TARGET_SECRET_ASSIGNMENT_RE.search(cleaned)
+        ):
+            raise ValueError("target_ref must not contain credentials or secret material")
+        return cleaned
 
 
 def _coerce_netbox_operation_payload(values: dict[str, Any]) -> dict[str, Any]:
@@ -211,6 +339,7 @@ class PlanRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     provider: str = "proxmox"
+    endpoint_id: int | None = Field(default=None, gt=0)
     desired_state: DesiredStateBundle = Field(default_factory=DesiredStateBundle)
     operations: list[ProviderOperation] = Field(default_factory=list)
     scope: dict[str, Any] = Field(default_factory=dict)
@@ -239,6 +368,10 @@ class PlanResponse(BaseModel):
 
     id: str
     provider: str
+    endpoint_id: int | None = None
+    endpoint_config_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    requester: str | None = None
+    digest: str = ""
     netbox_branch_schema_id: str | None = None
     source_branch_schema_id: str | None = None
     operations: list[ProviderOperation] = Field(default_factory=list)
@@ -246,6 +379,7 @@ class PlanResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     blocked_actions: list[ProviderOperation] = Field(default_factory=list)
     created_at: datetime
+    expires_at: datetime
     live_state_summary: dict[str, Any] = Field(default_factory=dict)
     request_summary: dict[str, Any] = Field(default_factory=dict)
 
@@ -255,12 +389,18 @@ class PlanResponse(BaseModel):
 
 
 class ApplyRequest(BaseModel):
-    """Apply an existing plan or an inline operation payload."""
+    """Apply one immutable persisted plan with a one-time approval token.
+
+    Legacy inline fields remain parseable for a stable 409 migration response,
+    but routes reject them as apply authority.
+    """
 
     model_config = ConfigDict(extra="allow")
 
     provider: str = "proxmox"
     plan_id: str | None = None
+    endpoint_id: int | None = Field(default=None, gt=0)
+    approval_token: str | None = None
     desired_state: DesiredStateBundle | None = None
     operations: list[ProviderOperation] = Field(default_factory=list)
     scope: dict[str, Any] = Field(default_factory=dict)
@@ -288,10 +428,48 @@ class ApplyRequest(BaseModel):
         return self.netbox_branch_schema_id or self.source_branch_schema_id
 
 
+class ApprovalRequest(BaseModel):
+    """Bind an approval request to the endpoint persisted in a canonical plan."""
+
+    endpoint_id: int | None = Field(default=None, gt=0)
+
+
+class ApprovalResponse(BaseModel):
+    """One-time approval credential; ``token`` is returned only at creation."""
+
+    id: str
+    plan_id: str
+    plan_digest: str
+    endpoint_id: int | None = None
+    endpoint_config_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    requester: str
+    approver: str
+    token: str
+    expires_at: datetime
+
+
+class ApprovalStatusResponse(BaseModel):
+    """Safe durable approval metadata; never includes raw token or token hash."""
+
+    id: str
+    plan_id: str
+    plan_digest: str
+    endpoint_id: int | None = None
+    endpoint_config_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    requester: str
+    approver: str
+    created_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    consumed_by: str | None = None
+    operation_run_id: str | None = None
+
+
 class ReconcileRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     provider: str = "proxmox"
+    endpoint_id: int | None = Field(default=None, gt=0)
     scope: dict[str, Any] = Field(default_factory=dict)
     actor: str | None = None
     netbox_branch_schema_id: str | None = None
@@ -302,11 +480,35 @@ class ReconcileRequest(BaseModel):
         return self.netbox_branch_schema_id or self.source_branch_schema_id
 
 
+class OperationEvent(BaseModel):
+    """One ordered, append-only dispatch or provider-task transition."""
+
+    sequence: int
+    operation_index: int | None = None
+    operation_id: str | None = None
+    event: str
+    status: OperationStatus
+    code: str
+    message: str
+    kind: str | None = None
+    action: str | None = None
+    target_ref: str | None = None
+    provider_task_ref: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
 class OperationRun(BaseModel):
     """Persisted Ceph v2 operation run."""
 
     id: str
     plan_id: str | None = None
+    endpoint_id: int | None = None
+    endpoint_config_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    plan_digest: str | None = None
+    requester: str | None = None
+    approver: str | None = None
+    approval_id: str | None = None
     status: OperationStatus
     actor: str | None = None
     source_branch_schema_id: str | None = None
@@ -315,15 +517,18 @@ class OperationRun(BaseModel):
     provider_task_refs: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    lease_expires_at: datetime | None = None
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     result_summary: dict[str, Any] = Field(default_factory=dict)
+    events: list[OperationEvent] = Field(default_factory=list)
 
 
 class ProviderCapabilities(BaseModel):
     """Capability flags for one Ceph provider adapter."""
 
     provider: str
+    endpoint_id: int | None = None
     supported: bool
     read_state: bool = False
     diff: bool = False
@@ -412,6 +617,9 @@ class SSEEvent(BaseModel):
 
 
 __all__ = [
+    "ApprovalRequest",
+    "ApprovalResponse",
+    "ApprovalStatusResponse",
     "ApplyRequest",
     "CapabilitiesResponse",
     "CephHealthStatus",
@@ -420,6 +628,7 @@ __all__ = [
     "DesiredStateBundle",
     "MetricsResponse",
     "OperationRun",
+    "OperationEvent",
     "PlanRequest",
     "PlanResponse",
     "ProviderCapabilities",
@@ -429,4 +638,8 @@ __all__ = [
     "SSEEvent",
     "ValidationResponse",
     "ValidationResult",
+    "is_secret_field_name",
+    "normalized_field_name",
+    "sanitize_operation_value",
+    "validate_credential_ref",
 ]

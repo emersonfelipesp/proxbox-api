@@ -7,9 +7,12 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 
+from proxbox_api.app import factory
+from proxbox_api.operation_inventory.adapter import walk
 from proxbox_api.operation_inventory.collection import check_optional, optional_sequences
-from proxbox_api.operation_inventory.generated import identities, load_documents
+from proxbox_api.operation_inventory.generated import bind, identities, load_documents
 from proxbox_api.operation_inventory.inputs import load_inputs
 from proxbox_api.operation_inventory.schema import InventoryError, load_inventory
 
@@ -39,26 +42,26 @@ RAW_INPUTS = [
     " cOrE, PBS,pbs,, ",
 ]
 COUNTS = [
-    4049,
+    4051,
     3766,
-    3786,
+    3788,
     3766,
-    3797,
+    3799,
     3777,
-    3797,
-    3808,
+    3799,
+    3810,
     3996,
     4007,
-    4027,
+    4029,
     4007,
-    4038,
+    4040,
     4018,
-    4038,
-    4049,
-    4049,
+    4040,
+    4051,
+    4051,
     3766,
-    3797,
-    3808,
+    3799,
+    3810,
     3996,
     4007,
 ]
@@ -150,32 +153,112 @@ def _included(row, mode):
     return mode.core
 
 
-def assert_all_modes(inventory):
-    assert [mode.feature_tokens for mode in inventory.modes] == RAW_INPUTS
-    assert [len(mode.registrations) for mode in inventory.modes] == COUNTS
-    default = [inventory.operations[row.operation] for row in inventory.modes[0].registrations]
-    generated = [row for row in default if row.generated]
+def _registered_rows(inventory, registrations):
+    return [inventory.operations[row.operation] for row in registrations]
+
+
+def _assert_core_route_oracles(rows, mode):
+    sockets = [row.path for row in rows if row.protocol == "websocket"]
+    assert sockets == (
+        [
+            "/",
+            "/ws/virtual-machines",
+            "/ws",
+            "/proxmox/console/browser-stream",
+            "/ssh/sessions/{session_id}/ws",
+        ]
+        if mode.core
+        else []
+    )
+    standalone = [
+        (row.path, row.methods, row.protocol)
+        for row in rows
+        if row.name in {"create_browser_console_session", "browser_console_stream"}
+    ]
+    assert standalone == (
+        [
+            ("/proxmox/console/browser-sessions", ["POST"], "http"),
+            ("/proxmox/console/browser-stream", [], "websocket"),
+        ]
+        if mode.core
+        else []
+    )
+
+
+def _assert_generated_sequence(rows):
+    generated = [row for row in rows if row.generated]
     assert len(generated) == 3741
     assert [(row.path, row.methods) for row in generated[:2]] == [
         ("/proxmox/api2/latest/access", ["GET"]),
         ("/proxmox/api2/access", ["GET"]),
     ]
+    return generated
+
+
+def _assert_mode_rows(inventory, mode, default, generated):
+    rows = _registered_rows(inventory, mode.registrations)
+    assert rows == [row for row in default if _included(row, mode)]
+    assert [row for row in rows if row.generated] == generated
+    _assert_core_route_oracles(rows, mode)
+
+
+def assert_all_modes(inventory):
+    assert [mode.feature_tokens for mode in inventory.modes] == RAW_INPUTS
+    assert [len(mode.registrations) for mode in inventory.modes] == COUNTS
+    default = _registered_rows(inventory, inventory.modes[0].registrations)
+    generated = _assert_generated_sequence(default)
     for mode in inventory.modes:
-        rows = [inventory.operations[row.operation] for row in mode.registrations]
-        assert rows == [row for row in default if _included(row, mode)]
-        assert [row for row in rows if row.generated] == generated
-        sockets = [row.path for row in rows if row.protocol == "websocket"]
-        assert sockets == (
-            ["/", "/ws/virtual-machines", "/ws", "/ssh/sessions/{session_id}/ws"]
-            if mode.core
-            else []
-        )
+        _assert_mode_rows(inventory, mode, default, generated)
+    opt_in = _registered_rows(inventory, inventory.runtime_codegen_opt_in.registrations)
+    _assert_generated_sequence(opt_in)
+    assert len(inventory.runtime_codegen_opt_in.registrations) == 4053
 
 
 def test_committed_real_inventory_all_mode_oracles():
     # Missing artifact is a failure, never a skip or regenerated expectation.
     inventory = load_inventory((ROOT / "contracts/mounted-operations.json").read_bytes())
     assert_all_modes(inventory)
+
+
+@pytest.mark.asyncio
+async def test_default_lifespan_mounts_committed_default_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from proxbox_api.routes.proxmox import runtime_generated
+
+    async def skip_bootstrap(_app: FastAPI) -> None:
+        return None
+
+    async def skip_dispose() -> None:
+        return None
+
+    monkeypatch.delenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", raising=False)
+    monkeypatch.delenv("PROXBOX_FEATURES", raising=False)
+    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda: None)
+    monkeypatch.setattr(factory, "validate_auth_lockout_identity_key", lambda: None)
+    monkeypatch.setattr(factory, "quarantine_legacy_codegen_artifacts", lambda: [])
+    monkeypatch.setattr(factory, "_run_bootstrap_pass", skip_bootstrap)
+    monkeypatch.setattr(factory.database, "dispose_database", skip_dispose)
+    monkeypatch.setattr(
+        runtime_generated,
+        "_generated_route_cache_path",
+        lambda: tmp_path / "runtime_generated_routes_cache.json",
+    )
+
+    application = factory.create_app()
+    async with factory._lifespan(application):
+        inputs = load_inputs(ROOT)
+        documents = load_documents(ROOT, inputs.generated_versions)
+        generated = identities(ROOT, documents)
+        actual = [bind(row, generated) for row in walk(application.routes, ROOT)]
+
+    inventory = load_inventory((ROOT / "contracts/mounted-operations.json").read_bytes())
+    expected = [
+        inventory.operations[registration.operation]
+        for registration in inventory.modes[0].registrations
+    ]
+    assert actual == expected
 
 
 def test_removed_registration_breaks_fixed_mode_oracle():

@@ -30,6 +30,8 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.log_buffer import configure_buffer_logger
 from proxbox_api.logger import logger
 from proxbox_api.openapi_custom import custom_openapi_builder
+from proxbox_api.proxmox_codegen.security import SchemaValidationError
+from proxbox_api.proxmox_to_netbox.proxmox_schema import quarantine_legacy_codegen_artifacts
 from proxbox_api.routes.admin import router as admin_router
 from proxbox_api.routes.auth import router as auth_router
 from proxbox_api.routes.cloud import azure_vhd_imports_router as cloud_azure_vhd_imports_router
@@ -62,6 +64,9 @@ from proxbox_api.routes.proxmox.replication import router as px_replication_rout
 from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 from proxbox_api.routes.proxmox.sdn import router as px_sdn_router
 from proxbox_api.routes.proxmox.services import router as px_services_router
+from proxbox_api.routes.proxmox.viewer_codegen import (
+    bundled_only_router as px_viewer_bundled_only_router,
+)
 from proxbox_api.routes.proxmox.zfs import router as px_zfs_router
 from proxbox_api.routes.proxmox_actions import router as proxmox_actions_router
 from proxbox_api.routes.proxmox_tags import router as proxmox_tags_router
@@ -70,6 +75,7 @@ from proxbox_api.routes.sync.active import router as sync_active_router
 from proxbox_api.routes.sync.individual import router as sync_individual_router
 from proxbox_api.routes.virtualization import router as virtualization_router
 from proxbox_api.routes.virtualization.virtual_machines import router as virtual_machines_router
+from proxbox_api.runtime_settings import runtime_codegen_enabled
 from proxbox_api.services.auth_lockout import (
     AuthLockoutPolicy,
     AuthSourceContext,
@@ -95,6 +101,7 @@ AUTH_EXEMPT_PATHS = frozenset(
         "/auth/bootstrap-status",
     }
 )
+_ENDPOINT_RATE_LIMITS = {"/proxmox/viewer/pydantic": 6}
 
 
 def _load_trusted_proxies() -> tuple[IPNetwork, ...]:
@@ -141,6 +148,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.requests_per_minute = requests_per_minute
         self.window_size = 60.0
         self._requests: dict[str, list[float]] = defaultdict(list)
+        self._endpoint_requests: dict[tuple[str, str], list[float]] = defaultdict(list)
 
     def _clean_old_requests(self, ip: str, now: float) -> None:
         cutoff = now - self.window_size
@@ -151,6 +159,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     def _get_client_ip(self, request: Request) -> str:
         return resolve_client_source(request).canonical
+
+    def _endpoint_limit_exceeded(self, path: str, ip: str, now: float) -> bool:
+        limit = _ENDPOINT_RATE_LIMITS.get(path)
+        if limit is None:
+            return False
+        key = (path, ip)
+        cutoff = now - self.window_size
+        requests = [timestamp for timestamp in self._endpoint_requests[key] if timestamp > cutoff]
+        self._endpoint_requests[key] = requests
+        if len(requests) >= limit:
+            return True
+        requests.append(now)
+        return False
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -165,6 +186,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Please try again later."},
+                headers={"Retry-After": "60"},
+            )
+
+        if self._endpoint_limit_exceeded(path, ip, now):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Endpoint rate limit exceeded. Please try again later."},
                 headers={"Retry-After": "60"},
             )
 
@@ -260,6 +288,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         bootstrap.init_database_and_netbox()
         validate_auth_lockout_identity_key()
+        quarantine_legacy_codegen_artifacts()
         try:
             register_generated_proxmox_routes(app)
         except ProxboxException as error:
@@ -268,6 +297,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 error.message,
                 extra={"detail": error.detail},
             )
+            strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if strict:
+                raise
+        except SchemaValidationError as error:
+            logger.warning("Generated Proxmox proxy routes were not mounted: %s", error)
             strict = os.environ.get("PROXBOX_STRICT_STARTUP", "").lower() in (
                 "1",
                 "true",
@@ -361,7 +399,131 @@ async def _run_bootstrap_pass(app: FastAPI) -> None:
     app.state.bootstrap_status = status
 
 
-def create_app() -> FastAPI:  # noqa: C901
+def _include_core_routes(app: FastAPI) -> None:
+    register_cache_routes(app)
+    register_full_update_routes(app)
+    register_websocket_routes(app)
+    app.include_router(admin_router, prefix="/admin", tags=["admin"])
+    app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
+    app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
+    app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
+    app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
+    app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
+    app.include_router(px_firewall_router, prefix="/proxmox", tags=["proxmox / firewall"])
+    app.include_router(px_sdn_router, prefix="/proxmox", tags=["proxmox / sdn"])
+    app.include_router(px_datacenter_router, prefix="/proxmox", tags=["proxmox / datacenter"])
+    app.include_router(px_access_router, prefix="/proxmox", tags=["proxmox / access"])
+    app.include_router(px_services_router, prefix="/proxmox", tags=["proxmox / services"])
+    app.include_router(px_zfs_router, prefix="/proxmox", tags=["proxmox / zfs"])
+    app.include_router(
+        px_metrics_router,
+        prefix="/proxmox/metrics",
+        tags=["proxmox / metrics"],
+    )
+    app.include_router(
+        proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
+    )
+    app.include_router(proxmox_tags_router, prefix="/proxmox", tags=["proxmox / operational verbs"])
+    app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
+    if runtime_codegen_enabled():
+        from proxbox_api.routes.proxmox.viewer_codegen import runtime_codegen_router
+
+        viewer_router = runtime_codegen_router
+    else:
+        viewer_router = px_viewer_bundled_only_router
+    app.include_router(
+        viewer_router,
+        prefix="/proxmox/viewer",
+        tags=["proxmox / viewer"],
+    )
+    app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
+    app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
+    app.include_router(
+        virtual_machines_router,
+        prefix="/virtualization/virtual-machines",
+        tags=["virtualization / virtual-machines"],
+    )
+    app.include_router(extras_router, prefix="/extras", tags=["extras"])
+    app.include_router(intent_router, prefix="/intent", tags=["intent"])
+    app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
+    app.include_router(vm_tags_router, prefix="/intent", tags=["intent"])
+    app.include_router(cloud_lxc_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_provision_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_provision_stream_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_firecracker_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_azure_vhd_imports_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_network_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_image_factory_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_template_images_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_pve_template_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_qemu_templates_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_templates_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(cloud_versions_router, prefix="/cloud", tags=["cloud"])
+    app.include_router(ssh_terminal_router, prefix="/ssh", tags=["ssh terminal"])
+    app.include_router(
+        sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
+    )
+    app.include_router(sync_active_router)
+
+
+def _include_pbs_routes(app: FastAPI, enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
+        from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("PBS subpackage unavailable; /pbs/* routes disabled (%s)", exc)
+    else:
+        app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
+        app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
+
+
+def _include_ceph_routes(app: FastAPI, enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        from proxbox_api.ceph import router as ceph_router  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
+    else:
+        app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
+    try:
+        from proxbox_api.ceph.v2_routes import router as ceph_v2_router  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("Ceph v2 subpackage unavailable; /ceph/v2/* routes disabled (%s)", exc)
+    else:
+        app.include_router(ceph_v2_router, prefix="/ceph/v2", tags=["ceph-v2"])
+
+
+def _include_pdm_routes(app: FastAPI, enabled: bool) -> None:
+    if not enabled:
+        return
+    try:
+        from proxbox_api.pdm import admin_router as pdm_admin_router  # noqa: PLC0415
+        from proxbox_api.pdm import router as pdm_router  # noqa: PLC0415
+    except ImportError as exc:
+        logger.info("PDM subpackage unavailable; /pdm/* routes disabled (%s)", exc)
+    else:
+        app.include_router(pdm_admin_router, prefix="/pdm", tags=["pdm"])
+        app.include_router(pdm_router, prefix="/pdm", tags=["pdm"])
+
+
+def _include_selected_routes(app: FastAPI) -> None:
+    features = {
+        token.strip().lower()
+        for token in os.environ.get("PROXBOX_FEATURES", "").split(",")
+        if token.strip()
+    }
+    sidecar_only = bool(features) and features.issubset({"pbs", "ceph", "pdm"})
+    if not sidecar_only:
+        _include_core_routes(app)
+    _include_pbs_routes(app, not features or "pbs" in features)
+    _include_ceph_routes(app, not features or "ceph" in features)
+    _include_pdm_routes(app, not features or "pdm" in features)
+
+
+def create_app() -> FastAPI:
     """Build and configure the Proxbox FastAPI application."""
     auth_lockout_policy = AuthLockoutPolicy.from_env()
     app = FastAPI(
@@ -443,106 +605,6 @@ def create_app() -> FastAPI:  # noqa: C901
     app.include_router(root_meta_router)
     app.include_router(auth_router)
 
-    features = {
-        token.strip().lower()
-        for token in os.environ.get("PROXBOX_FEATURES", "").split(",")
-        if token.strip()
-    }
-    sidecar_features = {"pbs", "ceph", "pdm"}
-    sidecar_only = bool(features) and features.issubset(sidecar_features)
-    include_pbs = not features or "pbs" in features
-    include_ceph = not features or "ceph" in features
-    include_pdm = not features or "pdm" in features
-
-    if not sidecar_only:
-        register_cache_routes(app)
-        register_full_update_routes(app)
-        register_websocket_routes(app)
-        app.include_router(admin_router, prefix="/admin", tags=["admin"])
-        app.include_router(netbox_router, prefix="/netbox", tags=["netbox"])
-        app.include_router(px_nodes_router, prefix="/proxmox/nodes", tags=["proxmox / nodes"])
-        app.include_router(px_cluster_router, prefix="/proxmox/cluster", tags=["proxmox / cluster"])
-        app.include_router(px_ha_router, prefix="/proxmox/cluster", tags=["proxmox / ha"])
-        app.include_router(px_replication_router, prefix="/proxmox", tags=["proxmox / replication"])
-        app.include_router(px_firewall_router, prefix="/proxmox", tags=["proxmox / firewall"])
-        app.include_router(px_sdn_router, prefix="/proxmox", tags=["proxmox / sdn"])
-        app.include_router(px_datacenter_router, prefix="/proxmox", tags=["proxmox / datacenter"])
-        app.include_router(px_access_router, prefix="/proxmox", tags=["proxmox / access"])
-        app.include_router(px_services_router, prefix="/proxmox", tags=["proxmox / services"])
-        app.include_router(px_zfs_router, prefix="/proxmox", tags=["proxmox / zfs"])
-        app.include_router(
-            px_metrics_router,
-            prefix="/proxmox/metrics",
-            tags=["proxmox / metrics"],
-        )
-        app.include_router(
-            proxmox_actions_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
-        )
-        app.include_router(
-            proxmox_tags_router, prefix="/proxmox", tags=["proxmox / operational verbs"]
-        )
-        app.include_router(proxmox_router, prefix="/proxmox", tags=["proxmox"])
-        app.include_router(dcim_router, prefix="/dcim", tags=["dcim"])
-        app.include_router(virtualization_router, prefix="/virtualization", tags=["virtualization"])
-        app.include_router(
-            virtual_machines_router,
-            prefix="/virtualization/virtual-machines",
-            tags=["virtualization / virtual-machines"],
-        )
-        app.include_router(extras_router, prefix="/extras", tags=["extras"])
-        app.include_router(intent_router, prefix="/intent", tags=["intent"])
-        app.include_router(deletion_requests_router, prefix="/intent", tags=["intent"])
-        app.include_router(vm_tags_router, prefix="/intent", tags=["intent"])
-        app.include_router(cloud_lxc_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_provision_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_provision_stream_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_firecracker_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_azure_vhd_imports_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_network_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_image_factory_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_template_images_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_pve_template_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_qemu_templates_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_templates_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(cloud_versions_router, prefix="/cloud", tags=["cloud"])
-        app.include_router(ssh_terminal_router, prefix="/ssh", tags=["ssh terminal"])
-        app.include_router(
-            sync_individual_router, prefix="/sync/individual", tags=["sync / individual"]
-        )
-        app.include_router(sync_active_router)
-
-    if include_pbs:
-        try:
-            from proxbox_api.pbs import admin_router as pbs_admin_router  # noqa: PLC0415
-            from proxbox_api.pbs import router as pbs_router  # noqa: PLC0415
-        except ImportError as exc:
-            logger.info("PBS subpackage unavailable; /pbs/* routes disabled (%s)", exc)
-        else:
-            app.include_router(pbs_admin_router, prefix="/pbs", tags=["pbs"])
-            app.include_router(pbs_router, prefix="/pbs", tags=["pbs"])
-
-    if include_ceph:
-        try:
-            from proxbox_api.ceph import router as ceph_router  # noqa: PLC0415
-        except ImportError as exc:
-            logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
-        else:
-            app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
-        try:
-            from proxbox_api.ceph.v2_routes import router as ceph_v2_router  # noqa: PLC0415
-        except ImportError as exc:
-            logger.info("Ceph v2 subpackage unavailable; /ceph/v2/* routes disabled (%s)", exc)
-        else:
-            app.include_router(ceph_v2_router, prefix="/ceph/v2", tags=["ceph-v2"])
-
-    if include_pdm:
-        try:
-            from proxbox_api.pdm import admin_router as pdm_admin_router  # noqa: PLC0415
-            from proxbox_api.pdm import router as pdm_router  # noqa: PLC0415
-        except ImportError as exc:
-            logger.info("PDM subpackage unavailable; /pdm/* routes disabled (%s)", exc)
-        else:
-            app.include_router(pdm_admin_router, prefix="/pdm", tags=["pdm"])
-            app.include_router(pdm_router, prefix="/pdm", tags=["pdm"])
+    _include_selected_routes(app)
 
     return app

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 
-from proxbox_api.ceph import v2_engine
 from proxbox_api.ceph.prometheus import PrometheusSourceConfig
 from proxbox_api.ceph.v2_engine import build_plan, metric_safety_validations
 from proxbox_api.ceph.v2_providers.base import CephCapabilityUnsupported
@@ -18,6 +18,8 @@ from proxbox_api.ceph.v2_schemas import (
     ProviderCapabilities,
     ProviderOperation,
 )
+
+prometheus_provider_module = importlib.import_module("proxbox_api.ceph.v2_providers.prometheus")
 
 
 def _snapshot(**kwargs: Any) -> CephMetricSnapshot:
@@ -45,7 +47,7 @@ async def test_adapter_metrics_with_source_returns_snapshot(monkeypatch) -> None
         assert config.url == "http://prom:9090"
         return snap
 
-    monkeypatch.setattr("proxbox_api.ceph.v2_providers.prometheus.fetch_snapshot", fake_fetch)
+    monkeypatch.setattr(prometheus_provider_module, "fetch_snapshot", fake_fetch)
     adapter = PrometheusCephProviderAdapter(source=PrometheusSourceConfig(url="http://prom:9090"))
     metrics = await adapter.metrics({})
     assert metrics["cluster_health"] == "HEALTH_WARN"
@@ -101,9 +103,7 @@ class _FakeAdapter:
         return {}
 
 
-async def test_build_plan_consumes_metric_snapshot_for_warnings(monkeypatch) -> None:
-    monkeypatch.setattr(v2_engine, "_PLAN_STORE", {})
-    monkeypatch.setattr(v2_engine, "_PLAN_STORE_ORDER", [])
+async def test_build_plan_consumes_metric_snapshot_for_warnings() -> None:
     request = PlanRequest.model_validate(
         {
             "provider": "proxmox",
@@ -118,9 +118,7 @@ async def test_build_plan_consumes_metric_snapshot_for_warnings(monkeypatch) -> 
     assert plan.valid is True
 
 
-async def test_build_plan_reads_snapshot_from_request_scope(monkeypatch) -> None:
-    monkeypatch.setattr(v2_engine, "_PLAN_STORE", {})
-    monkeypatch.setattr(v2_engine, "_PLAN_STORE_ORDER", [])
+async def test_build_plan_reads_snapshot_from_request_scope() -> None:
     snapshot = _snapshot(cluster_health="HEALTH_WARN", misplaced_pgs=5)
     request = PlanRequest.model_validate(
         {
@@ -131,3 +129,31 @@ async def test_build_plan_reads_snapshot_from_request_scope(monkeypatch) -> None
     )
     plan = await build_plan(request, _FakeAdapter())
     assert any(v.code == "cluster_degraded" for v in plan.validations)
+
+
+async def test_build_plan_redacts_provider_and_request_summaries() -> None:
+    canary = "https://operator:plan-secret@ceph.invalid?token=plan-canary"
+    request = PlanRequest.model_validate(
+        {
+            "provider": "proxmox",
+            "operations": [
+                {
+                    "kind": "pool",
+                    "target_ref": "rbd",
+                    "action": "create",
+                    "before_summary": {"password": "plain-plan-secret"},
+                    "after_summary": {
+                        "endpoint": canary,
+                        "nested": {"access_token": "raw-plan-token"},
+                    },
+                }
+            ],
+        }
+    )
+    plan = await build_plan(request, _FakeAdapter())
+    serialized = repr(plan.model_dump(mode="json"))
+
+    assert "plain-plan-secret" not in serialized
+    assert "plan-secret" not in serialized
+    assert "plan-canary" not in serialized
+    assert "raw-plan-token" not in serialized

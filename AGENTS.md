@@ -28,7 +28,63 @@ their complete source closure. No inventory module belongs in runtime startup.
 
 Read [`docs/api/console-sessions.md`](docs/api/console-sessions.md) and `proxbox_api/routes/proxmox/CLAUDE.md` before changing `POST /proxmox/console/sessions`, `ConsoleSessionRequest`, `ConsoleSessionResponse`, `_request_console_proxy()`, `_console_ticket()`, `_console_port()`, `_build_ws_url()`, or `ProxmoxSession.get_websocket_auth()`. This route returns private, short-lived Proxmox transport material only to the trusted `nms-backend` relay. Preserve the explicit QEMU/LXC mode matrix, local endpoint-ID meaning, stored TLS policy, full ticket encoding, exactly one API-token or password-session WebSocket authentication value, and the rule that tickets, upstream URLs, cookies, and authorization values never reach browser JavaScript or logs.
 
+The standalone browser surface is distinct:
+`POST /proxmox/console/browser-sessions` returns only `stream_token`,
+`websocket_path`, `expires_at`, and `console_type`; WebSocket
+`/proxmox/console/browser-stream` consumes it from exactly one
+`proxbox-token.<stream_token>` offered protocol alongside `binary`; never put
+the token in a URI or echo its protocol. Keep the complete private
+payload Fernet-encrypted in shared SQLite, the token random and one-use, the
+30-second TTL and active-count limits bounded, and consumption atomic across
+workers. Require the exact validated HTTPS Origin and `binary` subprotocol.
+Preserve the stored endpoint `verify_ssl` policy, mediate RFB 3.8 VNC
+authentication server-side for QEMU noVNC, and keep all client errors, close
+reasons, and logs secret-free. Disable ambient proxies and refuse every
+upstream redirect before a second connection so credentials cannot be replayed.
+QEMU terminal and LXC terminal relay frames
+directly; LXC noVNC remains invalid. Both create and consume must retain the
+inactive `console_relay_policy` seam for the pending RPC-only endpoint policy;
+do not implement or activate that policy here. Require the current endpoint row
+to be enabled at both standalone boundaries without changing the existing
+service-only broker's behavior.
+Preflight Fernet before requesting an upstream ticket, bracket IPv6 authorities,
+validate the node path segment, validate the expiry index at startup, and use
+one shared idle deadline refreshed by traffic in either direction.
+
 Generated `/proxmox/api2/*` proxy dispatch is read-only. Every non-GET method is refused before target and credential resolution, including cached and rebuilt routes. Mutation schemas remain discoverable but deprecated with a documented 403; use dedicated typed, audited RPC procedures for supported writes. This method guard does not establish effect safety for all GET operations or change handwritten route authorization.
+
+## Proxmox Code Generation Security
+
+Runtime code generation defaults to disabled. Only the explicit development
+setting `PROXBOX_RUNTIME_CODEGEN_ENABLED=true` mounts the HTTP generation and
+route-refresh endpoints or permits runtime user-schema discovery. With the
+default setting, route registration, schema discovery, and Pydantic source
+rendering use bundled schemas only; the user-generated directory may receive
+only the derived route cache. Refresh a bundled tag, including `latest`, solely
+by installing a replacement package that bundles the updated schema.
+
+Runtime-generated routes construct Pydantic models directly from parsed OpenAPI
+data with `pydantic.create_model`; runtime startup and route refresh never
+evaluate rendered Python source. The file renderer remains available for
+offline artifacts, but it must validate every emitted identifier and render
+aliases, descriptions, and defaults with Python literal representations.
+Codegen version tags must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` and must
+not equal `.` or `..`. Validate tags before any crawl or write, and resolve
+every generated artifact and runtime route-cache path inside its configured
+base directory before accessing the filesystem.
+Bundled tags are immutable and resolve before user-generated tags. Register a
+user artifact only when its `provenance.json` sidecar contains the source URL,
+generation time, and the matching SHA-256 digest of `openapi.json`. Persist
+non-default-source artifacts under `custom/<version_tag>/` for inspection only;
+runtime registration must never read that namespace. Enforce all OpenAPI
+resource limits before persistence, cache restoration, and model construction,
+and reject normalized field-name or operation-derived model-name collisions.
+Startup and `proxbox-schema quarantine-legacy` quarantine every user-generated
+`pydantic_models.py` and each legacy runtime route cache without valid
+provenance.
+Treat provenance sidecars as corruption detection, not authentication: a writer
+with the same operating-system UID can forge both an artifact and its digest.
+Production must therefore keep runtime code generation disabled.
 
 ## Certified Stack Pairing
 
@@ -92,7 +148,14 @@ rtk ruff format --check .
 uv run python -m compileall proxbox_api tests
 uv run python -c "import proxbox_api.main"
 uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
-uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py \
+  proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py \
+  proxbox_api/runtime_settings.py proxbox_api/settings_client.py \
+  proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/timing.py \
+  proxbox_api/ceph/v2_schemas.py \
+  proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py \
+  proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py \
+  proxbox_api/ceph/v2_providers/proxmox_writer.py
 rtk pytest tests
 ```
 
@@ -119,6 +182,57 @@ L2VPNTermination, RouteTarget, Prefix, plugin metadata objects, and optional
 rollback, lock, or mutate Proxmox SDN configuration. Unsupported older clusters
 and missing optional `netbox_bgp` APIs should emit skipped warnings rather than
 failing healthy endpoints.
+
+Ceph v2 writes live in `proxbox_api/ceph/`. Every Proxmox plan/approval/apply
+must name one durable local endpoint and create one private full-schema
+HMAC-bound session; generic selectors/session lists and first-session fallback
+are forbidden. Bind every non-noop operation to one exact persisted node; never
+select the first node or invent `localhost`. Strictly validate the payload for
+the exact `(kind, action)` during planning and again at dispatch; reject unknown
+or missing fields instead of filtering them. Persist/digest the plan plus a
+stable server-keyed endpoint configuration revision, bind that revision through
+approval/run records, and reject same-ID retargeting. Require a distinct
+delegated actor to issue one hashed/expiring/single-use approval, consume it
+atomically, append a live `dispatching` intent before every SDK call, and reload
+`enabled`, `allow_writes`, revision, endpoint/session binding, and node
+immediately before every mutation. Fetch and validate live `cluster/status`
+node membership first, then verify the endpoint/session through a dedicated
+uncached gate session; bootstrap-cached node membership is never write
+authority. Keep durable audit/lease work on an independent request session so
+heartbeats continue during slow gates, then require a fresh owner/expiry CAS
+after preparation and before invoking the provider mutation. Renewal and
+checkpoint predicates use database wall-clock time evaluated after row-lock
+waits, so delayed statements cannot reclaim expired authority. Every live
+checkpoint must retain the same unexposed lease-owner nonce and non-expired
+lease. For task-based
+mutations, UPID means submitted until terminal polling; atomically claim exactly
+one provider-globally unseen complete UPID whose returned and embedded nodes equal the
+plan node. Only `flag:create/update/delete` and `osd:update` are SDK-proven
+synchronous completions; no other missing task ID means success. Shield task
+claim/submission, synchronous-completion, and cancellation checkpoints through
+repeated cancellation until the inner durability task finishes, then propagate
+the remembered cancellation. Refuse startup with
+`ceph_provider_task_claim_cross_endpoint_collision` rather than selecting or
+discarding ambiguous cross-endpoint legacy evidence; this migration failure is
+fatal and must stop route mounting. Resolve bounded Ceph task timeout, poll
+interval, and run lease once off-loop as env override → plugin setting →
+default, normalize poll interval to at most timeout, persist the immutable lease
+duration, and bound every task-status call and sleep by the remaining deadline.
+Missing/multiple/reused or node-inconsistent task IDs, expired run leases, crashes, and cancellation become
+`outcome_unknown` and are not retried or overwritten by a late worker. Recursively
+redact normalized secret aliases, exception values, and non-JSON fallback text
+across persistence, API, SSE, every handler, and the DEBUG admin buffer.
+`netbox-ceph` must resolve the plugin
+endpoint to the canonical proxbox-api endpoint ID; a plugin PK is never a
+substitute. Ceph
+writes remain default-off unless both `PROXBOX_ENABLE_CEPH_V2_WRITES=true` and
+`PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY=true`; the trusted authenticated gateway
+must overwrite `X-Proxbox-Actor`. Legacy confirmation and non-Proxmox apply stay
+closed; Dashboard/external apply and destructive capabilities remain false until
+durable provider authority exists; reconcile stays read-only. Run the focused Ceph
+security/concurrency/migration suites and keep
+`docs/operations/ceph-write-approvals.md` plus its Portuguese translation
+aligned.
 
 If you edit `nextjs-ui/`, also run:
 
@@ -311,7 +425,7 @@ All violations block CI. Fix before pushing.
 
 **Type Checking (Pyright strict):**
 ```bash
-uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py
+uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py proxbox_api/runtime_settings.py proxbox_api/settings_client.py proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/timing.py proxbox_api/ceph/v2_schemas.py proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py proxbox_api/ceph/v2_providers/proxmox_writer.py
 ```
 Type mismatches block merge. Use `# type: ignore` only with justification.
 
@@ -424,6 +538,7 @@ connection exists or is **operator-only infrastructure** that has no business in
 `PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_RATE_LIMIT`,
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
+`PROXBOX_RUNTIME_CODEGEN_ENABLED`,
 `PROXBOX_CORS_EXTRA_ORIGINS`. Anything that controls sync behavior, batching,
 concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.
 

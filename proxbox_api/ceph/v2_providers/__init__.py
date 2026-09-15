@@ -2,45 +2,51 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 from proxbox_api.ceph.v2_providers.base import (
     CephProviderAdapter,
     RBDCephProviderAdapter,
     RGWAdminCephProviderAdapter,
 )
-from proxbox_api.ceph.v2_providers.dashboard import DashboardCephProviderAdapter
-from proxbox_api.ceph.v2_providers.external import ExternalCephProviderAdapter
-from proxbox_api.ceph.v2_providers.prometheus import PrometheusCephProviderAdapter
-from proxbox_api.ceph.v2_providers.proxmox import ProxmoxCephProviderAdapter
-
-ProviderFactory = Callable[[list[object] | None], CephProviderAdapter]
 
 
 def _normalize_provider(provider: str | None) -> str:
     return (provider or "proxmox").strip().lower().replace("-", "_")
 
 
-_REGISTRY: dict[str, ProviderFactory] = {
-    "proxmox": ProxmoxCephProviderAdapter,
-    "dashboard": DashboardCephProviderAdapter,
-    "rgw_admin": RGWAdminCephProviderAdapter,
-    "rbd": RBDCephProviderAdapter,
-    "prometheus": PrometheusCephProviderAdapter,
-    "external": ExternalCephProviderAdapter,
-}
+_PROVIDER_NAMES = frozenset({"proxmox", "dashboard", "rgw_admin", "rbd", "prometheus", "external"})
 
 
 def provider_names() -> list[str]:
-    return sorted(_REGISTRY)
+    return sorted(_PROVIDER_NAMES)
 
 
 def adapter_for_provider(
     provider: str | None, pxs: list[object] | None = None
 ) -> CephProviderAdapter:
     name = _normalize_provider(provider)
-    factory = _REGISTRY.get(name, ExternalCephProviderAdapter)
-    return factory(pxs)
+    # Keep provider modules lazy. ``endpoint_binding`` imports ``base`` while
+    # defining BoundProxmoxSession; eager-importing the Proxmox adapter here
+    # would import that partially initialized module and disable all v2 routes.
+    if name == "proxmox":
+        from proxbox_api.ceph.v2_providers.proxmox import ProxmoxCephProviderAdapter
+
+        return ProxmoxCephProviderAdapter(pxs)
+    if name == "dashboard":
+        from proxbox_api.ceph.v2_providers.dashboard import DashboardCephProviderAdapter
+
+        return DashboardCephProviderAdapter(pxs)
+    if name == "rgw_admin":
+        return RGWAdminCephProviderAdapter(pxs)
+    if name == "rbd":
+        return RBDCephProviderAdapter(pxs)
+    if name == "prometheus":
+        from proxbox_api.ceph.v2_providers.prometheus import PrometheusCephProviderAdapter
+
+        return PrometheusCephProviderAdapter(pxs)
+
+    from proxbox_api.ceph.v2_providers.external import ExternalCephProviderAdapter
+
+    return ExternalCephProviderAdapter(pxs)
 
 
 __all__ = [

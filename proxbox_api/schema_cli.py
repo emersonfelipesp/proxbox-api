@@ -8,6 +8,7 @@ Usage::
     proxbox-schema list
     proxbox-schema generate 8.4
     proxbox-schema generate 8.4 --workers 5
+    proxbox-schema quarantine-legacy
     proxbox-schema status
 """
 
@@ -18,11 +19,14 @@ import sys
 from pathlib import Path
 
 
-def _list_versions() -> int:
-    """Print all available bundled Proxmox OpenAPI schema versions."""
-    from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
+def _list_versions(*, include_user: bool = False) -> int:
+    """Print available bundled schemas and explicitly requested user schemas."""
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+        available_proxmox_sdk_versions,
+        has_bundled_proxmox_schema,
+    )
 
-    versions = available_proxmox_sdk_versions()
+    versions = available_proxmox_sdk_versions(include_user=include_user)
     if not versions:
         print("No bundled Proxmox OpenAPI schemas found.")
         return 1
@@ -31,21 +35,34 @@ def _list_versions() -> int:
     for version in versions:
         from proxbox_api.proxmox_to_netbox.proxmox_schema import proxmox_generated_openapi_path
 
-        path = proxmox_generated_openapi_path(version_tag=version)
+        path = proxmox_generated_openapi_path(version_tag=version, allow_user=include_user)
         size_mb = path.stat().st_size / (1024 * 1024) if path.exists() else 0
-        print(f"  {version:>10}   {size_mb:.1f} MB   {path}")
+        artifact_kind = "bundled" if has_bundled_proxmox_schema(version) else "user-generated"
+        print(f"  {version:>10}   {size_mb:.1f} MB   [{artifact_kind}]   {path}")
     return 0
 
 
-def _status() -> int:
+def _partition_versions(versions: list[str]) -> tuple[list[str], list[str]]:
+    """Separate immutable bundled tags from opted-in user-generated tags."""
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import has_bundled_proxmox_schema
+
+    bundled = [version for version in versions if has_bundled_proxmox_schema(version)]
+    user = [version for version in versions if version not in bundled]
+    return bundled, user
+
+
+def _status(*, include_user: bool = False) -> int:
     """Print schema version summary and generation task statuses."""
     from proxbox_api.proxmox_to_netbox.proxmox_schema import available_proxmox_sdk_versions
     from proxbox_api.schema_version_manager import get_all_generation_statuses
 
-    versions = available_proxmox_sdk_versions()
+    versions = available_proxmox_sdk_versions(include_user=include_user)
+    bundled, user = _partition_versions(versions) if include_user else (versions, [])
     tasks = get_all_generation_statuses()
 
-    print(f"Bundled versions: {', '.join(versions) if versions else '(none)'}")
+    print(f"Bundled versions: {', '.join(bundled) if bundled else '(none)'}")
+    if include_user:
+        print(f"User-generated versions: {', '.join(user) if user else '(none)'}")
     if tasks:
         print("\nGeneration tasks:")
         for tag, info in tasks.items():
@@ -62,21 +79,39 @@ def _status() -> int:
 
 def _generate(args: argparse.Namespace) -> int:
     """Generate OpenAPI schema for a specific Proxmox version tag."""
-    from proxbox_api.proxmox_codegen.pipeline import generate_proxmox_codegen_bundle
-    from proxbox_api.proxmox_to_netbox.proxmox_schema import get_user_generated_dir
+    from proxbox_api.proxmox_codegen.pipeline import (
+        codegen_output_directory,
+        generate_proxmox_codegen_bundle,
+        is_default_codegen_source,
+    )
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+        get_user_generated_dir,
+        has_bundled_proxmox_schema,
+    )
     from proxbox_api.schema_version_manager import has_schema_for_release
 
     version_tag = args.version_tag
 
-    if has_schema_for_release(version_tag) and not args.force:
+    if has_bundled_proxmox_schema(version_tag):
+        print(
+            f"Bundled schema version '{version_tag}' is immutable; choose a new version tag.",
+            file=sys.stderr,
+        )
+        return 1
+    if has_schema_for_release(version_tag, allow_user=True) and not args.force:
         print(f"Schema for version '{version_tag}' already exists.")
         print("Use --force to regenerate it.")
         return 0
 
     output_dir = Path(args.output_dir) if args.output_dir else get_user_generated_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
+    artifact_dir = codegen_output_directory(
+        output_dir,
+        source_url=args.source_url,
+        version_tag=version_tag,
+    )
     print(f"Generating Proxmox OpenAPI schema for version '{version_tag}'...")
-    print(f"Output directory: {output_dir / version_tag}")
+    print(f"Output directory: {artifact_dir}")
     print(f"Source URL: {args.source_url}")
     print(f"Workers: {args.workers}")
     print()
@@ -110,10 +145,30 @@ def _generate(args: argparse.Namespace) -> int:
     fallback = completeness.get("fallback_method_count", 0)
     if fallback:
         print(f"  Fallback methods (from apidoc.js): {fallback}")
-    print(f"  Output:     {output_dir / version_tag}")
+    print(f"  Output:     {artifact_dir}")
     print()
-    print("Schema is ready. Restart the app or call POST /proxmox/viewer/routes/refresh")
-    print("to register the new routes at runtime.")
+    if is_default_codegen_source(args.source_url):
+        print("Schema is ready for offline inspection.")
+        print("Start the development app with PROXBOX_RUNTIME_CODEGEN_ENABLED=true to discover it.")
+    else:
+        print("Custom-source artifacts are inspection-only and cannot register runtime routes.")
+    return 0
+
+
+def _quarantine_legacy() -> int:
+    """Quarantine legacy persisted Python and unprovenanced cache artifacts."""
+
+    from proxbox_api.proxmox_to_netbox.proxmox_schema import (
+        quarantine_legacy_codegen_artifacts,
+    )
+
+    quarantined = quarantine_legacy_codegen_artifacts()
+    if not quarantined:
+        print("No legacy Proxmox codegen artifacts required quarantine.")
+        return 0
+    print(f"Quarantined {len(quarantined)} legacy Proxmox codegen artifact(s):")
+    for path in quarantined:
+        print(f"  {path}")
     return 0
 
 
@@ -128,15 +183,30 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # list
-    subparsers.add_parser(
+    list_parser = subparsers.add_parser(
         "list",
         help="List all available bundled Proxmox OpenAPI schema versions.",
     )
+    list_parser.add_argument(
+        "--include-user",
+        action="store_true",
+        help="Include provenance-verified user artifacts (requires runtime codegen opt-in).",
+    )
 
     # status
-    subparsers.add_parser(
+    status_parser = subparsers.add_parser(
         "status",
         help="Show schema availability and any active generation tasks.",
+    )
+    status_parser.add_argument(
+        "--include-user",
+        action="store_true",
+        help="Include provenance-verified user artifacts (requires runtime codegen opt-in).",
+    )
+
+    subparsers.add_parser(
+        "quarantine-legacy",
+        help="Quarantine persisted Python models and unprovenanced runtime route caches.",
     )
 
     # generate
@@ -192,6 +262,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validated_include_user(args: argparse.Namespace) -> bool | None:
+    """Validate the explicit user-artifact discovery request."""
+    if not getattr(args, "include_user", False):
+        return False
+
+    from proxbox_api.runtime_settings import runtime_codegen_enabled
+
+    if runtime_codegen_enabled():
+        return True
+    print(
+        "--include-user requires PROXBOX_RUNTIME_CODEGEN_ENABLED=true.",
+        file=sys.stderr,
+    )
+    return None
+
+
 def main() -> int:
     """Entry point for the proxbox-schema CLI."""
     parser = build_parser()
@@ -201,10 +287,15 @@ def main() -> int:
         parser.print_help()
         return 0
 
+    include_user = _validated_include_user(args)
+    if include_user is None:
+        return 2
     if args.command == "list":
-        return _list_versions()
+        return _list_versions(include_user=include_user)
     if args.command == "status":
-        return _status()
+        return _status(include_user=include_user)
+    if args.command == "quarantine-legacy":
+        return _quarantine_legacy()
     if args.command == "generate":
         return _generate(args)
 

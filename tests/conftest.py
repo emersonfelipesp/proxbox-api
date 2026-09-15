@@ -278,9 +278,11 @@ def db_engine(tmp_path: Path):
     database_module.configure_sqlite_engine(engine)
     SQLModel.metadata.create_all(engine)
     initialize_auth_lockout_identity_key(None)
-    yield engine
-    engine.dispose()
-    clear_runtime_auth_lockout_identity_key()
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        clear_runtime_auth_lockout_identity_key()
 
 
 @pytest.fixture
@@ -489,3 +491,32 @@ async def proxmox_mock_http_local():
         os.environ.pop("PROXMOX_API_MODE", None)
     else:
         os.environ["PROXMOX_API_MODE"] = _prior
+
+
+# --- CI progress trace ----------------------------------------------------
+#
+# The shared runner has twice terminated the whole test job from outside
+# pytest near the end of the run, before any summary or report artifact could
+# be written, and its log is capped well below what a verbose run produces.
+# When PROXBOX_CI_TRACE is set, the controller prints one compact line per
+# slow test and a periodic heartbeat naming the most recent test it saw, so a
+# killed job still shows what was running. Off by default: locally the dots
+# are enough.
+
+_TRACE_SLOW_SECONDS = 30.0
+_TRACE_HEARTBEAT_EVERY = 100
+_trace_state = {"count": 0}
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if not os.environ.get("PROXBOX_CI_TRACE") or report.when != "call":
+        return
+    _trace_state["count"] += 1
+    slow = report.duration >= _TRACE_SLOW_SECONDS
+    if slow or _trace_state["count"] % _TRACE_HEARTBEAT_EVERY == 0:
+        kind = "slow" if slow else "heartbeat"
+        print(
+            f"\n[trace {kind}] #{_trace_state['count']} {report.nodeid} "
+            f"{report.outcome} {report.duration:.1f}s",
+            flush=True,
+        )

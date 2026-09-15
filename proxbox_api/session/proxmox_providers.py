@@ -9,6 +9,7 @@ from json import JSONDecodeError
 from typing import Annotated
 
 from fastapi import Depends, Query
+from proxmox_sdk.sdk.exceptions import ResourceException
 from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -28,6 +29,40 @@ from proxbox_api.types import ProxboxSettingsDict
 
 _NETBOX_ENDPOINT_ID_CHUNK_SIZE = 100
 _DB_SETTINGS_REQUEST_TIMEOUT_SECONDS = 0.5
+
+
+def _upstream_http_status(error: Exception) -> int:
+    """Return a validated Proxmox SDK HTTP status or a generic gateway failure."""
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, ResourceException):
+            status_code = current.status_code
+            return status_code if 400 <= status_code <= 599 else 502
+        current = current.__cause__ or current.__context__
+    return 502
+
+
+def _session_acquisition_error(error: Exception) -> ProxboxException:
+    """Translate session construction failures into a safe operator contract."""
+    status_code = _upstream_http_status(error)
+    detail: dict[str, object] = {
+        "reason": "proxmox_session_acquisition_failed",
+        "error_type": type(error).__name__,
+    }
+    if status_code != 502:
+        detail["upstream_status"] = status_code
+    return ProxboxException(
+        message="Could not return Proxmox Sessions",
+        detail=detail,
+        python_exception=str(error),
+        public_python_exception=type(error).__name__,
+        http_status_code=status_code,
+        redact_log_details=True,
+    )
+
+
 _DB_SETTINGS_INFLIGHT_LOCK = threading.Lock()
 _DB_SETTINGS_INFLIGHT: dict[
     asyncio.AbstractEventLoop,
@@ -35,7 +70,95 @@ _DB_SETTINGS_INFLIGHT: dict[
 ] = {}
 
 
-async def proxmox_sessions(  # noqa: C901
+def _parse_endpoint_ids(raw_endpoint_ids: str | None) -> list[int] | None:
+    if raw_endpoint_ids is None or not raw_endpoint_ids.strip():
+        return None
+    if len(raw_endpoint_ids) > 255:
+        raise ProxboxException(
+            message="Invalid Proxmox endpoint_ids query parameter",
+            detail="endpoint_ids exceeds maximum length.",
+        )
+
+    parts = [part.strip() for part in raw_endpoint_ids.split(",") if part.strip()]
+    if len(parts) > 100:
+        raise ProxboxException(
+            message="Invalid Proxmox endpoint_ids query parameter",
+            detail="Too many endpoint IDs specified.",
+        )
+    try:
+        return [int(endpoint_id) for endpoint_id in parts]
+    except ValueError as error:
+        raise ProxboxException(
+            message="Invalid Proxmox endpoint_ids query parameter",
+            detail="endpoint_ids must be a comma-separated list of integers.",
+            python_exception=str(error),
+        ) from error
+
+
+async def _create_filtered_session(
+    proxmox_schemas: list[ProxmoxSessionSchema],
+    field: str,
+    value: str,
+) -> list[ProxmoxSession]:
+    schema = next(
+        (item for item in proxmox_schemas if value == getattr(item, field, None)),
+        None,
+    )
+    if schema is None:
+        raise ProxboxException(
+            message=f"No result found for Proxmox Sessions based on the provided {field}",
+            detail="Check if the provided parameters are correct",
+        )
+    try:
+        return [await ProxmoxSession.create(schema)]
+    except Exception as error:
+        raise _session_acquisition_error(error) from error
+
+
+async def _create_all_sessions(
+    proxmox_schemas: list[ProxmoxSessionSchema],
+) -> list[ProxmoxSession]:
+    results = await asyncio.gather(
+        *[ProxmoxSession.create(schema) for schema in proxmox_schemas],
+        return_exceptions=True,
+    )
+    failures = [result for result in results if isinstance(result, BaseException)]
+    sessions = [result for result in results if not isinstance(result, BaseException)]
+    if not failures:
+        return sessions
+
+    failure = failures[0]
+    await _close_sessions_after_failed_acquisition(sessions)
+    if not isinstance(failure, Exception):
+        raise failure
+    raise _session_acquisition_error(failure) from failure
+
+
+async def _close_failed_acquisition_session(session: ProxmoxSession) -> None:
+    close_method = getattr(session, "aclose", None)
+    if not callable(close_method):
+        return
+    try:
+        await close_method()
+    except BaseException as error:
+        logger.debug(
+            "Failed to clean up partially acquired proxmox session: %s",
+            type(error).__name__,
+        )
+
+
+async def _close_sessions_after_failed_acquisition(
+    sessions: list[ProxmoxSession],
+) -> None:
+    cleanup = asyncio.gather(*[_close_failed_acquisition_session(session) for session in sessions])
+    try:
+        await asyncio.shield(cleanup)
+    except asyncio.CancelledError:
+        await cleanup
+        raise
+
+
+async def proxmox_sessions(
     database_session: AsyncSession = Depends(get_async_session),
     source: Annotated[
         str,
@@ -103,35 +226,13 @@ async def proxmox_sessions(  # noqa: C901
     If 'endpoint_ids' or 'proxmox_endpoint_ids' is provided, filter by those database IDs.
     """
 
-    if source not in ("database", "netbox"):
+    if source not in {"database", "netbox"}:
         raise ProxboxException(
             message="Invalid source parameter",
             detail="source must be 'database' or 'netbox'.",
         )
 
-    effective_endpoint_ids = proxmox_endpoint_ids or endpoint_ids
-
-    endpoint_id_list = None
-    if effective_endpoint_ids is not None and effective_endpoint_ids.strip():
-        if len(effective_endpoint_ids) > 255:
-            raise ProxboxException(
-                message="Invalid Proxmox endpoint_ids query parameter",
-                detail="endpoint_ids exceeds maximum length.",
-            )
-        try:
-            parts = [p.strip() for p in effective_endpoint_ids.split(",") if p.strip()]
-            if len(parts) > 100:
-                raise ProxboxException(
-                    message="Invalid Proxmox endpoint_ids query parameter",
-                    detail="Too many endpoint IDs specified.",
-                )
-            endpoint_id_list = [int(eid) for eid in parts]
-        except ValueError as error:
-            raise ProxboxException(
-                message="Invalid Proxmox endpoint_ids query parameter",
-                detail="endpoint_ids must be a comma-separated list of integers.",
-                python_exception=str(error),
-            ) from error
+    endpoint_id_list = _parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
 
     proxmox_schemas = await load_proxmox_session_schemas(
         database_session=database_session,
@@ -139,38 +240,16 @@ async def proxmox_sessions(  # noqa: C901
         endpoint_ids=endpoint_id_list,
     )
 
-    async def return_single_session(field: str, value: str) -> list[ProxmoxSession]:
-        for proxmox_schema in proxmox_schemas:
-            if value == getattr(proxmox_schema, field, None):
-                session = await ProxmoxSession.create(proxmox_schema)
-                return [session]
+    if ip_address is not None:
+        return await _create_filtered_session(proxmox_schemas, "ip_address", ip_address)
 
-        raise ProxboxException(
-            message=f"No result found for Proxmox Sessions based on the provided {field}",
-            detail="Check if the provided parameters are correct",
-        )
+    if domain is not None:
+        return await _create_filtered_session(proxmox_schemas, "domain", domain)
 
-    try:
-        if ip_address is not None:
-            return await return_single_session("ip_address", ip_address)
+    if name is not None:
+        return await _create_filtered_session(proxmox_schemas, "name", name)
 
-        if domain is not None:
-            return await return_single_session("domain", domain)
-
-        if name is not None:
-            return await return_single_session("name", name)
-    except ProxboxException as error:
-        raise error
-
-    try:
-        sessions = await asyncio.gather(
-            *[ProxmoxSession.create(px_schema) for px_schema in proxmox_schemas]
-        )
-        return list(sessions)
-    except Exception as error:
-        raise ProxboxException(
-            message="Could not return Proxmox Sessions", python_exception=f"{error}"
-        )
+    return await _create_all_sessions(proxmox_schemas)
 
 
 async def proxmox_sessions_dep(

@@ -43,7 +43,14 @@ def test_real_generated_registration_and_independent_explicit_alias_sequence(tin
     documents, expected = tiny_documents
     inputs = load_inputs(ROOT)
     optional = collection.optional_sequences(inputs, ROOT)
-    rows = collection._collect_mode(ROOT, inputs.modes[8], documents, expected, optional)
+    rows = collection._collect_mode(
+        ROOT,
+        inputs.modes[8],
+        documents,
+        expected,
+        optional,
+        runtime_codegen=True,
+    )
     actual = [(row.path, row.methods, row.generated.alias) for row in rows if row.generated]
     assert actual == [
         ("/proxmox/api2/latest/inventory-probe", ["GET"], False),
@@ -54,11 +61,43 @@ def test_real_generated_registration_and_independent_explicit_alias_sequence(tin
         "/",
         "/ws/virtual-machines",
         "/ws",
+        "/proxmox/console/browser-stream",
         "/ssh/sessions/{session_id}/ws",
+    ]
+    assert [
+        (row.path, row.methods, row.protocol)
+        for row in rows
+        if row.name in {"create_browser_console_session", "browser_console_stream"}
+    ] == [
+        ("/proxmox/console/browser-sessions", ["POST"], "http"),
+        ("/proxmox/console/browser-stream", [], "websocket"),
     ]
     collection.check_core([], inputs.modes[1])
     with pytest.raises(InventoryError, match="WebSocket"):
         collection.check_core([], inputs.modes[8])
+
+
+@pytest.mark.parametrize("mutation", ["missing", "renamed", "wrong-method"])
+def test_standalone_browser_create_route_mutations_fail(tiny_documents, mutation):
+    documents, expected = tiny_documents
+    inputs = load_inputs(ROOT)
+    optional = collection.optional_sequences(inputs, ROOT)
+    mode = inputs.modes[8]
+    rows = collection._collect_mode(ROOT, mode, documents, expected, optional)
+    create_index = next(
+        index for index, row in enumerate(rows) if row.name == "create_browser_console_session"
+    )
+    changed = list(rows)
+    if mutation == "missing":
+        changed.pop(create_index)
+    elif mutation == "renamed":
+        changed[create_index] = changed[create_index].model_copy(
+            update={"path": "/proxmox/console/browser-sessions-renamed"}
+        )
+    else:
+        changed[create_index] = changed[create_index].model_copy(update={"methods": ["GET"]})
+    with pytest.raises(InventoryError, match="standalone console"):
+        collection.check_core(changed, mode)
 
 
 @pytest.mark.parametrize("mutation", ["omission", "count", "failure"])
@@ -86,7 +125,14 @@ def test_registration_failure_or_partial_result_never_becomes_inventory(
     inputs = load_inputs(ROOT)
     optional = collection.optional_sequences(inputs, ROOT)
     with pytest.raises((ValueError, InventoryError)):
-        collection._collect_mode(ROOT, inputs.modes[8], documents, expected, optional)
+        collection._collect_mode(
+            ROOT,
+            inputs.modes[8],
+            documents,
+            expected,
+            optional,
+            runtime_codegen=True,
+        )
 
 
 @pytest.mark.parametrize("mutation", ["name", "method", "version", "path"])
@@ -172,8 +218,8 @@ def test_real_collect_orchestration_with_bounded_schema(
     monkeypatch.setattr(collection, "identities", lambda root, documents: expected)
     actual = collection._collect_mode
 
-    def mode_rows(root, mode, docs, generated, optional):
-        rows = actual(root, mode, docs, generated, optional)
+    def mode_rows(root, mode, docs, generated, optional, **kwargs):
+        rows = actual(root, mode, docs, generated, optional, **kwargs)
         return rows[1:] if mutate_equivalent and mode.equivalent else rows
 
     monkeypatch.setattr(collection, "_collect_mode", mode_rows)
@@ -185,6 +231,7 @@ def test_real_collect_orchestration_with_bounded_schema(
         assert len(inventory.modes) == 2
         assert inventory.modes[0].registrations == inventory.modes[1].registrations
         assert len(inventory.modes[0].registrations) == 258
+        assert len(inventory.runtime_codegen_opt_in.registrations) == 260
         assert inventory.provenance.imported_modules
 
 

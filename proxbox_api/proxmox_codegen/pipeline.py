@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -18,6 +19,11 @@ from proxbox_api.proxmox_codegen.normalize import normalize_captured_endpoints
 from proxbox_api.proxmox_codegen.openapi_generator import generate_openapi_schema
 from proxbox_api.proxmox_codegen.pydantic_generator import (
     generate_pydantic_models_from_openapi,
+)
+from proxbox_api.proxmox_codegen.security import (
+    resolve_contained,
+    validate_openapi_document_limits,
+    validate_version_tag,
 )
 from proxbox_api.proxmox_codegen.utils import dump_json, ensure_parent, utc_now_iso
 
@@ -66,11 +72,51 @@ def _viewer_apidoc_js_url(source_url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, apidoc_path, "", "", ""))
 
 
+def is_default_codegen_source(source_url: str) -> bool:
+    """Return whether a source is the official default Proxmox API viewer."""
+
+    return _normalized_viewer_url(source_url) == _normalized_viewer_url(PROXMOX_API_VIEWER_URL)
+
+
+def codegen_output_directory(
+    output_dir: str | Path,
+    *,
+    source_url: str,
+    version_tag: str,
+) -> Path:
+    """Resolve the official or inspection-only custom artifact directory."""
+
+    version_tag = validate_version_tag(version_tag)
+    parts = (version_tag,) if is_default_codegen_source(source_url) else ("custom", version_tag)
+    return resolve_contained(Path(output_dir), *parts)
+
+
 def _validate_source_for_version_tag(source_url: str, version_tag: str) -> None:
     if version_tag != LATEST_VERSION_TAG:
         return
-    if _normalized_viewer_url(source_url) != _normalized_viewer_url(PROXMOX_API_VIEWER_URL):
+    if not is_default_codegen_source(source_url):
         raise ValueError("Version tag 'latest' is reserved for official Proxmox API viewer URL.")
+
+
+def _persist_bundle(output_base: Path, bundle: GenerationBundle) -> None:
+    validate_openapi_document_limits(bundle.openapi)
+    raw_path = resolve_contained(output_base, "raw_capture.json")
+    openapi_path = resolve_contained(output_base, "openapi.json")
+    models_path = resolve_contained(output_base, "pydantic_models.py")
+    provenance_path = resolve_contained(output_base, "provenance.json")
+
+    dump_json(raw_path, bundle.capture)
+    dump_json(openapi_path, bundle.openapi)
+    ensure_parent(models_path)
+    models_path.write_text(bundle.pydantic_models_code, encoding="utf-8")
+    dump_json(
+        provenance_path,
+        {
+            "source_url": bundle.source_url,
+            "generated_at": bundle.generated_at,
+            "sha256": sha256(openapi_path.read_bytes()).hexdigest(),
+        },
+    )
 
 
 def _merge_capture(
@@ -215,9 +261,16 @@ async def generate_proxmox_codegen_bundle_async(
 ) -> GenerationBundle:
     """Run full generation pipeline and optionally persist artifacts."""
 
-    cleaned_version_tag = version_tag.strip()
-    if not cleaned_version_tag:
-        raise ValueError("version_tag cannot be empty.")
+    cleaned_version_tag = validate_version_tag(version_tag)
+    output_base = (
+        codegen_output_directory(
+            output_dir,
+            source_url=source_url,
+            version_tag=cleaned_version_tag,
+        )
+        if output_dir is not None
+        else None
+    )
     _validate_source_for_version_tag(source_url=source_url, version_tag=cleaned_version_tag)
 
     if _check_playwright_available():
@@ -227,8 +280,8 @@ async def generate_proxmox_codegen_bundle_async(
             retry_count=retry_count,
             retry_backoff_seconds=retry_backoff_seconds,
             checkpoint_path=(
-                str(Path(output_dir) / cleaned_version_tag / "crawl_checkpoint.json")
-                if output_dir is not None
+                str(resolve_contained(output_base, "crawl_checkpoint.json"))
+                if output_base is not None
                 else None
             ),
             checkpoint_every=checkpoint_every,
@@ -263,6 +316,7 @@ async def generate_proxmox_codegen_bundle_async(
         version=cleaned_version_tag,
         server_url="/api2/json",
     )
+    validate_openapi_document_limits(openapi)
 
     models_code = generate_pydantic_models_from_openapi(openapi)
 
@@ -282,15 +336,7 @@ async def generate_proxmox_codegen_bundle_async(
         pydantic_models_code=models_code,
     )
 
-    if output_dir is not None:
-        base = Path(output_dir) / cleaned_version_tag
-        raw_path = base / "raw_capture.json"
-        openapi_path = base / "openapi.json"
-        models_path = base / "pydantic_models.py"
-
-        dump_json(raw_path, bundle.capture)
-        dump_json(openapi_path, bundle.openapi)
-        ensure_parent(models_path)
-        models_path.write_text(bundle.pydantic_models_code, encoding="utf-8")
+    if output_base is not None:
+        _persist_bundle(output_base, bundle)
 
     return bundle

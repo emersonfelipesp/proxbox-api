@@ -94,6 +94,7 @@ nav:
       - Custom Field Retirement: operations/custom-fields.md
       - Hardware Discovery: operations/hardware-discovery.md
       - Firecracker Host-Agent Provisioning: operations/firecracker.md
+      - Ceph v2 Write Approval: operations/ceph-write-approvals.md
   - Development:
       - Schema Management: development/schema-management.md
       - Testing: development/testing.md

@@ -18,6 +18,19 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `__init__.py`: service package namespace.
 - `cloud_network.py`: managed customer-network settings resolver plus NetBox
   available-IP helpers used by Cloud QEMU/LXC provisioning.
+- `console_relay.py`: bounded shared-SQLite state and WebSocket transport for
+  standalone Proxmox browser consoles. It stores only a SHA-256 token digest,
+  timestamps, and one Fernet ciphertext; rejects unknown digests with an indexed
+  read before taking a write lock, then re-reads and consumes matching rows
+  atomically under `BEGIN IMMEDIATE`; applies exact Origin and bearer-token/binary subprotocol
+  binding without URI tokens; preserves endpoint TLS verification; disables
+  proxies and refuses redirects before any second upstream connection;
+  mediates RFB 3.8 VNC authentication;
+  and relays bounded binary/text frames with one connection-wide idle deadline
+  refreshed by either direction and deterministic peer-task cleanup.
+- `console_relay_policy.py`: inactive focused seam for the pending RPC-only
+  endpoint policy. Both create and consume call it with the current endpoint
+  row. Do not activate or duplicate that pending policy in the relay.
 - `auth_lockout.py`: shared, request-independent authentication lockout state
   service. It validates credential/source thresholds, window, row cap, separate
   per-bucket/global verification-concurrency capacity, and

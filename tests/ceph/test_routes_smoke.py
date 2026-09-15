@@ -5,8 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from httpx import Response
+from proxmox_sdk.sdk.exceptions import ResourceException
 
 from proxbox_api.ceph import routes as ceph_routes
+from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.exception import ProxboxException
+from proxbox_api.session.proxmox import ProxmoxSession
 
 
 class _FakeCluster:
@@ -142,6 +147,33 @@ def _fake_session(name: str = "pve-cluster"):
     )
 
 
+def _assert_session_error_response(
+    response: Response,
+    *,
+    status_code: int,
+    error_type: str,
+    upstream_status: int | None = None,
+) -> None:
+    detail: dict[str, object] = {
+        "reason": "proxmox_session_acquisition_failed",
+        "error_type": error_type,
+    }
+    if upstream_status is not None:
+        detail["upstream_status"] = upstream_status
+    assert (response.status_code, response.json()) == (
+        status_code,
+        {
+            "message": "Could not return Proxmox Sessions",
+            "detail": detail,
+            "python_exception": error_type,
+        },
+    )
+
+
+def _assert_response_excludes(response: Response, *canaries: str) -> None:
+    assert all(canary not in response.text for canary in canaries)
+
+
 @pytest.fixture
 def _patched_client(monkeypatch):
     calls: list[str] = []
@@ -161,6 +193,93 @@ async def test_ceph_status_reports_reachable(_patched_client):
     assert item.reachable is True
     assert item.health == {"status": "HEALTH_OK"}
     assert item.fsid == "fsid-1"
+
+
+def test_ceph_status_reports_unconfigured_endpoint(auth_test_client):
+    response = auth_test_client.get("/ceph/status")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "message": "No Proxmox endpoint is configured for Ceph status",
+        "detail": {
+            "reason": "ceph_endpoint_not_configured",
+            "message": "Configure at least one Proxmox endpoint before querying Ceph status.",
+        },
+        "python_exception": None,
+    }
+
+
+def test_ceph_status_reports_typed_sanitized_session_acquisition_failures(
+    monkeypatch,
+    db_session,
+    auth_test_client,
+):
+    db_session.add(
+        ProxmoxEndpoint(
+            name="pve01",
+            ip_address="10.0.0.10",
+            domain="pve.local",
+            port=8006,
+            username="root@pam",
+            password="password",
+            verify_ssl=False,
+        )
+    )
+    db_session.commit()
+
+    class MisleadingFailure(RuntimeError):
+        status_code = 418
+
+    async def fail_with_misleading_status(*_args, **_kwargs):
+        raise MisleadingFailure("secret-internal-token")
+
+    monkeypatch.setattr(ProxmoxSession, "create", fail_with_misleading_status)
+    response = auth_test_client.get("/ceph/status")
+    _assert_session_error_response(
+        response,
+        status_code=502,
+        error_type="MisleadingFailure",
+    )
+    _assert_response_excludes(response, "secret-internal-token")
+
+    async def fail_with_direct_sdk_error(*_args, **_kwargs):
+        raise ResourceException(401, "Unauthorized", "secret-direct-upstream-body")
+
+    monkeypatch.setattr(ProxmoxSession, "create", fail_with_direct_sdk_error)
+    response = auth_test_client.get("/ceph/status")
+    _assert_session_error_response(
+        response,
+        status_code=401,
+        error_type="ResourceException",
+        upstream_status=401,
+    )
+    _assert_response_excludes(response, "secret-direct-upstream-body")
+
+    async def fail_with_wrapped_sdk_error(*_args, **_kwargs):
+        try:
+            raise ResourceException(503, "Unavailable", "secret-wrapped-upstream-body")
+        except ResourceException as error:
+            raise ProxboxException(
+                message=(
+                    "Authentication failed for pve.secret.example using token secret-token-name"
+                ),
+                python_exception=str(error),
+            ) from error
+
+    monkeypatch.setattr(ProxmoxSession, "create", fail_with_wrapped_sdk_error)
+    response = auth_test_client.get("/ceph/status")
+    _assert_session_error_response(
+        response,
+        status_code=503,
+        error_type="ProxboxException",
+        upstream_status=503,
+    )
+    _assert_response_excludes(
+        response,
+        "pve.secret.example",
+        "secret-token-name",
+        "secret-wrapped-upstream-body",
+    )
 
 
 async def test_ceph_sync_threads_branch_query_into_summary(_patched_client):
@@ -308,11 +427,11 @@ async def test_ceph_sync_records_client_errors(monkeypatch):
     assert any("connection refused" in err for err in item.errors)
 
 
-async def test_ceph_sync_falls_back_to_localhost_for_unknown_nodes(_patched_client):
+async def test_ceph_sync_keeps_unknown_nodes_empty_without_localhost_fallback(_patched_client):
     session = _fake_session()
     session.cluster_status = []
     session.node_name = None
     response = await ceph_routes.ceph_sync_osds([session])
     item = response.items[0]
-    assert item.nodes == ["localhost"]
-    assert item.fetched == 2
+    assert item.nodes == []
+    assert item.fetched == 0

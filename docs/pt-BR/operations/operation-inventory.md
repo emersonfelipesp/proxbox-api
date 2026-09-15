@@ -1,13 +1,15 @@
 # Inventario de operacoes registradas
 
 O inventario mantido registra rotas, mas nao concede permissao para executa-las.
-Ele constroi a aplicacao real e registra explicitamente as rotas geradas em um
+Ele constroi a aplicacao real em cada modo padrao, registra explicitamente as
+rotas geradas incluidas no pacote em cada modo e registra separadamente o
+conjunto de desenvolvimento `PROXBOX_RUNTIME_CODEGEN_ENABLED=true` em um
 processo filho isolado e offline. Nao inicia o lifespan, nao inicializa o banco,
 nao invoca rotas ou dependencias e nao acessa sistemas gerenciados. O processo
 nao herda credenciais, desabilita explicitamente o dotenv e rejeita sockets e
 gravacoes fora de seu diretorio temporario. Essa protecao de auditoria Python
-serve ao desenvolvimento; ela nao
-representa um isolamento de chamadas de sistema em producao.
+serve ao desenvolvimento; ela nao representa um isolamento de chamadas de
+sistema em producao.
 
 ## Geracao e verificacao
 
@@ -43,8 +45,13 @@ O modo padrao e o modo explicito com todos os componentes sao equivalentes.
 O decimo sexto estado booleano, sem nucleo e sem componentes opcionais, nao pode
 ser selecionado: uma entrada vazia seleciona tudo; somente tokens desconhecidos
 selecionam o nucleo. Espacos, maiusculas e repeticoes possuem testes explicitos.
-As rotas geradas aparecem em todos os modos, pois o lifespan real as registra
-independentemente da selecao do nucleo.
+Todos os modos padrao contem as versoes e aliases gerados de
+`/proxmox/api2/*` incluidos no pacote, pois o lifespan os registra
+independentemente do opt-in de desenvolvimento ou da selecao do nucleo. Um
+conjunto ordenado separado registra as diferencas do viewer no opt-in de
+desenvolvimento. Em runtime, esse opt-in tambem pode admitir artefatos de usuario
+com proveniencia verificada; o inventario offline versionado permanece vinculado
+aos documentos revisados do pacote e nunca le o diretorio gerado pelo usuario.
 
 O adaptador exige o par FastAPI/Starlette revisado. Atualizacoes exigem revisao e
 os testes independentes de HTTP, WebSocket, montagens e colisoes. Cada ocorrencia
@@ -72,9 +79,10 @@ execucao, controles de escrita, autenticacao, politica SSH ou implantacao.
 
 ## Tabela de registros
 
-O resumo cobre todas as entradas. A tabela detalhada preserva cada registro do
-modo padrao; o artefato JSON preserva a sequencia completa de cada modo.
-A compilacao verifica fontes e integridade antes de incorporar os trechos
-locais gerados. Entradas ausentes, desatualizadas ou simbolicas causam falha.
+O resumo cobre todas as entradas padrao. As tabelas detalhadas preservam cada
+registro padrao e cada adicao do opt-in de desenvolvimento; o artefato JSON
+preserva cada sequencia ordenada completa. A compilacao verifica fontes e
+integridade antes de incorporar os trechos locais gerados. Entradas ausentes,
+desatualizadas ou simbolicas causam falha.
 
 --8<-- "mounted-operations.pt-BR.md"

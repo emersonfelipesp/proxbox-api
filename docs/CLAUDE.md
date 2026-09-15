@@ -26,7 +26,7 @@ docs/
 ├── architecture/               # System overview and design patterns
 ├── api/                        # HTTP and WebSocket API reference
 │   ├── http-reference.md
-│   ├── console-sessions.md      # Private Proxmox console-session broker for the trusted NMS relay
+│   ├── console-sessions.md      # Private broker plus standalone encrypted browser relay
 │   ├── websocket-reference.md
 │   ├── cache.md                # Cache/reconcile plus aggregate auth capacity/row/reservation metrics
 │   └── cluster-ha.md
@@ -39,6 +39,7 @@ docs/
 ├── operations/                 # Operational guides
 │   ├── database.md             # SQLite target/auth guard, startup/runtime locks, key binding, migration, recovery
 │   ├── custom-fields.md        # Custom-field retirement and upgrade notes
+│   ├── ceph-write-approvals.md # Ceph v2 approval, recovery, rollout, NPR evidence
 │   ├── firecracker.md          # Firecracker host-agent provisioning
 │   └── hardware-discovery.md   # Hardware discovery and DCIM sync
 └── pt-BR/                      # Brazilian Portuguese translations
@@ -67,8 +68,14 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
+- Ceph v2 write behavior, failure recovery, deployment/rollback, and bounded
+  NPR 7150.2D feature evidence live in `operations/ceph-write-approvals.md`;
+  keep its Portuguese translation aligned, never document legacy inline apply
+  as authorized, preserve exact node/typed-payload/lease-owner/unique-UPID and
+  non-Proxmox capability constraints, and never promote feature evidence to a
+  project compliance or certification claim.
 - API reference in `docs/api/` should match the actual route signatures in `proxbox_api/routes/`.
-- Keep `api/console-sessions.md` and `pt-BR/api/console-sessions.md` synchronized with `proxbox_api/routes/proxmox/console.py`, `ProxmoxSession.get_websocket_auth()`, the trusted `nms-backend` relay contract, and `tests/proxmox/test_console_route.py`.
+- Keep `api/console-sessions.md` and `pt-BR/api/console-sessions.md` synchronized with `proxbox_api/routes/proxmox/console.py`, `services/console_relay.py`, `ProxmoxSession.get_websocket_auth()`, the unchanged trusted service-consumer contract, and both console test modules.
 - Auth-lockout documentation must distinguish bcrypt reservation-capacity 503s
   from bounded failure-row partition saturation. Keep the English and pt-BR
   cache metrics tables aligned with `get_auth_lockout_metrics()`.

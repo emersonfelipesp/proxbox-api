@@ -14,7 +14,15 @@ from .adapter import walk
 from .generated import bind, identities, load_documents
 from .inputs import Inputs, ModeInput, load_inputs
 from .provenance import dependencies, provenance, source
-from .schema import Inventory, InventoryError, Mode, Operation, Registration, digest
+from .schema import (
+    Inventory,
+    InventoryError,
+    Mode,
+    Operation,
+    Registration,
+    RuntimeCodegenOptIn,
+    digest,
+)
 
 OPTIONAL = {
     "proxbox_api.pbs.admin": ("pbs", "/pbs"),
@@ -56,10 +64,40 @@ def check_optional(
 
 def check_core(rows: list[Operation], mode: ModeInput) -> None:
     """Verify core admission facts without assigning any operation effect."""
-    expected = ["/", "/ws/virtual-machines", "/ws", "/ssh/sessions/{session_id}/ws"]
-    actual = [row.path for row in rows if row.protocol == "websocket"]
-    if actual != (expected if mode.core else []):
+    expected_sockets = [
+        "/",
+        "/ws/virtual-machines",
+        "/ws",
+        "/proxmox/console/browser-stream",
+        "/ssh/sessions/{session_id}/ws",
+    ]
+    actual_sockets = [row.path for row in rows if row.protocol == "websocket"]
+    if actual_sockets != (expected_sockets if mode.core else []):
         raise InventoryError("Core WebSocket sequence differs from the reviewed mode")
+    expected_standalone = [
+        ("/proxmox/console/browser-sessions", ["POST"], "http"),
+        ("/proxmox/console/browser-stream", [], "websocket"),
+    ]
+    standalone_names = {"create_browser_console_session", "browser_console_stream"}
+    actual_standalone = [
+        (row.path, row.methods, row.protocol) for row in rows if row.name in standalone_names
+    ]
+    if actual_standalone != (expected_standalone if mode.core else []):
+        raise InventoryError("Core standalone console sequence differs from the reviewed mode")
+
+
+def _check_generated_sequence(
+    rows: list[Operation],
+    generated: dict,
+    state: dict[str, object] | None,
+) -> None:
+    actual_names = [row.name for row in rows if row.generated]
+    if (
+        actual_names != list(generated)
+        or state is None
+        or state["route_count"] != len(actual_names)
+    ):
+        raise InventoryError("Generated operation/version sequence is incomplete")
 
 
 @contextmanager
@@ -82,23 +120,43 @@ def selected_features(raw: str) -> Iterator[None]:
             os.environ.pop("PROXBOX_FEATURES", None)
 
 
+@contextmanager
+def selected_runtime_codegen(enabled: bool) -> Iterator[None]:
+    """Select the process-level route set and restore the prior environment."""
+
+    name = "PROXBOX_RUNTIME_CODEGEN_ENABLED"
+    present = name in os.environ
+    previous = os.environ.get(name, "")
+    if enabled:
+        os.environ[name] = "true"
+    else:
+        os.environ.pop(name, None)
+    try:
+        yield
+    finally:
+        if present:
+            os.environ[name] = previous
+        else:
+            os.environ.pop(name, None)
+
+
 def _collect_mode(
     root: Path,
     mode: ModeInput,
     documents: dict,
     generated: dict,
     optional: dict[str, list[Operation]],
+    *,
+    runtime_codegen: bool = False,
 ) -> list[Operation]:
     from proxbox_api.app.factory import create_app
     from proxbox_api.routes.proxmox.runtime_generated import register_generated_proxmox_routes
 
-    with selected_features(mode.raw):
+    with selected_features(mode.raw), selected_runtime_codegen(runtime_codegen):
         app = create_app()
         state = register_generated_proxmox_routes(app, openapi_documents=documents)
         rows = [bind(row, generated) for row in walk(app.routes, root)]
-        actual_names = [row.name for row in rows if row.generated]
-        if actual_names != list(generated) or state["route_count"] != len(actual_names):
-            raise InventoryError("Generated operation/version sequence is incomplete")
+        _check_generated_sequence(rows, generated, state)
         check_optional(rows, mode, optional)
         check_core(rows, mode)
     return rows
@@ -134,7 +192,30 @@ def collect(root: Path) -> Inventory:
             )
         )
         print(f"Collected {mode.name}: {len(rows)} registrations", flush=True)
+    opt_in_rows = _collect_mode(
+        root,
+        inputs.modes[0],
+        documents,
+        generated,
+        optional,
+        runtime_codegen=True,
+    )
+    opt_in_registrations = []
+    for index, row in enumerate(opt_in_rows):
+        key = digest(row.model_dump())
+        definitions[key] = row
+        opt_in_registrations.append(Registration(index=index, operation=key))
+    print(f"Collected runtime-codegen-opt-in: {len(opt_in_rows)} registrations", flush=True)
     proof = provenance(root)
     manifest = source(root / "contracts/operation-inventory-inputs.json", root)
     proof = proof.model_copy(update={"sources": [*proof.sources, manifest]})
-    return Inventory(schema_version=1, provenance=proof, operations=definitions, modes=modes)
+    return Inventory(
+        schema_version=2,
+        provenance=proof,
+        operations=definitions,
+        modes=modes,
+        runtime_codegen_opt_in=RuntimeCodegenOptIn(
+            setting="PROXBOX_RUNTIME_CODEGEN_ENABLED=true",
+            registrations=opt_in_registrations,
+        ),
+    )
