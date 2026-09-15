@@ -11,16 +11,21 @@ import stat
 import subprocess
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Coroutine, Generator
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, inspect, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 from sqlmodel import Session, create_engine, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -55,6 +60,306 @@ STALE_KEY = "stale-test-api-key-bbbbbbbbbbbbbbbbbbbbbbbbb"
 CLIENT_IP = "10.0.0.42"
 PROCESS_COORDINATION_TIMEOUT_SECONDS = 30.0
 WRITE_TRANSACTION_HOLD_SECONDS = 1.0
+
+
+def _pending_task_details(tasks: set[asyncio.Task[Any]]) -> str:
+    details: list[str] = []
+    for task in sorted(tasks, key=lambda item: item.get_name()):
+        stack = task.get_stack(limit=1)
+        location = "no Python stack"
+        if stack:
+            frame = stack[-1]
+            location = f"{frame.f_code.co_filename}:{frame.f_lineno}"
+        details.append(f"{task.get_name()} at {location}")
+    return "; ".join(details)
+
+
+def _task_errors(tasks: set[asyncio.Task[Any]]) -> list[BaseException]:
+    errors: list[BaseException] = []
+    for task in sorted(tasks, key=lambda item: item.get_name()):
+        if task.cancelled():
+            continue
+        if (error := task.exception()) is not None:
+            errors.append(error)
+    return errors
+
+
+def _raise_task_errors(operation: str, errors: list[BaseException]) -> NoReturn:
+    if len(errors) == 1:
+        raise errors[0]
+    raise BaseExceptionGroup(f"{operation} encountered multiple failures", errors)
+
+
+async def _cancel_and_collect_test_tasks(
+    tasks: set[asyncio.Task[Any]],
+    *,
+    timeout: float,
+) -> tuple[
+    set[asyncio.Task[Any]],
+    set[asyncio.Task[Any]],
+    list[asyncio.CancelledError],
+]:
+    if not tasks:
+        return set(), set(), []
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    drain_task = asyncio.create_task(asyncio.wait(tasks, timeout=timeout))
+    repeated_cancellations: list[asyncio.CancelledError] = []
+    while not drain_task.done():
+        try:
+            await asyncio.shield(drain_task)
+        except asyncio.CancelledError as error:
+            repeated_cancellations.append(error)
+    done, pending = drain_task.result()
+    return done, pending, repeated_cancellations
+
+
+async def _raise_after_wait_interruption(
+    tasks: set[asyncio.Task[Any]],
+    *,
+    operation: str,
+    timeout: float,
+    interruption: BaseException,
+) -> NoReturn:
+    done, pending, repeated = await _cancel_and_collect_test_tasks(tasks, timeout=timeout)
+    errors = [interruption, *repeated, *_task_errors(done)]
+    if pending:
+        details = _pending_task_details(pending)
+        errors.append(AssertionError(f"{operation} cancellation timed out: {details}"))
+    _raise_task_errors(operation, errors)
+
+
+async def _raise_after_task_failure(
+    pending: set[asyncio.Task[Any]],
+    *,
+    operation: str,
+    timeout: float,
+    failures: list[BaseException],
+) -> NoReturn:
+    done, still_pending, repeated = await _cancel_and_collect_test_tasks(pending, timeout=timeout)
+    errors = [*failures, *repeated, *_task_errors(done)]
+    if still_pending:
+        details = _pending_task_details(still_pending)
+        errors.append(AssertionError(f"{operation} sibling cancellation timed out: {details}"))
+    _raise_task_errors(operation, errors)
+
+
+async def _raise_after_task_timeout(
+    pending: set[asyncio.Task[Any]],
+    *,
+    operation: str,
+    timeout: float,
+) -> NoReturn:
+    initial_details = _pending_task_details(pending)
+    done, still_pending, repeated = await _cancel_and_collect_test_tasks(pending, timeout=timeout)
+    errors: list[BaseException] = [
+        AssertionError(f"{operation} timed out; pending tasks: {initial_details}")
+    ]
+    errors.extend(repeated)
+    errors.extend(_task_errors(done))
+    if still_pending:
+        details = _pending_task_details(still_pending)
+        errors.append(AssertionError(f"{operation} cancellation timed out: {details}"))
+    _raise_task_errors(operation, errors)
+
+
+async def _wait_for_test_tasks(
+    tasks: list[asyncio.Task[Any]],
+    *,
+    operation: str,
+    timeout: float = PROCESS_COORDINATION_TIMEOUT_SECONDS,
+) -> list[Any]:
+    if not tasks:
+        return []
+    task_set = set(tasks)
+    try:
+        done, pending = await asyncio.wait(
+            task_set,
+            timeout=timeout,
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+    except BaseException as interruption:
+        await _raise_after_wait_interruption(
+            task_set,
+            operation=operation,
+            timeout=timeout,
+            interruption=interruption,
+        )
+    failures = _task_errors(done)
+    if failures:
+        await _raise_after_task_failure(
+            pending,
+            operation=operation,
+            timeout=timeout,
+            failures=failures,
+        )
+    if pending:
+        await _raise_after_task_timeout(pending, operation=operation, timeout=timeout)
+    return [task.result() for task in tasks]
+
+
+async def _wait_for_cleanup_tasks(
+    tasks: list[asyncio.Task[Any]],
+    *,
+    operation: str,
+    timeout: float = PROCESS_COORDINATION_TIMEOUT_SECONDS,
+) -> None:
+    if not tasks:
+        return
+    task_set = set(tasks)
+    try:
+        done, pending = await asyncio.wait(task_set, timeout=timeout)
+    except BaseException as interruption:
+        await _raise_after_wait_interruption(
+            task_set,
+            operation=operation,
+            timeout=timeout,
+            interruption=interruption,
+        )
+    errors = _task_errors(done)
+    if pending:
+        initial_details = _pending_task_details(pending)
+        cancelled, still_pending, repeated = await _cancel_and_collect_test_tasks(
+            pending, timeout=timeout
+        )
+        errors.extend(repeated)
+        errors.extend(_task_errors(cancelled))
+        errors.append(AssertionError(f"{operation} timed out; pending tasks: {initial_details}"))
+        if still_pending:
+            details = _pending_task_details(still_pending)
+            errors.append(AssertionError(f"{operation} cancellation timed out: {details}"))
+    if errors:
+        _raise_task_errors(operation, errors)
+
+
+async def _cancel_and_drain_test_tasks(
+    tasks: list[asyncio.Task[Any]],
+    *,
+    operation: str,
+    timeout: float = PROCESS_COORDINATION_TIMEOUT_SECONDS,
+) -> None:
+    if not tasks:
+        return
+    done, pending, repeated = await _cancel_and_collect_test_tasks(set(tasks), timeout=timeout)
+    errors: list[BaseException] = [*repeated, *_task_errors(done)]
+    if pending:
+        details = _pending_task_details(pending)
+        errors.append(AssertionError(f"{operation} did not cancel; pending tasks: {details}"))
+    if errors:
+        _raise_task_errors(operation, errors)
+
+
+async def _capture_async_error(awaitable: Awaitable[Any]) -> list[BaseException]:
+    try:
+        await awaitable
+    except BaseException as error:
+        return [error]
+    return []
+
+
+async def _force_release_connection(connection: AsyncConnection) -> None:
+    try:
+        await connection.close()
+    except BaseException as close_error:
+        try:
+            await connection.invalidate(close_error)
+        except BaseException as invalidate_error:
+            raise BaseExceptionGroup(
+                "connection fallback release failed",
+                [close_error, invalidate_error],
+            ) from invalidate_error
+
+
+def _unreleased_test_connections(
+    connections: list[AsyncConnection],
+) -> list[AsyncConnection]:
+    return [
+        connection
+        for connection in connections
+        if not connection.closed and not connection.invalidated
+    ]
+
+
+async def _fallback_release_test_connections(
+    connections: list[AsyncConnection],
+) -> list[BaseException]:
+    fallback_tasks = [
+        asyncio.create_task(
+            _force_release_connection(connection),
+            name=f"auth-pool-fallback-release-{index}",
+        )
+        for index, connection in enumerate(connections)
+    ]
+    return await _capture_async_error(
+        _wait_for_cleanup_tasks(
+            fallback_tasks,
+            operation="authentication pool fallback release",
+        )
+    )
+
+
+def _connection_release_invariant_errors(
+    target: AsyncEngine,
+    connections: list[AsyncConnection],
+) -> list[BaseException]:
+    errors: list[BaseException] = []
+    if unreleased := _unreleased_test_connections(connections):
+        errors.append(AssertionError(f"{len(unreleased)} test connections remain unreleased"))
+    pool = cast(AsyncAdaptedQueuePool, target.pool)
+    if (checked_out := pool.checkedout()) != 0:
+        errors.append(AssertionError(f"authentication pool still has {checked_out} checkouts"))
+    return errors
+
+
+async def _close_test_connections(
+    target: AsyncEngine,
+    connections: list[AsyncConnection],
+) -> None:
+    close_tasks = [
+        asyncio.create_task(connection.close(), name=f"auth-pool-close-{index}")
+        for index, connection in enumerate(connections)
+    ]
+    errors = await _capture_async_error(
+        _wait_for_cleanup_tasks(close_tasks, operation="authentication pool close")
+    )
+    errors.extend(
+        await _fallback_release_test_connections(_unreleased_test_connections(connections))
+    )
+    errors.extend(_connection_release_invariant_errors(target, connections))
+    if errors:
+        raise BaseExceptionGroup("authentication pool cleanup failed", errors)
+
+
+async def _finish_auth_burst_lifecycle(
+    *,
+    primary_error: BaseException | None,
+    tasks: list[asyncio.Task[Any]],
+    tasks_observed: bool,
+    dispose: Callable[[], Coroutine[Any, Any, None]],
+) -> None:
+    errors = [] if primary_error is None else [primary_error]
+    cleanup_tasks = [task for task in tasks if not tasks_observed or not task.done()]
+    errors.extend(
+        await _capture_async_error(
+            _cancel_and_drain_test_tasks(cleanup_tasks, operation="valid authentication burst")
+        )
+    )
+    try:
+        dispose_task = asyncio.create_task(dispose(), name="auth-lockout-engine-dispose")
+    except BaseException as error:
+        errors.append(error)
+    else:
+        errors.extend(
+            await _capture_async_error(
+                _wait_for_cleanup_tasks(
+                    [dispose_task],
+                    operation="authentication engine disposal",
+                )
+            )
+        )
+    if errors:
+        _raise_task_errors("valid authentication burst lifecycle", errors)
 
 
 def _record_failures_in_process(
@@ -253,6 +558,225 @@ def stored_key(db_session: Session) -> str:
     # transaction; release it before concurrency tests open other connections.
     db_session.rollback()
     return VALID_KEY
+
+
+async def test_wait_for_test_tasks_cancels_sibling_after_failure() -> None:
+    sibling_cancelled = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def fail_connection() -> None:
+        await asyncio.sleep(0)
+        raise RuntimeError("synthetic connection failure")
+
+    async def block_connection() -> None:
+        try:
+            await blocked.wait()
+        finally:
+            sibling_cancelled.set()
+
+    tasks = [
+        asyncio.create_task(block_connection(), name="blocked-connection"),
+        asyncio.create_task(fail_connection(), name="failed-connection"),
+    ]
+    with pytest.raises(RuntimeError, match="synthetic connection failure"):
+        await _wait_for_test_tasks(tasks, operation="synthetic connection warm-up", timeout=1)
+
+    assert sibling_cancelled.is_set()
+    assert all(task.done() for task in tasks)
+
+
+async def test_wait_for_test_tasks_drains_children_when_parent_is_cancelled() -> None:
+    blocked = asyncio.Event()
+    children_started = asyncio.Event()
+    started = 0
+
+    async def block_until_cancelled() -> None:
+        nonlocal started
+        started += 1
+        if started == 2:
+            children_started.set()
+        await blocked.wait()
+
+    children = [
+        asyncio.create_task(block_until_cancelled(), name=f"parent-cancel-child-{index}")
+        for index in range(2)
+    ]
+    parent = asyncio.create_task(
+        _wait_for_test_tasks(children, operation="parent-cancelled coordination"),
+        name="parent-cancelled-wait",
+    )
+    await asyncio.wait_for(children_started.wait(), timeout=1)
+    parent.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await parent
+    assert all(task.cancelled() for task in children)
+
+
+async def test_wait_for_test_tasks_preserves_cancellation_cleanup_failure() -> None:
+    blocked = asyncio.Event()
+    child_started = asyncio.Event()
+
+    async def raise_during_cancellation() -> None:
+        child_started.set()
+        try:
+            await blocked.wait()
+        except asyncio.CancelledError as error:
+            raise RuntimeError("synthetic cancellation cleanup failure") from error
+
+    child = asyncio.create_task(raise_during_cancellation(), name="failing-cancel-child")
+    parent = asyncio.create_task(
+        _wait_for_test_tasks([child], operation="cancellation failure coordination"),
+        name="cancellation-failure-wait",
+    )
+    await asyncio.wait_for(child_started.wait(), timeout=1)
+    parent.cancel()
+
+    with pytest.raises(BaseExceptionGroup) as error_info:
+        await parent
+    assert {type(error) for error in error_info.value.exceptions} == {
+        asyncio.CancelledError,
+        RuntimeError,
+    }
+    assert child.done()
+
+
+async def test_wait_for_test_tasks_retains_drain_across_repeated_cancellation() -> None:
+    blocked = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def finish_cleanup_after_cancellation() -> None:
+        try:
+            await blocked.wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+    child = asyncio.create_task(finish_cleanup_after_cancellation(), name="layered-cancel-child")
+    parent = asyncio.create_task(
+        _wait_for_test_tasks([child], operation="layered cancellation coordination"),
+        name="layered-cancel-parent",
+    )
+    await asyncio.sleep(0)
+    parent.cancel()
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+    parent.cancel()
+    release_cleanup.set()
+
+    with pytest.raises(BaseExceptionGroup) as error_info:
+        await parent
+    assert [type(error) for error in error_info.value.exceptions] == [
+        asyncio.CancelledError,
+        asyncio.CancelledError,
+    ]
+    assert child.done()
+
+
+async def test_wait_for_test_tasks_bounds_coordination_timeout() -> None:
+    blocked = asyncio.Event()
+    task = asyncio.create_task(blocked.wait(), name="blocked-coordination")
+
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic coordination timed out; pending tasks: blocked-coordination at ",
+    ):
+        await _wait_for_test_tasks([task], operation="synthetic coordination", timeout=0.01)
+
+    assert task.cancelled()
+
+
+async def test_cancel_and_drain_test_tasks_bounds_stuck_cleanup() -> None:
+    blocked = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def resist_cancellation_during_cleanup() -> None:
+        try:
+            await blocked.wait()
+        except asyncio.CancelledError:
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+    task = asyncio.create_task(
+        resist_cancellation_during_cleanup(), name="stuck-cancellation-cleanup"
+    )
+    await asyncio.sleep(0)
+
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic cleanup did not cancel; pending tasks: "
+        r"stuck-cancellation-cleanup at ",
+    ):
+        await _cancel_and_drain_test_tasks([task], operation="synthetic cleanup", timeout=0.01)
+
+    assert cleanup_started.is_set()
+    release_cleanup.set()
+    await asyncio.wait_for(task, timeout=1)
+
+
+async def test_cleanup_wait_recovers_real_connection_close_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    target = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'cleanup.db'}",
+        pool_size=2,
+        max_overflow=0,
+    )
+    connections = [await target.connect(), await target.connect()]
+    pool = cast(AsyncAdaptedQueuePool, target.pool)
+    original_close = AsyncConnection.close
+    first_close_failed = False
+
+    async def fail_first_close(connection: AsyncConnection) -> None:
+        nonlocal first_close_failed
+        if connection is connections[0] and not first_close_failed:
+            first_close_failed = True
+            raise RuntimeError("synthetic pre-close failure")
+        await original_close(connection)
+
+    monkeypatch.setattr(AsyncConnection, "close", fail_first_close)
+    try:
+        with pytest.raises(BaseExceptionGroup, match="authentication pool cleanup failed") as error:
+            await _close_test_connections(target, connections)
+        assert str(error.value.exceptions[0]) == "synthetic pre-close failure"
+        assert all(connection.closed for connection in connections)
+        assert pool.checkedout() == 0
+    finally:
+        await target.dispose()
+
+
+async def test_auth_burst_lifecycle_groups_primary_drain_and_disposal_failures() -> None:
+    blocked = asyncio.Event()
+    task_started = asyncio.Event()
+
+    async def fail_during_cancellation() -> None:
+        task_started.set()
+        try:
+            await blocked.wait()
+        except asyncio.CancelledError as error:
+            raise RuntimeError("synthetic drain failure") from error
+
+    async def fail_disposal() -> None:
+        raise RuntimeError("synthetic disposal failure")
+
+    task = asyncio.create_task(fail_during_cancellation(), name="lifecycle-failing-task")
+    await asyncio.wait_for(task_started.wait(), timeout=1)
+
+    with pytest.raises(BaseExceptionGroup) as error_info:
+        await _finish_auth_burst_lifecycle(
+            primary_error=ValueError("synthetic primary failure"),
+            tasks=[task],
+            tasks_observed=False,
+            dispose=fail_disposal,
+        )
+    assert [str(error) for error in error_info.value.exceptions] == [
+        "synthetic primary failure",
+        "synthetic drain failure",
+        "synthetic disposal failure",
+    ]
+    assert task.done()
 
 
 def test_valid_key_returns_authorized(db_session: Session, stored_key: str) -> None:
@@ -787,7 +1311,13 @@ async def test_async_valid_burst_above_failure_threshold_never_locks(
     )
     db_engine.dispose()
     async_url = str(db_engine.url).replace("sqlite:///", "sqlite+aiosqlite:///")
-    target = create_async_engine(async_url, connect_args={"check_same_thread": False})
+    target = create_async_engine(
+        async_url,
+        connect_args={"check_same_thread": False},
+        pool_size=8,
+        max_overflow=0,
+    )
+    pool = cast(AsyncAdaptedQueuePool, target.pool)
     configure_sqlite_engine(target.sync_engine)
     sessions = async_sessionmaker(target, class_=AsyncSession, expire_on_commit=False)
     entered = 0
@@ -820,15 +1350,67 @@ async def test_async_valid_burst_above_failure_threshold_never_locks(
                 policy,
             )
 
-    try:
-        tasks = [asyncio.create_task(authenticate()) for _ in range(8)]
-        await asyncio.wait_for(all_entered.wait(), timeout=5)
-        release.set()
-        assert await asyncio.gather(*tasks) == [(True, None)] * 8
+    warm_connections: list[AsyncConnection] = []
+    tasks: list[asyncio.Task[tuple[bool, str | None]]] = []
+    tasks_observed = False
+    primary_error: BaseException | None = None
+
+    async def acquire_warm_connection() -> None:
+        warm_connections.append(await target.connect())
+
+    async def load_lockout_rows() -> list[AuthLockout]:
         async with sessions() as session:
-            assert (await session.exec(select(AuthLockout))).all() == []
+            return list((await session.exec(select(AuthLockout))).all())
+
+    try:
+        warm_tasks = [
+            asyncio.create_task(acquire_warm_connection(), name=f"auth-pool-warm-{index}")
+            for index in range(8)
+        ]
+        try:
+            await _wait_for_test_tasks(warm_tasks, operation="authentication pool warm-up")
+            assert pool.checkedout() == 8
+            probe_tasks = [
+                asyncio.create_task(
+                    connection.execute(text("SELECT 1")),
+                    name=f"auth-pool-probe-{index}",
+                )
+                for index, connection in enumerate(warm_connections)
+            ]
+            await _wait_for_test_tasks(probe_tasks, operation="authentication pool probe")
+        finally:
+            await _close_test_connections(target, warm_connections)
+        assert pool.checkedin() == 8
+
+        tasks = [
+            asyncio.create_task(authenticate(), name=f"valid-auth-burst-{index}")
+            for index in range(8)
+        ]
+        try:
+            await asyncio.wait_for(all_entered.wait(), timeout=PROCESS_COORDINATION_TIMEOUT_SECONDS)
+        finally:
+            release.set()
+        try:
+            results = await _wait_for_test_tasks(
+                list(tasks), operation="valid authentication burst"
+            )
+        finally:
+            tasks_observed = True
+        assert results == [(True, None)] * 8
+        row_task = asyncio.create_task(load_lockout_rows(), name="auth-lockout-row-check")
+        assert await _wait_for_test_tasks(
+            [row_task], operation="authentication lockout row check"
+        ) == [[]]
+    except BaseException as error:
+        primary_error = error
     finally:
-        await target.dispose()
+        release.set()
+        await _finish_auth_burst_lifecycle(
+            primary_error=primary_error,
+            tasks=list(tasks),
+            tasks_observed=tasks_observed,
+            dispose=target.dispose,
+        )
 
 
 def test_http_valid_burst_above_failure_threshold_never_returns_lockout(
