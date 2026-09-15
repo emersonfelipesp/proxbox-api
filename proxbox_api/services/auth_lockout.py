@@ -461,8 +461,6 @@ def initialize_auth_lockout_identity_key(expected_fingerprint: str | None) -> st
     global _runtime_identity_hmac_key
 
     with _identity_key_runtime_lock:
-        _runtime_identity_hmac_key = None
-        _identity_hmac_key.cache_clear()
         key = _load_identity_hmac_key(allow_create=expected_fingerprint is None)
         fingerprint = _identity_key_fingerprint(key)
         if expected_fingerprint is not None and not hmac.compare_digest(
@@ -473,6 +471,7 @@ def initialize_auth_lockout_identity_key(expected_fingerprint: str | None) -> st
                 "the authentication lockout identity key does not match the database binding"
             )
         _runtime_identity_hmac_key = key
+        _identity_hmac_key.cache_clear()
         return fingerprint
 
 

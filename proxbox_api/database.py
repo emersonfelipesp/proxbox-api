@@ -10,7 +10,8 @@ import sqlite3
 import stat
 import threading
 import time
-from collections.abc import AsyncGenerator, Generator, Mapping
+from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -115,6 +116,15 @@ class SQLiteDatabaseTarget:
         return self.async_engine_url.render_as_string(hide_password=False)
 
 
+@dataclass(frozen=True, slots=True)
+class DatabaseRuntimeOwner:
+    """Opaque ownership token for one application lifespan."""
+
+    token: str
+    target: SQLiteDatabaseTarget
+    generation: str
+
+
 database_target: SQLiteDatabaseTarget | None = None
 # Legacy public module names remain available, but are intentionally unset
 # until lifespan startup resolves and verifies the configured target.
@@ -126,7 +136,20 @@ async_engine: AsyncEngine | None = None
 async_session_factory: async_sessionmaker[AsyncSession] | None = None
 connect_args = {"check_same_thread": False}
 _database_runtime_lock = threading.RLock()
+_database_runtime_condition = threading.Condition(_database_runtime_lock)
 _database_runtime_lease_descriptor: int | None = None
+_database_runtime_owners: dict[str, Path] = {}
+_database_runtime_generation: str | None = None
+_database_runtime_transitioning = False
+_database_runtime_poisoned: str | None = None
+_database_runtime_wait_executor = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="proxbox-database-runtime-wait",
+)
+_database_runtime_cleanup_executor = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="proxbox-database-runtime-cleanup",
+)
 
 
 def _absolute_database_path(raw_path: str, *, variable: str) -> Path:
@@ -724,6 +747,7 @@ def _initialize_database_target(target: SQLiteDatabaseTarget) -> SQLiteDatabaseT
             candidate_async_engine = create_async_engine(
                 target.async_engine_url,
                 connect_args=connect_args,
+                poolclass=NullPool,
             )
             if sync_engine.url.database != str(
                 target.path
@@ -773,36 +797,228 @@ def get_async_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return async_session_factory
 
 
-async def dispose_database() -> None:
-    """Dispose process-local engines after lifespan shutdown."""
+def _detach_database_runtime() -> tuple[Engine | None, AsyncEngine | None, int | None]:
+    """Clear process-global handles and return the detached runtime resources."""
     global database_target, sqlite_file_name, sqlite_url, async_sqlite_url
     global engine, async_engine, async_session_factory
-    global _database_runtime_lease_descriptor
+    global _database_runtime_generation, _database_runtime_lease_descriptor
 
-    with _database_runtime_lock:
-        sync_engine = engine
-        candidate_async_engine = async_engine
-        database_target = None
-        sqlite_file_name = None
-        sqlite_url = None
-        async_sqlite_url = None
-        engine = None
-        async_engine = None
-        async_session_factory = None
-        runtime_lease_descriptor = _database_runtime_lease_descriptor
-        _database_runtime_lease_descriptor = None
+    sync_engine = engine
+    candidate_async_engine = async_engine
+    runtime_lease_descriptor = _database_runtime_lease_descriptor
+    database_target = None
+    sqlite_file_name = None
+    sqlite_url = None
+    async_sqlite_url = None
+    engine = None
+    async_engine = None
+    async_session_factory = None
+    _database_runtime_generation = None
+    _database_runtime_lease_descriptor = None
+    return sync_engine, candidate_async_engine, runtime_lease_descriptor
+
+
+def _dispose_synchronous_engine(sync_engine: Engine | None) -> None:
+    """Dispose the detached synchronous engine while the runtime lease stays held."""
     if sync_engine is not None:
         sync_engine.dispose()
-    if candidate_async_engine is not None:
-        await candidate_async_engine.dispose()
-    if runtime_lease_descriptor is not None:
-        try:
-            fcntl.flock(runtime_lease_descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(runtime_lease_descriptor)
-    from proxbox_api.services.auth_lockout import clear_runtime_auth_lockout_identity_key
 
-    clear_runtime_auth_lockout_identity_key()
+
+def _release_database_runtime_lease(runtime_lease: int | None) -> None:
+    """Unlock and close a detached runtime lease descriptor."""
+    if runtime_lease is None:
+        return
+    try:
+        fcntl.flock(runtime_lease, fcntl.LOCK_UN)
+    finally:
+        os.close(runtime_lease)
+
+
+def _finish_database_runtime_transition(runtime_lease: int | None) -> None:
+    """Release the lease and identity only after every engine has finished disposal."""
+    global _database_runtime_transitioning
+
+    with _database_runtime_condition:
+        try:
+            _release_database_runtime_lease(runtime_lease)
+        finally:
+            try:
+                from proxbox_api.services.auth_lockout import (
+                    clear_runtime_auth_lockout_identity_key,
+                )
+
+                clear_runtime_auth_lockout_identity_key()
+            finally:
+                _database_runtime_transitioning = False
+                _database_runtime_condition.notify_all()
+
+
+def _run_database_runtime_thread(
+    executor: ThreadPoolExecutor,
+    function: Callable[..., Any],
+    *args: Any,
+) -> asyncio.Future[Any]:
+    """Run one lifecycle operation without consuming the loop's default executor."""
+    return asyncio.get_running_loop().run_in_executor(executor, function, *args)
+
+
+async def _wait_task_through_repeated_cancellation(task: asyncio.Future[Any]) -> bool:
+    """Wait for one task despite repeated caller cancellation and report cancellation."""
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                cancelled = True
+        except BaseException:
+            if not task.done():
+                raise
+    return cancelled
+
+
+async def _complete_task_despite_cancellation(task: asyncio.Future[Any]) -> tuple[Any, bool]:
+    """Return a task's result after repeated shielding and report caller cancellation."""
+    cancelled = await _wait_task_through_repeated_cancellation(task)
+    return task.result(), cancelled
+
+
+async def _finish_database_runtime_transition_cancellation_resistant(
+    runtime_lease: int | None,
+) -> bool:
+    """Finish transition bookkeeping and report deferred caller cancellation."""
+    finish = _run_database_runtime_thread(
+        _database_runtime_cleanup_executor,
+        _finish_database_runtime_transition,
+        runtime_lease,
+    )
+    _, cancelled = await _complete_task_despite_cancellation(finish)
+    return cancelled
+
+
+async def _dispose_database_engines(
+    sync_engine: Engine | None,
+    candidate_async_engine: AsyncEngine | None,
+) -> tuple[bool, tuple[BaseException, ...]]:
+    """Attempt both detached disposals and retain every failure."""
+    failures: list[BaseException] = []
+    cancelled = False
+    sync_disposal = _run_database_runtime_thread(
+        _database_runtime_cleanup_executor,
+        _dispose_synchronous_engine,
+        sync_engine,
+    )
+    cancelled = await _wait_task_through_repeated_cancellation(sync_disposal)
+    try:
+        sync_disposal.result()
+    except BaseException as error:
+        failures.append(error)
+    if candidate_async_engine is not None:
+        async_disposal = asyncio.create_task(candidate_async_engine.dispose())
+        async_cancelled = await _wait_task_through_repeated_cancellation(async_disposal)
+        cancelled = cancelled or async_cancelled
+        try:
+            async_disposal.result()
+        except BaseException as error:
+            failures.append(error)
+    return cancelled, tuple(failures)
+
+
+def _poison_database_runtime_transition(
+    runtime_lease: int | None,
+    failures: tuple[BaseException, ...],
+) -> None:
+    """Keep failed cleanup unavailable until process restart and wake blocked callers."""
+    global _database_runtime_lease_descriptor, _database_runtime_poisoned
+    global _database_runtime_transitioning
+
+    summary = "; ".join(f"{type(error).__name__}: {error}" for error in failures)
+    with _database_runtime_condition:
+        if runtime_lease is not None:
+            _database_runtime_lease_descriptor = runtime_lease
+        _database_runtime_poisoned = summary or "unknown database runtime cleanup failure"
+        _database_runtime_transitioning = False
+        _database_runtime_condition.notify_all()
+
+
+def _database_runtime_disposal_error(
+    failures: tuple[BaseException, ...],
+) -> DatabaseStartupError:
+    """Build one fail-closed error retaining each engine cleanup failure."""
+    error = DatabaseStartupError(
+        "Database runtime disposal did not complete safely. This process is blocked from "
+        "reinitializing the database; restart it before serving requests or maintenance."
+    )
+    for failure in failures:
+        error.add_note(f"{type(failure).__name__}: {failure}")
+    return error
+
+
+async def _dispose_and_finish_database_runtime(
+    sync_engine: Engine | None,
+    candidate_async_engine: AsyncEngine | None,
+    runtime_lease: int | None,
+) -> bool:
+    """Dispose a detached runtime, then publish availability only after complete cleanup."""
+    cancelled, failures = await _dispose_database_engines(sync_engine, candidate_async_engine)
+    if failures:
+        _poison_database_runtime_transition(runtime_lease, failures)
+        raise _database_runtime_disposal_error(failures) from failures[0]
+    try:
+        finish_cancelled = await _finish_database_runtime_transition_cancellation_resistant(
+            runtime_lease
+        )
+    except BaseException as failure:
+        failures = (failure,)
+        _poison_database_runtime_transition(None, failures)
+        raise _database_runtime_disposal_error(failures) from failure
+    return cancelled or finish_cancelled
+
+
+def _begin_unowned_database_disposal() -> tuple[Engine | None, AsyncEngine | None, int | None]:
+    """Claim and detach an unowned runtime for ordered asynchronous disposal."""
+    global _database_runtime_transitioning
+
+    with _database_runtime_condition:
+        while _database_runtime_transitioning:
+            _database_runtime_condition.wait()
+        if _database_runtime_poisoned is not None:
+            raise DatabaseStartupError(
+                "Database runtime cleanup previously failed in this process; restart it before "
+                "database initialization or maintenance."
+            )
+        if _database_runtime_owners:
+            raise DatabaseStartupError(
+                "Database runtime cannot be disposed while application lifespans own it."
+            )
+        _database_runtime_transitioning = True
+        sync_engine, candidate_async_engine, runtime_lease = _detach_database_runtime()
+        return sync_engine, candidate_async_engine, runtime_lease
+
+
+async def dispose_database() -> None:
+    """Dispose an unowned process-local runtime after lifespan shutdown."""
+    begin_disposal = _run_database_runtime_thread(
+        _database_runtime_wait_executor,
+        _begin_unowned_database_disposal,
+    )
+    disposal, cancelled = await _complete_task_despite_cancellation(begin_disposal)
+    sync_engine, candidate_async_engine, runtime_lease = disposal
+    cleanup_cancelled = await _dispose_and_finish_database_runtime(
+        sync_engine, candidate_async_engine, runtime_lease
+    )
+    cancelled = cancelled or cleanup_cancelled
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+def _cancel_database_runtime_claim() -> None:
+    """Release unused first-initializer authority after caller cancellation."""
+    global _database_runtime_transitioning
+
+    with _database_runtime_condition:
+        _database_runtime_transitioning = False
+        _database_runtime_condition.notify_all()
 
 
 def _apply_sqlite_pragmas(dbapi_connection, connection_record) -> None:  # noqa: ARG001
@@ -2456,11 +2672,11 @@ def _warn_if_active_api_key_limit_exceeded(
     )
 
 
-def initialize_database_and_schema(
+def _initialize_database_and_schema_target(
+    target: SQLiteDatabaseTarget,
     environ: Mapping[str, str] | None = None,
 ) -> SQLiteDatabaseTarget:
-    """Verify one target and serialize all startup schema work across processes."""
-    target = resolve_database_target(environ)
+    """Initialize one already-resolved target under its startup lock."""
     with _database_runtime_lock, _database_startup_advisory_lock(target):
         _consume_fresh_database_override(target)
         _audit_fresh_database_override(target)
@@ -2469,6 +2685,163 @@ def initialize_database_and_schema(
         _warn_if_active_api_key_limit_exceeded(get_engine(), environ)
         _acquire_runtime_database_lease(target)
         return initialized_target
+
+
+def initialize_database_and_schema(
+    environ: Mapping[str, str] | None = None,
+) -> SQLiteDatabaseTarget:
+    """Verify one target and serialize all startup schema work across processes."""
+    target = resolve_database_target(environ)
+    return _initialize_database_and_schema_target(target, environ)
+
+
+def _claim_database_runtime(
+    environ: Mapping[str, str] | None,
+) -> DatabaseRuntimeOwner | SQLiteDatabaseTarget:
+    """Wait for lifecycle stability, then reuse or claim initialization authority."""
+    global _database_runtime_transitioning
+
+    with _database_runtime_condition:
+        while _database_runtime_transitioning:
+            _database_runtime_condition.wait()
+        if _database_runtime_poisoned is not None:
+            raise DatabaseStartupError(
+                "Database runtime cleanup previously failed in this process; restart it before "
+                "database initialization or maintenance."
+            )
+        target = resolve_database_target(environ)
+        if _database_runtime_owners:
+            if database_target is None or database_target.path != target.path:
+                raise DatabaseStartupError(
+                    "Database runtime is already initialized with a different SQLite target."
+                )
+            if _database_runtime_generation is None:
+                raise DatabaseStartupError("Database runtime generation is unavailable.")
+            owner = DatabaseRuntimeOwner(
+                token=uuid4().hex,
+                target=database_target,
+                generation=_database_runtime_generation,
+            )
+            _database_runtime_owners[owner.token] = owner.target.path
+            return owner
+        _database_runtime_transitioning = True
+        return target
+
+
+def _publish_database_runtime(target: SQLiteDatabaseTarget) -> DatabaseRuntimeOwner:
+    """Publish a newly initialized runtime and wake blocked acquirers."""
+    global _database_runtime_generation, _database_runtime_transitioning
+
+    with _database_runtime_condition:
+        generation = uuid4().hex
+        owner = DatabaseRuntimeOwner(token=uuid4().hex, target=target, generation=generation)
+        _database_runtime_generation = generation
+        _database_runtime_owners[owner.token] = target.path
+        _database_runtime_transitioning = False
+        _database_runtime_condition.notify_all()
+        return owner
+
+
+def _detach_failed_database_runtime() -> tuple[Engine | None, AsyncEngine | None, int | None]:
+    """Detach a failed first initialization while keeping its lease held."""
+    with _database_runtime_condition:
+        return _detach_database_runtime()
+
+
+async def acquire_database_runtime(
+    environ: Mapping[str, str] | None = None,
+) -> DatabaseRuntimeOwner:
+    """Initialize the shared runtime and register one lifespan owner atomically."""
+    claim_task = _run_database_runtime_thread(
+        _database_runtime_wait_executor,
+        _claim_database_runtime,
+        environ,
+    )
+    claim, cancelled = await _complete_task_despite_cancellation(claim_task)
+    if cancelled:
+        if isinstance(claim, DatabaseRuntimeOwner):
+            await release_database_runtime(claim)
+        else:
+            cancel_claim = _run_database_runtime_thread(
+                _database_runtime_cleanup_executor,
+                _cancel_database_runtime_claim,
+            )
+            await _complete_task_despite_cancellation(cancel_claim)
+        raise asyncio.CancelledError
+    if isinstance(claim, DatabaseRuntimeOwner):
+        return claim
+    try:
+        target = _initialize_database_and_schema_target(claim, environ)
+    except BaseException as startup_error:
+        sync_engine, candidate_async_engine, runtime_lease = _detach_failed_database_runtime()
+        try:
+            cleanup_cancelled = await _dispose_and_finish_database_runtime(
+                sync_engine, candidate_async_engine, runtime_lease
+            )
+        except BaseException as cleanup_error:
+            startup_error.add_note(
+                "Database runtime cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+            logger.error(
+                "Database runtime cleanup failed after startup initialization failed",
+                exc_info=(type(cleanup_error), cleanup_error, cleanup_error.__traceback__),
+            )
+        else:
+            if cleanup_cancelled:
+                startup_error.add_note(
+                    "Caller cancellation was deferred until failed-startup cleanup completed."
+                )
+        raise
+    return _publish_database_runtime(target)
+
+
+def _begin_database_runtime_release(
+    owner: DatabaseRuntimeOwner,
+) -> tuple[Engine | None, AsyncEngine | None, int | None] | None:
+    """Release one owner and claim final disposal authority when it was last."""
+    global _database_runtime_transitioning
+
+    with _database_runtime_condition:
+        while _database_runtime_transitioning:
+            _database_runtime_condition.wait()
+        if _database_runtime_poisoned is not None:
+            raise DatabaseStartupError(
+                "Database runtime cleanup previously failed in this process; restart it before "
+                "database initialization or maintenance."
+            )
+        owned_path = _database_runtime_owners.get(owner.token)
+        if owned_path is None or owned_path != owner.target.path:
+            raise DatabaseStartupError("Database runtime ownership token is unknown or released.")
+        if owner.generation != _database_runtime_generation:
+            raise DatabaseStartupError("Database runtime ownership generation is no longer active.")
+        del _database_runtime_owners[owner.token]
+        if _database_runtime_owners:
+            return None
+        _database_runtime_transitioning = True
+        sync_engine, candidate_async_engine, runtime_lease = _detach_database_runtime()
+        return sync_engine, candidate_async_engine, runtime_lease
+
+
+async def release_database_runtime(owner: DatabaseRuntimeOwner) -> None:
+    """Release one lifespan owner and dispose only after the final release."""
+    begin_release = _run_database_runtime_thread(
+        _database_runtime_wait_executor,
+        _begin_database_runtime_release,
+        owner,
+    )
+    disposal, cancelled = await _complete_task_despite_cancellation(begin_release)
+    if disposal is None:
+        if cancelled:
+            raise asyncio.CancelledError
+        return
+    sync_engine, candidate_async_engine, runtime_lease = disposal
+    cleanup_cancelled = await _dispose_and_finish_database_runtime(
+        sync_engine, candidate_async_engine, runtime_lease
+    )
+    cancelled = cancelled or cleanup_cancelled
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def create_db_and_tables() -> None:

@@ -220,11 +220,21 @@ Open the nearest scoped guide for the code you are changing.
    middleware, routers, and exception handlers. It deliberately resolves **no** database or
    NetBox configuration: importing or constructing the app must never touch the filesystem or
    the network, so configuration errors surface at startup rather than at import time.
-2. The lifespan handler owns all runtime state. It calls `bootstrap.init_database_and_netbox()`,
+2. Each lifespan acquires an opaque ownership token for the process-shared database and
+   authentication runtime before it calls `bootstrap.init_database_and_netbox()`. It then
    validates the authentication lockout identity key, registers generated Proxmox proxy routes,
-   builds the default NetBox session, and records bootstrap status. On shutdown it always
-   disposes the database engines, so a subsequent lifespan in the same process re-establishes
-   its own state instead of inheriting a disposed one.
+   builds the default NetBox session, and records bootstrap status. One owner initializes and
+   atomically publishes the shared bootstrap globals for each runtime generation; concurrent
+   owners wait for and reuse that result. Startup failures release only the token they acquired,
+   and overlapping lifespans keep the shared engines, runtime lease, and lockout identity alive
+   until cancellation-resistant final disposal completes. Repeated cancellation is deferred until
+   every cleanup task reaches a terminal state. Engine-disposal failure attempts both engines,
+   keeps the runtime lease and identity pinned, and poisons database reuse until process restart;
+   cleanup errors never replace an earlier startup or application failure. The shared async
+   engine uses `NullPool`, so overlapping lifespans on distinct event loops never reuse a
+   loop-bound pooled connection. Blocking lifecycle waiters and the synchronous cleanup work
+   that wakes them use separate dedicated executors, so default-executor saturation cannot
+   deadlock final disposal.
 3. Requests resolve NetBox and Proxmox sessions through dependency providers.
 4. VM sync routes prepare Proxmox/NetBox state, then delegate deterministic VM
    operation-queue reconciliation to `proxbox_api.services.sync.reconciliation`.

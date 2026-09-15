@@ -18,7 +18,7 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | File | Role |
 |------|------|
 | `factory.py` | `create_app()` — assembles the import-safe FastAPI application: validates auth-lockout policy/trusted-proxy process configuration, registers middleware/routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts database/bootstrap, adjacent HMAC-key validation, plus generated Proxmox route registration during lifespan. |
-| `bootstrap.py` | Resolves the guarded SQLite target, initializes its complete probe/schema boundary (including auth-lockout validation) under the target-specific interprocess lock, opens the default NetBox session, and records bootstrap status. Database failures are fatal while an absent NetBox endpoint remains non-fatal. A `CephProviderTaskClaimMigrationError` raised during schema initialization is fatal: bootstrap records one stable reason and refuses startup. |
+| `bootstrap.py` | Resolves the guarded SQLite target, initializes its complete probe/schema boundary (including auth-lockout validation) under the target-specific interprocess lock, opens the default NetBox session, and records bootstrap status. A condition-protected generation claim ensures simultaneous lifespans publish these process-global results exactly once. Database failures are fatal and shared with waiting owners, while an absent NetBox endpoint remains non-fatal. A `CephProviderTaskClaimMigrationError` raised during schema initialization is fatal: bootstrap records one stable reason and refuses startup. |
 | `cors.py` | Builds CORS allowed-origin lists from active NetBox endpoint records, including endpoint rows loaded after app construction. |
 | `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
 | `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including durable label-free authentication lockout metrics plus NetBox GET cache invalidation. |
@@ -32,15 +32,11 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 ## Application Startup Sequence
 
 1. `create_app()` is called (imported by `proxbox_api.main`) and assembles middleware, exception handlers, and routers without touching the database.
-2. Lifespan starts: `bootstrap.py` resolves one guarded absolute SQLite target; a persistent sibling lock serializes WAL/write proof, engines/tables, schema inspection, and every migration. The mandatory endpoint-table read then succeeds before optional NetBox client creation.
-3. Legacy user-generated Python models and unprovenanced route caches are
-   quarantined, then generated Proxmox routes are loaded from immutable bundled
-   schemas and registered. Provenance-verified user schemas are considered only
-   when the development-only `PROXBOX_RUNTIME_CODEGEN_ENABLED=true` process
-   opt-in was set before application construction.
+2. Lifespan starts by acquiring an opaque generation-bound owner token for the process-shared database runtime. The first owner initializes the guarded absolute SQLite target; later same-target owners register without rerunning schema or lockout-identity initialization. `bootstrap.py` publishes endpoint and NetBox globals once for that generation, and simultaneous owners wait for the same success or fatal failure. A persistent sibling lock serializes WAL/write proof, engines/tables, schema inspection, and every migration. A conflicting startup cannot release or mutate an incumbent owner's runtime.
+3. Legacy user-generated Python models and unprovenanced route caches are quarantined, then generated Proxmox routes are loaded from immutable bundled schemas and registered. Provenance-verified user schemas are considered only when the development-only `PROXBOX_RUNTIME_CODEGEN_ENABLED=true` process opt-in was set before application construction.
 4. The NetBox bootstrap pass records `app.state.bootstrap_status`, which is exposed by `GET /extras/bootstrap-status`.
 5. App becomes ready to serve; any database configuration/write failure prevents this transition.
-6. Lifespan shutdown disposes the sync and async engines and clears process-local database handles.
+6. Lifespan shutdown releases only its own token. The final owner enters a condition-protected transition, detaches the process globals, and attempts both engine disposals despite repeated caller cancellation. Only complete cleanup releases the runtime lease and clears the lockout identity. A disposal failure pins both boundaries and poisons database reuse until process restart. Cleanup failures are propagated on normal shutdown but recorded without replacing an earlier startup or application failure. New owners wait for active transitions, offline maintenance remains excluded by the lease, and overlapping owners continue serving without interruption. The shared async engine is unpooled so distinct lifespan event loops cannot inherit each other's pooled connections. Condition waiters and the cleanup work that wakes them execute on separate dedicated executors and never depend on default-executor capacity.
 
 ## Key Rules
 

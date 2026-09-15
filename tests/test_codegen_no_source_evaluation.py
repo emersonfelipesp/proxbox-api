@@ -797,7 +797,7 @@ async def test_lifespan_catches_only_typed_schema_validation_failure(monkeypatch
         return None
 
     real_register = runtime_generated.register_generated_proxmox_routes
-    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda: None)
+    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda _owner: None)
     monkeypatch.setattr(factory, "validate_auth_lockout_identity_key", lambda: None)
     monkeypatch.setattr(factory, "quarantine_legacy_codegen_artifacts", lambda: [])
     monkeypatch.setattr(factory, "_run_bootstrap_pass", _skip_bootstrap)
@@ -1269,7 +1269,7 @@ async def test_startup_quarantines_cache_and_provenance_symlinks_without_followi
 
     real_register = runtime_generated.register_generated_proxmox_routes
     monkeypatch.setenv("PROXBOX_GENERATED_DIR", str(user))
-    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda: None)
+    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda _owner: None)
     monkeypatch.setattr(factory, "validate_auth_lockout_identity_key", lambda: None)
     monkeypatch.setattr(factory, "_run_bootstrap_pass", _skip_bootstrap)
     monkeypatch.setattr(factory.database, "dispose_database", _skip_dispose)

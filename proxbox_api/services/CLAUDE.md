@@ -38,6 +38,9 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   storing keys or dictionary-testable fingerprints; inserts one durable
   per-token reservation before bcrypt; and gives each row a renewable expiry
   capped by a persisted absolute deadline.
+  Runtime identity material is validated against its database-bound fingerprint
+  before the process-pinned key is atomically replaced; failed replacement leaves
+  the serving generation's validated identity intact.
   Expired crash rows stop consuming capacity and remain observable for one hour;
   a result can update accounting exactly once only before its terminal deadline,
   and later results are discarded. Admission and finalization both compact older

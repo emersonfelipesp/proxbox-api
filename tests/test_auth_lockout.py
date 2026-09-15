@@ -2246,6 +2246,25 @@ def test_runtime_identity_key_stays_pinned_after_validated_sidecar_mutation(
     assert second == first
 
 
+def test_failed_identity_replacement_preserves_validated_runtime_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_material = "original-runtime-identity-" + "x" * 32
+    replacement_material = "replacement-runtime-identity-" + "y" * 32
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY", original_material)
+    lockout_module.clear_runtime_auth_lockout_identity_key()
+    fingerprint = lockout_module.initialize_auth_lockout_identity_key(None)
+    source = resolve_auth_source_context(CLIENT_IP, None, ())
+    before = build_lockout_identity(source, STALE_KEY)
+
+    monkeypatch.setenv("PROXBOX_AUTH_LOCKOUT_HMAC_KEY", replacement_material)
+    with pytest.raises(LockoutConfigurationError, match="does not match the database binding"):
+        lockout_module.initialize_auth_lockout_identity_key(fingerprint)
+
+    after = build_lockout_identity(source, STALE_KEY)
+    assert after == before
+
+
 def test_forwarded_source_requires_explicit_trusted_cidr() -> None:
     trusted = parse_trusted_proxy_cidrs("10.0.0.0/8,2001:db8::/32")
 
@@ -2878,14 +2897,15 @@ def test_lockout_migration_rejects_partial_metrics_schema(tmp_path) -> None:
 
 
 def test_lifespan_propagates_auth_schema_incompatibility(monkeypatch) -> None:
-    from proxbox_api.app import bootstrap, factory
+    from proxbox_api import database as database_module
+    from proxbox_api.app import factory
 
-    def fail_schema_bootstrap() -> None:
+    def fail_schema_bootstrap(target, environ=None) -> None:  # noqa: ANN001, ARG001
         raise AuthLockoutSchemaError("incompatible auth_lockout_buckets primary key")
 
     monkeypatch.setattr(
-        bootstrap,
-        "initialize_database_and_schema",
+        database_module,
+        "_initialize_database_and_schema_target",
         fail_schema_bootstrap,
     )
     with pytest.raises(AuthLockoutSchemaError, match="primary key"):
