@@ -193,8 +193,54 @@ sequenceDiagram
    valide a saude de producao.
 6. Dispare `promote-final-tag.yml` no `main` canonico do Gitea; ele valida o
    pacote privado exato e a atestacao NMS antes de enviar a tag ao repositorio
-   GitHub autorizado. Depois crie a GitHub Release com `--verify-tag`; o evento
+   GitHub autorizado. Aguarde o workflow terminar com sucesso, registre o SHA
+   exato da origem aprovada para producao e depois crie a GitHub Release com o
+   helper fail-closed; o evento
    valida a atestacao protegida do Gitea,
    publica os mesmos bytes no PyPI e depois as imagens no Docker Hub.
 7. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
    depois da publicacao final no PyPI.
+
+### Antes da transicao para o controle de release: automacao legada
+
+Antes da transicao para o controle de release, o caminho existente por tag do
+`publish-gitea.yml` continua sendo o publicador ativo. Para uma tag que nao seja
+RC, ele envia a tag exata ao GitHub e cria a GitHub Release somente quando ela
+nao existe. Ele falha de forma fechada para todo objeto existente, em rascunho
+ou publicado, para que um operador inspecione explicitamente seu estado, notas
+e artefatos. Aguarde esse job terminar; nao dispute com ele executando outro
+`gh release create`. Se o job enviou a tag, mas nao criou a Release, primeiro
+confirme que a Release nao existe e somente entao use o helper fail-closed com
+o SHA exato da origem do job legado concluido. Ele resolve a tag do GitHub para
+um commit, exige que esse commit seja igual ao SHA aprovado fornecido, consulta
+a API do GitHub e carrega as notas de release desse mesmo commit no GitHub, em
+vez da arvore de trabalho do chamador, e cria a Release apenas depois de um
+HTTP 404 explicito; uma Release
+existente, erro de autenticacao ou autorizacao, falha da API ou falha de rede
+interrompe a operacao sem publicar. O helper tambem fornece `--verify-tag`, para
+que o GitHub nao possa inventar ou mover a tag:
+
+```bash
+scripts/create-github-release.sh vX.Y.Z <sha-aprovado-de-40-caracteres>
+```
+
+Substitua `vX.Y.Z` pela tag final ou `.postN` exata que ja foi enviada ao GitHub.
+Se o helper informar que a Release existe, inspecione e publique ou repare o
+objeto existente em vez de criar outro. Nao ignore nenhuma outra falha da
+consulta.
+
+### Depois da transicao para o controle de release: promocao controlada
+
+Depois da transicao para o controle de release, o passo 6 e intencionalmente
+diferente: `promote-final-tag.yml` valida a evidencia de producao e envia a tag
+exata, mas nao cria a GitHub Release. Aguarde o workflow terminar com sucesso e
+registre o SHA exato da origem aprovada para producao. Em seguida, o operador
+executa `scripts/create-github-release.sh vX.Y.Z <sha-aprovado-de-40-caracteres>`
+como a etapa normal da publicacao controlada.
+O helper desreferencia a tag no GitHub e exige que ela corresponda a esse SHA
+aprovado, depois carrega as notas de release desse commit exato no GitHub. A
+mesma consulta fail-closed continua obrigatoria: o HTTP 404 esperado comprova
+que nao ha Release existente, enquanto qualquer outro
+resultado interrompe a operacao. Essa separacao impede que o evento
+`release: published` autorize PyPI ou Docker Hub antes da aprovacao da evidencia
+de producao.

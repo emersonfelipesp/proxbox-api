@@ -757,15 +757,15 @@ All checks MUST pass before committing.
 
 ## Release Procedure
 
-The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: tags: v*` (RC and final), `release: published`, and `workflow_dispatch`. The **Gitea-first** pipeline (introduced in v0.0.16) uses `.gitea/workflows/publish-gitea.yml` to publish to the Gitea Package Registry, push the tag to GitHub, and create the GitHub release — which fires the `release: published` event and triggers the PyPI publish.
+The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: tags: v*` (RC and final), `release: published`, and `workflow_dispatch`. The repository has two mutually exclusive Gitea-first publication modes. Before the release-control cutover, `.gitea/workflows/publish-gitea.yml` publishes to the Gitea Package Registry, pushes the tag to GitHub, and creates the GitHub Release. After the private control is activated, that workflow uploads a data-only release request; the control publishes the private package and RC tags, while `.gitea/workflows/promote-final-tag.yml` pushes an approved final tag only after production validation. In the controlled mode, the operator intentionally creates the GitHub Release after promotion. Follow the detailed mode-specific runbook in `docs/development/release-publishing.md`.
 
 | Trigger | Use for | Publishes to |
 |---------|---------|--------------|
 | `push: tags: v*rc*` (plain Gitea tag push to Gitea mirrored to GitHub) | RC `vX.Y.ZrcN` | TestPyPI via GitHub Actions |
-| `release: published` (created by `publish-gitea.yml`) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
+| `release: published` (legacy automation or the controlled operator step) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
 | Docker Hub publish | Called after PyPI validation | Docker Hub (raw/nginx/granian images) |
 
-### Gitea-first release flow (standard — vX.Y.Z)
+### Before release-control cutover: legacy Gitea-first flow
 
 1. **Bump versions** on the release branch: `pyproject.toml`, `uv.lock`. Local checks:
    ```bash
@@ -784,7 +784,7 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: 
 4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
    - Builds dist, publishes to Gitea Package Registry (`PKG_TOKEN` secret).
    - Pushes tag to GitHub. This fires `push: tags: v*` on GitHub Actions.
-   - For non-RC tags: creates (or publishes draft) GitHub release, which fires `release: published`.
+   - For non-RC tags: creates a GitHub Release only when none exists, which fires `release: published`. Any existing draft or published Release fails closed for explicit operator inspection.
    - The PyPI idempotency check in `publish-pypi` handles the `release: published` re-trigger gracefully (skips upload if already on PyPI).
 5. **Monitor both CI runs:**
    ```bash
@@ -797,13 +797,51 @@ The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: 
    ```
 7. **Cleanup**: delete the release branch locally and on both remotes.
 
+If the legacy workflow pushes the tag but fails before creating the Release,
+wait for the workflow to reach a terminal state and then run
+`scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>`,
+using the exact source SHA recorded by that completed job. The helper first
+requires the exact peeled GitHub tag commit to match that approved SHA and
+loads release notes from the same remote commit, never the local checkout. It
+then proceeds only when the GitHub API returns an explicit HTTP 404 for the
+Release, always supplies `--verify-tag`, and aborts on an existing Release,
+authentication or authorization error, API failure, or network failure.
+
+### After release-control cutover: controlled Gitea-first flow
+
+1. Push the annotated RC or final tag to Gitea only after the activation gate
+   in `AGENTS.md` reports that the private release control is ready.
+2. Wait for `.gitea/workflows/publish-gitea.yml` to upload the signed,
+   data-only `release-control-request`; it has no package or mirror credential.
+3. Dispatch the private control's `validate.yml`, then its separate irreversible
+   `publish.yml`, with the exact repository name, first-attempt target run ID,
+   and request SHA-256. The control publishes the private package and promotes
+   RC tags only.
+4. Validate an RC through TestPyPI. For the final version, verify the private
+   package, deploy it through the approved deployment control plane, and
+   validate production health before public promotion.
+5. Dispatch `.gitea/workflows/promote-final-tag.yml` from canonical `main`. It
+   verifies the exact private package and production attestation and pushes the
+   approved final tag to GitHub; it deliberately does not create a Release.
+   Wait for a successful terminal result and record the exact
+   production-approved source SHA.
+6. Run `scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>`.
+   The helper requires the exact peeled GitHub tag to equal that approved SHA
+   and loads release notes from the same remote commit. An explicit HTTP 404 is
+   the only Release-lookup result that authorizes creation; every ambiguous
+   failure aborts, and `--verify-tag` prevents GitHub from inventing or moving
+   the tag.
+7. Monitor the resulting `release: published` workflow through PyPI validation
+   and Docker Hub publication, then complete post-release validation and
+   cleanup.
+
 ### RC flow (TestPyPI gate)
 
 1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
 2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
 3. Fix-forward with `rcN+1` if anything fails.
 
-### Manual fallback (if Gitea Actions unavailable)
+### Legacy manual fallback (before release-control cutover only)
 
 If Gitea Actions tag triggers are not operational on this instance (Gitea 1.26.2 limitation — confirm with `git.nmulti.cloud` admin), use the following direct-upload path:
 
@@ -821,10 +859,17 @@ git push origin vX.Y.Z
 # Watch the tag-push publish run
 gh run watch <run-id> --repo emersonfelipesp/proxbox-api
 
-# Then create the GitHub release manually
-gh release create vX.Y.Z --repo emersonfelipesp/proxbox-api --title vX.Y.Z --generate-notes
+# Then create the GitHub release through the fail-closed helper
+scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>
 # The release: published run will fire; the PyPI idempotency check will skip the upload (already done)
 ```
+
+Do not use this direct-upload fallback after the controlled publisher is
+activated. The controlled path requires private-package and production evidence
+before `promote-final-tag.yml` pushes the final tag. The helper refuses to
+create a Release unless the dereferenced tag matches the supplied exact approved
+source SHA and the Release lookup returns an explicit HTTP 404; do not bypass
+authentication, authorization, API, network, or commit-mismatch failures.
 
 Note: `PKG_TOKEN` is the secret name for Gitea package uploads. The `GITEA_` prefix is reserved by Gitea Actions and cannot be used as a secret name.
 

@@ -141,9 +141,15 @@ uv run pytest tests/ -n auto \
   --cov-report=term-missing \
   --cov-report=xml:coverage.xml
 
-# Release-only unit/static contract. GitHub CI additionally prepares the real
-# CPython 3.13 musllinux wheelhouse and builds the extracted sdist context with
-# Docker build networking disabled.
+# Release-only unit/static contract. This includes the verified-tag and
+# production-approved-commit GitHub Release boundary; fail-closed handling of
+# missing tags, branch/tag name collisions, mismatched commits, remote-note
+# provenance failures, existing Releases, unauthorized, server, and network
+# lookup results; refusal to auto-publish legacy drafts; and the
+# distinct legacy-versus-controlled publication runbook paths. GitHub CI also
+# prepares the real CPython 3.13
+# musllinux wheelhouse and builds the extracted sdist context with Docker build
+# networking disabled.
 uv run pytest tests/test_release_workflows.py -q
 
 # E2E tests against in-process MockBackend

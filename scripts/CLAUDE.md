@@ -17,6 +17,7 @@ Utility and maintenance scripts for the `proxbox-api` project. These are one-off
 
 | File | Role |
 |------|------|
+| `create-github-release.sh` | Fail-closed final public-release helper. It resolves and peels the exact `refs/tags/` object, requires its commit to match the supplied production-approved SHA, loads notes from that exact GitHub commit, creates only after an explicit GitHub API 404, and aborts on existing releases, provenance mismatches, or ambiguous lookup failures. |
 | `mounted_operation_inventory.py` | Explicit isolated `generate`, `verify`, and `readiness` commands for the maintained mounted-operation contracts. The child denies sockets, database access and external writes before importing the application; it never runs lifespan or handlers. |
 | `operation_inventory_docs.py` | Standard-library-only MkDocs pre-build integrity and source check. It does not import the application and fails on missing, stale or symlinked inventory evidence before restricted snippets render. |
 | `refresh_schemas.py` | Regenerates the Proxmox and NetBox OpenAPI schema snapshots in `proxbox_api/generated/`. Run this when a new Proxmox or NetBox version is targeted. |
