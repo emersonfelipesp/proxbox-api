@@ -56,6 +56,16 @@ statement-only coverage (`COVERAGE_CORE=sysmon`, no `--cov-branch`, `-n 8
 branch coverage remains authoritative in the GitHub-hosted `.github/` CI and
 in the local invocation above.
 
+The TestPyPI and PyPI candidate validation jobs run the same mocked suite with
+two pytest-xdist workers and `--dist loadgroup`, preserving the singleton-state
+test groups. Python 3.13 retains branch coverage, an explicit `coverage.xml`
+artifact for 14 days, and `--durations=20`, but omits the large terminal
+missing-lines report from release logs. Coverage's `sysmon` core cannot measure
+branches on Python 3.13, so these jobs intentionally use the default coverage
+core instead of requesting `COVERAGE_CORE=sysmon` and silently falling back.
+Python 3.12 runs the same compatibility suite without coverage, so both
+supported interpreters are validated without collecting the metric twice.
+
 Generated schema output (`proxbox_api/generated/`) and E2E support code
 (`proxbox_api/e2e/`) are excluded from the core metric. The E2E support package
 is covered by the separate Docker E2E matrix, while generated declarations would

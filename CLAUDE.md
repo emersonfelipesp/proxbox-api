@@ -646,6 +646,13 @@ ratchet; 85% remains the long-term target rather than the current gate.
   pushes and pull requests only after N-MultiCloud/nmulticloud-context#204
   provisions that runner. Mirrored GitHub CI repeats the threshold on protected branches,
   reports missing lines, and retains `coverage.xml`; a regression blocks merge.
+- Release validation: the TestPyPI and PyPI candidate jobs use two xdist
+  workers with `--dist loadgroup` and retain `--durations=20`. Python 3.13
+  remains the branch-coverage leg and uploads `coverage.xml` for 14 days
+  without rendering the full terminal missing-lines report. Because coverage's
+  `sysmon` core cannot measure branches on Python 3.13, these jobs use the
+  default core instead of requesting `COVERAGE_CORE=sysmon` and falling back.
+  Python 3.12 validates compatibility without duplicate coverage collection.
 - Exclusions: only `proxbox_api/generated/` (machine-generated schema output) and
   `proxbox_api/e2e/` (support code exercised by the separate Docker E2E matrix).
 - Included: database, code-generation, testing helpers used by the core suite,

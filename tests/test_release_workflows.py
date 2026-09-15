@@ -446,6 +446,76 @@ def test_coverage_suite_jobs_outlast_the_shared_runner_worst_case():
         )
 
 
+def _mocked_schema_test_steps(job: dict) -> dict[str, dict]:
+    return {
+        step["name"]: step
+        for step in job["steps"]
+        if step["name"].startswith("Run mocked schema-driven tests")
+    }
+
+
+def _assert_bounded_release_test_command(name: str, command: str) -> None:
+    assert "pytest -n 2 --dist loadgroup" in command, name
+    assert "--durations=20" in command, name
+    assert "-n auto" not in command, name
+
+
+def _assert_release_validation_job(name: str, job: dict) -> None:
+    test_steps = _mocked_schema_test_steps(job)
+    assert set(test_steps) == {
+        "Run mocked schema-driven tests",
+        "Run mocked schema-driven tests with coverage",
+    }, name
+
+    compatibility_command = test_steps["Run mocked schema-driven tests"]["run"]
+    coverage_command = test_steps["Run mocked schema-driven tests with coverage"]["run"]
+    _assert_bounded_release_test_command(name, compatibility_command)
+    _assert_bounded_release_test_command(name, coverage_command)
+
+    assert "--cov=proxbox_api" in coverage_command, name
+    assert "--cov-branch" in coverage_command, name
+    assert "--cov-report=xml:coverage.xml" in coverage_command, name
+    assert "--cov-report=term" not in coverage_command, name
+    assert "COVERAGE_CORE" not in json.dumps(test_steps), name
+    assert "--cov" not in compatibility_command, name
+
+
+def _assert_release_coverage_upload(name: str, job: dict) -> None:
+    upload_steps = [
+        step for step in job["steps"] if step["name"] == "Upload release coverage evidence"
+    ]
+    assert len(upload_steps) == 1, name
+    upload_step = upload_steps[0]
+    artifact_names = {
+        "validate-testpypi": "coverage-testpypi-py3.13",
+        "validate-pypi-candidate": "coverage-pypi-candidate-py3.13",
+    }
+    assert upload_step["if"] == "${{ always() && matrix.python-version != '3.12' }}", name
+    assert upload_step["uses"] == (
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ), name
+    assert upload_step["with"] == {
+        "name": artifact_names[name],
+        "path": "coverage.xml",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
+
+
+def test_release_validation_uses_bounded_grouping_and_persists_xml_coverage():
+    """Keep release diagnostics useful without paying for terminal rendering."""
+    validation_jobs = {
+        name: job
+        for name, job in _publish_jobs().items()
+        if name in {"validate-testpypi", "validate-pypi-candidate"}
+    }
+    assert set(validation_jobs) == {"validate-testpypi", "validate-pypi-candidate"}
+
+    for name, job in validation_jobs.items():
+        _assert_release_validation_job(name, job)
+        _assert_release_coverage_upload(name, job)
+
+
 def test_ci_e2e_loads_prepared_image_artifacts_before_stack_start():
     workflow = _read(CI_WORKFLOW_PATH)
     e2e_block = workflow.split("e2e-docker:", 1)[1]

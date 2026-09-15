@@ -148,9 +148,12 @@ uv run pytest tests/ -n auto \
 # provenance failures, existing Releases, unauthorized, server, and network
 # lookup results; refusal to auto-publish legacy drafts; and the
 # distinct legacy-versus-controlled publication runbook paths. GitHub CI also
-# prepares the real CPython 3.13
-# musllinux wheelhouse and builds the extracted sdist context with Docker build
-# networking disabled.
+# prepares the real CPython 3.13 musllinux wheelhouse and builds the extracted
+# sdist context with Docker build networking disabled. Its candidate validation
+# contract also
+# pins two xdist workers with loadgroup isolation, retains duration telemetry,
+# and uploads branch-inclusive coverage XML from Python 3.13 for 14 days
+# without the terminal missing-lines report.
 uv run pytest tests/test_release_workflows.py -q
 
 # E2E tests against in-process MockBackend

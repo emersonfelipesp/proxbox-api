@@ -34,6 +34,20 @@ Para a superficie atual de rotas e contratos de docs:
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
 ```
 
+## Gate de cobertura
+
+A suite principal obrigatoria, sem E2E, mede cobertura de branches do codigo
+`proxbox_api` e aplica o limite minimo de 65,40%. Os jobs de validacao de
+candidatos no TestPyPI e PyPI executam essa suite com dois workers do
+pytest-xdist e `--dist loadgroup`, preservando os grupos de teste com estado
+singleton. O Python 3.13 preserva a cobertura de branches, o artefato explicito
+`coverage.xml` por 14 dias e `--durations=20`, mas omite do log de release o
+relatorio extenso de linhas ausentes. O core `sysmon` do coverage nao mede
+branches no Python 3.13; por isso esses jobs usam intencionalmente o core padrao
+em vez de solicitar `COVERAGE_CORE=sysmon` e executar um fallback silencioso. O
+Python 3.12 executa a mesma suite de compatibilidade sem cobertura, evitando
+coletar a metrica duas vezes.
+
 ## Testes da reconciliacao Rust
 
 O pacote Rust opcional fica em `proxbox-reconcile-rs/`. Python continua sendo o engine padrao,
