@@ -75,6 +75,43 @@ sequenceDiagram
 
 ## Regras do Workflow
 
+- Um pull request do Gitea de `develop` para `main` executa o workflow separado
+  de historico de promocao com `pull_request_target`. O Gitea carrega o workflow
+  e seu validador a partir da base `main` exata e confiavel, nunca do
+  `develop` candidato. A primeira implantacao e inicializada pelo processo de
+  promocao revisado existente, porque o `main` antigo nao pode executar um
+  workflow que ainda nao contem.
+- Um status comum de commit bem-sucedido e evidencia, nao a ancora de confianca
+  da promocao: o Gitea associa os status ao SHA da ponta e ao contexto sem
+  autenticar o criador do status nem a base do PR. Antes da promocao, o operador
+  de release separado deve usar um cliente autenticado da API do Gitea para
+  autenticar a execucao exata de `pull_request_target` e o job de historico
+  bem-sucedido, confirmar que
+  a tupla da API da execucao usa o SHA exato da ponta do PR e
+  `refs/pull/<numero>/head`, ler os bytes exatos do workflow na base `main` atual
+  e reler o PR aberto e as pontas atuais de `main` e `develop`. O workflow
+  executa em `opened`, `synchronize`, `reopened` e `edited`; uma tupla nao
+  canonica falha em vez de produzir um sucesso ignorado e reutilizavel.
+- Antes de habilitar este controle, `main` e `develop` devem ter registros de
+  protecao de branch verificados no Gitea. `main` deve exigir uma ponta
+  atualizada, bloquear sobreposicoes administrativas de merge e force pushes e
+  restringir permissoes de merge/atualizacao direta ao proprietario do
+  repositorio administrado separadamente. `develop` deve ser protegida contra
+  exclusao e restringir force pushes ao mesmo proprietario. Nao configure o
+  status comum do workflow como controle de seguranca obrigatorio. O operador
+  executa o squash revisado de um unico pai como uma atualizacao compare-and-swap
+  de `main` com base antiga exata, vinculando atomicamente destino e base; um
+  resultado ambiguo e resolvido por releitura antes de qualquer repeticao. Em
+  seguida, o operador registra o commit exato no PR e reposiciona `develop` com
+  compare-and-swap de base antiga exata, preservando a convergencia sem colocar
+  uma credencial de mutacao em um runner agendavel por codigo candidato.
+- Para cada caminho alterado e nao excluido, o historico completo de merges nao
+  pode conter o blob proposto como um estado estritamente mais antigo ja
+  substituido na branch base. Um rename para um novo caminho e tratado como um
+  caminho novo, enquanto excluir e recriar o mesmo caminho continua sujeito ao
+  seu historico. Links simbolicos usam o conteudo do blob; entradas nao blob nao
+  suportadas, como Git links, falham de forma segura. A verificacao tambem falha
+  de forma segura quando a cabeca nao contem a base exata ou o checkout e raso.
 - `pyproject.toml`, `uv.lock` e a tag Git precisam descrever a mesma versao.
 - Push de tags `rcN` publica no TestPyPI para validacao de release candidate.
 - Pacotes finais/post sao publicados primeiro no Gitea, implantados pelo NMS e

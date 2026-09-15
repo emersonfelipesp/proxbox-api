@@ -69,6 +69,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_codegen_no_source_evaluation.py` | Runtime model construction without source evaluation, AST-based dynamic-execution prohibitions, hostile-alias integration oracle, bundled-first and provenance resolution, custom-source isolation, schema resource limits, unsafe shape rejection, route validation ordering, quarantine, literal-safe rendering, and symlink-aware artifact path containment |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
+| `test_promotion_ancestor_blob_guard.py` | Promotion history guard: exhaustive merge-parent and stale-blob rejection, base advancement, new-path rename/deletion acceptance, shallow/non-blob fail-closed behavior, symlink type changes, and hostile/non-UTF-8 filenames |
 | `test_proxmox_to_netbox_contracts.py` | VM mapper behavior and generated schema availability checks |
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |
 | `test_qemu_guest_agent_helpers.py` | QEMU guest agent utility functions |

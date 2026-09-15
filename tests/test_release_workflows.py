@@ -29,6 +29,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 GITEA_CI_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "ci.yml"
+GITEA_PROMOTION_HISTORY_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "promotion-history.yml"
 PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-testpypi.yml"
 GITEA_PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "publish-gitea.yml"
 GITEA_ARTIFACT_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "artifact-v3-compatibility.yml"
@@ -306,6 +307,69 @@ def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
         },
     }
     assert "Upload test report" not in steps
+
+
+def _promotion_history_workflow() -> tuple[str, dict]:
+    source = _read(GITEA_PROMOTION_HISTORY_WORKFLOW_PATH)
+    return source, yaml.load(source, Loader=yaml.BaseLoader)  # nosec B506
+
+
+def _promotion_step(job: dict, name: str) -> dict:
+    for step in job["steps"]:
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"promotion job has no step named {name!r}")
+
+
+def test_gitea_promotion_history_guard_uses_trusted_base_workflow():
+    primary_workflow = yaml.safe_load(_read(GITEA_CI_WORKFLOW_PATH))
+    workflow_source, workflow = _promotion_history_workflow()
+    promotion_job = workflow["jobs"]["promotion-history"]
+    assert "promotion-history" not in primary_workflow["jobs"]
+    assert workflow["on"] == {
+        "pull_request_target": {"types": ["opened", "synchronize", "reopened", "edited"]}
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    assert {key: promotion_job[key] for key in ("name", "runs-on", "timeout-minutes")} == {
+        "name": "Reject ancestor-blob promotion regressions",
+        "runs-on": "ci-untrusted-python312",
+        "timeout-minutes": "10",
+    }
+    assert "if" not in promotion_job
+    checkout = _promotion_step(promotion_job, "Checkout trusted base validator with full history")
+    assert checkout["with"] == {
+        "persist-credentials": "false",
+        "fetch-depth": "0",
+        "ref": "${{ github.event.pull_request.base.sha }}",
+    }
+    assert workflow["concurrency"] == {
+        "group": "proxbox-api-promotion-history-${{ github.event.pull_request.number }}",
+        "cancel-in-progress": "true",
+    }
+    assert "${{ secrets." not in workflow_source
+    assert set(workflow["jobs"]) == {"promotion-history"}
+
+
+def test_gitea_promotion_history_guard_binds_live_base_and_exact_head():
+    _workflow_source, workflow = _promotion_history_workflow()
+    promotion_job = workflow["jobs"]["promotion-history"]
+    guard_command = _promotion_step(
+        promotion_job, "Reject stale base and ancestor-blob regressions"
+    )["run"]
+    assert all(
+        argument in guard_command
+        for argument in (
+            'test "$(git rev-parse HEAD^{commit})" = "$BASE_SHA"',
+            'test "${{ github.base_ref }}" = main',
+            'test "${{ github.head_ref }}" = develop',
+            "refs/remotes/origin/main^{commit}",
+            "refs/remotes/origin/develop^{commit}",
+            'if [ "$LIVE_MAIN_SHA" != "$BASE_SHA" ]; then',
+            "scripts/check_promotion_ancestor_blobs.py",
+            '--base "$BASE_SHA"',
+            '--head "$HEAD_SHA"',
+        )
+    )
 
 
 def _publish_jobs() -> dict[str, dict]:

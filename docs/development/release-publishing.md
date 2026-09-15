@@ -75,6 +75,41 @@ sequenceDiagram
 
 ## Workflow Rules
 
+- A Gitea pull request from `develop` to `main` runs the separate
+  `pull_request_target` promotion-history workflow. Gitea loads that workflow
+  and its validator from the trusted exact `main` base, never from candidate
+  `develop`. The first rollout is bootstrapped through the existing reviewed
+  promotion process because the old `main` cannot run a workflow that it does
+  not contain.
+- A successful ordinary commit status is evidence, not the promotion trust
+  anchor: Gitea associates statuses with a head SHA and context without
+  authenticating the status creator or PR base. Before promotion, the separate
+  release operator must use an authenticated Gitea API client to authenticate
+  the exact `pull_request_target` run and successful history job, confirm that the run's
+  API tuple uses the exact PR-head SHA and `refs/pull/<number>/head`, read the
+  exact workflow bytes from the current `main` base, and re-read the open PR and
+  live `main`/`develop` tips. The workflow runs on `opened`, `synchronize`,
+  `reopened`, and `edited`; a noncanonical tuple fails instead of producing a
+  reusable skipped success.
+- Before this control is enabled, `main` and `develop` must both have verified
+  Gitea branch-protection records. `main` must require an up-to-date head, block
+  administrative merge overrides and force pushes, and restrict merge/direct
+  update permission to the separately administered repository owner.
+  `develop` must be protected from deletion and restrict force pushes to that
+  owner. Do not configure the ordinary workflow status as a required security
+  control. The operator performs the reviewed one-parent squash as an exact-old
+  compare-and-swap update of `main`, so the destination and prior base are bound
+  atomically; ambiguous results are resolved by read-back before any retry. The
+  operator then records the exact commit on the PR and repoints `develop` with an
+  exact-old compare-and-swap, preserving branch convergence without placing a
+  mutation credential on a candidate-schedulable runner.
+- For every changed, non-deleted path, exhaustive merge history must not contain
+  the proposed blob as a strictly older state already superseded on the base
+  branch. A rename to a new path is treated as a new path, while deleting and
+  recreating the same path remains subject to its history. Symlinks use their
+  blob content; unsupported non-blob entries such as Git links fail closed. The
+  guard also fails closed when the head does not contain the exact base or the
+  checkout is shallow.
 - `pyproject.toml`, `uv.lock`, and the Git tag must describe the same version.
 - `rcN` tag pushes publish to TestPyPI for release-candidate validation.
 - Final/post packages publish privately to Gitea, deploy through NMS, and reach
