@@ -417,6 +417,37 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_DEBUG_CACHE` | `debug_cache` | false |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | `expose_internal_errors` | false |
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
+| n/a | `hardware_discovery_sync_nic_macs` | false (plugin-only; requires `hardware_discovery_enabled=true`; a missing field from an older plugin is false) |
+
+### Task-history sync ownership
+
+VM create routes expose `sync_task_history` with a backward-compatible default
+of `true`. Standalone and targeted VM syncs run one scoped task-history
+aggregate after the successful NetBox VM IDs are known. Full-update is the
+single-owner exception: it passes `sync_task_history=false` into its VM stage,
+then runs the dedicated task-history stage exactly once. Deploy backend support
+before changing an orchestrating plugin to send `false`; older callers that
+omit the flag remain compatible.
+
+The task-history service walks each selected Proxmox node's archive with
+`limit=500`, increasing `start` offsets, one fixed run-start `until`, and one
+global fetch semaphore. It loads the typed VM sync-state sidecars once and
+treats endpoint ID, cluster name, VMID, and VM type as authoritative identity;
+custom fields are not an identity fallback. A malformed, missing, duplicate,
+or unreadable sidecar for a relevant selected VM fails closed. Estate-wide runs
+skip genuinely unmanaged VMs, while ownership collisions and cross-owner UPIDs
+are skipped and mark the run degraded. UPIDs are deduplicated before one bulk
+NetBox reconciliation, with no per-UPID status reads or per-record write
+fallback.
+
+Selected NetBox IDs are deduplicated and sent in chunks of at most 100 using
+repeated `id` query values. NetBox list reads follow the server-provided `next`
+links and reject repeated links or overlapping page content instead of
+returning a partial set. A later-page or single-node failure retains safe rows
+and reports `degraded=true`; VM-list failure, no usable selected nodes, total
+node failure, or global reconciliation failure raises `ProxboxException`, so
+REST and SSE cannot report a misleading success. The full operational contract
+is documented in [`docs/sync/task-history.md`](docs/sync/task-history.md).
 
 ### VM interface sync strategy
 
@@ -847,6 +878,19 @@ authentication or authorization error, API failure, or network failure.
 1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
 2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
 3. Fix-forward with `rcN+1` if anything fails.
+
+### Publisher recovery
+
+Fix publisher failures through the issue-backed feature workflow and advance to
+the next immutable `rcN` or `postN`; never reuse or replace a consumed version.
+Before release-control cutover, the verified helper may finish GitHub Release
+creation only after the legacy workflow has reached a terminal state, pushed
+the exact approved tag, and failed before creating the Release. After cutover,
+do not bypass the data-only request, private validation/publication control,
+private package, production deployment evidence, or final-tag promotion with a
+local registry upload or direct GitHub tag push. Ambiguous package, tag,
+Release, or deployment results require authenticated read-back and explicit
+recovery; they are never permission to repeat an irreversible publication.
 
 ### Legacy manual fallback (before release-control cutover only)
 
