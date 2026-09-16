@@ -53,13 +53,12 @@ class TestNetBoxInterfaceTypeValues:
             ("bridge", "bridge"),
             ("bond", "lag"),
             ("vlan", "virtual"),
-            # Everything else degrades to `other`, exactly as before. Widening
-            # this table would retype existing NetBox rows and is a migration,
-            # not a mapping fix -- see the note on the enum.
             ("lo", "other"),
             ("loopback", "other"),
-            ("OVSBridge", "other"),
-            ("OVSBond", "other"),
+            ("OVSBridge", "bridge"),
+            ("OVSBond", "lag"),
+            ("OVSIntPort", "virtual"),
+            ("OVSPort", "other"),
             ("eth", "other"),
             ("", "other"),
             (None, "other"),

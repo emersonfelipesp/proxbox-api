@@ -38,6 +38,9 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   storing keys or dictionary-testable fingerprints; inserts one durable
   per-token reservation before bcrypt; and gives each row a renewable expiry
   capped by a persisted absolute deadline.
+  Runtime identity material is validated against its database-bound fingerprint
+  before the process-pinned key is atomically replaced; failed replacement leaves
+  the serving generation's validated identity intact.
   Expired crash rows stop consuming capacity and remain observable for one hour;
   a result can update accounting exactly once only before its terminal deadline,
   and later results are discarded. Admission and finalization both compact older
@@ -89,7 +92,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `influx.py`: independent InfluxDB v2 query client for `/proxmox/metrics/influx/query`. It constructs Flux from validated structured fields, validates and pins the resolved HTTPS destination through the shared SSRF policy, accepts an injected `httpx.AsyncClient` or `AsyncBaseTransport`, bounds upstream and normalized response bytes plus rows, normalizes annotated CSV plus supported JSON, and exposes only secret-safe typed failures. It must not acquire NetBox/NMS state or persist caller credentials.
 - `proxmox_metrics.py`: direct Proxmox pull transport for `/proxmox/metrics/pull/query`. It resolves one existing endpoint, invokes only `cluster/metrics/export`, validates finite canonical samples, applies bounded filters, sorting, truncation, and exact deduplication, and maps provider failures without exposing exception text.
-- `proxmox_bounded.py`: compatibility boundary for the pinned `proxmox-sdk==0.0.13`. It prefers the SDK's public bounded-read capability when present and otherwise streams through the already-authenticated HTTPS backend with `Accept-Encoding: identity`, automatic decompression disabled, redirects rejected, boolean query values encoded as `0` or `1`, and content-length plus chunk-level limits before JSON materialization. Keep the legacy path isolated and remove it only after a published SDK version with the same public contract is pinned.
+- `proxmox_bounded.py`: thin boundary over the SDK's public bounded read (`ProxmoxResource.get_bounded()`, proxmox-sdk >= 0.0.15). The SDK enforces identity encoding, disabled transport decompression, redirect refusal (`ProxmoxRedirectError`), and content-length plus chunk-level limits before JSON materialization. This module only encodes boolean query values as `0`/`1` (the SDK forwards query values verbatim and yarl rejects Python booleans), drops `None` values, and maps `ResponseTooLargeError`/`UnsupportedResponseEncodingError` to `ProxmoxResponseTooLargeError`/`ProxmoxUnsupportedEncodingError`; every other SDK exception propagates unchanged. The pre-0.0.15 legacy streaming path was removed once the pinned SDK shipped the same public contract.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.
 - `sync/reconciliation/`: pure operation-queue builders, including the VM queue
   Python fallback and optional Rust bridge.

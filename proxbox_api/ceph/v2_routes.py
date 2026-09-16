@@ -839,11 +839,16 @@ async def ceph_v2_approve_plan(
 async def ceph_v2_approval_status(
     approval_id: str,
     session: AsyncDatabaseSessionDep,
+    actor: ActorHeader,
 ) -> ApprovalStatusResponse:
-    """Recover safe approval/run metadata without a transient raw token."""
+    """Recover approval/run metadata for its requester or approver."""
 
+    requester = _required_actor(actor)
     record = await session.get(CephApprovalRecord, approval_id)
-    if record is None:
+    if record is None or requester.casefold() not in {
+        record.requester.casefold(),
+        record.approver.casefold(),
+    }:
         raise HTTPException(status_code=404, detail="Approval not found.")
     try:
         await validated_approval_recovery_metadata(session, record)

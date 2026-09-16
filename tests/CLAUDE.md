@@ -44,7 +44,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `ceph/test_v2_proxmox_writer.py` | Proxmox Ceph writer mapping, exact no-fallback node binding, typed live node-membership refresh and secret-safe failure boundary, post-gate owner CAS before dispatch, immutable timing normalization, deadline-bounded status calls/sleeps, strict payload rejection, SDK-proven synchronous completion typing, independent gate/heartbeat sessions, and exhaustive common per-mutation gate coverage |
 | `ceph/test_v2_approval_concurrency.py` | Atomic approval race, same/cross-endpoint sequential/concurrent provider-global task-claim uniqueness, dedicated real AsyncSession gate/audit failure matrix, double/triple-cancellation-safe dispatch/task/synchronous/cancellation evidence, persisted lease-duration heartbeat behavior, database-clock delayed-CAS rejection, inherited custom/duck adapter dispatch compatibility, expiry recovery, and stale-worker rejection; exact AsyncSession path runs on CI Python 3.12 and has a narrow local Python 3.14 aiosqlite skip |
 | `test_core_utility_contracts.py` | Deterministic contracts for error conversion, type guards, NetBox helpers, and WebSocket utility boundaries |
-| `test_database_startup.py` | Typed SQLite path/URL resolution, raw-query truncation refusal, inaccessible/default/explicit legacy-auth guard, canonical claim validation, single-worker audited override/marker/reuse refusal, four-process override rejection and schema serialization, fatal migration/post-schema reads, WAL/write rollback, runtime lease, read-only failures, import safety, and lifespan contracts |
+| `test_database_startup.py` | Typed SQLite path/URL resolution, raw-query truncation refusal, inaccessible/default/explicit legacy-auth guard, canonical claim validation, single-worker audited override/marker/reuse refusal, four-process override rejection and schema serialization, fatal migration/post-schema reads, WAL/write rollback, runtime lease, read-only failures, import safety, failed-acquisition rollback, simultaneous success/failure publication with later-generation recovery, overlapping lifespan ownership, distinct-event-loop HTTP database access through an unpooled async engine, default-executor saturation resistance, secondary identity reuse, repeated-cancellation resistance across acquisition/disposal/finalization, disposal-failure poisoning, and primary-error preservation contracts |
 | `test_endpoint_crud.py` | Authenticated HTTP CRUD coverage for NetBox and Proxmox endpoint routes |
 | `test_ensure_device_overwrite_flags.py` | `_ensure_device` overwrite-flag plumbing for cluster/storage/node-interface/IP tag groups |
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
@@ -56,6 +56,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_log_buffer.py` | Ring buffer behavior, level filtering, pagination, idempotent sensitive-data filtering, nested secret aliases, and traceback redaction |
 | `test_logger_settings.py` | Logger configuration plus real-handler recursive key/URL/extra/exception/traceback redaction canaries |
 | `test_main_smoke.py` | Root metadata/version auth behavior and codegen pipeline smoke checks |
+| `test_dependency_security.py` | Minimum secure Next.js UI and mkdocs-material manifest and lockfile resolutions |
 | `test_router_smoke.py` | Per-router-prefix HTTP smoke: public routes reachable without auth, every protected prefix returns 401 unauthenticated and exists in the live OpenAPI schema, and safe read endpoints (`/version`, `/cache`, `/cache/metrics`, `/clear-cache`, `/auth/keys`) dispatch end-to-end with a valid API key |
 | `test_overwrite_flags_contract.py` | `SyncOverwriteFlags` schema contract and field defaults |
 | `test_cloud_image_pipeline.py` | Cloud Image Pipeline catalog/rendering, delimiter-proof encoded writes, typed source recipes, legacy storage, secret-safe ASGI validation, exact isolated SSH argv/host-key pinning, HTTP auth, broad-write + narrow-packer gate ordering, and execution/direct-SDK boundaries |
@@ -69,6 +70,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_codegen_no_source_evaluation.py` | Runtime model construction without source evaluation, AST-based dynamic-execution prohibitions, hostile-alias integration oracle, bundled-first and provenance resolution, custom-source isolation, schema resource limits, unsafe shape rejection, route validation ordering, quarantine, literal-safe rendering, and symlink-aware artifact path containment |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
 | `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
+| `test_promotion_ancestor_blob_guard.py` | Promotion history guard: exhaustive merge-parent and stale-blob rejection, base advancement, new-path rename/deletion acceptance, shallow/non-blob fail-closed behavior, symlink type changes, and hostile/non-UTF-8 filenames |
 | `test_proxmox_to_netbox_contracts.py` | VM mapper behavior and generated schema availability checks |
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |
 | `test_qemu_guest_agent_helpers.py` | QEMU guest agent utility functions |
@@ -100,7 +102,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_vm_sync.py` | Full VM sync workflow including coordinator and dry-run |
 | `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, role/snapshot rollback, commit-before-response-loss recovery, retry semantics, failure isolation, and empty-queue short-circuit |
 | `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation |
-| `test_auth_lockout.py` | Composite credential isolation plus shared source-abuse limits, database-bound and process-pinned identity-key generations/loss/skew/post-start-mutation contracts, atomic key-file publish fault injection, renewable per-token owner leases capped by persisted terminal deadlines, wedged-verifier reclamation and late-result discard, exactly-once duplicate/late-finalizer recovery within the supported horizon, finalizer-driven orphan compaction, credential-cohort coalescing with per-rejection source charging, missing-header and rotating-identity saturation with fair valid admission, bounded active-key recovery scans, unified per-bucket/global admission limits, typed WebSocket auth frames, sync/async/HTTP/WebSocket valid bursts above failure thresholds, durable source budgets/counters, safe expired-row eviction, real ASGI/Uvicorn middleware-stack proxy spoofing and trusted-forwarding partitioning, shell-level nginx bundled/custom-command trust defaults, sync/async and multiprocess atomic races, busy-timeout-before-WAL sync/async contention, full serialized bootstrap, rollback-compatible legacy schema, strict bucket/reservation/metric/key-binding validation, and label-free capacity/row/in-flight/orphan/compaction metrics |
+| `test_auth_lockout.py` | Composite credential isolation plus shared source-abuse limits, database-bound and process-pinned identity-key generations/loss/skew/post-start-mutation and failed-replacement preservation contracts, atomic key-file publish fault injection, renewable per-token owner leases capped by persisted terminal deadlines, wedged-verifier reclamation and late-result discard, exactly-once duplicate/late-finalizer recovery within the supported horizon, finalizer-driven orphan compaction, credential-cohort coalescing with per-rejection source charging, missing-header and rotating-identity saturation with fair valid admission, bounded active-key recovery scans, unified per-bucket/global admission limits, typed WebSocket auth frames, sync/async/HTTP/WebSocket valid bursts above failure thresholds with deterministic pre-warmed pool capacity and bounded cleanup, durable source budgets/counters, safe expired-row eviction, real ASGI/Uvicorn middleware-stack proxy spoofing and trusted-forwarding partitioning, shell-level nginx bundled/custom-command trust defaults, sync/async and multiprocess atomic races, busy-timeout-before-WAL sync/async contention, full serialized bootstrap, rollback-compatible legacy schema, strict bucket/reservation/metric/key-binding validation, and label-free capacity/row/in-flight/orphan/compaction metrics |
 | `test_auth_lockout_cli.py` | Explicit-existing-database enforcement, exact startup-equivalent recovery-schema validation (including destructive-rebind no-mutation cases for malformed PK/type/CHECK definitions), read-only secret-safe inspection/recovery while HTTP is locked, and offline runtime-lease-enforced identity-key rebind that atomically clears buckets/reservations and advances or safely recreates the generation |
 | `test_auth_bootstrap.py` | One-shot bootstrap claim: atomic first-key registration, concurrent-claim 409, inactive-history keeps bootstrap closed, legacy backfill idempotency, final-active-key delete/deactivate guards, transactional create/reactivate active-key caps, rotation flow |
 | `test_schema_cli.py` | `proxbox-schema` CLI subcommands (`list`, `status`, `generate`) via argparse |
@@ -141,9 +143,18 @@ uv run pytest tests/ -n auto \
   --cov-report=term-missing \
   --cov-report=xml:coverage.xml
 
-# Release-only unit/static contract. GitHub CI additionally prepares the real
-# CPython 3.13 musllinux wheelhouse and builds the extracted sdist context with
-# Docker build networking disabled.
+# Release-only unit/static contract. This includes the verified-tag and
+# production-approved-commit GitHub Release boundary; fail-closed handling of
+# missing tags, branch/tag name collisions, mismatched commits, remote-note
+# provenance failures, existing Releases, unauthorized, server, and network
+# lookup results; refusal to auto-publish legacy drafts; and the
+# distinct legacy-versus-controlled publication runbook paths. GitHub CI also
+# prepares the real CPython 3.13 musllinux wheelhouse and builds the extracted
+# sdist context with Docker build networking disabled. Its candidate validation
+# contract also
+# pins two xdist workers with loadgroup isolation, retains duration telemetry,
+# and uploads branch-inclusive coverage XML from Python 3.13 for 14 days
+# without the terminal missing-lines report.
 uv run pytest tests/test_release_workflows.py -q
 
 # E2E tests against in-process MockBackend

@@ -75,6 +75,43 @@ sequenceDiagram
 
 ## Regras do Workflow
 
+- Um pull request do Gitea de `develop` para `main` executa o workflow separado
+  de historico de promocao com `pull_request_target`. O Gitea carrega o workflow
+  e seu validador a partir da base `main` exata e confiavel, nunca do
+  `develop` candidato. A primeira implantacao e inicializada pelo processo de
+  promocao revisado existente, porque o `main` antigo nao pode executar um
+  workflow que ainda nao contem.
+- Um status comum de commit bem-sucedido e evidencia, nao a ancora de confianca
+  da promocao: o Gitea associa os status ao SHA da ponta e ao contexto sem
+  autenticar o criador do status nem a base do PR. Antes da promocao, o operador
+  de release separado deve usar um cliente autenticado da API do Gitea para
+  autenticar a execucao exata de `pull_request_target` e o job de historico
+  bem-sucedido, confirmar que
+  a tupla da API da execucao usa o SHA exato da ponta do PR e
+  `refs/pull/<numero>/head`, ler os bytes exatos do workflow na base `main` atual
+  e reler o PR aberto e as pontas atuais de `main` e `develop`. O workflow
+  executa em `opened`, `synchronize`, `reopened` e `edited`; uma tupla nao
+  canonica falha em vez de produzir um sucesso ignorado e reutilizavel.
+- Antes de habilitar este controle, `main` e `develop` devem ter registros de
+  protecao de branch verificados no Gitea. `main` deve exigir uma ponta
+  atualizada, bloquear sobreposicoes administrativas de merge e force pushes e
+  restringir permissoes de merge/atualizacao direta ao proprietario do
+  repositorio administrado separadamente. `develop` deve ser protegida contra
+  exclusao e restringir force pushes ao mesmo proprietario. Nao configure o
+  status comum do workflow como controle de seguranca obrigatorio. O operador
+  executa o squash revisado de um unico pai como uma atualizacao compare-and-swap
+  de `main` com base antiga exata, vinculando atomicamente destino e base; um
+  resultado ambiguo e resolvido por releitura antes de qualquer repeticao. Em
+  seguida, o operador registra o commit exato no PR e reposiciona `develop` com
+  compare-and-swap de base antiga exata, preservando a convergencia sem colocar
+  uma credencial de mutacao em um runner agendavel por codigo candidato.
+- Para cada caminho alterado e nao excluido, o historico completo de merges nao
+  pode conter o blob proposto como um estado estritamente mais antigo ja
+  substituido na branch base. Um rename para um novo caminho e tratado como um
+  caminho novo, enquanto excluir e recriar o mesmo caminho continua sujeito ao
+  seu historico. Links simbolicos usam o conteudo do blob; entradas nao blob nao
+  suportadas, como Git links, falham de forma segura. A verificacao tambem falha
+  de forma segura quando a cabeca nao contem a base exata ou o checkout e raso.
 - `pyproject.toml`, `uv.lock` e a tag Git precisam descrever a mesma versao.
 - Push de tags `rcN` publica no TestPyPI para validacao de release candidate.
 - Pacotes finais/post sao publicados primeiro no Gitea, implantados pelo NMS e
@@ -193,8 +230,54 @@ sequenceDiagram
    valide a saude de producao.
 6. Dispare `promote-final-tag.yml` no `main` canonico do Gitea; ele valida o
    pacote privado exato e a atestacao NMS antes de enviar a tag ao repositorio
-   GitHub autorizado. Depois crie a GitHub Release com `--verify-tag`; o evento
+   GitHub autorizado. Aguarde o workflow terminar com sucesso, registre o SHA
+   exato da origem aprovada para producao e depois crie a GitHub Release com o
+   helper fail-closed; o evento
    valida a atestacao protegida do Gitea,
    publica os mesmos bytes no PyPI e depois as imagens no Docker Hub.
 7. Use `vX.Y.Z.postN` para qualquer fix de codigo ou empacotamento descoberto
    depois da publicacao final no PyPI.
+
+### Antes da transicao para o controle de release: automacao legada
+
+Antes da transicao para o controle de release, o caminho existente por tag do
+`publish-gitea.yml` continua sendo o publicador ativo. Para uma tag que nao seja
+RC, ele envia a tag exata ao GitHub e cria a GitHub Release somente quando ela
+nao existe. Ele falha de forma fechada para todo objeto existente, em rascunho
+ou publicado, para que um operador inspecione explicitamente seu estado, notas
+e artefatos. Aguarde esse job terminar; nao dispute com ele executando outro
+`gh release create`. Se o job enviou a tag, mas nao criou a Release, primeiro
+confirme que a Release nao existe e somente entao use o helper fail-closed com
+o SHA exato da origem do job legado concluido. Ele resolve a tag do GitHub para
+um commit, exige que esse commit seja igual ao SHA aprovado fornecido, consulta
+a API do GitHub e carrega as notas de release desse mesmo commit no GitHub, em
+vez da arvore de trabalho do chamador, e cria a Release apenas depois de um
+HTTP 404 explicito; uma Release
+existente, erro de autenticacao ou autorizacao, falha da API ou falha de rede
+interrompe a operacao sem publicar. O helper tambem fornece `--verify-tag`, para
+que o GitHub nao possa inventar ou mover a tag:
+
+```bash
+scripts/create-github-release.sh vX.Y.Z <sha-aprovado-de-40-caracteres>
+```
+
+Substitua `vX.Y.Z` pela tag final ou `.postN` exata que ja foi enviada ao GitHub.
+Se o helper informar que a Release existe, inspecione e publique ou repare o
+objeto existente em vez de criar outro. Nao ignore nenhuma outra falha da
+consulta.
+
+### Depois da transicao para o controle de release: promocao controlada
+
+Depois da transicao para o controle de release, o passo 6 e intencionalmente
+diferente: `promote-final-tag.yml` valida a evidencia de producao e envia a tag
+exata, mas nao cria a GitHub Release. Aguarde o workflow terminar com sucesso e
+registre o SHA exato da origem aprovada para producao. Em seguida, o operador
+executa `scripts/create-github-release.sh vX.Y.Z <sha-aprovado-de-40-caracteres>`
+como a etapa normal da publicacao controlada.
+O helper desreferencia a tag no GitHub e exige que ela corresponda a esse SHA
+aprovado, depois carrega as notas de release desse commit exato no GitHub. A
+mesma consulta fail-closed continua obrigatoria: o HTTP 404 esperado comprova
+que nao ha Release existente, enquanto qualquer outro
+resultado interrompe a operacao. Essa separacao impede que o evento
+`release: published` autorize PyPI ou Docker Hub antes da aprovacao da evidencia
+de producao.

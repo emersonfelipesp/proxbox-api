@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, NoReturn
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
@@ -12,8 +13,10 @@ from proxbox_api.constants import DEFAULT_LOG_PATH
 from proxbox_api.database import (
     CephProviderTaskClaimMigrationError,
     DatabaseConfigurationError,
+    DatabaseRuntimeOwner,
     DatabaseStartupError,
     NetBoxEndpoint,
+    SQLiteDatabaseTarget,
     get_session,
     initialize_database_and_schema,
 )
@@ -33,6 +36,20 @@ database_session: Session | None = None
 netbox_endpoints: list[NetBoxEndpoint] = []
 init_ok: bool = False
 last_init_error: str | None = None
+_bootstrap_runtime_condition = threading.Condition()
+_bootstrap_initializing_generation: str | None = None
+_bootstrap_ready_generation: str | None = None
+_bootstrap_failed_generation: str | None = None
+_bootstrap_failure_message: str | None = None
+
+
+def _runtime_database_target(
+    runtime_owner: DatabaseRuntimeOwner | None,
+) -> SQLiteDatabaseTarget:
+    """Return the acquired target, or initialize for legacy direct callers."""
+    if runtime_owner is not None:
+        return runtime_owner.target
+    return initialize_database_and_schema()
 
 
 def _configure_backend_file_logging() -> None:
@@ -57,7 +74,7 @@ def _configure_backend_file_logging() -> None:
     )
 
 
-def _refuse_ceph_task_claim_collision(error: CephProviderTaskClaimMigrationError) -> None:
+def refuse_ceph_task_claim_collision(error: CephProviderTaskClaimMigrationError) -> NoReturn:
     """Record one stable fatal reason and abort every database bootstrap path."""
 
     global init_ok, last_init_error
@@ -71,30 +88,17 @@ def _refuse_ceph_task_claim_collision(error: CephProviderTaskClaimMigrationError
     raise error
 
 
-def init_database_and_netbox() -> None:
-    """Create tables if needed, open a DB session, and configure the default NetBox client."""
-    global netbox_session, database_session, netbox_endpoints, init_ok, last_init_error
-
-    init_ok = False
-    last_init_error = None
-    netbox_session = None
-    database_session = None
-    netbox_endpoints = []
-    NetBoxBase.nb = None
+def _open_database_session(
+    runtime_owner: DatabaseRuntimeOwner | None,
+) -> tuple[SQLiteDatabaseTarget, Session]:
+    """Open the verified runtime session and preserve fatal startup diagnostics."""
+    global last_init_error
 
     try:
-        target = initialize_database_and_schema()
-        database_session = next(get_session())
-        logger.info(
-            "SQLite database startup verification passed",
-            extra={
-                "database_path": str(target.path),
-                "configuration_source": target.source,
-                "startup_lock_path": str(target.startup_lock_path),
-            },
-        )
+        target = _runtime_database_target(runtime_owner)
+        session = next(get_session())
     except CephProviderTaskClaimMigrationError as error:
-        _refuse_ceph_task_claim_collision(error)
+        refuse_ceph_task_claim_collision(error)
     except (DatabaseConfigurationError, DatabaseStartupError) as error:
         last_init_error = str(error)
         logger.error("bootstrap: fatal database configuration or verification error: %s", error)
@@ -107,6 +111,30 @@ def init_database_and_netbox() -> None:
         last_init_error = str(startup_error)
         logger.exception("bootstrap: fatal database schema initialization error")
         raise startup_error from error
+
+    logger.info(
+        "SQLite database startup verification passed",
+        extra={
+            "database_path": str(target.path),
+            "configuration_source": target.source,
+            "startup_lock_path": str(target.startup_lock_path),
+        },
+    )
+    return target, session
+
+
+def _initialize_database_and_netbox(runtime_owner: DatabaseRuntimeOwner | None = None) -> None:
+    """Create tables if needed, open a DB session, and configure the default NetBox client."""
+    global netbox_session, database_session, netbox_endpoints, init_ok, last_init_error
+
+    init_ok = False
+    last_init_error = None
+    netbox_session = None
+    database_session = None
+    netbox_endpoints = []
+    NetBoxBase.nb = None
+
+    target, database_session = _open_database_session(runtime_owner)
 
     try:
         netbox_endpoints = list(
@@ -156,3 +184,65 @@ def init_database_and_netbox() -> None:
         NetBoxBase.nb = None
 
     _configure_backend_file_logging()
+
+
+def _claim_bootstrap_initialization(runtime_owner: DatabaseRuntimeOwner) -> bool:
+    """Wait for this runtime generation and claim its one bootstrap attempt."""
+    global _bootstrap_initializing_generation
+
+    with _bootstrap_runtime_condition:
+        while _bootstrap_initializing_generation == runtime_owner.generation:
+            _bootstrap_runtime_condition.wait()
+        if _bootstrap_ready_generation == runtime_owner.generation:
+            return False
+        if _bootstrap_failed_generation == runtime_owner.generation:
+            raise DatabaseStartupError(
+                "Shared database and NetBox bootstrap already failed for this runtime: "
+                f"{_bootstrap_failure_message or 'unknown startup error'}"
+            )
+        _bootstrap_initializing_generation = runtime_owner.generation
+        return True
+
+
+def _publish_bootstrap_success(runtime_owner: DatabaseRuntimeOwner) -> None:
+    """Publish successful shared bootstrap completion and wake waiting owners."""
+    global _bootstrap_failed_generation, _bootstrap_failure_message
+    global _bootstrap_initializing_generation, _bootstrap_ready_generation
+
+    with _bootstrap_runtime_condition:
+        _bootstrap_ready_generation = runtime_owner.generation
+        _bootstrap_failed_generation = None
+        _bootstrap_failure_message = None
+        _bootstrap_initializing_generation = None
+        _bootstrap_runtime_condition.notify_all()
+
+
+def _publish_bootstrap_failure(
+    runtime_owner: DatabaseRuntimeOwner,
+    error: BaseException,
+) -> None:
+    """Publish a failed shared bootstrap attempt and wake waiting owners."""
+    global _bootstrap_failed_generation, _bootstrap_failure_message
+    global _bootstrap_initializing_generation, _bootstrap_ready_generation
+
+    with _bootstrap_runtime_condition:
+        _bootstrap_ready_generation = None
+        _bootstrap_failed_generation = runtime_owner.generation
+        _bootstrap_failure_message = str(error)
+        _bootstrap_initializing_generation = None
+        _bootstrap_runtime_condition.notify_all()
+
+
+def init_database_and_netbox(runtime_owner: DatabaseRuntimeOwner | None = None) -> None:
+    """Initialize shared bootstrap state exactly once per database generation."""
+    if runtime_owner is None:
+        _initialize_database_and_netbox()
+        return
+    if not _claim_bootstrap_initialization(runtime_owner):
+        return
+    try:
+        _initialize_database_and_netbox(runtime_owner)
+    except BaseException as error:
+        _publish_bootstrap_failure(runtime_owner, error)
+        raise
+    _publish_bootstrap_success(runtime_owner)

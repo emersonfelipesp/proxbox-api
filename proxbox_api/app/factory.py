@@ -283,10 +283,21 @@ proxbox_cfg: dict = {}
 PROXBOX_PLUGIN_NAME: str = "netbox_proxbox"
 
 
+async def _acquire_database_runtime_owner() -> database.DatabaseRuntimeOwner:
+    """Acquire one runtime owner and publish fatal Ceph migration diagnostics."""
+    try:
+        return await database.acquire_database_runtime()
+    except database.CephProviderTaskClaimMigrationError as error:
+        bootstrap.refuse_ceph_task_claim_collision(error)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    runtime_owner: database.DatabaseRuntimeOwner | None = None
+    primary_error: BaseException | None = None
     try:
-        bootstrap.init_database_and_netbox()
+        runtime_owner = await _acquire_database_runtime_owner()
+        bootstrap.init_database_and_netbox(runtime_owner)
         validate_auth_lockout_identity_key()
         quarantine_legacy_codegen_artifacts()
         try:
@@ -327,8 +338,24 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await _run_bootstrap_pass(app)
 
         yield
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        await database.dispose_database()
+        if runtime_owner is not None:
+            try:
+                await database.release_database_runtime(runtime_owner)
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    "Database runtime cleanup also failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+                logger.error(
+                    "Database runtime cleanup failed while preserving the primary lifespan error",
+                    exc_info=(type(cleanup_error), cleanup_error, cleanup_error.__traceback__),
+                )
 
 
 async def _run_bootstrap_pass(app: FastAPI) -> None:

@@ -800,6 +800,158 @@ async def _next_event_sequence(session: DatabaseSessionProtocol, run_id: str) ->
     return (latest.sequence + 1) if latest is not None else 0
 
 
+@dataclass(frozen=True)
+class _CheckpointState:
+    task_refs: list[str]
+    warnings: list[str]
+    errors: list[str]
+    result: dict[str, Any]
+    lease_seconds: float
+    next_owner: str | None
+
+
+def _checkpoint_task_refs(
+    current: list[str] | None,
+    replacement: list[str] | None,
+) -> list[str]:
+    if replacement is None:
+        return list(current or [])
+    return [safe for item in replacement if (safe := _safe_text(item)) is not None]
+
+
+def _checkpoint_messages(
+    current: list[str] | None,
+    replacement: list[str] | None,
+) -> list[str]:
+    if replacement is None:
+        return list(current or [])
+    return redact_secrets(list(replacement))
+
+
+def _checkpoint_result(
+    current: dict[str, Any] | None,
+    replacement: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if replacement is None:
+        return dict(current or {})
+    return redact_secrets(replacement)
+
+
+def _checkpoint_state(
+    run_record: CephOperationRunRecord,
+    *,
+    status: str,
+    provider_task_refs: list[str] | None,
+    warnings: list[str] | None,
+    errors: list[str] | None,
+    result_summary: dict[str, Any] | None,
+) -> _CheckpointState:
+    lease_seconds = _persisted_lease_seconds(run_record.lease_duration_seconds)
+    active = status in {"running", "dispatching"}
+    return _CheckpointState(
+        task_refs=_checkpoint_task_refs(run_record.provider_task_refs, provider_task_refs),
+        warnings=_checkpoint_messages(run_record.warnings, warnings),
+        errors=_checkpoint_messages(run_record.errors, errors),
+        result=_checkpoint_result(run_record.result_summary, result_summary),
+        lease_seconds=lease_seconds,
+        next_owner=run_record.lease_owner if active else None,
+    )
+
+
+async def _cas_active_checkpoint(
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    *,
+    status: str,
+    database_now: _DatabaseEpochSeconds,
+    state: _CheckpointState,
+) -> None:
+    run_id = run_record.id
+    expected_owner = run_record.lease_owner
+    if not expected_owner:
+        raise _CephRunLeaseLost(run_id)
+    database_next_expiry = (
+        database_now + state.lease_seconds if state.next_owner is not None else None
+    )
+    await _maybe_await(session.rollback())
+    statement = (
+        sa_update(CephOperationRunRecord)
+        .where(col(CephOperationRunRecord.id) == run_id)
+        .where(col(CephOperationRunRecord.status).in_(("running", "dispatching")))
+        .where(col(CephOperationRunRecord.lease_owner) == expected_owner)
+        .where(col(CephOperationRunRecord.lease_expires_at) > database_now)
+        .values(
+            status=status,
+            updated_at=database_now,
+            lease_expires_at=database_next_expiry,
+            lease_owner=state.next_owner,
+            provider_task_refs=state.task_refs,
+            warnings=state.warnings,
+            errors=state.errors,
+            result_summary=state.result,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    result = await _maybe_await(session.exec(statement))
+    if result.rowcount == 1:
+        return
+    await _maybe_await(session.rollback())
+    raise _CephRunLeaseLost(run_id)
+
+
+def _update_inactive_checkpoint(
+    run_record: CephOperationRunRecord,
+    *,
+    status: str,
+    now: float,
+    state: _CheckpointState,
+) -> None:
+    run_record.status = status
+    run_record.updated_at = now
+    run_record.lease_expires_at = _lease_expiry(status, now, state.lease_seconds)
+    run_record.lease_owner = state.next_owner
+    run_record.provider_task_refs = state.task_refs
+    run_record.warnings = state.warnings
+    run_record.errors = state.errors
+    run_record.result_summary = state.result
+
+
+def _checkpoint_event_record(
+    run_id: str,
+    *,
+    sequence: int,
+    event: str,
+    status: str,
+    code: str,
+    message: str,
+    operation_index: int | None,
+    operation: ProviderOperation | None,
+    provider_task_ref: str | None,
+    payload: dict[str, Any] | None,
+    created_at: float,
+) -> CephOperationEventRecord:
+    operation_id = _safe_text(operation.id) if operation is not None else None
+    kind = _safe_text(operation.kind) if operation is not None else None
+    action = _safe_text(operation.action) if operation is not None else None
+    target_ref = _safe_text(operation.target_ref) if operation is not None else None
+    return CephOperationEventRecord(
+        run_id=run_id,
+        sequence=sequence,
+        operation_index=operation_index,
+        operation_id=operation_id,
+        event=_safe_text(event) or "event_redacted",
+        status=status,
+        code=_safe_text(code) or "diagnostic_redacted",
+        message=_safe_text(message) or "Diagnostic redacted.",
+        kind=kind,
+        action=action,
+        target_ref=target_ref,
+        provider_task_ref=_safe_text(provider_task_ref),
+        payload=redact_secrets(payload or {}),
+        created_at=created_at,
+    )
+
+
 async def _append_event_checkpoint(
     session: DatabaseSessionProtocol,
     run_record: CephOperationRunRecord,
@@ -825,90 +977,48 @@ async def _append_event_checkpoint(
     cannot overwrite stale-run recovery or another worker's checkpoint.
     """
 
-    now = time.time()
-    database_now = _DatabaseEpochSeconds()
     run_id = run_record.id
     previous_status = run_record.status
-    expected_owner = run_record.lease_owner
-    next_task_refs = (
-        list(run_record.provider_task_refs or [])
-        if provider_task_refs is None
-        else [safe for item in provider_task_refs if (safe := _safe_text(item)) is not None]
+    active = previous_status in {"running", "dispatching"}
+    if not active and run_record.lease_owner is not None:
+        raise _CephRunLeaseLost(run_record.id)
+    state = _checkpoint_state(
+        run_record,
+        status=status,
+        provider_task_refs=provider_task_refs,
+        warnings=warnings,
+        errors=errors,
+        result_summary=result_summary,
     )
-    next_warnings = (
-        list(run_record.warnings or []) if warnings is None else redact_secrets(list(warnings))
-    )
-    next_errors = list(run_record.errors or []) if errors is None else redact_secrets(list(errors))
-    next_result = (
-        dict(run_record.result_summary or {})
-        if result_summary is None
-        else redact_secrets(result_summary)
-    )
-    lease_seconds = _persisted_lease_seconds(run_record.lease_duration_seconds)
-    database_next_expiry = (
-        database_now + lease_seconds if status in {"running", "dispatching"} else None
-    )
-    next_owner = expected_owner if status in {"running", "dispatching"} else None
-
-    if previous_status in {"running", "dispatching"}:
-        if not expected_owner:
-            raise _CephRunLeaseLost(run_id)
-        await _maybe_await(session.rollback())
-        statement = (
-            sa_update(CephOperationRunRecord)
-            .where(col(CephOperationRunRecord.id) == run_id)
-            .where(col(CephOperationRunRecord.status).in_(("running", "dispatching")))
-            .where(col(CephOperationRunRecord.lease_owner) == expected_owner)
-            .where(col(CephOperationRunRecord.lease_expires_at) > database_now)
-            .values(
-                status=status,
-                updated_at=database_now,
-                lease_expires_at=database_next_expiry,
-                lease_owner=next_owner,
-                provider_task_refs=next_task_refs,
-                warnings=next_warnings,
-                errors=next_errors,
-                result_summary=next_result,
-            )
-            .execution_options(synchronize_session=False)
+    if active:
+        await _cas_active_checkpoint(
+            session,
+            run_record,
+            status=status,
+            database_now=_DatabaseEpochSeconds(),
+            state=state,
         )
-        result = await _maybe_await(session.exec(statement))
-        if result.rowcount != 1:
-            await _maybe_await(session.rollback())
-            raise _CephRunLeaseLost(run_id)
-    elif expected_owner is not None:
-        # Terminal rows must never retain reusable execution authority.
-        raise _CephRunLeaseLost(run_id)
 
     for transaction_record in transaction_records or []:
         session.add(transaction_record)
+    now = time.time()
     sequence = await _next_event_sequence(session, run_id)
-    event_record = CephOperationEventRecord(
-        run_id=run_id,
+    event_record = _checkpoint_event_record(
+        run_id,
         sequence=sequence,
-        operation_index=operation_index,
-        operation_id=_safe_text(operation.id) if operation is not None else None,
-        event=_safe_text(event) or "event_redacted",
+        event=event,
         status=status,
-        code=_safe_text(code) or "diagnostic_redacted",
-        message=_safe_text(message) or "Diagnostic redacted.",
-        kind=_safe_text(operation.kind) if operation is not None else None,
-        action=_safe_text(operation.action) if operation is not None else None,
-        target_ref=_safe_text(operation.target_ref) if operation is not None else None,
-        provider_task_ref=_safe_text(provider_task_ref),
-        payload=redact_secrets(payload or {}),
+        code=code,
+        message=message,
+        operation_index=operation_index,
+        operation=operation,
+        provider_task_ref=provider_task_ref,
+        payload=payload,
         created_at=now,
     )
     session.add(event_record)
-    if previous_status not in {"running", "dispatching"}:
-        run_record.status = status
-        run_record.updated_at = now
-        run_record.lease_expires_at = _lease_expiry(status, now, lease_seconds)
-        run_record.lease_owner = next_owner
-        run_record.provider_task_refs = next_task_refs
-        run_record.warnings = next_warnings
-        run_record.errors = next_errors
-        run_record.result_summary = next_result
+    if not active:
+        _update_inactive_checkpoint(run_record, status=status, now=now, state=state)
         session.add(run_record)
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(run_record))
@@ -2475,7 +2585,304 @@ async def _task_binding_failure(
     return await operation_run_with_events(session, run_record)
 
 
-async def _execute_plan_operations(  # noqa: C901 - explicit security checkpoints
+def _declares_synchronous_success(
+    adapter: CephProviderAdapter,
+    operation: ProviderOperation,
+    safe_result: dict[str, Any],
+) -> bool:
+    declares_sync = getattr(adapter, "declares_synchronous_success", None)
+    return bool(callable(declares_sync) and declares_sync(operation, safe_result))
+
+
+async def _binding_failure_or_cancel(
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    *,
+    operation_index: int,
+    operation: ProviderOperation,
+    plan: PlanResponse,
+    progress: _ApplyProgress,
+    safe_result: dict[str, Any],
+    code: str,
+    cancellation_deferred: bool,
+) -> OperationRun:
+    terminal = await _task_binding_failure(
+        session,
+        run_record,
+        operation_index=operation_index,
+        operation=operation,
+        plan=plan,
+        progress=progress,
+        safe_result=safe_result,
+        code=code,
+    )
+    if cancellation_deferred:
+        raise asyncio.CancelledError
+    return terminal
+
+
+async def _handle_synchronous_result(
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    *,
+    operation_index: int,
+    operation: ProviderOperation,
+    plan: PlanResponse,
+    progress: _ApplyProgress,
+    safe_result: dict[str, Any],
+    candidates: list[str],
+    new_refs: list[str],
+    cancellation_deferred: bool,
+) -> tuple[CephOperationRunRecord, OperationRun | None]:
+    if candidates or new_refs:
+        terminal = await _binding_failure_or_cancel(
+            session,
+            run_record,
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            progress=progress,
+            safe_result=safe_result,
+            code="provider_synchronous_result_ambiguous",
+            cancellation_deferred=cancellation_deferred,
+        )
+        return run_record, terminal
+    run_record = await _append_synchronous_completion_cancellation_safe(
+        session,
+        run_record,
+        operation_index=operation_index,
+        operation=operation,
+        plan=plan,
+        progress=progress,
+        safe_result=safe_result,
+    )
+    if cancellation_deferred:
+        await _persist_cancelled_checkpoint(
+            session,
+            run_record,
+            event="synchronous_completion_cancelled",
+            code="synchronous_completion_cancelled",
+            message=(
+                "Execution was cancelled after synchronous provider completion; "
+                "remaining plan outcome is unknown."
+            ),
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            progress=progress,
+            error="Plan execution was cancelled after synchronous completion.",
+            payload={"result": {**safe_result, "result": "completed"}},
+        )
+        raise asyncio.CancelledError
+    return run_record, None
+
+
+def _proxmox_task_binding_error(
+    operation: ProviderOperation,
+    safe_result: dict[str, Any],
+    candidates: list[str],
+    new_refs: list[str],
+    progress: _ApplyProgress,
+) -> str | None:
+    if len(candidates) != 1 or len(new_refs) != 1:
+        return "provider_task_reference_invalid"
+    if new_refs[0] in progress.task_refs:
+        return "provider_task_reference_reused"
+    expected_node = operation.node or ""
+    result_node = str(safe_result.get("node") or "")
+    if not expected_node or result_node != expected_node:
+        return "provider_task_node_mismatch"
+    if _proxmox_upid_node(new_refs[0]) != expected_node:
+        return "provider_task_node_mismatch"
+    return None
+
+
+async def _handle_submitted_task(
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    *,
+    operation_index: int,
+    operation: ProviderOperation,
+    plan: PlanResponse,
+    adapter: CephProviderAdapter,
+    progress: _ApplyProgress,
+    safe_result: dict[str, Any],
+    upid: str,
+    cancellation_deferred: bool,
+) -> tuple[CephOperationRunRecord, OperationRun | None]:
+    run_record, claimed = await _claim_submitted_task_cancellation_safe(
+        session,
+        run_record,
+        operation_index=operation_index,
+        operation=operation,
+        plan=plan,
+        progress=progress,
+        safe_result=safe_result,
+        upid=upid,
+    )
+    if not claimed:
+        terminal = await _binding_failure_or_cancel(
+            session,
+            run_record,
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            progress=progress,
+            safe_result=safe_result,
+            code="provider_task_reference_reused",
+            cancellation_deferred=cancellation_deferred,
+        )
+        return run_record, terminal
+    if cancellation_deferred:
+        await _persist_cancelled_checkpoint(
+            session,
+            run_record,
+            event="provider_task_poll_cancelled",
+            code="provider_task_poll_cancelled",
+            message="Task processing was cancelled after submission; outcome is unknown.",
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            progress=progress,
+            error="Submitted provider task outcome is unknown.",
+            provider_task_ref=upid,
+            payload={"result": {**safe_result, "result": "submitted"}},
+        )
+        raise asyncio.CancelledError
+    return await _resolve_submitted_task(
+        session,
+        run_record,
+        operation_index=operation_index,
+        operation=operation,
+        plan=plan,
+        adapter=adapter,
+        progress=progress,
+        safe_result=safe_result,
+        upid=upid,
+        node=str(safe_result.get("node") or ""),
+    )
+
+
+async def _missing_task_reference(
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    *,
+    operation_index: int,
+    operation: ProviderOperation,
+    plan: PlanResponse,
+    progress: _ApplyProgress,
+    safe_result: dict[str, Any],
+    new_refs: list[str],
+    cancellation_deferred: bool,
+) -> OperationRun:
+    progress.task_refs.extend(new_refs)
+    run_record = await _await_durable_checkpoint(
+        asyncio.create_task(
+            _append_event_checkpoint(
+                session,
+                run_record,
+                event="provider_task_reference_missing",
+                status="outcome_unknown",
+                code="provider_task_reference_missing",
+                message=(
+                    "The provider returned no valid task reference and did not explicitly "
+                    "declare synchronous success; mutation outcome is unknown."
+                ),
+                operation_index=operation_index,
+                operation=operation,
+                payload={"result": safe_result},
+                provider_task_refs=progress.task_refs,
+                warnings=plan.warnings,
+                errors=["Provider mutation outcome is unknown."],
+                result_summary=progress.summary(
+                    len(plan.operations),
+                    outcome_unknown_operation_id=operation.id,
+                ),
+            )
+        )
+    )
+    if cancellation_deferred:
+        raise asyncio.CancelledError
+    return await operation_run_with_events(session, run_record)
+
+
+async def _handle_dispatched_result(
+    session: DatabaseSessionProtocol,
+    run_record: CephOperationRunRecord,
+    *,
+    operation_index: int,
+    operation: ProviderOperation,
+    plan: PlanResponse,
+    adapter: CephProviderAdapter,
+    progress: _ApplyProgress,
+    safe_result: dict[str, Any],
+    cancellation_deferred: bool,
+) -> tuple[CephOperationRunRecord, OperationRun | None]:
+    candidates = _task_ref_candidates(safe_result)
+    new_refs = _task_refs_from_result(safe_result, provider=plan.provider)
+    if _declares_synchronous_success(adapter, operation, safe_result):
+        return await _handle_synchronous_result(
+            session,
+            run_record,
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            progress=progress,
+            safe_result=safe_result,
+            candidates=candidates,
+            new_refs=new_refs,
+            cancellation_deferred=cancellation_deferred,
+        )
+    if plan.provider == "proxmox":
+        binding_error = _proxmox_task_binding_error(
+            operation,
+            safe_result,
+            candidates,
+            new_refs,
+            progress,
+        )
+        if binding_error is not None:
+            terminal = await _binding_failure_or_cancel(
+                session,
+                run_record,
+                operation_index=operation_index,
+                operation=operation,
+                plan=plan,
+                progress=progress,
+                safe_result=safe_result,
+                code=binding_error,
+                cancellation_deferred=cancellation_deferred,
+            )
+            return run_record, terminal
+    upid = new_refs[0] if len(new_refs) == 1 else None
+    if upid is not None:
+        return await _handle_submitted_task(
+            session,
+            run_record,
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            adapter=adapter,
+            progress=progress,
+            safe_result=safe_result,
+            upid=upid,
+            cancellation_deferred=cancellation_deferred,
+        )
+    terminal = await _missing_task_reference(
+        session,
+        run_record,
+        operation_index=operation_index,
+        operation=operation,
+        plan=plan,
+        progress=progress,
+        safe_result=safe_result,
+        new_refs=new_refs,
+        cancellation_deferred=cancellation_deferred,
+    )
+    return run_record, terminal
+
+
+async def _execute_plan_operations(
     plan: PlanResponse,
     adapter: CephProviderAdapter,
     session: DatabaseSessionProtocol,
@@ -2511,194 +2918,19 @@ async def _execute_plan_operations(  # noqa: C901 - explicit security checkpoint
         if terminal_run is not None:
             return terminal_run
         assert safe_result is not None  # nosec B101 - internal typed state invariant
-
-        candidates = _task_ref_candidates(safe_result)
-        new_refs = _task_refs_from_result(safe_result, provider=plan.provider)
-        declares_sync = getattr(adapter, "declares_synchronous_success", None)
-        synchronous_success = bool(
-            callable(declares_sync) and declares_sync(operation, safe_result)
+        run_record, terminal_run = await _handle_dispatched_result(
+            session,
+            run_record,
+            operation_index=operation_index,
+            operation=operation,
+            plan=plan,
+            adapter=adapter,
+            progress=progress,
+            safe_result=safe_result,
+            cancellation_deferred=cancellation_deferred,
         )
-        if synchronous_success:
-            if candidates or new_refs:
-                terminal = await _task_binding_failure(
-                    session,
-                    run_record,
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    safe_result=safe_result,
-                    code="provider_synchronous_result_ambiguous",
-                )
-                if cancellation_deferred:
-                    raise asyncio.CancelledError
-                return terminal
-            run_record = await _append_synchronous_completion_cancellation_safe(
-                session,
-                run_record,
-                operation_index=operation_index,
-                operation=operation,
-                plan=plan,
-                progress=progress,
-                safe_result=safe_result,
-            )
-            if cancellation_deferred:
-                await _persist_cancelled_checkpoint(
-                    session,
-                    run_record,
-                    event="synchronous_completion_cancelled",
-                    code="synchronous_completion_cancelled",
-                    message=(
-                        "Execution was cancelled after synchronous provider completion; "
-                        "remaining plan outcome is unknown."
-                    ),
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    error="Plan execution was cancelled after synchronous completion.",
-                    payload={"result": {**safe_result, "result": "completed"}},
-                )
-                raise asyncio.CancelledError
-            continue
-
-        if plan.provider == "proxmox":
-            expected_node = operation.node or ""
-            result_node = str(safe_result.get("node") or "")
-            if len(candidates) != 1 or len(new_refs) != 1:
-                terminal = await _task_binding_failure(
-                    session,
-                    run_record,
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    safe_result=safe_result,
-                    code="provider_task_reference_invalid",
-                )
-                if cancellation_deferred:
-                    raise asyncio.CancelledError
-                return terminal
-            if new_refs[0] in progress.task_refs:
-                terminal = await _task_binding_failure(
-                    session,
-                    run_record,
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    safe_result=safe_result,
-                    code="provider_task_reference_reused",
-                )
-                if cancellation_deferred:
-                    raise asyncio.CancelledError
-                return terminal
-            if (
-                not expected_node
-                or result_node != expected_node
-                or _proxmox_upid_node(new_refs[0]) != expected_node
-            ):
-                terminal = await _task_binding_failure(
-                    session,
-                    run_record,
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    safe_result=safe_result,
-                    code="provider_task_node_mismatch",
-                )
-                if cancellation_deferred:
-                    raise asyncio.CancelledError
-                return terminal
-        upid = new_refs[0] if len(new_refs) == 1 else None
-        if upid:
-            run_record, claimed = await _claim_submitted_task_cancellation_safe(
-                session,
-                run_record,
-                operation_index=operation_index,
-                operation=operation,
-                plan=plan,
-                progress=progress,
-                safe_result=safe_result,
-                upid=upid,
-            )
-            if not claimed:
-                terminal = await _task_binding_failure(
-                    session,
-                    run_record,
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    safe_result=safe_result,
-                    code="provider_task_reference_reused",
-                )
-                if cancellation_deferred:
-                    raise asyncio.CancelledError
-                return terminal
-            if cancellation_deferred:
-                await _persist_cancelled_checkpoint(
-                    session,
-                    run_record,
-                    event="provider_task_poll_cancelled",
-                    code="provider_task_poll_cancelled",
-                    message="Task processing was cancelled after submission; outcome is unknown.",
-                    operation_index=operation_index,
-                    operation=operation,
-                    plan=plan,
-                    progress=progress,
-                    error="Submitted provider task outcome is unknown.",
-                    provider_task_ref=upid,
-                    payload={"result": {**safe_result, "result": "submitted"}},
-                )
-                raise asyncio.CancelledError
-            run_record, terminal_run = await _resolve_submitted_task(
-                session,
-                run_record,
-                operation_index=operation_index,
-                operation=operation,
-                plan=plan,
-                adapter=adapter,
-                progress=progress,
-                safe_result=safe_result,
-                upid=upid,
-                node=str(safe_result.get("node") or ""),
-            )
-            if terminal_run is not None:
-                return terminal_run
-            continue
-
-        progress.task_refs.extend(new_refs)
-
-        run_record = await _await_durable_checkpoint(
-            asyncio.create_task(
-                _append_event_checkpoint(
-                    session,
-                    run_record,
-                    event="provider_task_reference_missing",
-                    status="outcome_unknown",
-                    code="provider_task_reference_missing",
-                    message=(
-                        "The provider returned no valid task reference and did not explicitly "
-                        "declare synchronous success; mutation outcome is unknown."
-                    ),
-                    operation_index=operation_index,
-                    operation=operation,
-                    payload={"result": safe_result},
-                    provider_task_refs=progress.task_refs,
-                    warnings=plan.warnings,
-                    errors=["Provider mutation outcome is unknown."],
-                    result_summary=progress.summary(
-                        len(plan.operations),
-                        outcome_unknown_operation_id=operation.id,
-                    ),
-                )
-            )
-        )
-        if cancellation_deferred:
-            raise asyncio.CancelledError
-        return await operation_run_with_events(session, run_record)
+        if terminal_run is not None:
+            return terminal_run
 
     destructive_count = sum(operation.is_destructive for operation in plan.operations)
     run_record = await _await_durable_checkpoint(

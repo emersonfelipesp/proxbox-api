@@ -75,6 +75,41 @@ sequenceDiagram
 
 ## Workflow Rules
 
+- A Gitea pull request from `develop` to `main` runs the separate
+  `pull_request_target` promotion-history workflow. Gitea loads that workflow
+  and its validator from the trusted exact `main` base, never from candidate
+  `develop`. The first rollout is bootstrapped through the existing reviewed
+  promotion process because the old `main` cannot run a workflow that it does
+  not contain.
+- A successful ordinary commit status is evidence, not the promotion trust
+  anchor: Gitea associates statuses with a head SHA and context without
+  authenticating the status creator or PR base. Before promotion, the separate
+  release operator must use an authenticated Gitea API client to authenticate
+  the exact `pull_request_target` run and successful history job, confirm that the run's
+  API tuple uses the exact PR-head SHA and `refs/pull/<number>/head`, read the
+  exact workflow bytes from the current `main` base, and re-read the open PR and
+  live `main`/`develop` tips. The workflow runs on `opened`, `synchronize`,
+  `reopened`, and `edited`; a noncanonical tuple fails instead of producing a
+  reusable skipped success.
+- Before this control is enabled, `main` and `develop` must both have verified
+  Gitea branch-protection records. `main` must require an up-to-date head, block
+  administrative merge overrides and force pushes, and restrict merge/direct
+  update permission to the separately administered repository owner.
+  `develop` must be protected from deletion and restrict force pushes to that
+  owner. Do not configure the ordinary workflow status as a required security
+  control. The operator performs the reviewed one-parent squash as an exact-old
+  compare-and-swap update of `main`, so the destination and prior base are bound
+  atomically; ambiguous results are resolved by read-back before any retry. The
+  operator then records the exact commit on the PR and repoints `develop` with an
+  exact-old compare-and-swap, preserving branch convergence without placing a
+  mutation credential on a candidate-schedulable runner.
+- For every changed, non-deleted path, exhaustive merge history must not contain
+  the proposed blob as a strictly older state already superseded on the base
+  branch. A rename to a new path is treated as a new path, while deleting and
+  recreating the same path remains subject to its history. Symlinks use their
+  blob content; unsupported non-blob entries such as Git links fail closed. The
+  guard also fails closed when the head does not contain the exact base or the
+  checkout is shallow.
 - `pyproject.toml`, `uv.lock`, and the Git tag must describe the same version.
 - `rcN` tag pushes publish to TestPyPI for release-candidate validation.
 - Final/post packages publish privately to Gitea, deploy through NMS, and reach
@@ -215,9 +250,53 @@ sequenceDiagram
    and validate production health.
 6. Dispatch `promote-final-tag.yml` from canonical Gitea `main`; it verifies the
    exact private package and NMS attestation before pushing the tag to the
-   authorized GitHub repository. Then create the GitHub Release with
-   `--verify-tag`; its event verifies the protected Gitea
-   attestation, publishes the exact bytes to PyPI, and then publishes Docker
-   images after validation.
+   authorized GitHub repository. Wait for that workflow to complete
+   successfully, record its exact production-approved source SHA, and then
+   create the GitHub Release with the fail-closed helper; its event verifies the
+   protected Gitea attestation, publishes the exact bytes to PyPI, and then
+   publishes Docker images after validation.
 7. Use `vX.Y.Z.postN` for any code or packaging fix discovered after final
    PyPI publication.
+
+### Before the release-control cutover: legacy automation
+
+Before the release-control cutover, the existing `publish-gitea.yml` tag-push
+path remains the active publisher. For a non-RC tag it pushes the exact tag to
+GitHub and creates the GitHub Release only when no Release exists. It fails
+closed for every existing draft or published object so an operator can inspect
+its state, notes, and assets explicitly. Wait for that job to finish; do not
+race it with a second `gh release create`. If the job pushed the
+tag but did not create the Release, first confirm that the Release is absent,
+then use the fail-closed helper with the exact source SHA from the completed
+legacy job. It resolves the GitHub tag to a commit, requires that commit to
+equal the supplied approved SHA, loads the release notes from that same GitHub
+commit instead of the caller's working tree, queries the GitHub API, and
+creates the Release only after an explicit HTTP 404. An existing Release,
+authentication or authorization error, API failure, or network failure aborts
+without publishing.
+The helper also supplies `--verify-tag`, so GitHub cannot invent or move the
+tag:
+
+```bash
+scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>
+```
+
+Replace `vX.Y.Z` with the exact final or `.postN` tag already pushed to GitHub.
+If the helper reports that the Release exists, inspect and publish or repair
+that existing object instead of creating another one. Do not bypass any other
+lookup failure.
+
+### After the release-control cutover: controlled promotion
+
+After the release-control cutover, step 6 is intentionally different:
+`promote-final-tag.yml` verifies production evidence and pushes the exact tag,
+but does not create the GitHub Release. Wait for the workflow to complete
+successfully and record its exact production-approved source SHA. The operator
+then runs `scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>`
+as the normal controlled publication step.
+The helper dereferences the GitHub tag and requires it to equal that approved
+SHA, then loads the release notes from that exact GitHub commit. The same
+fail-closed lookup remains required: the expected HTTP 404 proves
+there is no existing Release, while any other result aborts. This separation
+ensures that the `release: published` event cannot authorize PyPI or Docker Hub
+until production evidence has passed.

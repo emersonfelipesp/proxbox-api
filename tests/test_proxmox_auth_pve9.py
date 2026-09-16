@@ -17,7 +17,7 @@ import io
 import logging
 
 import pytest
-from proxmox_sdk.sdk.exceptions import ResourceException
+from proxmox_sdk.sdk.exceptions import ProxmoxRedirectError, ResourceException
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import SensitiveDataFilter
@@ -94,6 +94,17 @@ class FakePve9AuthRejectedAPI(FakePve9ProxmoxAPI):
             content='{"data":null,"errors":{"PVE":"Authentication failed"}}',
             errors={"PVE": "Authentication failed"},
         )
+
+
+class FakePve9RedirectingAPI(FakePve9ProxmoxAPI):
+    """SDK fake that refuses a redirect on the version probe (proxmox-sdk >= 0.0.15)."""
+
+    def __init__(self, host, **kwargs):
+        super().__init__(host, **kwargs)
+        self.version = self
+
+    def get(self):
+        raise ProxmoxRedirectError(301, "https://pve-real.example.com:8006/api2/json/version")
 
 
 class FakeDomainFailsThenIpSucceedsAPI(FakePve9ProxmoxAPI):
@@ -174,6 +185,29 @@ def test_auth_failure_surfaces_upstream_pve_error(monkeypatch):
     assert "401" in detail
     assert "Authentication failed" in detail
     assert "PVE" in detail
+
+
+def test_redirecting_endpoint_reports_actionable_detail(monkeypatch):
+    monkeypatch.setattr("proxbox_api.session.proxmox.ProxmoxAPI", FakePve9RedirectingAPI)
+
+    with pytest.raises(ProxboxException) as exc_info:
+        ProxmoxSession(
+            {
+                "ip_address": _doc_address(11),
+                "domain": None,
+                "http_port": 8006,
+                "user": "root@pam",
+                "password": None,
+                "token": {"name": "proxbox", "value": "token"},
+                "ssl": False,
+            }
+        )
+
+    detail = exc_info.value.detail or ""
+    assert "HTTP redirect 301 refused" in detail
+    assert "pve-real.example.com" in detail
+    assert "final Proxmox API address" in detail
+    assert "/api2/json" not in detail
 
 
 def test_abandoned_sdk_is_closed_on_domain_fallback(monkeypatch):

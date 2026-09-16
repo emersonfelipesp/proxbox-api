@@ -1719,6 +1719,81 @@ def test_stale_lease_owner_cannot_append_or_terminalize_live_run(tmp_path) -> No
     sync_engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("status", "lease_owner"),
+    [("dispatching", None), ("failed", "retained-owner")],
+)
+def test_checkpoint_rejects_missing_or_retained_execution_authority(
+    tmp_path,
+    status: str,
+    lease_owner: str | None,
+) -> None:
+    database_path = tmp_path / f"ceph-invalid-checkpoint-owner-{status}.db"
+    sync_engine = create_engine(f"sqlite:///{database_path}")
+    SQLModel.metadata.create_all(sync_engine)
+    run_id = str(uuid4())
+    with Session(sync_engine) as session:
+        record = CephOperationRunRecord(
+            id=run_id,
+            status=status,
+            provider="proxmox",
+            lease_owner=lease_owner,
+            lease_expires_at=time.time() + 60 if lease_owner else None,
+        )
+        session.add(record)
+        session.commit()
+        with pytest.raises(_CephRunLeaseLost):
+            asyncio.run(
+                _append_event_checkpoint(
+                    session,
+                    record,
+                    event="invalid_owner",
+                    status="completed",
+                    code="invalid_owner",
+                    message="invalid execution authority",
+                )
+            )
+    sync_engine.dispose()
+
+
+def test_inactive_checkpoint_updates_record_and_appends_event(tmp_path) -> None:
+    database_path = tmp_path / "ceph-inactive-checkpoint.db"
+    sync_engine = create_engine(f"sqlite:///{database_path}")
+    SQLModel.metadata.create_all(sync_engine)
+    run_id = str(uuid4())
+    with Session(sync_engine) as session:
+        record = CephOperationRunRecord(
+            id=run_id,
+            status="failed",
+            provider="proxmox",
+            warnings=["existing warning"],
+            errors=["existing error"],
+            result_summary={"existing": True},
+        )
+        session.add(record)
+        session.commit()
+        updated = asyncio.run(
+            _append_event_checkpoint(
+                session,
+                record,
+                event="recovery_recorded",
+                status="outcome_unknown",
+                code="recovery_recorded",
+                message="Recovery evidence appended.",
+            )
+        )
+        events = session.exec(
+            select(CephOperationEventRecord).where(CephOperationEventRecord.run_id == run_id)
+        ).all()
+
+    sync_engine.dispose()
+    assert updated.status == "outcome_unknown"
+    assert updated.warnings == ["existing warning"]
+    assert updated.errors == ["existing error"]
+    assert updated.result_summary == {"existing": True}
+    assert [event.code for event in events] == ["recovery_recorded"]
+
+
 def test_non_noop_proxmox_result_without_valid_upid_is_outcome_unknown(tmp_path) -> None:
     database_path = tmp_path / "ceph-invalid-upid.db"
     sync_engine = create_engine(f"sqlite:///{database_path}")
@@ -1764,6 +1839,182 @@ def test_non_noop_proxmox_result_without_valid_upid_is_outcome_unknown(tmp_path)
     assert operation.status == "outcome_unknown"
     assert operation.provider_task_refs == []
     assert operation.events[-1].code == "provider_task_reference_invalid"
+
+
+def test_plan_noop_is_checkpointed_without_provider_dispatch(tmp_path) -> None:
+    database_path = tmp_path / "ceph-plan-noop.db"
+    sync_engine = create_engine(f"sqlite:///{database_path}")
+    event.listen(sync_engine, "connect", _apply_sqlite_pragmas)
+    plan = _canonical_plan()
+    plan.operations[0].action = "noop"
+    plan.digest = canonical_plan_digest(plan)
+    raw_token = secrets.token_urlsafe(48)
+    _seed_control_plane(
+        sync_engine,
+        plan=plan,
+        raw_token=raw_token,
+        approval_id=str(uuid4()),
+    )
+
+    class _NoDispatchAdapter:
+        async def apply(
+            self,
+            _operation: ProviderOperation,
+            *,
+            confirm_destructive: bool,
+        ) -> dict[str, Any]:
+            raise AssertionError("noop operations must not reach the provider")
+
+    try:
+        with Session(sync_engine) as session:
+            persisted = asyncio.run(load_persisted_plan(session, plan.id))
+            operation = asyncio.run(
+                apply_plan(
+                    persisted,
+                    ApplyRequest(
+                        plan_id=plan.id,
+                        endpoint_id=plan.endpoint_id,
+                        approval_token=raw_token,
+                        actor="alice",
+                    ),
+                    _NoDispatchAdapter(),  # type: ignore[arg-type]
+                    session,
+                )
+            )
+    finally:
+        sync_engine.dispose()
+
+    assert operation.status == "completed"
+    assert operation.result_summary["noop"] == 1
+    assert [event.code for event in operation.events] == [
+        "approval_consumed",
+        "operation_noop",
+        "run_completed",
+    ]
+
+
+def test_synchronous_result_with_task_reference_is_outcome_unknown(tmp_path) -> None:
+    database_path = tmp_path / "ceph-ambiguous-synchronous-result.db"
+    sync_engine = create_engine(f"sqlite:///{database_path}")
+    event.listen(sync_engine, "connect", _apply_sqlite_pragmas)
+    plan = _canonical_plan()
+    raw_token = secrets.token_urlsafe(48)
+    _seed_control_plane(
+        sync_engine,
+        plan=plan,
+        raw_token=raw_token,
+        approval_id=str(uuid4()),
+    )
+
+    class _AmbiguousSynchronousAdapter:
+        async def apply(
+            self,
+            operation: ProviderOperation,
+            *,
+            confirm_destructive: bool,
+        ) -> dict[str, Any]:
+            assert confirm_destructive is True
+            return {
+                "result": "completed",
+                "completion_mode": "synchronous",
+                "node": operation.node,
+                "provider_task_ref": ("UPID:node1:00000001:00000002:00000003:ceph:task:root@pam:"),
+            }
+
+        def declares_synchronous_success(
+            self,
+            _operation: ProviderOperation,
+            result: dict[str, Any],
+        ) -> bool:
+            return result.get("completion_mode") == "synchronous"
+
+    try:
+        with Session(sync_engine) as session:
+            persisted = asyncio.run(load_persisted_plan(session, plan.id))
+            operation = asyncio.run(
+                apply_plan(
+                    persisted,
+                    ApplyRequest(
+                        plan_id=plan.id,
+                        endpoint_id=plan.endpoint_id,
+                        approval_token=raw_token,
+                        actor="alice",
+                    ),
+                    _AmbiguousSynchronousAdapter(),  # type: ignore[arg-type]
+                    session,
+                )
+            )
+    finally:
+        sync_engine.dispose()
+
+    assert operation.status == "outcome_unknown"
+    assert operation.provider_task_refs == []
+    assert operation.events[-1].code == "provider_synchronous_result_ambiguous"
+
+
+@pytest.mark.parametrize(
+    ("provider", "result", "expected_code"),
+    [
+        ("dashboard", {"result": "submitted"}, "provider_task_reference_missing"),
+        (
+            "proxmox",
+            {"provider_task_ref": ATOMIC_UPID, "node": "node2"},
+            "provider_task_node_mismatch",
+        ),
+    ],
+)
+def test_provider_result_without_valid_task_binding_is_outcome_unknown(
+    tmp_path,
+    provider: str,
+    result: dict[str, Any],
+    expected_code: str,
+) -> None:
+    database_path = tmp_path / f"ceph-invalid-provider-result-{provider}.db"
+    sync_engine = create_engine(f"sqlite:///{database_path}")
+    event.listen(sync_engine, "connect", _apply_sqlite_pragmas)
+    plan = _canonical_plan()
+    plan.provider = provider
+    plan.operations[0].provider = provider
+    plan.digest = canonical_plan_digest(plan)
+    raw_token = secrets.token_urlsafe(48)
+    _seed_control_plane(
+        sync_engine,
+        plan=plan,
+        raw_token=raw_token,
+        approval_id=str(uuid4()),
+    )
+
+    class _ResultAdapter:
+        async def apply(
+            self,
+            _operation: ProviderOperation,
+            *,
+            confirm_destructive: bool,
+        ) -> dict[str, Any]:
+            assert confirm_destructive is True
+            return result
+
+    try:
+        with Session(sync_engine) as session:
+            persisted = asyncio.run(load_persisted_plan(session, plan.id))
+            operation = asyncio.run(
+                apply_plan(
+                    persisted,
+                    ApplyRequest(
+                        plan_id=plan.id,
+                        endpoint_id=plan.endpoint_id,
+                        approval_token=raw_token,
+                        actor="alice",
+                    ),
+                    _ResultAdapter(),  # type: ignore[arg-type]
+                    session,
+                )
+            )
+    finally:
+        sync_engine.dispose()
+
+    assert operation.status == "outcome_unknown"
+    assert operation.events[-1].code == expected_code
 
 
 def test_malformed_terminal_state_cannot_be_promoted_to_success(tmp_path) -> None:

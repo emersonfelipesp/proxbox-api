@@ -235,7 +235,7 @@ async def test_default_lifespan_mounts_committed_default_inventory(
 
     monkeypatch.delenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", raising=False)
     monkeypatch.delenv("PROXBOX_FEATURES", raising=False)
-    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda: None)
+    monkeypatch.setattr(factory.bootstrap, "init_database_and_netbox", lambda _owner: None)
     monkeypatch.setattr(factory, "validate_auth_lockout_identity_key", lambda: None)
     monkeypatch.setattr(factory, "quarantine_legacy_codegen_artifacts", lambda: [])
     monkeypatch.setattr(factory, "_run_bootstrap_pass", skip_bootstrap)

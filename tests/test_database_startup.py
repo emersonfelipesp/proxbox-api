@@ -8,13 +8,17 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect
+from sqlalchemy.pool import NullPool
 from sqlmodel import Session
 
 from proxbox_api import database
@@ -29,6 +33,7 @@ from proxbox_api.database import (
     resolve_database_target,
     verify_sqlite_target,
 )
+from proxbox_api.services import auth_lockout as lockout_module
 from proxbox_api.services.auth_lockout import (
     LockoutConfigurationError,
     clear_runtime_auth_lockout_identity_key,
@@ -48,6 +53,82 @@ def _prepare_fast_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(factory, "register_generated_proxmox_routes", lambda app: None)
     monkeypatch.setattr(factory, "_run_bootstrap_pass", _skip_netbox_object_bootstrap)
     monkeypatch.setattr(bootstrap, "_configure_backend_file_logging", lambda: None)
+
+
+def _serve_distinct_loop_database_client(
+    name: str,
+    application: FastAPI,
+    survivor: str,
+    events: dict[str, dict[str, threading.Event]],
+    peer_stopped: threading.Event,
+    survivor_probe_done: threading.Event,
+    responses: dict[str, tuple[int, dict[str, bool]]],
+) -> None:
+    """Serve one real client on its portal loop until the test releases it."""
+    with TestClient(application) as client:
+        events["ready"][name].set()
+        assert events["initial_probe"][name].wait(timeout=10)
+        initial = client.get("/auth/bootstrap-status")
+        responses[name] = (initial.status_code, initial.json())
+        events["initial_done"][name].set()
+        if name == survivor:
+            assert peer_stopped.wait(timeout=10)
+            repeated = client.get("/auth/bootstrap-status")
+            responses[f"{name}-after-peer-shutdown"] = (
+                repeated.status_code,
+                repeated.json(),
+            )
+            survivor_probe_done.set()
+        assert events["release"][name].wait(timeout=10)
+
+
+def _distinct_loop_client_events() -> dict[str, dict[str, threading.Event]]:
+    """Create named synchronization events for both portal-thread clients."""
+    return {
+        "ready": {"first": threading.Event(), "second": threading.Event()},
+        "initial_probe": {"first": threading.Event(), "second": threading.Event()},
+        "initial_done": {"first": threading.Event(), "second": threading.Event()},
+        "release": {"first": threading.Event(), "second": threading.Event()},
+    }
+
+
+def _start_distinct_loop_database_clients(
+    executor: ThreadPoolExecutor,
+    applications: dict[str, FastAPI],
+    survivor: str,
+    events: dict[str, dict[str, threading.Event]],
+    peer_stopped: threading.Event,
+    survivor_probe_done: threading.Event,
+    responses: dict[str, tuple[int, dict[str, bool]]],
+) -> dict[str, Future[None]]:
+    """Start both portal-thread clients without adding branches to the contract test."""
+    arguments = (survivor, events, peer_stopped, survivor_probe_done, responses)
+    return {
+        "first": executor.submit(
+            _serve_distinct_loop_database_client,
+            "first",
+            applications["first"],
+            *arguments,
+        ),
+        "second": executor.submit(
+            _serve_distinct_loop_database_client,
+            "second",
+            applications["second"],
+            *arguments,
+        ),
+    }
+
+
+def _complete_initial_distinct_loop_probes(
+    events: dict[str, dict[str, threading.Event]],
+) -> None:
+    """Probe each event loop while both client lifespans remain active."""
+    assert events["ready"]["first"].wait(timeout=10)
+    assert events["ready"]["second"].wait(timeout=10)
+    events["initial_probe"]["first"].set()
+    assert events["initial_done"]["first"].wait(timeout=10)
+    events["initial_probe"]["second"].set()
+    assert events["initial_done"]["second"].wait(timeout=10)
 
 
 def test_resolver_uses_non_container_user_data_default(
@@ -954,6 +1035,662 @@ async def test_lifespan_builds_verified_engines_and_tables_then_disposes_them(
     assert database.async_engine is None
     assert database.sqlite_file_name is None
     assert database.sqlite_url is None
+
+
+async def test_overlapping_lifespans_dispose_only_after_the_final_owner_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    database_path = tmp_path / "shared-runtime.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_lifespan = factory._lifespan(factory.create_app())
+    second_lifespan = factory._lifespan(factory.create_app())
+
+    await first_lifespan.__aenter__()
+    first_active = True
+    second_active = False
+    try:
+        first_engine = database.get_engine()
+        await second_lifespan.__aenter__()
+        second_active = True
+        assert database.get_engine() is first_engine
+
+        await first_lifespan.__aexit__(None, None, None)
+        first_active = False
+        assert database.get_engine() is first_engine
+        validate_auth_lockout_identity_key()
+    finally:
+        if second_active:
+            await second_lifespan.__aexit__(None, None, None)
+        if first_active:
+            await first_lifespan.__aexit__(None, None, None)
+
+    assert database.engine is None
+    with pytest.raises(
+        LockoutConfigurationError,
+        match="authentication lockout identity key was not validated during startup",
+    ):
+        validate_auth_lockout_identity_key()
+
+
+@pytest.mark.parametrize("first_to_stop", ("first", "second"))
+def test_overlapping_test_clients_share_async_runtime_across_event_loops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    first_to_stop: str,
+) -> None:
+    _dispose_runtime()
+    _prepare_fast_lifespan(monkeypatch)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / f"loops-{first_to_stop}.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    applications = {"first": factory.create_app(), "second": factory.create_app()}
+    events = _distinct_loop_client_events()
+    peer_stopped = threading.Event()
+    survivor_probe_done = threading.Event()
+    survivor = "second" if first_to_stop == "first" else "first"
+    responses: dict[str, tuple[int, dict[str, bool]]] = {}
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = _start_distinct_loop_database_clients(
+            executor,
+            applications,
+            survivor,
+            events,
+            peer_stopped,
+            survivor_probe_done,
+            responses,
+        )
+        _complete_initial_distinct_loop_probes(events)
+        candidate_async_engine = database.async_engine
+        assert candidate_async_engine is not None
+        assert isinstance(candidate_async_engine.sync_engine.pool, NullPool)
+
+        events["release"][first_to_stop].set()
+        futures[first_to_stop].result(timeout=10)
+        peer_stopped.set()
+        assert survivor_probe_done.wait(timeout=10)
+        events["release"][survivor].set()
+        futures[survivor].result(timeout=10)
+
+    expected = (200, {"needs_bootstrap": True, "has_db_keys": False})
+    assert responses == {
+        "first": expected,
+        "second": expected,
+        f"{survivor}-after-peer-shutdown": expected,
+    }
+    assert database.engine is None
+    assert database.async_engine is None
+
+
+async def test_simultaneous_owners_publish_bootstrap_globals_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "simultaneous.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_owner = await database.acquire_database_runtime()
+    second_owner = await database.acquire_database_runtime()
+    original_initialize = bootstrap._initialize_database_and_netbox
+    initialization_started = threading.Event()
+    allow_initialization = threading.Event()
+    initialization_calls = 0
+
+    def _slow_initialize(owner) -> None:  # noqa: ANN001
+        nonlocal initialization_calls
+        initialization_calls += 1
+        initialization_started.set()
+        assert allow_initialization.wait(timeout=5)
+        original_initialize(owner)
+
+    monkeypatch.setattr(bootstrap, "_initialize_database_and_netbox", _slow_initialize)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(bootstrap.init_database_and_netbox, first_owner)
+            assert initialization_started.wait(timeout=5)
+            second = executor.submit(bootstrap.init_database_and_netbox, second_owner)
+            assert not second.done()
+            allow_initialization.set()
+            first.result(timeout=10)
+            second.result(timeout=10)
+
+        assert initialization_calls == 1
+        assert bootstrap.init_ok is True
+        validate_auth_lockout_identity_key()
+    finally:
+        allow_initialization.set()
+        await database.release_database_runtime(first_owner)
+        await database.release_database_runtime(second_owner)
+
+
+async def test_failed_bootstrap_wakes_waiters_and_next_generation_recovers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "failed-generation.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_owner = await database.acquire_database_runtime()
+    second_owner = await database.acquire_database_runtime()
+    original_initialize = bootstrap._initialize_database_and_netbox
+    initialization_started = threading.Event()
+    allow_failure = threading.Event()
+
+    def _fail_initialize(owner) -> None:  # noqa: ANN001
+        initialization_started.set()
+        assert allow_failure.wait(timeout=5)
+        raise DatabaseStartupError(f"synthetic shared failure for {owner.generation}")
+
+    monkeypatch.setattr(bootstrap, "_initialize_database_and_netbox", _fail_initialize)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(bootstrap.init_database_and_netbox, first_owner)
+        assert initialization_started.wait(timeout=5)
+        second = executor.submit(bootstrap.init_database_and_netbox, second_owner)
+        assert not second.done()
+        allow_failure.set()
+        with pytest.raises(DatabaseStartupError, match="synthetic shared failure"):
+            first.result(timeout=10)
+        with pytest.raises(DatabaseStartupError, match="bootstrap already failed"):
+            second.result(timeout=10)
+
+    failed_generation = first_owner.generation
+    await database.release_database_runtime(first_owner)
+    await database.release_database_runtime(second_owner)
+    assert database._database_runtime_owners == {}
+    assert database.engine is None
+
+    monkeypatch.setattr(bootstrap, "_initialize_database_and_netbox", original_initialize)
+    replacement_owner = await database.acquire_database_runtime()
+    try:
+        assert replacement_owner.generation != failed_generation
+        bootstrap.init_database_and_netbox(replacement_owner)
+        assert bootstrap._bootstrap_ready_generation == replacement_owner.generation
+        assert bootstrap._bootstrap_failed_generation is None
+        assert bootstrap.init_ok is True
+    finally:
+        await database.release_database_runtime(replacement_owner)
+
+
+async def test_secondary_lifespan_does_not_rerun_successful_shared_bootstrap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    database_path = tmp_path / "shared-bootstrap.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_lifespan = factory._lifespan(factory.create_app())
+    second_lifespan = factory._lifespan(factory.create_app())
+
+    await first_lifespan.__aenter__()
+    second_active = False
+    try:
+        first_engine = database.get_engine()
+
+        def _unexpected_secondary_bootstrap(owner) -> None:  # noqa: ANN001
+            raise DatabaseStartupError("secondary bootstrap corrupted shared globals")
+
+        monkeypatch.setattr(
+            bootstrap,
+            "_initialize_database_and_netbox",
+            _unexpected_secondary_bootstrap,
+        )
+        await second_lifespan.__aenter__()
+        second_active = True
+
+        assert database.get_engine() is first_engine
+        assert bootstrap.init_ok is True
+        validate_auth_lockout_identity_key()
+    finally:
+        if second_active:
+            await second_lifespan.__aexit__(None, None, None)
+        await first_lifespan.__aexit__(None, None, None)
+
+
+async def test_secondary_same_target_owner_does_not_reload_identity_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    database_path = tmp_path / "shared-identity.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_lifespan = factory._lifespan(factory.create_app())
+    second_lifespan = factory._lifespan(factory.create_app())
+
+    await first_lifespan.__aenter__()
+    second_active = False
+    try:
+        first_engine = database.get_engine()
+
+        def _unexpected_identity_reload(expected_fingerprint) -> str:  # noqa: ANN001
+            raise LockoutConfigurationError(
+                f"secondary owner reloaded identity {expected_fingerprint}"
+            )
+
+        monkeypatch.setattr(
+            lockout_module,
+            "initialize_auth_lockout_identity_key",
+            _unexpected_identity_reload,
+        )
+        await second_lifespan.__aenter__()
+        second_active = True
+
+        assert database.get_engine() is first_engine
+        validate_auth_lockout_identity_key()
+    finally:
+        if second_active:
+            await second_lifespan.__aexit__(None, None, None)
+        await first_lifespan.__aexit__(None, None, None)
+
+
+async def test_repeated_cancellation_while_acquisition_waits_leaves_no_ghost_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "cancelled-acquisition.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    original_claim = database._claim_database_runtime
+    claim_started = threading.Event()
+
+    def _observed_claim(environ):  # noqa: ANN001
+        claim_started.set()
+        return original_claim(environ)
+
+    monkeypatch.setattr(database, "_claim_database_runtime", _observed_claim)
+    with database._database_runtime_condition:
+        database._database_runtime_transitioning = True
+    acquisition = asyncio.create_task(database.acquire_database_runtime())
+    assert await asyncio.to_thread(claim_started.wait, 5)
+    acquisition.cancel()
+    await asyncio.sleep(0)
+    acquisition.cancel()
+    with database._database_runtime_condition:
+        database._database_runtime_transitioning = False
+        database._database_runtime_condition.notify_all()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(acquisition, timeout=10)
+    assert database._database_runtime_owners == {}
+    assert database._database_runtime_transitioning is False
+    assert database.engine is None
+
+
+async def test_repeated_cancellation_waits_for_sync_then_async_disposal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "cancelled-sync-disposal.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    owner = await database.acquire_database_runtime()
+    sync_engine = database.engine
+    candidate_async_engine = database.async_engine
+    assert sync_engine is not None
+    assert candidate_async_engine is not None
+    original_sync_dispose = type(sync_engine).dispose
+    original_async_dispose = type(candidate_async_engine).dispose
+    sync_started = threading.Event()
+    allow_sync = threading.Event()
+    async_started = asyncio.Event()
+
+    def _blocked_sync_dispose(engine, *args, **kwargs) -> None:  # noqa: ANN001
+        if engine is sync_engine:
+            sync_started.set()
+            assert allow_sync.wait(timeout=5)
+        original_sync_dispose(engine, *args, **kwargs)
+
+    async def _observed_async_dispose(engine) -> None:  # noqa: ANN001
+        async_started.set()
+        await original_async_dispose(engine)
+
+    monkeypatch.setattr(type(sync_engine), "dispose", _blocked_sync_dispose)
+    monkeypatch.setattr(type(candidate_async_engine), "dispose", _observed_async_dispose)
+    release = asyncio.create_task(database.release_database_runtime(owner))
+    assert await asyncio.to_thread(sync_started.wait, 5)
+    release.cancel()
+    await asyncio.sleep(0)
+    release.cancel()
+    await asyncio.sleep(0)
+    assert not release.done()
+    assert not async_started.is_set()
+
+    allow_sync.set()
+    await asyncio.wait_for(async_started.wait(), timeout=5)
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(release, timeout=10)
+    assert database._database_runtime_transitioning is False
+    assert database._database_runtime_poisoned is None
+
+
+async def test_final_release_holds_runtime_lease_until_cancelled_async_disposal_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    database_path = tmp_path / "ordered-disposal.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    owner = await database.acquire_database_runtime()
+    candidate_async_engine = database.async_engine
+    assert candidate_async_engine is not None
+    original_dispose = type(candidate_async_engine).dispose
+    disposal_started = asyncio.Event()
+    allow_disposal = asyncio.Event()
+
+    async def _blocked_dispose(engine) -> None:  # noqa: ANN001
+        disposal_started.set()
+        await allow_disposal.wait()
+        await original_dispose(engine)
+
+    def _assert_offline_maintenance_refused() -> None:
+        with pytest.raises(DatabaseStartupError, match="worker still holds the runtime lease"):
+            with database.offline_database_maintenance_lock(database_path):
+                pytest.fail("Offline maintenance acquired a live runtime lease")
+
+    monkeypatch.setattr(type(candidate_async_engine), "dispose", _blocked_dispose)
+    release = asyncio.create_task(database.release_database_runtime(owner))
+    await asyncio.wait_for(disposal_started.wait(), timeout=5)
+    replacement = asyncio.create_task(database.acquire_database_runtime())
+    await asyncio.sleep(0.05)
+    assert not replacement.done()
+    await asyncio.to_thread(_assert_offline_maintenance_refused)
+
+    release.cancel()
+    await asyncio.sleep(0)
+    release.cancel()
+    await asyncio.sleep(0)
+    assert not release.done()
+    await asyncio.to_thread(_assert_offline_maintenance_refused)
+
+    allow_disposal.set()
+    with pytest.raises(asyncio.CancelledError):
+        await release
+    replacement_owner = await asyncio.wait_for(replacement, timeout=10)
+    await database.release_database_runtime(replacement_owner)
+
+
+async def test_saturated_default_executor_cannot_deadlock_runtime_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "saturated-executor.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    loop = asyncio.get_running_loop()
+    one_worker_executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(one_worker_executor)
+    owner = await database.acquire_database_runtime()
+    candidate_async_engine = database.async_engine
+    assert candidate_async_engine is not None
+    original_dispose = type(candidate_async_engine).dispose
+    disposal_started = asyncio.Event()
+    allow_disposal = asyncio.Event()
+    default_worker_started = threading.Event()
+    allow_default_worker = threading.Event()
+
+    async def _blocked_dispose(engine) -> None:  # noqa: ANN001
+        if engine is candidate_async_engine:
+            disposal_started.set()
+            await allow_disposal.wait()
+        await original_dispose(engine)
+
+    def _occupy_default_worker() -> None:
+        default_worker_started.set()
+        assert allow_default_worker.wait(timeout=10)
+
+    monkeypatch.setattr(type(candidate_async_engine), "dispose", _blocked_dispose)
+    release = asyncio.create_task(database.release_database_runtime(owner))
+    default_blocker: asyncio.Future[None] | None = None
+    replacement: asyncio.Task[database.DatabaseRuntimeOwner] | None = None
+    try:
+        await asyncio.wait_for(disposal_started.wait(), timeout=5)
+        default_blocker = loop.run_in_executor(None, _occupy_default_worker)
+        while not default_worker_started.is_set():
+            await asyncio.sleep(0)
+        replacement = asyncio.create_task(database.acquire_database_runtime())
+        await asyncio.sleep(0.05)
+        assert not replacement.done()
+
+        allow_disposal.set()
+        await asyncio.wait_for(release, timeout=10)
+        replacement_owner = await asyncio.wait_for(replacement, timeout=10)
+        await database.release_database_runtime(replacement_owner)
+    finally:
+        allow_disposal.set()
+        allow_default_worker.set()
+        if default_blocker is not None:
+            await default_blocker
+        one_worker_executor.shutdown(wait=True)
+
+
+async def test_repeated_cancellation_waits_for_transition_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "cancelled-finalization.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    owner = await database.acquire_database_runtime()
+    original_finish = database._finish_database_runtime_transition
+    finish_started = threading.Event()
+    allow_finish = threading.Event()
+
+    def _blocked_finish(runtime_lease: int | None) -> None:
+        finish_started.set()
+        assert allow_finish.wait(timeout=5)
+        original_finish(runtime_lease)
+
+    monkeypatch.setattr(database, "_finish_database_runtime_transition", _blocked_finish)
+    release = asyncio.create_task(database.release_database_runtime(owner))
+    assert await asyncio.to_thread(finish_started.wait, 5)
+    replacement = asyncio.create_task(database.acquire_database_runtime())
+    await asyncio.sleep(0.05)
+    assert not replacement.done()
+    release.cancel()
+    await asyncio.sleep(0)
+    release.cancel()
+    await asyncio.sleep(0)
+    assert not release.done()
+    assert not replacement.done()
+
+    allow_finish.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(release, timeout=10)
+    replacement_owner = await asyncio.wait_for(replacement, timeout=10)
+    await database.release_database_runtime(replacement_owner)
+
+
+@pytest.mark.parametrize(
+    ("fail_sync", "fail_async"),
+    ((True, False), (False, True), (True, True)),
+)
+async def test_disposal_failure_attempts_both_engines_and_poisons_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_sync: bool,
+    fail_async: bool,
+) -> None:
+    await database.dispose_database()
+    database_path = tmp_path / f"poisoned-{fail_sync}-{fail_async}.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    owner = await database.acquire_database_runtime()
+    sync_engine = database.engine
+    candidate_async_engine = database.async_engine
+    assert sync_engine is not None
+    assert candidate_async_engine is not None
+    original_sync_dispose = type(sync_engine).dispose
+    original_async_dispose = type(candidate_async_engine).dispose
+    attempts = {"sync": 0, "async": 0}
+
+    def _sync_dispose(engine, *args, **kwargs) -> None:  # noqa: ANN001
+        if engine is sync_engine:
+            attempts["sync"] += 1
+            if fail_sync:
+                raise RuntimeError("synthetic synchronous disposal failure")
+        original_sync_dispose(engine, *args, **kwargs)
+
+    async def _async_dispose(engine) -> None:  # noqa: ANN001
+        attempts["async"] += 1
+        if fail_async:
+            raise RuntimeError("synthetic asynchronous disposal failure")
+        await original_async_dispose(engine)
+
+    with monkeypatch.context() as failure_patch:
+        failure_patch.setattr(type(sync_engine), "dispose", _sync_dispose)
+        failure_patch.setattr(type(candidate_async_engine), "dispose", _async_dispose)
+        with pytest.raises(DatabaseStartupError, match="restart it") as failure:
+            await database.release_database_runtime(owner)
+
+    try:
+        assert attempts == {"sync": 1, "async": 1}
+        assert database._database_runtime_poisoned is not None
+        expected_notes = int(fail_sync) + int(fail_async)
+        assert len(failure.value.__notes__) == expected_notes
+        validate_auth_lockout_identity_key()
+        with pytest.raises(DatabaseStartupError, match="cleanup previously failed"):
+            await database.acquire_database_runtime()
+
+        def _assert_offline_maintenance_refused() -> None:
+            with pytest.raises(DatabaseStartupError, match="worker still holds"):
+                with database.offline_database_maintenance_lock(database_path):
+                    pytest.fail("Offline maintenance acquired a poisoned runtime lease")
+
+        await asyncio.to_thread(_assert_offline_maintenance_refused)
+    finally:
+        original_sync_dispose(sync_engine)
+        await original_async_dispose(candidate_async_engine)
+        runtime_lease = database._database_runtime_lease_descriptor
+        database._database_runtime_lease_descriptor = None
+        database._database_runtime_poisoned = None
+        database._database_runtime_transitioning = False
+        database._database_runtime_owners.clear()
+        database._release_database_runtime_lease(runtime_lease)
+        clear_runtime_auth_lockout_identity_key()
+
+
+@pytest.mark.parametrize("failure_site", ("startup", "body"))
+async def test_lifespan_preserves_primary_failure_when_release_also_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / f"primary-{failure_site}.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    original_release = database.release_database_runtime
+
+    async def _release_then_fail(owner) -> None:  # noqa: ANN001
+        await original_release(owner)
+        raise DatabaseStartupError("synthetic release failure")
+
+    monkeypatch.setattr(database, "release_database_runtime", _release_then_fail)
+    if failure_site == "startup":
+
+        def _fail_startup(owner) -> None:  # noqa: ANN001
+            raise ValueError("primary startup failure")
+
+        monkeypatch.setattr(bootstrap, "init_database_and_netbox", _fail_startup)
+
+    with pytest.raises(ValueError, match=f"primary {failure_site} failure") as failure:
+        async with factory._lifespan(factory.create_app()):
+            if failure_site == "body":
+                raise ValueError("primary body failure")
+
+    assert failure.value.__notes__ == [
+        "Database runtime cleanup also failed: DatabaseStartupError: synthetic release failure"
+    ]
+    assert database._database_runtime_owners == {}
+    assert database.engine is None
+
+
+async def test_failed_conflicting_lifespan_does_not_release_the_incumbent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    first_path = tmp_path / "incumbent.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(first_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_lifespan = factory._lifespan(factory.create_app())
+
+    await first_lifespan.__aenter__()
+    try:
+        first_engine = database.get_engine()
+        monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "conflicting.db"))
+        with pytest.raises(DatabaseStartupError, match="different SQLite target"):
+            async with factory._lifespan(factory.create_app()):
+                pytest.fail("The conflicting application unexpectedly entered its lifespan")
+
+        assert database.get_engine() is first_engine
+        assert database.database_target is not None
+        assert database.database_target.path == first_path
+        validate_auth_lockout_identity_key()
+    finally:
+        await first_lifespan.__aexit__(None, None, None)
+
+    assert database.engine is None
+
+
+async def test_failed_owned_startup_releases_only_its_ownership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    database_path = tmp_path / "owned-startup.db"
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(database_path))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    first_lifespan = factory._lifespan(factory.create_app())
+
+    await first_lifespan.__aenter__()
+    try:
+        first_engine = database.get_engine()
+
+        def _fail_bootstrap(runtime_owner) -> None:  # noqa: ANN001
+            assert runtime_owner.target.path == database_path
+            raise DatabaseStartupError("synthetic owned bootstrap failure")
+
+        monkeypatch.setattr(bootstrap, "init_database_and_netbox", _fail_bootstrap)
+        with pytest.raises(DatabaseStartupError, match="synthetic owned bootstrap failure"):
+            async with factory._lifespan(factory.create_app()):
+                pytest.fail("The failed application unexpectedly entered its lifespan")
+
+        assert database.get_engine() is first_engine
+        validate_auth_lockout_identity_key()
+    finally:
+        await first_lifespan.__aexit__(None, None, None)
+
+    assert database.engine is None
+
+
+async def test_direct_disposal_refuses_an_owned_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await database.dispose_database()
+    _prepare_fast_lifespan(monkeypatch)
+    monkeypatch.setenv("PROXBOX_DATABASE_PATH", str(tmp_path / "owned-runtime.db"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    async with factory._lifespan(factory.create_app()):
+        active_engine = database.get_engine()
+        with pytest.raises(DatabaseStartupError, match="lifespans own it"):
+            await database.dispose_database()
+        assert database.get_engine() is active_engine
+
+    assert database.engine is None
 
 
 async def test_lifespan_preserves_url_delimiters_inside_database_filename(

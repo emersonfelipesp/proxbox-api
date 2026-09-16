@@ -79,11 +79,13 @@ async def test_ceph_task_claim_collision_refuses_application_startup(monkeypatch
 
     reason = "ceph_provider_task_claim_cross_endpoint_collision"
 
-    def _raise_collision(environ=None) -> None:
+    def _raise_collision(_target, environ=None) -> None:
         raise CephProviderTaskClaimMigrationError(reason)
 
     _prepare_fast_lifespan(monkeypatch)
-    monkeypatch.setattr(bootstrap, "initialize_database_and_schema", _raise_collision)
+    monkeypatch.setattr(
+        factory.database, "_initialize_database_and_schema_target", _raise_collision
+    )
     application = factory.create_app()
 
     with pytest.raises(CephProviderTaskClaimMigrationError, match=f"^{reason}$"):
@@ -105,11 +107,13 @@ async def test_ceph_task_claim_collision_is_not_downgraded_to_a_startup_error(mo
 
     reason = "ceph_provider_task_claim_cross_endpoint_collision"
 
-    def _raise_collision(environ=None) -> None:
+    def _raise_collision(_target, environ=None) -> None:
         raise CephProviderTaskClaimMigrationError(reason)
 
     _prepare_fast_lifespan(monkeypatch)
-    monkeypatch.setattr(bootstrap, "initialize_database_and_schema", _raise_collision)
+    monkeypatch.setattr(
+        factory.database, "_initialize_database_and_schema_target", _raise_collision
+    )
     application = factory.create_app()
 
     with pytest.raises(CephProviderTaskClaimMigrationError) as excinfo:

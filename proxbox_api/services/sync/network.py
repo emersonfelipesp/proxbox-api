@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from ipaddress import ip_interface as _ip_interface
+from typing import Callable, Mapping, cast
 
 from proxmox_sdk.sdk.exceptions import ResourceException
 
@@ -11,6 +12,8 @@ from proxbox_api.enum.status_mapping import NetBoxInterfaceType
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
+    RestRecord,
+    clear_rest_get_cache_for_path,
     rest_bulk_delete_async,
     rest_bulk_reconcile_async,
     rest_first_async,
@@ -41,6 +44,169 @@ from proxbox_api.services.sync.vm_helpers import (
 )
 
 NETBOX_VM_INTERFACE_NAME_MAX_LENGTH = 64
+_MIGRATED_NODE_INTERFACE_TYPES = frozenset({"ovsbridge", "ovsbond", "ovsintport"})
+
+
+def _interface_choice_value(value: object) -> str:
+    if isinstance(value, Mapping):
+        value = cast(Mapping[str, object], value).get("value")
+    return str(value or "").strip().lower()
+
+
+def _interface_retype_blockers(record: RestRecord) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if record.get("cable") not in (None, "", False):
+        blockers.append("cable")
+    if bool(record.get("mark_connected")):
+        blockers.append("mark_connected")
+    return tuple(blockers)
+
+
+async def _safe_node_interface_type(
+    nb: object,
+    *,
+    device_id: object,
+    device_name: object,
+    interface_name: str,
+    proxmox_type: object,
+) -> tuple[str, RestRecord | None, bool]:
+    desired = NetBoxInterfaceType.from_proxmox(proxmox_type).value
+    if str(proxmox_type or "").strip().lower() not in _MIGRATED_NODE_INTERFACE_TYPES:
+        return desired, None, False
+
+    clear_rest_get_cache_for_path(nb, "/api/dcim/interfaces/")
+    existing = await rest_first_async(
+        nb,
+        "/api/dcim/interfaces/",
+        query={"device_id": device_id, "name": interface_name, "limit": 2},
+    )
+    if existing is None:
+        return desired, None, True
+
+    current = _interface_choice_value(existing.get("type"))
+    blockers = _interface_retype_blockers(existing)
+    if not current or current == desired or not blockers:
+        return desired, existing, True
+
+    logger.warning(
+        "Preserving NetBox interface type %s for device %s interface %s; "
+        "cannot retype to %s while %s is set",
+        current,
+        device_name or device_id,
+        interface_name,
+        desired,
+        " and ".join(blockers),
+    )
+    return current, existing, True
+
+
+async def _call_node_interface_reconcile(
+    nb: object,
+    *,
+    lookup: dict[str, object],
+    payload: dict[str, object],
+    current_normalizer: Callable[[dict[str, object]], dict[str, object]],
+    patchable_fields: set[str] | frozenset[str] | None,
+    strict_lookup: bool,
+    lookup_query_field_map: dict[str, str] | None,
+    existing_record: RestRecord | None,
+    existing_record_supplied: bool,
+) -> RestRecord:
+    if existing_record_supplied:
+        return await rest_reconcile_async(
+            nb,
+            "/api/dcim/interfaces/",
+            lookup=lookup,
+            payload=payload,
+            schema=NetBoxInterfaceSyncState,
+            current_normalizer=current_normalizer,
+            patchable_fields=patchable_fields,
+            strict_lookup=strict_lookup,
+            lookup_query_field_map=lookup_query_field_map,
+            existing_record=existing_record,
+        )
+    return await rest_reconcile_async(
+        nb,
+        "/api/dcim/interfaces/",
+        lookup=lookup,
+        payload=payload,
+        schema=NetBoxInterfaceSyncState,
+        current_normalizer=current_normalizer,
+        patchable_fields=patchable_fields,
+        strict_lookup=strict_lookup,
+        lookup_query_field_map=lookup_query_field_map,
+    )
+
+
+async def _reconcile_node_interface_with_type_guard(
+    nb: object,
+    *,
+    device_id: object,
+    device_name: object,
+    interface_name: str,
+    proxmox_type: object,
+    lookup: dict[str, object],
+    payload: dict[str, object],
+    current_normalizer: Callable[[dict[str, object]], dict[str, object]],
+    patchable_fields: set[str] | frozenset[str] | None = None,
+    strict_lookup: bool = False,
+    lookup_query_field_map: dict[str, str] | None = None,
+) -> RestRecord:
+    desired, existing, checked = await _safe_node_interface_type(
+        nb,
+        device_id=device_id,
+        device_name=device_name,
+        interface_name=interface_name,
+        proxmox_type=proxmox_type,
+    )
+    desired_payload = {**payload, "type": desired}
+    try:
+        return await _call_node_interface_reconcile(
+            nb,
+            lookup=lookup,
+            payload=desired_payload,
+            current_normalizer=current_normalizer,
+            patchable_fields=patchable_fields,
+            strict_lookup=strict_lookup,
+            lookup_query_field_map=lookup_query_field_map,
+            existing_record=existing,
+            existing_record_supplied=checked,
+        )
+    except ProxboxException:
+        if not checked:
+            raise
+        clear_rest_get_cache_for_path(nb, "/api/dcim/interfaces/")
+        refreshed = await rest_first_async(
+            nb,
+            "/api/dcim/interfaces/",
+            query={"device_id": device_id, "name": interface_name, "limit": 2},
+        )
+        if refreshed is None:
+            raise
+        current = _interface_choice_value(refreshed.get("type"))
+        blockers = _interface_retype_blockers(refreshed)
+        if not current or current == desired or not blockers:
+            raise
+        logger.warning(
+            "Preserving NetBox interface type %s for device %s interface %s after "
+            "concurrent migration conflict; cannot retype to %s while %s is set",
+            current,
+            device_name or device_id,
+            interface_name,
+            desired,
+            " and ".join(blockers),
+        )
+        return await _call_node_interface_reconcile(
+            nb,
+            lookup=lookup,
+            payload={**desired_payload, "type": current},
+            current_normalizer=current_normalizer,
+            patchable_fields=patchable_fields,
+            strict_lookup=strict_lookup,
+            lookup_query_field_map=lookup_query_field_map,
+            existing_record=refreshed,
+            existing_record_supplied=True,
+        )
 
 
 def _proxmox_node_interface_payload(interface: object) -> dict[str, object]:
@@ -135,6 +301,47 @@ def normalize_vm_interface_name(
     return normalized_name
 
 
+async def _sync_legacy_node_vlan(
+    nb: object,
+    *,
+    iface_type: object,
+    vlan_id_raw: object,
+    interface_name: str,
+    tag_refs: list[dict],
+) -> int | None:
+    if iface_type != "vlan" or vlan_id_raw is None:
+        return None
+    try:
+        vlan_vid = int(str(vlan_id_raw))
+        record = await rest_reconcile_async(
+            nb,
+            "/api/ipam/vlans/",
+            lookup={"vid": vlan_vid},
+            payload={
+                "vid": vlan_vid,
+                "name": f"VLAN {vlan_vid}",
+                "status": "active",
+                "tags": tag_refs,
+            },
+            schema=NetBoxVlanSyncState,
+            current_normalizer=lambda row: {
+                "vid": row.get("vid"),
+                "name": row.get("name"),
+                "status": row.get("status"),
+                "tags": row.get("tags"),
+            },
+        )
+        return _record_id(record)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to create/sync VLAN vid=%s for node interface %s: %s",
+            vlan_id_raw,
+            interface_name,
+            exc,
+        )
+        return None
+
+
 async def sync_node_interface_and_ip(
     nb,
     device: dict,
@@ -143,47 +350,22 @@ async def sync_node_interface_and_ip(
     tag_refs: list[dict],
 ) -> dict:
     node_cidr = interface_config.get("cidr") or interface_config.get("address")
-    vlan_nb_id: int | None = None
-
     iface_type = interface_config.get("type", "other")
     vlan_id_raw = interface_config.get("vlan_id")
-    if iface_type == "vlan" and vlan_id_raw is not None:
-        try:
-            vlan_vid = int(vlan_id_raw)
-            vlan_record = await rest_reconcile_async(
-                nb,
-                "/api/ipam/vlans/",
-                lookup={"vid": vlan_vid},
-                payload={
-                    "vid": vlan_vid,
-                    "name": f"VLAN {vlan_vid}",
-                    "status": "active",
-                    "tags": tag_refs,
-                },
-                schema=NetBoxVlanSyncState,
-                current_normalizer=lambda record: {
-                    "vid": record.get("vid"),
-                    "name": record.get("name"),
-                    "status": record.get("status"),
-                    "tags": record.get("tags"),
-                },
-            )
-            vlan_nb_id = (
-                vlan_record.get("id")
-                if isinstance(vlan_record, dict)
-                else getattr(vlan_record, "id", None)
-            )
-        except Exception as vlan_exc:
-            logger.warning(
-                "Failed to create/sync VLAN vid=%s for node interface %s: %s",
-                vlan_id_raw,
-                interface_name,
-                vlan_exc,
-            )
-
-    interface = await rest_reconcile_async(
+    vlan_nb_id = await _sync_legacy_node_vlan(
         nb,
-        "/api/dcim/interfaces/",
+        iface_type=iface_type,
+        vlan_id_raw=vlan_id_raw,
+        interface_name=interface_name,
+        tag_refs=tag_refs,
+    )
+
+    interface = await _reconcile_node_interface_with_type_guard(
+        nb,
+        device_id=device.get("id", 0),
+        device_name=device.get("name"),
+        interface_name=interface_name,
+        proxmox_type=iface_type,
         lookup={
             "device": device.get("id", 0),
             "name": interface_name,
@@ -192,12 +374,10 @@ async def sync_node_interface_and_ip(
             "device": device.get("id", 0),
             "name": interface_name,
             "status": "active",
-            "type": NetBoxInterfaceType.from_proxmox(iface_type).value,
             "untagged_vlan": vlan_nb_id,
             "mode": "access" if vlan_nb_id is not None else None,
             "tags": tag_refs,
         },
-        schema=NetBoxInterfaceSyncState,
         current_normalizer=lambda record: {
             "device": record.get("device"),
             "name": record.get("name"),
@@ -243,7 +423,11 @@ async def sync_node_interface_and_ip(
 
 # Proxmox /network entry types that are not modeled as standalone NetBox
 # interfaces (loopback, and Open vSwitch internal plumbing / ifupdown aliases).
-_NODE_IFACE_SKIP_TYPES = {"loopback", "OVSPort", "OVSIntPort", "alias"}
+_NODE_IFACE_SKIP_TYPES = {"loopback", "alias"}
+
+
+def _node_network_members(entry: dict, *fields: str) -> list[str]:
+    return " ".join(str(entry.get(field) or "") for field in fields).split()
 
 
 def _node_network_membership(
@@ -251,17 +435,20 @@ def _node_network_membership(
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Map each member interface name -> its bridge / bond parent name.
 
-    Built from the `bridge_ports` and `bond_slaves` space-separated lists that
-    Proxmox returns on the parent interface entry.
+    Built from the Linux and Open vSwitch parent/member fields in the raw
+    Proxmox network payload.
     """
     member_bridge: dict[str, str] = {}
     member_bond: dict[str, str] = {}
     for entry in entries:
         parent = str(entry.get("iface") or "")
-        for member in str(entry.get("bridge_ports") or "").split():
+        for member in _node_network_members(entry, "bridge_ports", "ovs_ports"):
             member_bridge[member] = parent
-        for member in str(entry.get("bond_slaves") or "").split():
+        for member in _node_network_members(entry, "bond_slaves", "ovs_bonds"):
             member_bond[member] = parent
+        ovs_bridge = str(entry.get("ovs_bridge") or "").strip()
+        if ovs_bridge:
+            member_bridge[parent] = ovs_bridge
     return member_bridge, member_bond
 
 
@@ -318,7 +505,225 @@ def _record_id(record: object) -> int | None:
     return _relation_id_or_none(raw)
 
 
-async def sync_node_network(  # noqa: C901
+def _node_interface_payload(
+    device_id: object,
+    iface: str,
+    entry: dict,
+    tag_refs: list[dict],
+) -> dict:
+    return {
+        "device": device_id,
+        "name": iface,
+        "status": "active",
+        "enabled": bool(entry.get("active")),
+        "tags": tag_refs,
+    }
+
+
+async def _reconcile_node_interface_scalar(
+    nb: object,
+    *,
+    device: dict,
+    entry: dict,
+    tag_refs: list[dict],
+) -> object:
+    device_id = device.get("id")
+    iface = entry["iface"]
+    return await _reconcile_node_interface_with_type_guard(
+        nb,
+        device_id=device_id,
+        device_name=device.get("name"),
+        interface_name=iface,
+        proxmox_type=entry.get("type"),
+        lookup={"device_id": device_id, "name": iface},
+        payload=_node_interface_payload(device_id, iface, entry, tag_refs),
+        current_normalizer=_node_iface_normalizer,
+        patchable_fields=frozenset({"device", "name", "status", "enabled", "type", "tags"}),
+    )
+
+
+async def _sync_node_interface_vlan(
+    nb: object, entry: dict, iface: str, tag_refs: list[dict]
+) -> int | None:
+    if entry.get("type") != "vlan" or not entry.get("vlan-id"):
+        return None
+    try:
+        vid = int(entry["vlan-id"])
+        record = await rest_reconcile_async(
+            nb,
+            "/api/ipam/vlans/",
+            lookup={"vid": vid},
+            payload={"vid": vid, "name": f"VLAN {vid}", "status": "active", "tags": tag_refs},
+            schema=NetBoxVlanSyncState,
+            current_normalizer=lambda row: {
+                "vid": row.get("vid"),
+                "name": row.get("name"),
+                "status": row.get("status"),
+                "tags": row.get("tags"),
+            },
+        )
+        return _record_id(record)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to sync VLAN for node interface %s: %s", iface, exc)
+        return None
+
+
+async def _sync_node_interface_addresses(
+    nb: object,
+    entry: dict,
+    iface: str,
+    iface_id: int | None,
+    tag_refs: list[dict],
+    now: datetime,
+) -> list[object]:
+    addresses: list[object] = []
+    if iface_id is None:
+        return addresses
+    for field in ("cidr", "cidr6"):
+        cidr = entry.get(field)
+        if not cidr or _is_network_id(cidr):
+            continue
+        try:
+            await _reconcile_interface_ip(
+                nb,
+                ip_addr=cidr,
+                interface_id=iface_id,
+                tag_refs=tag_refs,
+                now=now,
+                dns_name=None,
+                interface_name=iface,
+                assigned_object_type="dcim.interface",
+                interface_lookup_field="interface_id",
+            )
+            addresses.append(cidr)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to sync IP %s on node interface %s: %s", cidr, iface, exc)
+    return addresses
+
+
+async def _sync_node_interface_mac(
+    nb: object, entry: dict, iface: str, iface_id: int | None, tag_refs: list[dict]
+) -> str | None:
+    from proxbox_api.services.sync.mac_address import normalize_mac, reconcile_mac_for_interface
+
+    mac = normalize_mac(_hwaddress_from_options(entry))
+    if not mac or iface_id is None:
+        return None
+    try:
+        await reconcile_mac_for_interface(
+            nb,
+            mac=mac,
+            assigned_object_type="dcim.interface",
+            assigned_object_id=iface_id,
+            interface_list_path="/api/dcim/interfaces/",
+            tag_refs=tag_refs,
+        )
+        return mac
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to sync MAC %s on node interface %s: %s", mac, iface, exc)
+        return None
+
+
+async def _sync_node_network_phase_one(
+    nb: object,
+    device: dict,
+    entries: list[dict],
+    tag_refs: list[dict],
+    now: datetime,
+) -> tuple[dict[str, int], dict[str, int], list[dict]]:
+    name_to_id: dict[str, int] = {}
+    vlan_ids: dict[str, int] = {}
+    results: list[dict] = []
+    for entry in entries:
+        iface = entry["iface"]
+        interface = await _reconcile_node_interface_scalar(
+            nb, device=device, entry=entry, tag_refs=tag_refs
+        )
+        iface_id = _record_id(interface)
+        if iface_id is None:
+            raise ProxboxException(
+                message="Node interface reconciliation returned no persisted record",
+                detail=f"Device {device.get('name') or device.get('id')} interface {iface}",
+            )
+        name_to_id[iface] = iface_id
+        result: dict = {"id": iface_id, "name": iface}
+        vlan_id = await _sync_node_interface_vlan(nb, entry, iface, tag_refs)
+        if vlan_id is not None:
+            vlan_ids[iface] = vlan_id
+        addresses = await _sync_node_interface_addresses(nb, entry, iface, iface_id, tag_refs, now)
+        if addresses:
+            result["ip_addresses"] = addresses
+        mac = await _sync_node_interface_mac(nb, entry, iface, iface_id, tag_refs)
+        if mac:
+            result["mac_address"] = mac
+        results.append(result)
+    return name_to_id, vlan_ids, results
+
+
+def _node_interface_topology_patch(
+    entry: dict,
+    name_to_id: dict[str, int],
+    vlan_ids: dict[str, int],
+    member_bridge: dict[str, str],
+    member_bond: dict[str, str],
+) -> dict:
+    iface = entry["iface"]
+    patch: dict = {
+        "bridge": None,
+        "lag": None,
+        "parent": None,
+        "mode": None,
+        "tagged_vlans": [],
+    }
+    bridge = member_bridge.get(iface)
+    bond = member_bond.get(iface)
+    if bridge in name_to_id:
+        patch["bridge"] = name_to_id[bridge]
+    if bond in name_to_id:
+        patch["lag"] = name_to_id[bond]
+    if entry.get("type") != "vlan":
+        return patch
+    parent = entry.get("vlan-raw-device")
+    if parent in name_to_id:
+        patch["parent"] = name_to_id[parent]
+    if iface in vlan_ids:
+        patch.update(mode="tagged", tagged_vlans=[vlan_ids[iface]])
+    return patch
+
+
+async def _sync_node_network_topology(
+    nb: object,
+    device_id: object,
+    entries: list[dict],
+    name_to_id: dict[str, int],
+    vlan_ids: dict[str, int],
+) -> None:
+    member_bridge, member_bond = _node_network_membership(entries)
+    for entry in entries:
+        iface = entry["iface"]
+        if iface not in name_to_id:
+            continue
+        patch = _node_interface_topology_patch(
+            entry, name_to_id, vlan_ids, member_bridge, member_bond
+        )
+        await rest_reconcile_async(
+            nb,
+            "/api/dcim/interfaces/",
+            lookup={"device_id": device_id, "name": iface},
+            payload={
+                "device": device_id,
+                "name": iface,
+                "type": NetBoxInterfaceType.from_proxmox(entry.get("type")).value,
+                **patch,
+            },
+            schema=NetBoxInterfaceSyncState,
+            current_normalizer=_node_iface_normalizer,
+            patchable_fields=frozenset(patch),
+            nullable_fields=frozenset({"bridge", "lag", "parent", "mode"}),
+        )
+
+
+async def sync_node_network(
     nb,
     device: dict,
     network_entries: list[dict],
@@ -350,8 +755,6 @@ async def sync_node_network(  # noqa: C901
     legacy per-interface path (``sync_node_interface_and_ip``), which models a
     bridge's ``untagged_vlan`` as ``mode=access``.
     """
-    from proxbox_api.services.sync.mac_address import normalize_mac, reconcile_mac_for_interface
-
     now = now or datetime.now(timezone.utc)
     device_id = device.get("id")
     entries = [
@@ -359,150 +762,10 @@ async def sync_node_network(  # noqa: C901
         for e in (network_entries or [])
         if e.get("iface") and e.get("iface") != "lo" and e.get("type") not in _NODE_IFACE_SKIP_TYPES
     ]
-    member_bridge, member_bond = _node_network_membership(entries)
-
-    name_to_id: dict[str, int] = {}
-    vlan_id_for_iface: dict[str, int] = {}
-    results: list[dict] = []
-
-    # Phase 1 — scalar fields, IPs and VLAN objects.
-    for entry in entries:
-        iface = entry["iface"]
-        nb_type = NetBoxInterfaceType.from_proxmox(entry.get("type")).value
-        interface = await rest_reconcile_async(
-            nb,
-            "/api/dcim/interfaces/",
-            lookup={"device_id": device_id, "name": iface},
-            payload={
-                "device": device_id,
-                "name": iface,
-                "status": "active",
-                "enabled": bool(entry.get("active")),
-                "type": nb_type,
-                "tags": tag_refs,
-            },
-            schema=NetBoxInterfaceSyncState,
-            current_normalizer=_node_iface_normalizer,
-            # Phase 1 owns only scalar fields. Topology FKs and VLAN membership
-            # (bridge/lag/parent/mode/tagged_vlans) are reconciled in phase 2;
-            # never let phase 1 clear them on re-sync. NetBoxInterfaceSyncState
-            # defaults tagged_vlans to [] (survives exclude_none), so without
-            # this whitelist a re-sync would PATCH away phase 2's VLAN membership.
-            patchable_fields=frozenset({"device", "name", "status", "enabled", "type", "tags"}),
-        )
-        iface_id = _record_id(interface)
-        if iface_id is not None:
-            name_to_id[iface] = iface_id
-        result: dict = {"id": iface_id, "name": iface}
-
-        if entry.get("type") == "vlan" and entry.get("vlan-id"):
-            try:
-                vid = int(entry["vlan-id"])
-                vlan_record = await rest_reconcile_async(
-                    nb,
-                    "/api/ipam/vlans/",
-                    lookup={"vid": vid},
-                    payload={
-                        "vid": vid,
-                        "name": f"VLAN {vid}",
-                        "status": "active",
-                        "tags": tag_refs,
-                    },
-                    schema=NetBoxVlanSyncState,
-                    current_normalizer=lambda record: {
-                        "vid": record.get("vid"),
-                        "name": record.get("name"),
-                        "status": record.get("status"),
-                        "tags": record.get("tags"),
-                    },
-                )
-                vlan_nb_id = _record_id(vlan_record)
-                if vlan_nb_id is not None:
-                    vlan_id_for_iface[iface] = vlan_nb_id
-            except Exception as vlan_exc:  # noqa: BLE001
-                logger.warning("Failed to sync VLAN for node interface %s: %s", iface, vlan_exc)
-
-        for cidr_field in ("cidr", "cidr6"):
-            cidr = entry.get(cidr_field)
-            if not cidr or iface_id is None:
-                continue
-            if _is_network_id(cidr):
-                # e.g. Proxmox reporting a node's v6 as the ::/64 base; NetBox
-                # won't assign a network ID to an interface.
-                logger.debug("Skipping network-ID address %s on node interface %s", cidr, iface)
-                continue
-            try:
-                await _reconcile_interface_ip(
-                    nb,
-                    ip_addr=cidr,
-                    interface_id=iface_id,
-                    tag_refs=tag_refs,
-                    now=now,
-                    dns_name=None,
-                    interface_name=iface,
-                    assigned_object_type="dcim.interface",
-                    interface_lookup_field="interface_id",
-                )
-                result.setdefault("ip_addresses", []).append(cidr)
-            except Exception as ip_exc:  # noqa: BLE001
-                logger.warning("Failed to sync IP %s on node interface %s: %s", cidr, iface, ip_exc)
-
-        # MAC (bridges/bonds only — see _hwaddress_from_options). NetBox 4.5+
-        # stores it as a dcim.MACAddress referenced by primary_mac_address.
-        mac = normalize_mac(_hwaddress_from_options(entry))
-        if mac and iface_id is not None:
-            try:
-                await reconcile_mac_for_interface(
-                    nb,
-                    mac=mac,
-                    assigned_object_type="dcim.interface",
-                    assigned_object_id=iface_id,
-                    interface_list_path="/api/dcim/interfaces/",
-                    tag_refs=tag_refs,
-                )
-                result["mac_address"] = mac
-            except Exception as mac_exc:  # noqa: BLE001
-                logger.warning(
-                    "Failed to sync MAC %s on node interface %s: %s", mac, iface, mac_exc
-                )
-        results.append(result)
-
-    # Phase 2 — topology cross-references, now that every interface has an id.
-    for entry in entries:
-        iface = entry["iface"]
-        if iface not in name_to_id:
-            continue
-        patch: dict = {}
-        bridge_parent = member_bridge.get(iface)
-        if bridge_parent and bridge_parent in name_to_id:
-            patch["bridge"] = name_to_id[bridge_parent]
-        bond_parent = member_bond.get(iface)
-        if bond_parent and bond_parent in name_to_id:
-            patch["lag"] = name_to_id[bond_parent]
-        if entry.get("type") == "vlan":
-            raw_device = entry.get("vlan-raw-device")
-            if raw_device and raw_device in name_to_id:
-                patch["parent"] = name_to_id[raw_device]
-            if iface in vlan_id_for_iface:
-                patch["mode"] = "tagged"
-                patch["tagged_vlans"] = [vlan_id_for_iface[iface]]
-        if not patch:
-            continue
-        await rest_reconcile_async(
-            nb,
-            "/api/dcim/interfaces/",
-            lookup={"device_id": device_id, "name": iface},
-            payload={
-                "device": device_id,
-                "name": iface,
-                "type": NetBoxInterfaceType.from_proxmox(entry.get("type")).value,
-                **patch,
-            },
-            schema=NetBoxInterfaceSyncState,
-            current_normalizer=_node_iface_normalizer,
-            patchable_fields=frozenset(patch),
-        )
-
+    name_to_id, vlan_ids, results = await _sync_node_network_phase_one(
+        nb, device, entries, tag_refs, now
+    )
+    await _sync_node_network_topology(nb, device_id, entries, name_to_id, vlan_ids)
     return results
 
 

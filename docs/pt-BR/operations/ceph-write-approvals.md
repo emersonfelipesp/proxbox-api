@@ -212,7 +212,14 @@ Se a resposta do apply for perdida, repetir a mesma requisicao retorna 409
 `approval_replayed` com `approval_id`, `plan_id` e `operation_run_id`. Consulte
 `GET /ceph/v2/operations/{operation_run_id}` e seus eventos ordenados, ou o SSE
 `GET /ceph/v2/operations/{id}/events`. `GET /ceph/v2/approvals/{approval_id}`
-retorna somente metadados seguros e nunca o token ou seu hash. Para run
+retorna somente metadados seguros e nunca o token ou seu hash. A requisicao
+deve incluir um `X-Proxbox-Actor` confiavel e nao vazio que corresponda ao
+solicitante ou aprovador, em comparacao sem diferenca entre maiusculas e
+minusculas. A ausencia do header e rejeitada pela validacao de header
+obrigatorio; um valor vazio retorna `actor_required`. Um ator sem relacao
+recebe o mesmo 404 de uma aprovacao desconhecida, evitando revelar a existencia
+da aprovacao ou as identidades dos participantes. O gateway autenticado deve
+substituir esse header, e nao apenas encaminha-lo. Para run
 `running`/`dispatching` cujo lease expira, a proxima leitura de status/SSE muda
 atomicamente o estado para `outcome_unknown`, acrescenta `run_lease_expired` e
 preserva as referencias de tarefa com uma acao explicita de recuperacao.

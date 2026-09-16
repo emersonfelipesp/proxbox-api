@@ -391,6 +391,21 @@ class ProxmoxSession:
             )
 
     @staticmethod
+    def _describe_redirect_error(error: Exception) -> str:
+        """Explain a refused HTTP redirect without following it.
+
+        The SDK refuses every 3xx before reading a body so credentials never
+        follow a redirect. The redirect target host name is not a secret and
+        tells the operator which final Proxmox API address to configure.
+        """
+        status = getattr(error, "status", None)
+        host = getattr(error, "location_host", None)
+        detail = f"HTTP redirect {status} refused" if status else "HTTP redirect refused"
+        if host:
+            detail = f"{detail} (redirect target host: {host})"
+        return f"{detail}; configure the endpoint with the final Proxmox API address."
+
+    @staticmethod
     def _describe_auth_error(error: Exception) -> str:
         """Map a Proxmox SDK auth failure to a user-visible detail string.
 
@@ -399,9 +414,13 @@ class ProxmoxSession:
         failures. Never expose the provider response body or structured values.
         """
         try:
-            from proxmox_sdk.sdk.exceptions import ResourceException
+            from proxmox_sdk.sdk.exceptions import ProxmoxRedirectError, ResourceException
         except Exception:  # pragma: no cover - defensive import guard
+            ProxmoxRedirectError = ()  # type: ignore[assignment]
             ResourceException = ()  # type: ignore[assignment]
+
+        if isinstance(error, ProxmoxRedirectError):
+            return ProxmoxSession._describe_redirect_error(error)
 
         if isinstance(error, ResourceException):
             status_code = getattr(error, "status_code", None)

@@ -30,6 +30,7 @@ Session management utilities for NetBox and Proxmox API clients.
 - `netbox.py` is the source of truth for building NetBox client sessions from persisted endpoint records.
 - `proxmox_core.py` and `proxmox_providers.py` create proxmox-sdk async SDK sessions and enrich them with cluster metadata used by API request flows.
 - `proxmox_providers.py` validates `endpoint_ids` before filtering which Proxmox endpoints participate in a request.
+- `ProxmoxSession._describe_auth_error` turns SDK connection failures into secret-safe operator detail. proxmox-sdk (>= 0.0.15) refuses every HTTP 3xx before reading a body (`ProxmoxRedirectError`), so an endpoint that sits behind a redirecting proxy fails with the refused status and target host plus the instruction to configure the final Proxmox API address; `ResourceException` keeps its HTTP status and structured error field names, and nothing else from the provider body is exposed.
 
 ## Extension Guidance
 

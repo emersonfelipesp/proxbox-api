@@ -269,9 +269,9 @@ The response byte bound is applied during the authenticated upstream stream,
 before JSON decoding. Identity encoding is required and automatic transport
 decompression is disabled. Redirects are rejected before an authenticated
 request can leave the selected endpoint, and boolean query parameters are
-encoded as Proxmox-compatible `0` or `1` values. The service supports the pinned
-`proxmox-sdk==0.0.13` through an isolated compatibility adapter and prefers the
-SDK's public bounded-read capability when a later published version provides it.
+encoded as Proxmox-compatible `0` or `1` values. The service reads through the
+pinned SDK's public bounded-read method (`proxmox-sdk==0.0.15`), which owns the
+byte limit, encoding, and redirect guarantees.
 
 This transport contract is intentionally separate from any metric-server
 configuration route. Configuration persistence, encryption, permissions, and

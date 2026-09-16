@@ -34,7 +34,7 @@ Both routers are mounted in `proxbox_api/app/factory.py` (`/ceph` and `/ceph/v2`
 | File | Role |
 |------|------|
 | `v2_schemas.py` | Pydantic contract: desired state, exact operation-node binding, endpoint-bound plan/approval/apply, safe approval status, ordered operation events, run, provider, validation, metric, and SSE schemas. It recursively normalizes/redacts secret aliases. Legacy apply fields remain parseable only for stable rejection; they are not write authority. |
-| `v2_engine.py` | Durable plan/approval/apply engine: canonical digests, expiring hashed approvals, atomic consumption, owner-bound live leases, append-only pre-dispatch/task checkpoints, permanent provider-global atomic task claims, repeated-cancellation-safe task/synchronous/cancellation evidence, unique node-consistent UPID handling, replay recovery, recursive secret/fallback redaction, and read-only reconciliation. There is no process-local plan authority. |
+| `v2_engine.py` | Durable plan/approval/apply engine: canonical digests, expiring hashed approvals, atomic consumption, owner-bound live leases, append-only pre-dispatch/task checkpoints, permanent provider-global atomic task claims, repeated-cancellation-safe task/synchronous/cancellation evidence, unique node-consistent UPID handling, replay recovery, recursive secret/fallback redaction, and read-only reconciliation. Checkpoint state normalization, active-row compare-and-set, event construction, synchronous completion, task binding, task submission, and missing-reference handling remain separate bounded helpers; preserve their ordering when changing apply execution. There is no process-local plan authority. |
 | `endpoint_binding.py` | Resolves exactly one local DB endpoint, creates exactly one request-private session, persists only a stable server-keyed revision of the complete mutation-relevant endpoint configuration, and binds endpoint/session connection/auth/TLS/timeout/retry schemas with a second per-request secret HMAC. No endpoint secret or ephemeral key/tag is persisted or exposed. |
 | `timing.py` | Resolves one frozen Ceph task timeout, poll interval, and run lease snapshot off the event loop through a bounded settings request. Precedence is environment override → validated `ProxboxPluginSettings` value → default; availability failures are not cached as authoritative settings. |
 | `v2_providers/base.py` | Adapter contract plus fail-closed capability, provider-boundary and write-gate errors and terminal-task polling hook. |
@@ -134,7 +134,7 @@ endpoint `allow_writes` values.
 - v2 is additive; do not change v1 `/ceph` behavior.
 - The Proxmox adapter now executes PVE Ceph writes through `proxmox_writer` +
   proxmox-sdk `CephWrite` (#12 part 1 / #224). The current `proxmox-sdk`
-  pin (`0.0.13`) ships the `CephWrite` domain, so the adapter advertises
+  pin (`0.0.15`) ships the `CephWrite` domain, so the adapter advertises
     the SDK write surface, but live execution remains default-off behind the two
     Ceph safety flags. An older pin without `CephWrite` degrades cleanly via
     `cephwrite_importable()` to `apply=False` and blocks writes with a clear
@@ -154,7 +154,9 @@ events and read-only reconcile.
 consumption plus live dispatching/lease-owner CAS, sequential/concurrent durable
 task-claim uniqueness, shielded task/synchronous cancellation checkpoints,
 heartbeat/session serialization, crash/cancellation ambiguity,
-expiry recovery, and stale-worker nonterminalization checkpoints. The exact AsyncSession/gather path runs on the CI Python 3.12
+expiry recovery, stale-worker nonterminalization checkpoints, plan-level noop
+checkpointing without provider dispatch, and rejection of ambiguous synchronous
+results that also carry task references. The exact AsyncSession/gather path runs on the CI Python 3.12
 toolchain; it is narrowly skipped on local Python 3.14 where the aiosqlite
 connection worker does not complete. A two-connection SQLite race remains live
 locally and proves one winner, one run, and one provider call.

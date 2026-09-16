@@ -65,13 +65,10 @@ class NetBoxInterfaceType(str, Enum):
     it would have been rejected as an invalid choice the moment its mapping key
     matched. It is gone.
 
-    The mapping table itself is deliberately unchanged. Widening it is a
-    migration, not a cleanup: node sync owns ``type`` and rewrites existing
-    rows, and a row that NetBox currently accepts as ``other`` while carrying a
-    cable or ``mark_connected`` becomes invalid the moment it is retyped to one
-    of NetBox's virtual kinds -- which would abort node-network sync for the
-    whole node. Any widening therefore needs to detect and preserve those rows
-    first; that is tracked separately.
+    Open vSwitch bridges, bonds, and internal ports have direct NetBox virtual
+    counterparts. ``OVSPort`` deliberately remains ``other`` because it denotes
+    a bridge member rather than a virtual interface. Node sync guards legacy
+    cabled or ``mark_connected`` rows before applying these widened mappings.
     """
 
     bridge = "bridge"
@@ -89,6 +86,9 @@ class NetBoxInterfaceType(str, Enum):
             "bridge": cls.bridge,
             "bond": cls.lag,
             "vlan": cls.virtual,
+            "ovsbridge": cls.bridge,
+            "ovsbond": cls.lag,
+            "ovsintport": cls.virtual,
         }
         if isinstance(raw, cls):
             # Same idempotence requirement as the status mapping above.

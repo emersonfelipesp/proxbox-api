@@ -88,7 +88,7 @@ Production must therefore keep runtime code generation disabled.
 
 ## Certified Stack Pairing
 
-Current pairing: `netbox-proxbox 0.0.26.post1 ... proxbox-api 0.0.21.post2 ... proxmox-sdk 0.0.13 ... netbox-sdk 0.0.13`.
+Current pairing: `netbox-proxbox 0.0.26.post7 ... proxbox-api 0.0.23 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
 `proxbox-api 0.0.21.post2` adds authenticated Proxmox console WebSocket handshakes,
 typed-sidecar-only inventory state, NetBox 4.6.6 certification, strict Python
 3.12/3.13 support, and a verified network-free production release context.
@@ -171,7 +171,7 @@ PROXBOX_RECONCILIATION_ENGINE=compare \
   uv run pytest tests/reconciliation -q
 ```
 
-If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.13`); there is no local `proxmox-sdk/` subdirectory in this repo.
+If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.15`); there is no local `proxmox-sdk/` subdirectory in this repo.
 
 SDN support lives in `proxbox_api/routes/proxmox/sdn.py` and
 `proxbox_api/services/sync/sdn.py`. Keep it read-only against Proxmox: the

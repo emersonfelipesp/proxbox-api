@@ -340,13 +340,25 @@ jobs:
             NOTES_ARGS="--generate-notes"
           fi
           TARGET_BRANCH="main"
-          if gh release view "${TAG}" --repo "${GH_REPO}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists — ensuring it is not a draft"
-            gh release edit "${TAG}" --repo "${GH_REPO}" --draft=false
-            echo "Release ${TAG} published (was draft)"
+          RELEASE_HEADERS="$(mktemp)"
+          trap 'rm -f "${RELEASE_HEADERS}"' EXIT
+          if gh api --include --silent --method GET \
+            "repos/${GH_REPO}/releases/tags/${TAG}" >"${RELEASE_HEADERS}"; then
+            echo "GitHub Release ${TAG} already exists; refusing to publish or alter it automatically." >&2
+            echo "Inspect its draft, prerelease, notes, and assets through an explicit operator review." >&2
+            exit 1
           else
+            LOOKUP_STATUS="$(
+              awk '/^HTTP\// { status = $2 } END { print status }' "${RELEASE_HEADERS}"
+            )"
+            if [ "${LOOKUP_STATUS}" != "404" ]; then
+              echo "GitHub Release lookup failed without an explicit HTTP 404; refusing to create ${TAG}." >&2
+              echo "Observed HTTP status: ${LOOKUP_STATUS:-<none>}" >&2
+              exit 1
+            fi
             gh release create "${TAG}" \
               --repo "${GH_REPO}" \
+              --verify-tag \
               --target "${TARGET_BRANCH}" \
               --title "${TAG}" \
               ${NOTES_ARGS}

@@ -115,9 +115,21 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   through `.value` before REST reconciliation. NetBox accepts `bridge`, `lag`,
   `virtual`, and `other` for `dcim.Interface.type` — it has **no** `loopback`
   type, which is why the enum no longer carries that value. A Proxmox loopback
-  reports its type as `loopback` and, like every other unmapped type, degrades
-  to `other`; see the enum notes for why widening that mapping is a migration
-  rather than a fix. Python enum
+  reports its type as `loopback` and degrades to `other`. Open vSwitch bridges,
+  bonds, and internal ports map to `bridge`, `lag`, and `virtual`; `OVSPort`
+  is materialized as `other` so its authoritative `ovs_bridge` membership is
+  retained. The topology phase consumes Linux
+  `bridge_ports`/`bond_slaves` and Open vSwitch
+  `ovs_ports`/`ovs_bonds`/`ovs_bridge`. Before changing a legacy row from
+  `other`, node sync invalidates its cached list read and checks the live cable
+  and `mark_connected` state. An incompatible row keeps its existing type and
+  emits an actionable warning instead of aborting the entire node sync. A
+  duplicate-create race or blocker added before PATCH triggers one authoritative
+  re-read and a preserve-only retry in both the full-network and legacy
+  per-interface paths. A duplicate that never becomes visible fails the stage;
+  an id-less interface is never reported as synchronized. Phase two owns and
+  explicitly clears stale `bridge`, `lag`, `parent`, `mode`, and `tagged_vlans`
+  values when Proxmox removes a Linux or OVS relationship. Python enum
   labels such as `netboxinterfacetype.bridge` are invalid API choices, and
   NetBox rejects them with `"... is not a valid choice."`, which surfaces as a
   stage that creates zero interfaces rather than as an obvious type error.

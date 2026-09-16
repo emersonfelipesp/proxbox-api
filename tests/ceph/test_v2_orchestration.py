@@ -505,7 +505,7 @@ async def test_duplicate_approval_recovery_rejects_tampered_linked_run(
         json={"endpoint_id": harness.endpoint_id},
         headers=APPROVER,
     )
-    status = await harness.client.get(f"/ceph/v2/approvals/{approval['id']}")
+    status = await harness.client.get(f"/ceph/v2/approvals/{approval['id']}", headers=APPROVER)
 
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["reason"] == "approval_recovery_integrity_failed"
@@ -997,15 +997,14 @@ async def test_approval_expiry_and_sequential_replay_are_rejected(ceph_v2_harnes
     assert recovered.json()["id"] == first.json()["id"]
 
 
-async def test_approval_status_lookup_exposes_only_safe_metadata(
+async def test_approval_status_lookup_before_consumption_exposes_only_safe_metadata(
     ceph_v2_harness,
-    db_session,
 ):
     harness = ceph_v2_harness
     plan = await _create_plan(harness)
     approval = await _approve(harness, plan["id"])
 
-    before = await harness.client.get(f"/ceph/v2/approvals/{approval['id']}")
+    before = await harness.client.get(f"/ceph/v2/approvals/{approval['id']}", headers=REQUESTER)
     assert before.status_code == 200
     before_payload = before.json()
     assert before_payload["operation_run_id"] is None
@@ -1014,8 +1013,17 @@ async def test_approval_status_lookup_exposes_only_safe_metadata(
     assert "token_hash" not in before_payload
     assert approval["token"] not in before.text
 
+
+async def test_approval_status_lookup_after_consumption_exposes_only_safe_metadata(
+    ceph_v2_harness,
+    db_session,
+):
+    harness = ceph_v2_harness
+    plan = await _create_plan(harness)
+    approval = await _approve(harness, plan["id"])
     applied = await _apply(harness, plan["id"], approval["token"])
-    after = await harness.client.get(f"/ceph/v2/approvals/{approval['id']}")
+
+    after = await harness.client.get(f"/ceph/v2/approvals/{approval['id']}", headers=APPROVER)
     assert after.status_code == 200
     after_payload = after.json()
     assert after_payload["operation_run_id"] == applied.json()["id"]
@@ -1026,6 +1034,50 @@ async def test_approval_status_lookup_exposes_only_safe_metadata(
     record = db_session.get(CephApprovalRecord, approval["id"])
     assert record is not None
     assert record.token_hash not in after.text
+
+
+async def test_approval_status_lookup_requires_a_participant_actor(ceph_v2_harness):
+    harness = ceph_v2_harness
+    plan = await _create_plan(harness)
+    approval = await _approve(harness, plan["id"])
+    path = f"/ceph/v2/approvals/{approval['id']}"
+
+    missing = await harness.client.get(path)
+    assert missing.status_code == 422
+
+    blank = await harness.client.get(path, headers={"X-Proxbox-Actor": "   "})
+    assert blank.status_code == 400
+    assert blank.json()["detail"]["reason"] == "actor_required"
+
+    unrelated = await harness.client.get(path, headers={"X-Proxbox-Actor": "mallory"})
+    unknown = await harness.client.get(
+        "/ceph/v2/approvals/unknown-approval",
+        headers={"X-Proxbox-Actor": "mallory"},
+    )
+    assert (unrelated.status_code, unrelated.json()) == (unknown.status_code, unknown.json())
+    assert (unrelated.status_code, unrelated.json()) == (
+        404,
+        {"detail": "Approval not found."},
+    )
+
+    case_insensitive_requester = await harness.client.get(
+        path, headers={"X-Proxbox-Actor": "ALICE"}
+    )
+    assert case_insensitive_requester.status_code == 200
+    assert case_insensitive_requester.json()["requester"] == "alice"
+
+    case_insensitive_approver = await harness.client.get(path, headers={"X-Proxbox-Actor": "BOB"})
+    assert case_insensitive_approver.status_code == 200
+    assert case_insensitive_approver.json()["approver"] == "bob"
+
+
+async def test_approval_status_openapi_requires_actor_header(ceph_v2_harness):
+    schema = (await ceph_v2_harness.client.get("/openapi.json")).json()
+    parameters = schema["paths"]["/ceph/v2/approvals/{approval_id}"]["get"]["parameters"]
+    actor_parameter = next(item for item in parameters if item["name"] == "X-Proxbox-Actor")
+
+    assert actor_parameter["in"] == "header"
+    assert actor_parameter["required"] is True
 
 
 async def test_unknown_kind_action_is_blocked_without_approval_or_write(

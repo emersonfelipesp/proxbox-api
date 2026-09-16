@@ -49,12 +49,18 @@ Central enum definitions for Proxmox path options and NetBox value constraints.
   Proxmox type out of the `other` bucket retypes every row already synced under
   it. NetBox validates the whole instance: a row carrying a cable or
   `mark_connected` is legal as `other` and **invalid** once it becomes one of
-  the virtual kinds (`virtual`, `bridge`, `lag`), and the phase-one reconcile is
-  unguarded, so the rejection aborts node-network sync for the entire node.
-  `loopback`, `ovsbridge`, and `ovsbond` were widened and then deliberately
-  reverted for exactly this reason. Any future widening has to detect
-  incompatible legacy rows and preserve their type with an actionable warning,
-  with an integration test covering a cabled row of the affected type.
+  the virtual kinds (`virtual`, `bridge`, `lag`). Node sync therefore reads an
+  existing row before migrating `OVSBridge`, `OVSBond`, or `OVSIntPort`; when a
+  cable or `mark_connected` blocks the change, it preserves the current type
+  and logs the device, interface, desired type, and blocker. Compatible rows
+  migrate to `bridge`, `lag`, and `virtual`, respectively. `OVSPort` remains
+  type `other` but is materialized because its `ovs_bridge` field is the
+  authoritative membership edge for a physical OVS port. Migration reads invalidate the shared GET
+  cache first. If duplicate-create recovery or a concurrent cable change makes
+  the initial PATCH fail, sync re-reads the row authoritatively and retries with
+  the preserved type only when the live row proves a blocker. Every future
+  widening must use the same guard and cover each incompatibility and race in
+  an integration test.
 - **`from_proxmox` is idempotent — mapping an already-mapped member is a no-op.**
   The status crosses two mappers in the live VM sync: the payload builder maps
   the raw Proxmox status, and the model validator maps whatever it is handed.

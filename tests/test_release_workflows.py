@@ -29,6 +29,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 GITEA_CI_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "ci.yml"
+GITEA_PROMOTION_HISTORY_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "promotion-history.yml"
 PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-testpypi.yml"
 GITEA_PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "publish-gitea.yml"
 GITEA_ARTIFACT_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "artifact-v3-compatibility.yml"
@@ -42,6 +43,7 @@ CI_GATE_PATH = REPO_ROOT / "scripts" / "gitea_ci_gate.py"
 RUNNER_GATE_PATH = REPO_ROOT / "scripts" / "gitea_release_runner_gate.py"
 BUILD_BOUNDARY_PATH = REPO_ROOT / "scripts" / "gitea_release_build_boundary.py"
 HANDOFF_PATH = REPO_ROOT / "scripts" / "gitea_release_handoff.py"
+CREATE_GITHUB_RELEASE_PATH = REPO_ROOT / "scripts" / "create-github-release.sh"
 RUNNER_ACCEPTANCE_PATH = REPO_ROOT / ".gitea" / "release-runner-acceptance.json"
 RELEASE_CONTROL_DOC_PATHS = (
     REPO_ROOT / "AGENTS.md",
@@ -307,6 +309,72 @@ def test_gitea_pr_gate_runs_the_same_coverage_scope_without_secrets():
     assert "Upload test report" not in steps
 
 
+def _promotion_history_workflow() -> tuple[str, dict]:
+    source = _read(GITEA_PROMOTION_HISTORY_WORKFLOW_PATH)
+    return source, yaml.load(source, Loader=yaml.BaseLoader)  # nosec B506
+
+
+def _promotion_step(job: dict, name: str) -> dict:
+    for step in job["steps"]:
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"promotion job has no step named {name!r}")
+
+
+def test_gitea_promotion_history_guard_uses_trusted_base_workflow():
+    primary_workflow = yaml.safe_load(_read(GITEA_CI_WORKFLOW_PATH))
+    workflow_source, workflow = _promotion_history_workflow()
+    promotion_job = workflow["jobs"]["promotion-history"]
+    assert "promotion-history" not in primary_workflow["jobs"]
+    assert workflow["on"] == {
+        "pull_request_target": {
+            "branches": ["main"],
+            "types": ["opened", "synchronize", "reopened", "edited"],
+        }
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    assert {key: promotion_job[key] for key in ("name", "runs-on", "timeout-minutes")} == {
+        "name": "Reject ancestor-blob promotion regressions",
+        "runs-on": "ci-untrusted-python312",
+        "timeout-minutes": "10",
+    }
+    assert "if" not in promotion_job
+    checkout = _promotion_step(promotion_job, "Checkout trusted base validator with full history")
+    assert checkout["with"] == {
+        "persist-credentials": "false",
+        "fetch-depth": "0",
+        "ref": "${{ github.event.pull_request.base.sha }}",
+    }
+    assert workflow["concurrency"] == {
+        "group": "proxbox-api-promotion-history-${{ github.event.pull_request.number }}",
+        "cancel-in-progress": "true",
+    }
+    assert "${{ secrets." not in workflow_source
+    assert set(workflow["jobs"]) == {"promotion-history"}
+
+
+def test_gitea_promotion_history_guard_binds_live_base_and_exact_head():
+    _workflow_source, workflow = _promotion_history_workflow()
+    promotion_job = workflow["jobs"]["promotion-history"]
+    guard_command = _promotion_step(
+        promotion_job, "Reject stale base and ancestor-blob regressions"
+    )["run"]
+    assert all(
+        argument in guard_command
+        for argument in (
+            'test "$(git rev-parse HEAD^{commit})" = "$BASE_SHA"',
+            'test "${{ github.base_ref }}" = main',
+            'test "${{ github.head_ref }}" = develop',
+            "refs/remotes/origin/main^{commit}",
+            "refs/remotes/origin/develop^{commit}",
+            'if [ "$LIVE_MAIN_SHA" != "$BASE_SHA" ]; then',
+            "scripts/check_promotion_ancestor_blobs.py",
+            '--base "$BASE_SHA"',
+            '--head "$HEAD_SHA"',
+        )
+    )
+
+
 def _publish_jobs() -> dict[str, dict]:
     return yaml.safe_load(_read(PUBLISH_WORKFLOW_PATH))["jobs"]
 
@@ -376,6 +444,76 @@ def test_coverage_suite_jobs_outlast_the_shared_runner_worst_case():
         assert job["timeout-minutes"] >= 90, (
             f"{name} runs the full coverage suite; 45 minutes was observed to be too tight"
         )
+
+
+def _mocked_schema_test_steps(job: dict) -> dict[str, dict]:
+    return {
+        step["name"]: step
+        for step in job["steps"]
+        if step["name"].startswith("Run mocked schema-driven tests")
+    }
+
+
+def _assert_bounded_release_test_command(name: str, command: str) -> None:
+    assert "pytest -n 2 --dist loadgroup" in command, name
+    assert "--durations=20" in command, name
+    assert "-n auto" not in command, name
+
+
+def _assert_release_validation_job(name: str, job: dict) -> None:
+    test_steps = _mocked_schema_test_steps(job)
+    assert set(test_steps) == {
+        "Run mocked schema-driven tests",
+        "Run mocked schema-driven tests with coverage",
+    }, name
+
+    compatibility_command = test_steps["Run mocked schema-driven tests"]["run"]
+    coverage_command = test_steps["Run mocked schema-driven tests with coverage"]["run"]
+    _assert_bounded_release_test_command(name, compatibility_command)
+    _assert_bounded_release_test_command(name, coverage_command)
+
+    assert "--cov=proxbox_api" in coverage_command, name
+    assert "--cov-branch" in coverage_command, name
+    assert "--cov-report=xml:coverage.xml" in coverage_command, name
+    assert "--cov-report=term" not in coverage_command, name
+    assert "COVERAGE_CORE" not in json.dumps(test_steps), name
+    assert "--cov" not in compatibility_command, name
+
+
+def _assert_release_coverage_upload(name: str, job: dict) -> None:
+    upload_steps = [
+        step for step in job["steps"] if step["name"] == "Upload release coverage evidence"
+    ]
+    assert len(upload_steps) == 1, name
+    upload_step = upload_steps[0]
+    artifact_names = {
+        "validate-testpypi": "coverage-testpypi-py3.13",
+        "validate-pypi-candidate": "coverage-pypi-candidate-py3.13",
+    }
+    assert upload_step["if"] == "${{ always() && matrix.python-version != '3.12' }}", name
+    assert upload_step["uses"] == (
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    ), name
+    assert upload_step["with"] == {
+        "name": artifact_names[name],
+        "path": "coverage.xml",
+        "if-no-files-found": "error",
+        "retention-days": 14,
+    }
+
+
+def test_release_validation_uses_bounded_grouping_and_persists_xml_coverage():
+    """Keep release diagnostics useful without paying for terminal rendering."""
+    validation_jobs = {
+        name: job
+        for name, job in _publish_jobs().items()
+        if name in {"validate-testpypi", "validate-pypi-candidate"}
+    }
+    assert set(validation_jobs) == {"validate-testpypi", "validate-pypi-candidate"}
+
+    for name, job in validation_jobs.items():
+        _assert_release_validation_job(name, job)
+        _assert_release_coverage_upload(name, job)
 
 
 def test_ci_e2e_loads_prepared_image_artifacts_before_stack_start():
@@ -905,6 +1043,337 @@ def test_github_promotion_creates_and_pushes_the_verified_local_tag_ref():
     assert 'git rev-parse "refs/tags/${TAG}^{commit}"' in checkout_source
     assert 'git rev-parse "refs/tags/${TAG}"' in checkout_source
     assert 'git push github "refs/tags/${TAG}:refs/tags/${TAG}"' in push_source
+
+
+def _gh_release_create_commands(source: str) -> tuple[str, ...]:
+    commands = []
+    lines = iter(source.splitlines())
+    for line in lines:
+        if not line.lstrip().startswith("gh release create"):
+            continue
+        command = [line]
+        while command[-1].rstrip().endswith("\\"):
+            command.append(next(lines, ""))
+        commands.append("\n".join(command))
+    return tuple(commands)
+
+
+def _assert_all_release_create_commands_verify_tag(paths: tuple[Path, ...]):
+    commands = []
+    for path in paths:
+        for command in _gh_release_create_commands(_read(path)):
+            commands.append((path, command))
+            assert "--verify-tag" in command, (path, command)
+    assert commands
+
+
+def test_every_github_release_creation_requires_an_existing_tag():
+    """Every copyable ``gh release create`` command must verify its tag."""
+    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
+    steps = parsed["jobs"]["push-to-github"]["steps"]
+    release_source = str(
+        next(
+            step
+            for step in steps
+            if step["name"] == "Create or publish GitHub Release (non-RC only)"
+        )["run"]
+    )
+
+    assert "gh api --include --silent --method GET" in release_source
+    assert 'if [ "${LOOKUP_STATUS}" != "404" ]' in release_source
+    assert "exit 1" in release_source
+    assert "gh release edit" not in release_source
+
+    _assert_all_release_create_commands_verify_tag(
+        (
+            GITEA_PUBLISH_WORKFLOW_PATH,
+            CREATE_GITHUB_RELEASE_PATH,
+            *RELEASE_CONTROL_DOC_PATHS,
+        )
+    )
+
+
+def _fake_gh_environment(tmp_path: Path, lookup: str) -> tuple[dict[str, str], Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    call_log = tmp_path / "gh-calls.log"
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >>"${FAKE_GH_CALL_LOG}"
+if [ "$1" = "api" ]; then
+  case "$*" in
+    *"/git/ref/tags/"*)
+      case "${FAKE_GH_LOOKUP}" in
+        tag-missing) printf 'tag not found\\n' >&2; exit 1 ;;
+        mismatch|branch-tag-collision) printf 'commit\\t%s\\n' 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'; exit 0 ;;
+        annotated-absent) printf 'tag\\t%s\\n' 'cccccccccccccccccccccccccccccccccccccccc'; exit 0 ;;
+        *) printf 'commit\\t%s\\n' "${FAKE_GH_TAG_SHA}"; exit 0 ;;
+      esac
+      ;;
+    *"/git/tags/"*) printf 'commit\\t%s\\n' "${FAKE_GH_TAG_SHA}"; exit 0 ;;
+    *"/contents/"*)
+      case "${FAKE_GH_LOOKUP}" in
+        notes-error) printf 'notes unavailable\\n' >&2; exit 1 ;;
+        notes-empty) exit 0 ;;
+        *) printf 'approved remote notes\\n'; exit 0 ;;
+      esac
+      ;;
+  esac
+  case "${FAKE_GH_LOOKUP}" in
+    absent|annotated-absent) printf 'HTTP/2.0 404 Not Found\\n'; exit 1 ;;
+    existing|existing-draft|existing-published) printf 'HTTP/2.0 200 OK\\n'; exit 0 ;;
+    unauthorized) printf 'HTTP/2.0 401 Unauthorized\\n'; exit 1 ;;
+    server-error) printf 'HTTP/2.0 500 Internal Server Error\\n'; exit 1 ;;
+    network-error) printf 'network unavailable\\n' >&2; exit 1 ;;
+  esac
+fi
+if [ "$1" = "release" ] && [ "$2" = "create" ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--notes-file" ]; then
+      test "$(cat "$2")" = "approved remote notes"
+      exit $?
+    fi
+    shift
+  done
+  exit 91
+fi
+exit 90
+""",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["FAKE_GH_CALL_LOG"] = str(call_log)
+    env["FAKE_GH_LOOKUP"] = lookup
+    env["FAKE_GH_TAG_SHA"] = "a" * 40
+    return env, call_log
+
+
+def _run_release_helper(
+    tmp_path: Path,
+    lookup: str,
+    tag: str = "v1.2.3.post4",
+    approved_sha: str = "a" * 40,
+    cwd: Path | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    env, call_log = _fake_gh_environment(tmp_path, lookup)
+    completed = subprocess.run(
+        ["bash", str(CREATE_GITHUB_RELEASE_PATH), tag, approved_sha],
+        cwd=cwd or REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    gh_calls = call_log.read_text(encoding="utf-8") if call_log.exists() else ""
+    return completed, gh_calls
+
+
+def test_github_release_helper_creates_only_after_explicit_not_found(tmp_path):
+    completed, gh_calls = _run_release_helper(tmp_path, "absent")
+
+    assert completed.returncode == 0, completed.stderr
+    assert (
+        "api --method GET repos/emersonfelipesp/proxbox-api/git/ref/tags/v1.2.3.post4" in gh_calls
+    )
+    assert "api --method GET --header Accept: application/vnd.github.raw+json" in gh_calls
+    assert "api --include --silent --method GET" in gh_calls
+    assert "release create v1.2.3.post4" in gh_calls
+    assert "--verify-tag" in gh_calls
+    assert "--target main" in gh_calls
+
+
+def test_github_release_helper_rejects_invalid_tags_before_lookup(tmp_path):
+    completed, gh_calls = _run_release_helper(tmp_path, "absent", "not-a-release-tag")
+
+    assert completed.returncode != 0
+    assert gh_calls == ""
+
+
+def test_github_release_helper_rejects_invalid_approved_sha_before_lookup(tmp_path):
+    completed, gh_calls = _run_release_helper(tmp_path, "absent", approved_sha="not-a-sha")
+
+    assert completed.returncode != 0
+    assert gh_calls == ""
+
+
+@pytest.mark.parametrize("lookup", ("tag-missing", "mismatch"))
+def test_github_release_helper_requires_the_approved_promoted_commit(tmp_path, lookup):
+    completed, gh_calls = _run_release_helper(tmp_path, lookup)
+
+    assert completed.returncode != 0
+    assert "release create" not in gh_calls
+
+
+def test_github_release_helper_peels_an_annotated_exact_tag(tmp_path):
+    completed, gh_calls = _run_release_helper(tmp_path, "annotated-absent")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "/git/ref/tags/v1.2.3.post4" in gh_calls
+    assert "/git/tags/cccccccccccccccccccccccccccccccccccccccc" in gh_calls
+
+
+def test_github_release_helper_rejects_a_branch_tag_name_collision(tmp_path):
+    completed, gh_calls = _run_release_helper(tmp_path, "branch-tag-collision")
+
+    assert completed.returncode != 0
+    assert "/git/ref/tags/v1.2.3.post4" in gh_calls
+    assert "/commits/v1.2.3.post4" not in gh_calls
+    assert "release create" not in gh_calls
+
+
+@pytest.mark.parametrize("lookup", ("notes-error", "notes-empty"))
+def test_github_release_helper_requires_notes_from_the_approved_commit(tmp_path, lookup):
+    completed, gh_calls = _run_release_helper(tmp_path, lookup)
+
+    assert completed.returncode != 0
+    assert "/contents/docs/release-notes/version-1.2.3.post4.md?ref=" in gh_calls
+    assert "release create" not in gh_calls
+
+
+def test_github_release_helper_ignores_stale_local_notes_and_working_directory(tmp_path):
+    stale_notes = tmp_path / "docs" / "release-notes"
+    stale_notes.mkdir(parents=True)
+    (stale_notes / "version-1.2.3.post4.md").write_text("stale local notes\n")
+
+    completed, gh_calls = _run_release_helper(tmp_path, "absent", cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "/contents/docs/release-notes/version-1.2.3.post4.md?ref=" in gh_calls
+    assert "release create" in gh_calls
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    ("existing", "unauthorized", "server-error", "network-error"),
+)
+def test_github_release_helper_fails_closed_for_every_non_404_lookup(tmp_path, lookup):
+    completed, gh_calls = _run_release_helper(tmp_path, lookup)
+
+    assert completed.returncode != 0
+    assert "release create" not in gh_calls
+
+
+def _run_legacy_release_step(
+    tmp_path: Path, lookup: str
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    env, call_log = _fake_gh_environment(tmp_path, lookup)
+    env["GITHUB_REPOSITORY"] = "emersonfelipesp/proxbox-api"
+    env["VERSION"] = "1.2.3"
+    env["TAG"] = "v1.2.3"
+    parsed = yaml.safe_load(_read(GITEA_PUBLISH_WORKFLOW_PATH))
+    steps = parsed["jobs"]["push-to-github"]["steps"]
+    release_source = str(
+        next(
+            step
+            for step in steps
+            if step["name"] == "Create or publish GitHub Release (non-RC only)"
+        )["run"]
+    )
+    completed = subprocess.run(
+        ["bash", "-c", release_source],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    gh_calls = call_log.read_text(encoding="utf-8") if call_log.exists() else ""
+    return completed, gh_calls
+
+
+@pytest.mark.parametrize("lookup", ("existing-draft", "existing-published"))
+def test_legacy_workflow_never_alters_or_publishes_an_existing_release(tmp_path, lookup):
+    completed, gh_calls = _run_legacy_release_step(tmp_path, lookup)
+
+    assert completed.returncode != 0
+    assert "release edit" not in gh_calls
+    assert "release create" not in gh_calls
+
+
+def _release_mode_sections(text: str, legacy_heading: str, controlled_heading: str):
+    legacy_start = text.index(legacy_heading)
+    controlled_start = text.index(controlled_heading, legacy_start)
+    return text[legacy_start:controlled_start], text[controlled_start:]
+
+
+def _normalized_prose(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _assert_phrases(text: str, phrases: tuple[str, ...]):
+    missing = tuple(phrase for phrase in phrases if phrase not in text)
+    assert not missing, missing
+
+
+def test_release_runbooks_distinguish_legacy_and_controlled_publication():
+    """Manual Release creation changes role at the release-control cutover."""
+    english = _read(REPO_ROOT / "docs" / "development" / "release-publishing.md")
+    portuguese = _read(REPO_ROOT / "docs" / "pt-BR" / "development" / "release-publishing.md")
+
+    english_legacy, english_controlled = (
+        _normalized_prose(section)
+        for section in _release_mode_sections(
+            english,
+            "### Before the release-control cutover: legacy automation",
+            "### After the release-control cutover: controlled promotion",
+        )
+    )
+    _assert_phrases(
+        english_legacy,
+        ("publish-gitea.yml", "Wait for that job", "only after an explicit HTTP 404"),
+    )
+    _assert_phrases(
+        english_controlled,
+        (
+            "promote-final-tag.yml",
+            "does not create the GitHub Release",
+            "complete successfully",
+            "production-approved source SHA",
+            "requires it to equal that approved SHA",
+            "loads the release notes from that exact GitHub commit",
+            "normal controlled publication",
+        ),
+    )
+
+    portuguese_legacy, portuguese_controlled = (
+        _normalized_prose(section)
+        for section in _release_mode_sections(
+            portuguese,
+            "### Antes da transicao para o controle de release: automacao legada",
+            "### Depois da transicao para o controle de release: promocao controlada",
+        )
+    )
+    _assert_phrases(
+        portuguese_legacy,
+        (
+            "publish-gitea.yml",
+            "Aguarde esse job",
+            "apenas depois de um HTTP 404 explicito",
+        ),
+    )
+    _assert_phrases(
+        portuguese_controlled,
+        (
+            "promote-final-tag.yml",
+            "nao cria a GitHub Release",
+            "terminar com sucesso",
+            "origem aprovada para producao",
+            "corresponda a esse SHA aprovado",
+            "carrega as notas de release desse commit exato no GitHub",
+            "etapa normal da publicacao",
+        ),
+    )
+    combined = english + portuguese
+    _assert_phrases(combined, ("scripts/create-github-release.sh vX.Y.Z",))
+    assert "LEGACY_PUBLICATION_MODE" not in combined
+    assert "CONTROLLED_PUBLICATION_MODE" not in combined
+    assert "creates (or publishes draft)" not in _read(REPO_ROOT / "CLAUDE.md")
+    assert "creates or publishes the GitHub Release" not in english
+    assert "cria ou publica a GitHub Release" not in portuguese
 
 
 def test_gitea_package_publication_links_an_exact_release_manifest():

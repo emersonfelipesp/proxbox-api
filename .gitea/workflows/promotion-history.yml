@@ -1,0 +1,58 @@
+name: Promotion history guard
+
+# pull_request_target loads these workflow and validator bytes from the trusted
+# main base, never from the candidate develop head. The first rollout is
+# bootstrapped through the existing exact-head promotion gates. Later promotion
+# PRs cannot weaken this read-only job in the same change they ask it to validate.
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
+
+concurrency:
+  group: proxbox-api-promotion-history-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  promotion-history:
+    name: Reject ancestor-blob promotion regressions
+    runs-on: ci-untrusted-python312
+    timeout-minutes: 10
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout trusted base validator with full history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Reject stale base and ancestor-blob regressions
+        shell: bash
+        run: |
+          set -eo pipefail
+          test "${{ github.base_ref }}" = main
+          test "${{ github.head_ref }}" = develop
+          test "$(git rev-parse HEAD^{commit})" = "$BASE_SHA"
+          git fetch --force --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+refs/heads/develop:refs/remotes/origin/develop"
+          LIVE_MAIN_SHA="$(git rev-parse refs/remotes/origin/main^{commit})"
+          if [ "$LIVE_MAIN_SHA" != "$BASE_SHA" ]; then
+            echo "Main advanced after this promotion event; update develop before retrying." >&2
+            exit 1
+          fi
+          test "$(git rev-parse refs/remotes/origin/develop^{commit})" = "$HEAD_SHA"
+          python3 scripts/check_promotion_ancestor_blobs.py \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA"
