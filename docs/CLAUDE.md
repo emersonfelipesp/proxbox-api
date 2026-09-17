@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/docs/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/docs/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -68,6 +68,9 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
+- Keep NetBox endpoint probe, cached-client lifecycle, transport-failure status,
+  VM platform overwrite, and free-threaded CI guidance aligned in both languages
+  with their source modules and workflows.
 - Ceph v2 write behavior, failure recovery, deployment/rollback, and bounded
   NPR 7150.2D feature evidence live in `operations/ceph-write-approvals.md`;
   keep its Portuguese translation aligned, never document legacy inline apply

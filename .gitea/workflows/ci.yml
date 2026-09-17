@@ -1,7 +1,7 @@
 name: CI
 
 # Authoritative pre-merge gate for Gitea feature branches. The dedicated label
-# is intentionally unschedulable until N-MultiCloud/nmulticloud-context#204
+# is intentionally unschedulable until public CI capacity
 # provisions an ephemeral, unprivileged runner with no production credentials.
 
 # push runs are limited to the long-lived branches: an unrestricted push
@@ -67,6 +67,13 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv run ruff check .
           uv run ruff format --check .
+
+      - name: Public boundary scan
+        shell: bash
+        run: |
+          set -eo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          uv run python scripts/check_public_boundary.py --mutation-test
 
       - name: Ty type check
         shell: bash

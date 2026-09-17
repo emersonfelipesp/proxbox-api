@@ -1,22 +1,22 @@
 # Provisionamento Firecracker via Host-Agent
 
-`proxbox-api` define o contrato HTTP entre o NMS Cloud e um host-agent Firecracker. O inventario do NetBox continua no `netbox-proxbox`: pools, hosts, imagens e registros `FirecrackerMicroVM` sao resolvidos antes desta API ser chamada.
+`proxbox-api` define o contrato HTTP entre o cloud management e um host-agent Firecracker. O inventario do NetBox continua no `netbox-proxbox`: pools, hosts, imagens e registros `FirecrackerMicroVM` sao resolvidos antes desta API ser chamada.
 
 ## Fluxo
 
 ```mermaid
 sequenceDiagram
-    participant NMSB as nms-backend
+    participant RELAY as trusted-relay-service
     participant API as proxbox-api
     participant Agent as Firecracker host-agent
 
-    NMSB->>API: POST /cloud/firecracker/provision[/stream]
+    RELAY->>API: POST /cloud/firecracker/provision[/stream]
     API->>Agent: GET /health
     API->>Agent: GET /capabilities
     API->>Agent: POST /assets/prepare
     API->>Agent: POST /microvms
     API->>Agent: POST /microvms/{microvm_id}/actions/start
-    API-->>NMSB: status, microvm_id, instance_ref, guest_ip
+    API-->>RELAY: status, microvm_id, instance_ref, guest_ip
 ```
 
 O endpoint sem stream retorna JSON final. O endpoint com stream envia Server-Sent Events e termina com `event: complete`.
@@ -32,7 +32,7 @@ Ambos usam o middleware normal `X-Proxbox-API-Key`. `X-Proxbox-Actor` e opcional
 
 ## Limite de confianca
 
-`nms-backend` deve resolver no NetBox o host Firecracker, pool, imagem e o
+`trusted-relay-service` deve resolver no NetBox o host Firecracker, pool, imagem e o
 registro `FirecrackerMicroVM` antes de chamar o proxbox-api. A requisicao ainda
 leva `host_agent_base_url` e `host_agent_token` opcional, entao o proxbox-api
 valida a URL antes de qualquer chamada externa: apenas `http` e `https` sao
@@ -57,4 +57,4 @@ detalhes do host-agent puderem ser expostos ao cliente.
 Respostas de sucesso incluem `ok`, `microvm_id`, `instance_ref`, `host_id`,
 `host_pool_id`, `image_id`, `status`, `guest_ip` e `detail`. Quando
 `netbox_microvm_id` e informado, `instance_ref` usa o formato
-`firecracker:<id>` e e o identificador usado pelo NMS Cloud.
+`firecracker:<id>` e e o identificador usado pelo cloud management.

@@ -17,6 +17,11 @@ repos:
 
   - repo: local
     hooks:
+      - id: public-boundary
+        name: public-boundary
+        entry: python scripts/check_public_boundary.py --mutation-test
+        language: system
+        pass_filenames: false
       - id: ty
         name: ty
         entry: uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py

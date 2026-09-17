@@ -25,7 +25,7 @@ Proxmox, cloud, and intent routes also depend on the relevant
 
 | Prefix | Purpose |
 |---|---|
-| `/cloud` | NMS Cloud VM, LXC, template, image-factory, Azure VHD import, and Firecracker provisioning workflows |
+| `/cloud` | cloud management VM, LXC, template, image-factory, Azure VHD import, and Firecracker provisioning workflows |
 | `/intent` | NetBox-to-Proxmox intent planning, apply, deletion-request approval chain, and pending-deletion tag helpers |
 | `/pbs` | Proxmox Backup Server endpoint configuration, status probes, and read-only sync summaries |
 | `/pdm` | Proxmox Datacenter Manager endpoint configuration, status probes, and read-only sync summaries |
@@ -228,7 +228,7 @@ The SSH call is bounded by a 10-second timeout — a timeout is reported via
 `error.reason="command_timeout"` with `reachable=true`, not raised as an
 exception.
 
-Called by nms-backend's `@rpc_handler("os.linux_proxmox.show_systemctl_services")`,
+Called by trusted-relay-service's `@rpc_handler("os.linux_proxmox.show_systemctl_services")`,
 itself dispatched by the matching netbox-rpc procedure; not intended to be
 called directly by end users.
 
@@ -279,7 +279,7 @@ consumer-specific proxy behavior remain outside proxbox-api.
 
 ## Cloud (`/cloud`)
 
-Cloud routes power the NMS Cloud portal. Most routes that touch Proxmox writes
+Cloud routes power the cloud management portal. Most routes that touch Proxmox writes
 require `ProxmoxEndpoint.allow_writes=true`; remote SSH execution for the cloud
 image build pipeline also requires `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`.
 PVE product builds in the catalog use `provider="proxmox_iso"` with official

@@ -235,7 +235,7 @@ def generate_cloud_init_userdata(
     *,
     install_qemu_guest_agent: bool | None = None,
     install_zabbix_agent2: bool | None = None,
-    zabbix_server: str = "zabbix.nmulti.cloud",
+    zabbix_server: str = "zabbix.example.com",
     search_domain: str | None = None,
     nameservers: list[str] | None = None,
 ) -> str:

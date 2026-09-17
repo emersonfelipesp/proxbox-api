@@ -61,6 +61,15 @@ follows the current upstream `netbox-docker` base image, `ubuntu:26.04`, via the
 mirror-backed image reference, so the package set matches the upstream
 Dockerfile.
 
+The non-blocking `test-free-threaded` job is a focused Python 3.14t compatibility
+probe, not a declaration that the package supports Python 3.14. It installs only the
+focused dependencies required to compile and import the package and to run
+`python -m scripts.verify_free_threaded_auth_heartbeat`. That probe exercises the
+authentication reservation heartbeat deterministically. The full suite stays on the
+supported Python lanes because SQLAlchemy's C-extension event-registry teardown can
+segfault during `engine.dispose()` on the free-threaded runtime, even with
+`PYTHON_GIL=1`.
+
 ## E2E Stack
 
 `ci.yml` starts a real stack and verifies that `proxbox-api` can authenticate,

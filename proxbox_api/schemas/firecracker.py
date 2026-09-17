@@ -125,7 +125,7 @@ class FirecrackerMicroVMMetrics(BaseModel):
 
 
 class FirecrackerProvisionRequest(BaseModel):
-    """Cloud-facing request passed from NMS Backend to proxbox-api."""
+    """Cloud-facing request passed from trusted control plane to proxbox-api."""
 
     model_config = ConfigDict(extra="forbid")
 

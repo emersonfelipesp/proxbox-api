@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/routes/netbox/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/proxbox_api/routes/netbox/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -15,7 +15,7 @@ Endpoints for managing NetBox endpoint records and API diagnostics.
 
 ## Current Files
 
-- `__init__.py`: NetBox route handlers for endpoint CRUD, status, and OpenAPI operations.
+- `__init__.py`: NetBox route handlers for endpoint CRUD, request-private reachability probes, status, and OpenAPI operations.
 
 ## How These Routes Work
 
@@ -27,6 +27,9 @@ Endpoints for managing NetBox endpoint records and API diagnostics.
   NetBox API-client, and plugin-settings caches. Endpoint creation otherwise leaves
   the pre-connection default settings cached for five minutes, hiding the operator's
   NetBox-backed feature flags from the newly configured runtime.
+- Create and update return a typed advisory probe result after the transaction commits.
+  Probe failure never reverses the write. `GET /endpoint/{id}/probe` exposes the same
+  operation for test-connection callers, and probe responses never serialize tokens.
 
 ## Extension Guidance
 

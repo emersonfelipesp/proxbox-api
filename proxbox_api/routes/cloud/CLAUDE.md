@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/routes/cloud/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/proxbox_api/routes/cloud/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -326,7 +326,7 @@ the response/OpenAPI model.
 ## Firecracker Provisioning Trust Boundary
 
 `firecracker.py` accepts `host_agent_base_url` and optional `host_agent_token`
-from the caller because `nms-backend` resolves the selected NetBox Proxbox
+from the caller because `trusted-relay-service` resolves the selected NetBox Proxbox
 Firecracker host/image inventory before calling this backend. proxbox-api still
 validates the outbound target before constructing `FirecrackerHostAgentClient`:
 the base URL must use `http` or `https`, include a hostname, omit embedded
@@ -335,7 +335,7 @@ credentials, omit query strings/fragments, and pass the shared SSRF host guard
 validated host-agent.
 
 Firecracker provisioning is not a `ProxmoxEndpoint` write and does not use
-`allow_writes`; the trust boundary is the shared API key, the nms-backend
+`allow_writes`; the trust boundary is the shared API key, the trusted-relay-service
 inventory resolution step, and the host-agent URL SSRF validation above.
 Streaming failures are sanitized with the same
 `PROXBOX_EXPOSE_INTERNAL_ERRORS` gate as the app-level generic exception
@@ -346,14 +346,14 @@ handler: clients see `An unexpected error occurred.` by default.
 `netbox-packer`'s `PackerBuildJob` (cloud_config installer) calls this endpoint
 via `proxbox_client.call_proxbox_build()` with `X-Proxbox-API-Key`, passing
 `user_data_yaml = installer_config.content`. The whole flow is triggerable from
-the NMS UI at `nms.nmulti.cloud/virtualization/packer`. See
+the management UI at `control-plane.example.com/virtualization/packer`. See
 `/root/personal-context/claude-reference/netbox-packer.md`.
 
 Host bootstrap (bake key, configured storage content types including
 `snippets,images`; the download API separately receives `content=import`,
 `allow_writes=True`, NetBox Packer settings):
-`/root/personal-context/nmulticloud-context/deploy/docs/proxbox-api-cloud-image-bake.md`.
-Compose wiring: `nmulticloud-context/deploy/compose/proxbox-api.compose.yaml`.
+`deployment-specific documentation`.
+Compose wiring: `deployment-specific Compose configuration`.
 
 ## Azure VHD Import Pipeline (`POST /cloud/azure/vhd-imports`)
 

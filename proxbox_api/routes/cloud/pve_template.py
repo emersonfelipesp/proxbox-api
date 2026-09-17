@@ -165,7 +165,7 @@ async def build_pve_template(
 
     With ``create_vm=false`` the endpoint returns the rendered payloads and
     expected snippet paths without touching Proxmox — useful for a dry run
-    from the NMS UI before the operator commits.
+    from the management UI before the operator commits.
     """
     instance_id = f"{req.hostname}-{int(time.time())}"
     payloads = render_all(

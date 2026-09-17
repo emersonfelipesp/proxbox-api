@@ -27,6 +27,7 @@ from proxbox_api.main import (
     full_update_sync_stream,
     standalone_info,
 )
+from proxbox_api.netbox_probe import NetBoxProbeResult
 from proxbox_api.routes.netbox import (
     create_netbox_endpoint,
     delete_netbox_endpoint,
@@ -34,6 +35,7 @@ from proxbox_api.routes.netbox import (
     get_netbox_endpoints,
     netbox_openapi,
     netbox_status,
+    probe_netbox_endpoint_route,
     update_netbox_endpoint,
 )
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
@@ -522,6 +524,13 @@ def test_proxmox_endpoint_requires_complete_token_pair(db_session):
 def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
     settings_cache_invalidations: list[None] = []
     invalidate_client_cache = AsyncMock()
+    probe = AsyncMock(
+        return_value=NetBoxProbeResult(
+            reachable=True,
+            status="reachable",
+            api_version="4.6.1",
+        )
+    )
 
     monkeypatch.setattr(
         "proxbox_api.routes.netbox.invalidate_settings_cache",
@@ -531,9 +540,10 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
         "proxbox_api.routes.netbox.invalidate_netbox_api_cache",
         invalidate_client_cache,
     )
+    monkeypatch.setattr("proxbox_api.routes.netbox.probe_netbox_endpoint", probe)
     payload = NetBoxEndpoint(
         name="netbox-primary",
-        ip_address="1.1.1.3",
+        ip_address="2001:db8::13",
         domain="netbox.example.com",
         port=443,
         token="token-1",
@@ -566,7 +576,7 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
             endpoint_id,
             NetBoxEndpoint(
                 name="netbox-primary-updated",
-                ip_address="1.1.1.3",
+                ip_address="2001:db8::13",
                 domain="netbox.example.com",
                 port=443,
                 token="token-2",
@@ -632,7 +642,11 @@ def test_netbox_endpoint_rejects_v2_incomplete_token(db_session):
         )
 
 
-def test_netbox_endpoint_accepts_v2_token(db_session):
+def test_netbox_endpoint_accepts_v2_token(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.probe_netbox_endpoint",
+        AsyncMock(return_value=NetBoxProbeResult(reachable=True, status="reachable")),
+    )
     created = asyncio.run(
         create_netbox_endpoint(
             NetBoxEndpoint(
@@ -661,6 +675,59 @@ def test_netbox_status_and_openapi_routes_are_mocked(client_with_fake_netbox):
 
     openapi_body = asyncio.run(netbox_openapi(fake_session))
     assert "/api/virtualization/virtual-machines/" in openapi_body["paths"]
+
+
+def test_netbox_endpoint_probe_route_returns_advisory_result(db_session, monkeypatch):
+    endpoint = NetBoxEndpoint(
+        name="netbox-probe",
+        ip_address="2001:db8::31",
+        domain="netbox.example.com",
+        token="token",
+    )
+    db_session.add(endpoint)
+    db_session.commit()
+    db_session.refresh(endpoint)
+    expected = NetBoxProbeResult(
+        reachable=False,
+        status="connection_error",
+        error_type="ClientConnectorError",
+        error="ClientConnectorError: connection refused",
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.probe_netbox_endpoint",
+        AsyncMock(return_value=expected),
+    )
+
+    result = asyncio.run(probe_netbox_endpoint_route(endpoint.id, db_session))
+
+    assert result == expected
+
+
+def test_netbox_endpoint_create_returns_advisory_probe(db_session, monkeypatch):
+    expected = NetBoxProbeResult(
+        reachable=False,
+        status="timeout",
+        error_type="TimeoutError",
+        error="TimeoutError",
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.probe_netbox_endpoint",
+        AsyncMock(return_value=expected),
+    )
+
+    result = asyncio.run(
+        create_netbox_endpoint(
+            NetBoxEndpoint(
+                name="netbox-probe-create",
+                ip_address="2001:db8::32",
+                domain="netbox.example.com",
+                token="token",
+            ),
+            db_session,
+        )
+    )
+
+    assert result.probe == expected
 
 
 def test_netbox_status_route_wraps_dependency_errors():

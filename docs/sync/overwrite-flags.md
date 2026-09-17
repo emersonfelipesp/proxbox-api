@@ -276,23 +276,21 @@ every remaining VM in the run.
 
 ### Overwriting
 
-The platform is set **when a VM is created** and is never patched afterwards. An
-operator may well have assigned a platform by hand, and taking that over on the first
-sync after upgrading would be a regression dressed as a feature.
+The platform is set when a VM is created. Existing VMs are patched only when
+`overwrite_vm_platform=true`. The flag defaults to `false`, so an upgrade or an
+unconfigured caller preserves operator-managed platform assignments while newly created
+VMs still receive the platform derived from the guest operating system.
 
-There is deliberately **no `overwrite_vm_platform` flag**. The `overwrite_*` set is a
-CI-enforced cross-repo contract (`contracts/overwrite_flags.json`, mirrored in
-netbox-proxbox alongside `constants.OVERWRITE_FIELDS`), and adding a flag requires
-changing both repos in the same release plus the plugin's settings model and per-endpoint
-override column. That is out of scope for populating the field; making the behaviour
-operator-tunable is a separate, properly cross-repo change.
-
-So with no configuration at all, a deployment sees the platform populated on **newly
-created VMs only**, and existing platforms are left exactly as they are.
+`overwrite_vm_platform` is part of the CI-enforced cross-repo overwrite contract
+(`contracts/overwrite_flags.json`, mirrored in netbox-proxbox alongside
+`constants.OVERWRITE_FIELDS`). The plugin exposes the default-false global setting and
+the per-endpoint tri-state override, resolves them with the other overwrite flags, and
+forwards the effective boolean to proxbox-api. Its name, position, and default must stay
+aligned in both repositories.
 
 A `netbox-metadata` fence may pin `platform` per VM, since it is an integer foreign key.
-That value lands on creation like any other, and is subject to the same create-only rule —
-the fence does not become a back-door overwrite gate for existing VMs.
+That value lands on creation like any other. For an existing VM, the same explicit
+`overwrite_vm_platform` gate applies; the fence does not become a back-door overwrite.
 
 Platform **records** are likewise created but never rewritten: an existing platform is
 referenced as-is, so a record an operator named, described, or tagged themselves is never

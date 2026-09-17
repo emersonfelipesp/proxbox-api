@@ -60,6 +60,16 @@ fallback para build a partir do codigo-fonte quando a imagem do registro nao
 existe. Esse build fallback segue a base atual do `netbox-docker`,
 `ubuntu:26.04`, usando a referencia via mirror.
 
+O job nao bloqueante `test-free-threaded` e um probe focado de compatibilidade
+com Python 3.14t, nao uma declaracao de suporte do pacote ao Python 3.14. Ele
+instala somente as dependencias focadas necessarias para compilar e importar o
+pacote e executar
+`python -m scripts.verify_free_threaded_auth_heartbeat`, que exercita de forma
+deterministica o heartbeat da reserva de autenticacao. A suite completa permanece
+nos Pythons suportados porque o teardown do event registry da extensao C do
+SQLAlchemy pode causar segfault durante `engine.dispose()` no runtime free-threaded,
+mesmo com `PYTHON_GIL=1`.
+
 ## Stack E2E
 
 O `ci.yml` sobe uma stack real e verifica que o `proxbox-api` consegue

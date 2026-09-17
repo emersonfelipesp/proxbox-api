@@ -14,13 +14,16 @@ This documentation covers installation, configuration, architecture, API referen
 
 ## Main capabilities
 
-- NetBox endpoint bootstrap with token v1 and v2 support.
+- NetBox endpoint bootstrap with token v1 and v2 support, advisory authenticated
+  reachability probes, and generation-safe cached-client retirement.
+- Secret-safe NetBox transport failure classification: connection failures return
+  HTTP 502 and timeouts return HTTP 504 with non-empty diagnostic detail.
 - Proxmox endpoint CRUD with password or token-pair auth.
 - Cluster, node, storage, VM, backup, snapshot, and replication data collection.
 - Virtual machine, interface, IP, disk, storage, and backup synchronization toward NetBox.
 - High-Availability readout across every configured cluster — see [Cluster HA API](api/cluster-ha.md).
 - VM operational verbs (start / stop / snapshot / migrate) gated by `ProxmoxEndpoint.allow_writes`, with idempotency, journal auditing, and SSE progress for migrate — see [HTTP API Reference — VM Operational Verbs](api/http-reference.md#vm-operational-verbs).
-- Optional PBS, PDM, Ceph, intent, SSH, and NMS Cloud route groups - see [Service Routes](api/service-routes.md).
+- Optional PBS, PDM, Ceph, intent, SSH, and cloud management route groups - see [Service Routes](api/service-routes.md).
 - Fail-closed Ceph v2 writes with a privately bound exact endpoint/session/node, strict per-operation payloads, independent single-use approval, owner-bound leases, provider-global node-consistent UPIDs, repeated-cancellation-safe checkpoints, and ambiguity-safe recovery — see [Ceph v2 Write Approval and Recovery](operations/ceph-write-approvals.md).
 - Admin log inspection, cache inspection, and full-update orchestration.
 

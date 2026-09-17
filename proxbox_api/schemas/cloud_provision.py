@@ -355,7 +355,7 @@ class CloudImageTemplateBuildRequest(BaseModel):
     bridge: str = Field("vmbr0", min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_.:-]*$")
     ciuser: str = Field("ubuntu", min_length=1, max_length=64)
     hostname: str = Field("cloud-image-template", min_length=1, max_length=128)
-    domain: str = Field("nmulti.local", min_length=1, max_length=128)
+    domain: str = Field("example.internal", min_length=1, max_length=128)
     node_cidr: str | None = None
     gateway: str | None = None
     nameservers: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
@@ -397,7 +397,7 @@ class CloudImageTemplateBuildRequest(BaseModel):
         ),
     )
     zabbix_server: str = Field(
-        "zabbix.nmulti.cloud",
+        "zabbix.example.com",
         min_length=1,
         max_length=253,
         description="Zabbix server endpoint for generated zabbix_agent2.conf.",
@@ -949,7 +949,7 @@ class PVETemplateBuildRequest(BaseModel):
     cores: int = Field(4, ge=1)
     nic_name: str = Field("ens18", min_length=1)
     hostname: str = Field("pve-node-01", min_length=1)
-    domain: str = Field("nmulti.local", min_length=1)
+    domain: str = Field("example.internal", min_length=1)
     node_cidr: str = Field("10.0.30.50/24", min_length=1)
     gateway: str = Field("10.0.30.1", min_length=1)
     nameservers: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])

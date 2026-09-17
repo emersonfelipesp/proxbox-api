@@ -1,22 +1,22 @@
 # Firecracker Host-Agent Provisioning
 
-`proxbox-api` owns the HTTP contract between NMS Cloud and a Firecracker host-agent. NetBox inventory still lives in `netbox-proxbox`: host pools, hosts, image templates, and `FirecrackerMicroVM` records are resolved before this service is called.
+`proxbox-api` owns the HTTP contract between cloud management and a Firecracker host-agent. NetBox inventory still lives in `netbox-proxbox`: host pools, hosts, image templates, and `FirecrackerMicroVM` records are resolved before this service is called.
 
 ## Flow
 
 ```mermaid
 sequenceDiagram
-    participant NMSB as nms-backend
+    participant RELAY as trusted-relay-service
     participant API as proxbox-api
     participant Agent as Firecracker host-agent
 
-    NMSB->>API: POST /cloud/firecracker/provision[/stream]
+    RELAY->>API: POST /cloud/firecracker/provision[/stream]
     API->>Agent: GET /health
     API->>Agent: GET /capabilities
     API->>Agent: POST /assets/prepare
     API->>Agent: POST /microvms
     API->>Agent: POST /microvms/{microvm_id}/actions/start
-    API-->>NMSB: status, microvm_id, instance_ref, guest_ip
+    API-->>RELAY: status, microvm_id, instance_ref, guest_ip
 ```
 
 The non-streaming endpoint returns one JSON response. The streaming endpoint forwards progress as Server-Sent Events and finishes with `event: complete`.
@@ -32,7 +32,7 @@ Both routes require the normal `X-Proxbox-API-Key` middleware. `X-Proxbox-Actor`
 
 ## Trust Boundary
 
-`nms-backend` is expected to resolve the selected Firecracker host, host pool,
+`trusted-relay-service` is expected to resolve the selected Firecracker host, host pool,
 image, and `FirecrackerMicroVM` NetBox records before calling proxbox-api. The
 request still carries `host_agent_base_url` and optional `host_agent_token`, so
 proxbox-api validates the URL before any outbound request: only `http` and
@@ -89,4 +89,4 @@ Successful responses return:
 }
 ```
 
-`instance_ref` is present when `nms-backend` supplied `netbox_microvm_id`. The value is the Cloud identifier used by NMS detail routes and list rendering.
+`instance_ref` is present when `trusted-relay-service` supplied `netbox_microvm_id`. The value is the Cloud identifier used by control plane detail routes and list rendering.

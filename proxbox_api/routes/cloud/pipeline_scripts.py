@@ -2,7 +2,7 @@
 
 The existing ``template_images`` route can create generic cloud-image templates
 through the Proxmox API. These helpers cover the operator-driven path used by
-NMS and netbox-proxbox when the source is a pfSense/OPNsense release image or
+control plane and netbox-proxbox when the source is a pfSense/OPNsense release image or
 an appliance source tree that must be built on a Proxmox-capable host.
 """
 
@@ -186,7 +186,7 @@ def _preferences_lines(
     if not request.pve_version_pin:
         return []
     return [
-        f"  - path: /etc/apt/preferences.d/nmulticloud-{entry.product_type.value}-pin",
+        f"  - path: /etc/apt/preferences.d/proxbox-{entry.product_type.value}-pin",
         "    content: |",
         f"      Package: {package_name}",
         f"      Pin: version {request.pve_version_pin}*",
@@ -324,11 +324,11 @@ def generate_appliance_first_boot_script(
     commands = [
         "#!/bin/sh",
         "set -eu",
-        'MARKER="/var/db/nmulticloud-cloud-image-bootstrap.done"',
+        'MARKER="/var/db/proxbox-cloud-image-bootstrap.done"',
         '[ -f "$MARKER" ] && exit 0',
-        "mkdir -p /usr/local/etc/nmulticloud /root/.ssh /var/db",
+        "mkdir -p /usr/local/etc/proxbox /root/.ssh /var/db",
         "chmod 700 /root/.ssh",
-        _encoded_write_command("/usr/local/etc/nmulticloud/cloud-image.env", environment),
+        _encoded_write_command("/usr/local/etc/proxbox/cloud-image.env", environment),
         _encoded_write_command("/root/.ssh/authorized_keys", authorized_keys),
         "chmod 600 /root/.ssh/authorized_keys",
         f"hostname {_q(request.hostname)}",

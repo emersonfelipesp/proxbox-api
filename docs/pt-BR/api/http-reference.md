@@ -195,13 +195,30 @@ de seguranca e nao fazem parte dessa janela.
 
 ## Rotas NetBox (`/netbox`)
 
-- `POST /netbox/endpoint` - Cria o endpoint NetBox singleton.
+- `POST /netbox/endpoint` - Cria o endpoint NetBox singleton. A resposta inclui
+  um probe consultivo com timeout de request de 10 segundos e fechamento do
+  client temporario limitado separadamente a um segundo. Falha de alcance ou
+  fechamento lento nao desfaz nem bloqueia indefinidamente a escrita duravel.
 - `GET /netbox/endpoint` - Lista os registros de endpoint NetBox.
+- Updates e remocao de endpoint aposentam atomicamente todos os facades SDK em
+  cache para aquele endpoint. Requests em andamento podem concluir com o
+  transporte emprestado; a ultima lifespan fecha as geracoes atual e
+  aposentadas, e fechamentos falhos permanecem disponiveis para retry.
 - `GET /netbox/endpoint/{netbox_id}` - Busca um endpoint pelo ID.
-- `PUT /netbox/endpoint/{netbox_id}` - Atualiza o endpoint.
+- `GET /netbox/endpoint/{netbox_id}/probe` - Executa o mesmo probe autenticado e
+  request-private usado apos as escritas. A resposta informa `reachable`, status
+  estavel, versao da API quando disponivel e erro com credenciais redigidas.
+- `PUT /netbox/endpoint/{netbox_id}` - Atualiza o endpoint e retorna o resultado
+  consultivo do probe sem condicionar a escrita ao alcance.
 - `DELETE /netbox/endpoint/{netbox_id}` - Remove o endpoint.
 - `GET /netbox/status` - Busca o status da API NetBox.
 - `GET /netbox/openapi` - Busca o OpenAPI do NetBox.
+
+Um probe falho fica em cache por 30 segundos usando fingerprint exato de URL,
+TLS e credencial, sem armazenar credenciais. Dependencias de sync falham rapido
+com HTTP 502 para conexao ou HTTP 504 para timeout somente enquanto esse
+resultado conhecido e recente; probe ausente, expirado, bem-sucedido ou de uma
+configuracao diferente nao bloqueia sync.
 
 ### Regra singleton do NetBox
 
@@ -458,6 +475,18 @@ Cobertura de testes:
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
 - `GET /virtualization/virtual-machines/task-history/create/stream` - Etapa SSE
+
+### Parametros de overwrite dos streams de VM
+
+Todos os endpoints de stream de VM acima aceitam os parametros de
+`SyncOverwriteFlags` definidos em `proxbox_api/schemas/sync.py`, incluindo
+`overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`,
+`overwrite_vm_description` e `overwrite_vm_custom_fields`.
+
+`overwrite_vm_platform` usa `false` por padrao. Habilite-o explicitamente para
+reconciliar a plataforma de uma VM existente a partir do sistema operacional
+convidado do Proxmox. Quando falso ou omitido, a plataforma continua gerenciada
+pelo operador apos a criacao inicial da VM.
   dedicada de task history; aceita `netbox_vm_ids` separado por virgulas.
   Omissao seleciona todas as VMs; valor vazio, malformado ou nao positivo recebe
   HTTP 422 antes do inicio do SSE. O parametro opcional `fetch_max_concurrency`

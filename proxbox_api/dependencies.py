@@ -7,6 +7,7 @@ from fastapi import Depends, Query, Request
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.netbox_probe import reject_recent_unreachable
 from proxbox_api.netbox_rest import RestRecord, ensure_tag_async
 from proxbox_api.schemas.sync import (
     SyncBehaviorFlags,
@@ -43,6 +44,7 @@ def _non_empty_cause(error: Exception) -> str | dict[str, object]:
 
 async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
     try:
+        reject_recent_unreachable(netbox_session)
         return await ensure_tag_async(
             netbox_session,
             name="Proxbox",
@@ -82,6 +84,7 @@ async def ensure_netbox_sync_dependencies(
 ) -> BootstrapStatus:
     """Reconcile NetBox-owned support objects before a sync route writes data."""
     try:
+        reject_recent_unreachable(netbox_session)
         status = await run_netbox_bootstrap(netbox_session, enabled=True)
     except ProxboxException:
         raise

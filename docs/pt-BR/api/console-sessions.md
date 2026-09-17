@@ -1,6 +1,6 @@
 # Sessões do Console do Proxmox
 
-Este documento é o guia canônico de implementação do `proxbox-api` para o broker privado de sessões usado pelo console do Proxmox no NMS. Ele explica como o serviço seleciona um guest, solicita um ticket de `vncproxy` ou `termproxy`, monta a URL WebSocket upstream, fornece um único valor de autenticação limitado ao relay confiável, preserva a política TLS do endpoint e trata falhas.
+Este documento é o guia canônico de implementação do `proxbox-api` para o broker privado de sessões usado pelo console do Proxmox no control plane. Ele explica como o serviço seleciona um guest, solicita um ticket de `vncproxy` ou `termproxy`, monta a URL WebSocket upstream, fornece um único valor de autenticação limitado ao relay confiável, preserva a política TLS do endpoint e trata falhas.
 
 O endpoint existente `/sessions` é exclusivamente serviço a serviço. A resposta contém credenciais temporárias e nunca pode ser devolvida diretamente ao JavaScript do navegador. O consumidor confiável existente e seu contrato permanecem inalterados.
 
@@ -13,11 +13,11 @@ somente dados opacos e seguros para o navegador.
 ## Responsabilidade e limite de confiança
 
 ```text
-navegador do NMS
+navegador do control plane
     |
-    | somente o token opaco do stream do NMS
+    | somente o token opaco do stream do control plane
     v
-relay confiável do nms-backend
+relay confiável do trusted-relay-service
     |
     | POST /proxmox/console/sessions autenticado como serviço
     | endpoint_id + vmid + node + vm_type + console_type
@@ -31,7 +31,7 @@ proxbox-api
 API e endpoint WebSocket do Proxmox
 ```
 
-O `proxbox-api` não autoriza o usuário final contra uma máquina virtual do NetBox. O `nms-backend` faz essa autorização por objeto, no escopo do chamador, e converte a relação de endpoint do NetBox para o ID do banco de dados do `proxbox-api` antes de chamar esta rota. Este serviço confia que o chamador autenticado já autorizou o `endpoint_id` e então valida que o endpoint existe localmente.
+O `proxbox-api` não autoriza o usuário final contra uma máquina virtual do NetBox. O `trusted-relay-service` faz essa autorização por objeto, no escopo do chamador, e converte a relação de endpoint do NetBox para o ID do banco de dados do `proxbox-api` antes de chamar esta rota. Este serviço confia que o chamador autenticado já autorizou o `endpoint_id` e então valida que o endpoint existe localmente.
 
 ## Modos compatíveis
 
@@ -72,7 +72,7 @@ A resposta `ConsoleSessionResponse` é material privado de transporte:
 | `verify_ssl` | Política TLS persistida no endpoint | Política controlada pelo servidor |
 | `websocket_auth` | Um valor privado `authorization` ou `cookie` | Segredo; somente no servidor |
 
-A rota retorna os dados necessários para um relay confiável abrir o WebSocket do Proxmox. Ela não é um contrato público de sessão para o navegador. O `nms-backend` transforma essa resposta em um contrato público muito menor.
+A rota retorna os dados necessários para um relay confiável abrir o WebSocket do Proxmox. Ela não é um contrato público de sessão para o navegador. O `trusted-relay-service` transforma essa resposta em um contrato público muito menor.
 
 ### Contrato autônomo para o navegador
 
@@ -165,7 +165,7 @@ O upgrade WebSocket exige o ticket na URL e a autenticação da sessão ativa. `
 - `kind="authorization"` com a autorização do token da API; ou
 - `kind="cookie"` com o `PVEAuthCookie` da sessão por senha.
 
-Os valores de `ProxmoxWebSocketAuth` e `ConsoleWebSocketAuth` usam `repr=False`. A rota fornece a credencial somente ao relay. O `nms-backend` valida novamente o tipo e os limites, guarda o valor no ticket de uso único e o anexa somente ao handshake upstream.
+Os valores de `ProxmoxWebSocketAuth` e `ConsoleWebSocketAuth` usam `repr=False`. A rota fornece a credencial somente ao relay. O `trusted-relay-service` valida novamente o tipo e os limites, guarda o valor no ticket de uso único e o anexa somente ao handshake upstream.
 
 Não adicione um segundo campo de autenticação e não exponha o valor em logs, respostas ao navegador ou URLs.
 
@@ -202,7 +202,7 @@ wss://{host}:{proxmox_port}/api2/json/nodes/{node}/{vm_type}/{vmid}/vncwebsocket
 
 `_build_ws_url()` usa `quote(ticket, safe="")`. O conjunto seguro vazio é obrigatório porque caracteres comuns do ticket poderiam alterar a interpretação da query string. Host e porta vêm do endpoint persistido; node, tipo e VMID vêm da requisição validada.
 
-O `nms-backend` exige `wss://` antes de guardar a URL. O navegador nunca recebe essa URL.
+O `trusted-relay-service` exige `wss://` antes de guardar a URL. O navegador nunca recebe essa URL.
 
 ## Política TLS
 
@@ -210,12 +210,12 @@ O `nms-backend` exige `wss://` antes de guardar a URL. O navegador nunca recebe 
 
 ## Falhas, logs e invariantes de segurança
 
-Violações do schema retornam 422; endpoint ausente retorna 404; falhas de conexão, proxy, ticket, porta ou autenticação retornam 502 com detalhes limitados. Um `ProxmoxAPIError` pode ser detalhado para o backend confiável, mas o `nms-backend` o converte antes de qualquer resposta ao navegador.
+Violações do schema retornam 422; endpoint ausente retorna 404; falhas de conexão, proxy, ticket, porta ou autenticação retornam 502 com detalhes limitados. Um `ProxmoxAPIError` pode ser detalhado para o backend confiável, mas o `trusted-relay-service` o converte antes de qualquer resposta ao navegador.
 
 Preserve estas invariantes:
 
 - mantenha a rota autenticada como serviço e nunca a chame diretamente do navegador;
-- mantenha a autorização do usuário por objeto no `nms-backend`;
+- mantenha a autorização do usuário por objeto no `trusted-relay-service`;
 - trate `endpoint_id` como o ID do banco local do `proxbox-api`;
 - mantenha `extra="forbid"` e a matriz QEMU/LXC explícita;
 - obtenha host, porta, credenciais e política TLS somente do endpoint persistido;
@@ -251,4 +251,4 @@ Execute:
 uv run pytest -q tests/proxmox/test_console_route.py tests/proxmox/test_browser_console_relay.py
 ```
 
-Ao alterar o broker, mantenha este guia, a referência HTTP, o `README.md` e os arquivos de contexto de LLM sincronizados; confira os contratos com o `nms-backend`; teste token, senha, QEMU noVNC, QEMU terminal e LXC terminal; e confirme que nenhum segredo entrou em schema público, repr, log ou resposta ao navegador.
+Ao alterar o broker, mantenha este guia, a referência HTTP, o `README.md` e os arquivos de contexto de LLM sincronizados; confira os contratos com o `trusted-relay-service`; teste token, senha, QEMU noVNC, QEMU terminal e LXC terminal; e confirme que nenhum segredo entrou em schema público, repr, log ou resposta ao navegador.

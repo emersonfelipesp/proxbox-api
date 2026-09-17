@@ -170,9 +170,27 @@ unset/false until a compatible netbox-packer release with endpoint-bound
 authorization is deployed and validated against the released proxbox-api
 contract. Enabling execution does not replace either endpoint write gate.
 
-PBS, PDM, Ceph, intent, SSH, and the broader NMS Cloud route groups are
+PBS, PDM, Ceph, intent, SSH, and the broader cloud management route groups are
 indexed in [`docs/api/service-routes.md`](docs/api/service-routes.md), including
 `PROXBOX_FEATURES` sidecar-only behavior.
+
+### NetBox connection lifecycle and diagnostics
+
+NetBox endpoint create and update responses include an advisory authenticated
+reachability probe. Operators can repeat the same request-private check with
+`GET /netbox/endpoint/{netbox_id}/probe`; it uses a 10-second request timeout,
+separately bounds temporary-client cleanup to one second, redacts credentials, and never
+rolls back a durable endpoint write. A failed result is cached for 30 seconds by the
+exact URL, TLS policy, and credential fingerprint so sync dependencies can fail fast
+with HTTP 502 for connection failures or HTTP 504 for timeouts.
+
+Normal NetBox SDK facades are cached by endpoint ID plus configuration fingerprint.
+Endpoint mutation retires obsolete generations atomically without closing a transport
+that an in-flight request may still use. The last application lifespan closes current
+and retired clients outside the cache lock, completes cleanup through cancellation, and
+retains failed closures for a later retry. NetBox transport failures keep non-empty,
+secret-safe operation and exception detail so backend retries and plugin stage retries
+remain observable.
 
 ### VM interface sync strategy
 

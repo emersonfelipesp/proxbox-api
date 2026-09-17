@@ -286,7 +286,7 @@ optional `guest_ip`, and optional `detail`.
 
 Operator-facing Azure managed-disk V2V planning and optional remote execution.
 This endpoint is consumed by the management page
-`/cloud/azure-to-nmulticloud-migration`.
+`/cloud/azure-to-proxbox-migration`.
 
 - `POST /cloud/azure/vhd-imports` - Validate an Azure-exported VHD import
   request and return the generated operator script. When `execute=true`, run the
@@ -336,14 +336,17 @@ The response includes:
 
 ## NetBox Routes (`/netbox`)
 
-- `POST /netbox/endpoint` - Create the singleton NetBox endpoint.
+- `POST /netbox/endpoint` - Create the singleton NetBox endpoint. The response includes an advisory `probe` result produced with a dedicated 10-second request timeout and a separately bounded one-second temporary-client cleanup; an unreachable NetBox or stalled cleanup never rolls back or indefinitely blocks the endpoint write.
 - `GET /netbox/endpoint` - List NetBox endpoint records.
 - NetBox endpoint updates and deletion atomically retire every cached SDK facade for that endpoint, so new requests cannot acquire an obsolete credential generation. Retired transports remain available to requests that already borrowed them and are closed with the current generation only after the final application lifespan exits. Failed shutdown closures remain queued for retry instead of becoming unreachable.
 - `GET /netbox/endpoint/{netbox_id}` - Get endpoint by ID.
-- `PUT /netbox/endpoint/{netbox_id}` - Update endpoint.
+- `GET /netbox/endpoint/{netbox_id}/probe` - Run the same authenticated, request-private reachability probe used after endpoint writes. The result reports `reachable`, a stable status, the NetBox API version when available, and credential-redacted error classification.
+- `PUT /netbox/endpoint/{netbox_id}` - Update endpoint and return an advisory `probe` result without blocking the durable update on reachability.
 - `DELETE /netbox/endpoint/{netbox_id}` - Delete endpoint.
 - `GET /netbox/status` - Fetch NetBox API status.
 - `GET /netbox/openapi` - Fetch NetBox OpenAPI.
+
+A failed probe is cached for 30 seconds against an unambiguous exact URL, TLS, and credential fingerprint. The bounded, locked cache file is shared by all proxbox-api workers and stores no credentials. Sync dependencies fail fast with HTTP 502 for connection failures or HTTP 504 for timeouts while that result is fresh, before bootstrap or tag reconciliation can contact NetBox. A missing, expired, successful, or differently configured probe never blocks sync.
 
 ### NetBox singleton rule
 

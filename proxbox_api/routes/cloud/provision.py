@@ -141,7 +141,7 @@ async def _cloud_provision_gate(
     """Gate cloud VM provisioning while honoring current NetBox allow_writes state.
 
     Local proxbox-api endpoint rows can lag behind the NetBox plugin endpoint
-    toggle used by NMS. When the only gate failure is local stale
+    toggle used by control plane. When the only gate failure is local stale
     ``allow_writes=False``, a current matching NetBox endpoint with
     ``allow_writes=True`` is authoritative for Cloud VM provisioning.
     """

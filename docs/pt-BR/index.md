@@ -14,7 +14,10 @@ Esta documentacao cobre instalacao, configuracao, arquitetura, referencias de AP
 
 ## Principais capacidades
 
-- Bootstrap do endpoint NetBox com suporte a token v1 e v2.
+- Bootstrap do endpoint NetBox com suporte a token v1 e v2, probe autenticado de
+  alcance e aposentadoria segura por geracao dos clients em cache.
+- Classificacao secret-safe das falhas de transporte do NetBox: conexoes falhas retornam
+  HTTP 502 e timeouts retornam HTTP 504 com detalhe diagnostico nao vazio.
 - CRUD de endpoints Proxmox com senha ou par de token.
 - Coleta de dados de cluster, node, storage, VM, backup, snapshot e replication.
 - Sincronizacao de VM, interfaces, IPs, discos, storages e backups para o NetBox.

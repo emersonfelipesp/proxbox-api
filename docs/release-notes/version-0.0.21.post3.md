@@ -12,11 +12,11 @@ QEMU and LXC console-session contract introduced in `0.0.21.post2`.
   and byte length of both distribution files.
 - Publishes the manifest as an immutable generic package and links it to the
   canonical `emersonfelipesp/proxbox-api` repository.
-- Allows the NMS signed deployment-proof contract to resolve, verify, and
+- Allows the control plane signed deployment-proof contract to resolve, verify, and
   authorize the exact package artifacts before production mutation.
 
 ## Upgrade
 
-Deploy the exact `proxbox-api 0.0.21.post3` package through the NMS
+Deploy the exact `proxbox-api 0.0.21.post3` package through the control plane
 `latest_package` source. Verify `/health`, then validate QEMU noVNC, QEMU
-terminal, and LXC terminal sessions through the NMS same-origin relay.
+terminal, and LXC terminal sessions through the control plane same-origin relay.

@@ -3,7 +3,7 @@
 Backs ``GET /proxmox/services/systemd`` (see
 ``proxbox_api/routes/proxmox/services.py``). Field names and shape mirror the
 "Shared contract" published in the parent feature issue
-(``emersonfelipesp/netbox-proxbox#180``) so netbox-rpc / nms-backend callers
+(``emersonfelipesp/netbox-proxbox#180``) so netbox-rpc / trusted-relay-service callers
 and this schema never drift.
 """
 

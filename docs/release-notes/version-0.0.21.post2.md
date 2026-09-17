@@ -9,14 +9,14 @@ checkout on a trusted runner without Node.js. Both tags remain immutable.
 ## Console relay authentication
 
 - Adds the bounded `websocket_auth` contract to console-session responses so
-  the trusted NMS relay can authenticate its server-side WebSocket handshake
+  the trusted control plane relay can authenticate its server-side WebSocket handshake
   to Proxmox.
 - Uses `Authorization: PVEAPIToken=...` for API-token endpoints and a
   `PVEAuthCookie=...` cookie for password-backed endpoints.
 - Keeps all Proxmox credentials server-side. The browser receives only the
-  NMS one-use relay URL and never receives the upstream authentication value.
+  control plane one-use relay URL and never receives the upstream authentication value.
 - Hides sensitive authentication values from dataclass representations and
-  rejects malformed response shapes at the NMS boundary.
+  rejects malformed response shapes at the control plane boundary.
 
 ## Inventory and synchronization
 
@@ -44,4 +44,4 @@ checkout on a trusted runner without Node.js. Both tags remain immutable.
 
 Deploy the exact `proxbox-api 0.0.21.post2` package from the Gitea Package
 Registry, verify `/health`, and validate QEMU noVNC, QEMU terminal, and LXC
-terminal sessions through the NMS same-origin relay.
+terminal sessions through the control plane same-origin relay.

@@ -300,7 +300,7 @@ async def create_console_session(
     req: ConsoleSessionRequest,
     db_session: SessionDep,
 ) -> ConsoleSessionResponse:
-    """Create a one-time session for the trusted nms-backend relay."""
+    """Create a one-time session for the trusted-relay service."""
     endpoint = await _load_endpoint(req, db_session)
     return await _create_console_session_for_endpoint(req, endpoint)
 

@@ -2,7 +2,7 @@
 
 Exposes ``GET /proxmox/services/systemd`` -- the SSH executor for the
 agentless, pull-based Proxmox service-monitoring feature
-(``emersonfelipesp/netbox-proxbox#180``). It is called by nms-backend's
+(``emersonfelipesp/netbox-proxbox#180``). It is called by trusted-relay-service's
 ``@rpc_handler("os.linux_proxmox.show_systemctl_services")``, itself
 dispatched by the netbox-rpc procedure of the same name; it is not meant to be
 called directly by end users.

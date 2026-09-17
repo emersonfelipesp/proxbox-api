@@ -112,7 +112,7 @@ def test_pve_cloudinit_payload_renders_required_fields() -> None:
         ssh_authorized_keys=["ssh-ed25519 AAAA testkey op@host"],
     )
     assert "#cloud-config" in payloads.user_data
-    assert "pve-node-42.nmulti.local" in payloads.user_data
+    assert "pve-node-42.example.internal" in payloads.user_data
     assert "Pin: version 9.1.11*" in payloads.user_data
     assert "pve-enterprise.sources" in payloads.user_data
     assert "grub-pc/install_devices multiselect %s" in payloads.user_data

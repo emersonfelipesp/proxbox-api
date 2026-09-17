@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/.github/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/.github/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -11,20 +11,22 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 ## Purpose
 
-GitHub and Gitea Actions CI/CD workflows for `proxbox-api`. Public workflows
-live under `.github/workflows/`; private registry and deployment workflows live
-under `.gitea/workflows/`.
+Public GitHub Actions CI, documentation, package publication, and container
+publication workflows for `proxbox-api`. The only documented Gitea workflow is
+the bounded untrusted compatibility probe under `.gitea/workflows/`; private
+runner inventories, deployment receipts, package-registry wiring, and promotion
+orchestration are outside the public repository boundary and must not be
+reintroduced here.
 
 ## Workflow Index
 
 | File | Trigger | What it does |
 |------|---------|--------------|
-| `.gitea/workflows/publish-gitea.yml` | Gitea: tag push (`v*`) | Uses distinct job-bound ephemeral validation/build identities on the repository-unique `ci-release-proxbox-api` label. The first proves the exact tag/source/CI and accepted runner before candidate execution. The second builds behind the token-free UID boundary and uploads the package wheel, package sdist, `release-manifest.json`, `release-request.json`, `runner-completion-attestation.json`, and `runner-completion-attestation.sig`. The target workflow has no package or GitHub-mirror credential and cannot publish or push tags; the separate locked control owns those capabilities. |
 | `.gitea/workflows/artifact-v3-compatibility.yml` | Gitea: pull request / manual dispatch | Runs a bounded, disposable upload/download checksum probe for the Gitea-compatible artifact v3 actions on `ci-untrusted-python312`. |
 | `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
-| `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Downloads the exact linked Gitea wheel/sdist and validates both on Python 3.12/3.13. Candidate validation uses two xdist workers with loadgroup isolation; Python 3.13 keeps branch coverage, uploads XML evidence for 14 days, and retains duration telemetry while omitting the terminal missing-lines report. `rcN` versions publish to TestPyPI; final/post events additionally require immutable successful deployment evidence before those bytes reach PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
+| `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Builds the exact tagged source on GitHub, validates its wheel and sdist on Python 3.12/3.13, and publishes the same artifacts. Candidate validation uses two xdist workers with loadgroup isolation; Python 3.13 keeps branch coverage, uploads XML evidence for 14 days, and retains duration telemetry while omitting the terminal missing-lines report. `rcN` versions publish to TestPyPI; final/post releases publish to PyPI, then publish Docker images and run post-publish E2E. |
 | `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across the supported POSIX Linux/macOS runtimes for Python 3.12 and 3.13. Windows is not a supported service runtime because safety-critical state uses POSIX advisory locks. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
 | `release-docker-verify.yml` | Called after successful Docker publication / manual dispatch | Pulls and smoke-tests every published standard and experimental Docker tag only after the release publication workflow succeeds. |
@@ -51,6 +53,15 @@ ci.yml (push/PR — dev mode E2E only)
     - NetBox readiness waits up to 20 minutes for migrations/search indexing, then checks `/api/status/` before creating tokens.
     - Docker-backed Proxmox E2E uses pytest marker `mock_http`; the separate in-process MockBackend pass uses `mock_backend`.
 
+`test-free-threaded` is intentionally `continue-on-error`. It creates an isolated
+Python 3.14t environment without installing root project metadata, installs the
+focused dependencies needed to import and run the probe, compiles the package,
+and runs `scripts.verify_free_threaded_auth_heartbeat`. Do not expand it
+to the full pytest suite until the SQLAlchemy C-extension event-registry teardown
+no longer segfaults during `engine.dispose()` on free-threaded Python. The job is
+a forward-compatibility probe; supported production and complete-test runtimes
+remain Python 3.12 and 3.13.
+
 rust-reconcile.yml
 ├── test         (cargo test --no-default-features, local native install, strict parity)
 └── build-wheels (needs: test; maturin wheel artifacts for supported Linux/macOS runtimes)
@@ -59,27 +70,18 @@ ci.yml (release event — both dev + pypi modes)
 └── e2e-docker matrix runs both netbox_proxbox_mode=dev and netbox_proxbox_mode=pypi
 
 publish-testpypi.yml (staged package release)
-├── prepare-release        (validate tag/version; fetch exact Gitea dist + final deployment attestation)
-├── validate-gitea-artifacts (install exact wheel + sdist on py3.12/3.13)
+├── prepare-release         (validate tag/version; build exact tagged wheel + sdist)
+├── validate-built-artifacts (install exact wheel + sdist on py3.12/3.13)
 ├── TestPyPI lane
-│   ├── publish-testpypi   (needs: prepare-release)
+│   ├── publish-testpypi   (needs: prepare-release + validate-built-artifacts)
 │   └── validate-testpypi  (needs: prepare-release + publish-testpypi; installs package from TestPyPI across py3.12/3.13, then runs local checks)
 └── PyPI lane
-    ├── validate-pypi-candidate (needs: prepare-release; local checks across py3.12/3.13)
-    ├── e2e-pre-publish         (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES; same 20-minute NetBox readiness gate)
+    ├── validate-pypi-candidate (needs: prepare-release + validate-built-artifacts; local checks across py3.12/3.13)
+    ├── e2e-pre-publish         (needs: prepare-release + validate-built-artifacts; dev deps — proxbox-api local build + DEV_OVERRIDES; same 20-minute NetBox readiness gate)
     ├── publish-pypi            (needs: prepare-release + validate-pypi-candidate + e2e-pre-publish)
     ├── validate-pypi           (needs: prepare-release + publish-pypi; installs package from PyPI)
     ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish, which verifies the published images before returning)
     └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox; same 20-minute NetBox readiness gate)
-
-publish-gitea.yml (credential-free target request; ci-release-proxbox-api)
-├── validate-source      (prove tag/develop/CI and accepted runner)
-└── build-request        (needs: validate-source; token-free build + signed exact six-file upload)
-
-N-MultiCloud/release-control (separate private control repository)
-├── validate.yml         (independently fetch, verify, and seal the exact request)
-└── publish.yml          (isolated credential owner; publish Gitea bytes and promote RC tag)
-```
 
 ## E2E Dependency Modes
 
@@ -109,10 +111,9 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
 - Release workflows validate that the `pyproject.toml` version matches the Git tag before publishing.
 - Package uploads intentionally do not use `twine --skip-existing`; if an artifact version was consumed, bump to the next `.postN` or `rcN` and publish that immutable version.
 - Package-index credentials are step-scoped `TWINE_USERNAME` / `TWINE_PASSWORD`
-  environment variables, never Twine command-line arguments. The private
-  Gitea link call uses a mode-0600 netrc, and RC Git promotion uses a
-  mode-0500 `GIT_ASKPASS` helper so credentials never enter process argv.
+  environment variables, never Twine command-line arguments.
 - Do not add secrets to workflow files — use repository secrets (`PYPI_TOKEN`, `DOCKERHUB_TOKEN`, etc.).
-- Keep `docs/development/ci-e2e-workflows.md`, `docs/pt-BR/development/ci-e2e-workflows.md`, and `docs/development/release-publishing.md` aligned with CI workflow changes.
+- Keep `docs/development/ci-e2e-workflows.md` and
+  `docs/pt-BR/development/ci-e2e-workflows.md` aligned with CI workflow changes.
 - Keep `rust-reconcile.yml` aligned with `proxbox-reconcile-rs/Cargo.toml`,
   `proxbox-reconcile-rs/pyproject.toml`, and `tests/reconciliation/`.

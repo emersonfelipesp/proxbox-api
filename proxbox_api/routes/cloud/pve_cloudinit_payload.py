@@ -9,7 +9,7 @@ unattended Proxmox VE install on top of a Debian 12 (Bookworm) base image:
 * ``meta-data`` — declares the cloud-init ``instance-id``; a fresh value
   here is what forces cloud-init to re-run on a clone.
 
-Source-of-truth for the static template lives in the ``nms`` repository
+Source-of-truth for the static template lives in the ``control-plane`` repository
 under ``cloud-init/pve-install/``. This module embeds the same content as
 Python multi-line strings so ``proxbox-api`` does not need an out-of-tree
 file at runtime.
@@ -25,7 +25,7 @@ DEFAULT_DEBIAN_RELEASE = "bookworm"
 DEFAULT_NIC_NAME = "ens18"
 DEFAULT_BRIDGE_NAME = "vmbr0"
 DEFAULT_HOSTNAME = "pve-node-01"
-DEFAULT_DOMAIN = "nmulti.local"
+DEFAULT_DOMAIN = "example.internal"
 DEFAULT_NODE_CIDR = "10.0.30.50/24"
 DEFAULT_GATEWAY = "10.0.30.1"
 DEFAULT_NAMESERVERS = ("1.1.1.1", "8.8.8.8")

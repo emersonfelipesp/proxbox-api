@@ -17,7 +17,7 @@ def test_build_proxmox_ci_args_maps_user_ssh_keys_and_network():
         ssh_keys=ssh_keys,
         user_data={"package_update": True, "timezone": "UTC"},
         network={"ip": "192.0.2.50", "cidr": 24, "gw": "192.0.2.1"},
-        search_domain="nmulti.cloud",
+        search_domain="example.com",
         dns_servers=["168.0.96.26", "168.0.96.27", "8.8.8.8"],
     )
 
@@ -26,7 +26,7 @@ def test_build_proxmox_ci_args_maps_user_ssh_keys_and_network():
     assert args["ciuser"] == "ubuntu"
     assert args["sshkeys"] == quote("\n".join(ssh_keys), safe="")
     assert args["ipconfig0"] == "ip=192.0.2.50/24,gw=192.0.2.1"
-    assert args["searchdomain"] == "nmulti.cloud"
+    assert args["searchdomain"] == "example.com"
     assert args["nameserver"] == "168.0.96.26 168.0.96.27 8.8.8.8"
     assert str(args["cicustom"]).startswith("user=")
     assert "package_update: true" in str(args["cicustom"])

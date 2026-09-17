@@ -1,7 +1,4 @@
-"""LXC container cloud provisioning and CT-template listing routes.
-
-Closes https://git.nmulti.cloud/emersonfelipesp/proxbox-api/issues/90
-"""
+"""LXC container cloud provisioning and CT-template listing routes."""
 
 from __future__ import annotations
 

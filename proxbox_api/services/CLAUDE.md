@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/proxbox_api/services/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/proxbox_api/services/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -90,7 +90,7 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   `hardware_discovery_sync_nic_macs` UI setting. A missing setting is false; a
   MAC failure warns and never aborts the run.
 - `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
-- `influx.py`: independent InfluxDB v2 query client for `/proxmox/metrics/influx/query`. It constructs Flux from validated structured fields, validates and pins the resolved HTTPS destination through the shared SSRF policy, accepts an injected `httpx.AsyncClient` or `AsyncBaseTransport`, bounds upstream and normalized response bytes plus rows, normalizes annotated CSV plus supported JSON, and exposes only secret-safe typed failures. It must not acquire NetBox/NMS state or persist caller credentials.
+- `influx.py`: independent InfluxDB v2 query client for `/proxmox/metrics/influx/query`. It constructs Flux from validated structured fields, validates and pins the resolved HTTPS destination through the shared SSRF policy, accepts an injected `httpx.AsyncClient` or `AsyncBaseTransport`, bounds upstream and normalized response bytes plus rows, normalizes annotated CSV plus supported JSON, and exposes only secret-safe typed failures. It must not acquire NetBox/control plane state or persist caller credentials.
 - `proxmox_metrics.py`: direct Proxmox pull transport for `/proxmox/metrics/pull/query`. It resolves one existing endpoint, invokes only `cluster/metrics/export`, validates finite canonical samples, applies bounded filters, sorting, truncation, and exact deduplication, and maps provider failures without exposing exception text.
 - `proxmox_bounded.py`: thin boundary over the SDK's public bounded read (`ProxmoxResource.get_bounded()`, proxmox-sdk >= 0.0.15). The SDK enforces identity encoding, disabled transport decompression, redirect refusal (`ProxmoxRedirectError`), and content-length plus chunk-level limits before JSON materialization. This module only encodes boolean query values as `0`/`1` (the SDK forwards query values verbatim and yarl rejects Python booleans), drops `None` values, and maps `ResponseTooLargeError`/`UnsupportedResponseEncodingError` to `ProxmoxResponseTooLargeError`/`ProxmoxUnsupportedEncodingError`; every other SDK exception propagates unchanged. The pre-0.0.15 legacy streaming path was removed once the pinned SDK shipped the same public contract.
 - `sync/`: main synchronization workflows for clusters, devices, virtual machines, storage, backups, snapshots, disks, interfaces, IPs, and task history.

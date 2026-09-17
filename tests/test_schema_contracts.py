@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,139 @@ from proxbox_api.proxmox_to_netbox.proxmox_schema import (
 )
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema
 from tests.fixtures import NETBOX_OPENAPI_SNAPSHOT
+
+OpenAPIDocument = dict[str, object]
+PUBLIC_PLUGIN_NAMESPACES = frozenset({"bng", "gpon", "proxbox"})
+REPRESENTATIVE_PUBLIC_PATHS = (
+    "/api/virtualization/virtual-machines/",
+    "/api/dcim/devices/",
+    "/api/ipam/prefixes/",
+)
+VIRTUAL_MACHINE_SCHEMA_REFS = frozenset(
+    {
+        "#/components/schemas/PaginatedVirtualMachineWithConfigContextList",
+        "#/components/schemas/VirtualMachineWithConfigContext",
+        "#/components/schemas/WritableVirtualMachineWithConfigContextRequest",
+    }
+)
+
+
+def _is_local_json_pointer(ref: str) -> bool:
+    return ref.startswith("#/")
+
+
+def _decode_json_pointer_token(token: str) -> str:
+    return token.replace("~1", "/").replace("~0", "~")
+
+
+def _resolve_local_json_pointer(document: OpenAPIDocument, pointer: str) -> object | None:
+    if not _is_local_json_pointer(pointer):
+        return None
+    current: object = document
+    for raw_token in pointer[2:].split("/"):
+        if not raw_token:
+            return None
+        token = _decode_json_pointer_token(raw_token)
+        if not isinstance(current, dict) or token not in current:
+            return None
+        current = current[token]
+    return current
+
+
+def _iter_local_json_pointers(node: object) -> Iterable[str]:
+    stack: list[object] = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            ref = current.get("$ref")
+            if isinstance(ref, str) and _is_local_json_pointer(ref):
+                yield ref
+            stack.extend(current.values())
+            continue
+        if isinstance(current, list):
+            stack.extend(current)
+
+
+def _collect_dangling_local_references(document: OpenAPIDocument) -> list[str]:
+    seen: set[str] = set()
+    dangling: list[str] = []
+    for ref in _iter_local_json_pointers(document):
+        if ref in seen:
+            continue
+        seen.add(ref)
+        if _resolve_local_json_pointer(document, ref) is None:
+            dangling.append(ref)
+    return dangling
+
+
+def _plugin_namespace(path: str) -> str | None:
+    parts = path.split("/")
+    if len(parts) > 3 and parts[1:3] == ["api", "plugins"]:
+        return parts[3]
+    return None
+
+
+def _assert_representative_public_paths(paths: dict[str, object]) -> None:
+    for path in REPRESENTATIVE_PUBLIC_PATHS:
+        assert path in paths
+
+
+def _assert_no_private_control_plane_surface(document: OpenAPIDocument) -> None:
+    paths = document.get("paths")
+    assert isinstance(paths, dict)
+    plugin_namespaces = {
+        namespace for path in paths if (namespace := _plugin_namespace(path)) is not None
+    }
+    assert plugin_namespaces <= PUBLIC_PLUGIN_NAMESPACES
+
+    components = document.get("components")
+    assert isinstance(components, dict)
+    schemas = components.get("schemas")
+    assert isinstance(schemas, dict)
+    assert not any("Backend" in name for name in schemas)
+
+
+def _assert_virtual_machine_operation_schemas(document: OpenAPIDocument) -> None:
+    paths = document.get("paths")
+    assert isinstance(paths, dict)
+    vm_path = paths["/api/virtualization/virtual-machines/"]
+    assert isinstance(vm_path, dict)
+
+    refs = set(_iter_local_json_pointers(vm_path))
+    missing = VIRTUAL_MACHINE_SCHEMA_REFS - refs
+    assert not missing, f"missing VM schema refs: {sorted(missing)}"
+
+    for ref in VIRTUAL_MACHINE_SCHEMA_REFS:
+        assert _resolve_local_json_pointer(document, ref) is not None
+
+
+def _assert_all_local_json_pointers_resolve(document: OpenAPIDocument) -> None:
+    dangling = _collect_dangling_local_references(document)
+    assert dangling == []
+
+
+def test_bundled_netbox_openapi_cache_is_sanitized_public_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for issue #439: bundled NetBox OpenAPI stays a public contract."""
+
+    monkeypatch.delenv("PROXBOX_NETBOX_OPENAPI_PERSIST", raising=False)
+    monkeypatch.setattr(netbox_schema, "_in_memory_openapi_cache", None)
+
+    bundled_path = netbox_schema.netbox_openapi_cache_path()
+    assert bundled_path.is_file()
+
+    document = netbox_schema.load_netbox_openapi_cache()
+    assert isinstance(document, dict)
+    assert document.get("openapi") == "3.0.3"
+
+    paths = document.get("paths")
+    assert isinstance(paths, dict)
+
+    _assert_representative_public_paths(paths)
+    _assert_no_private_control_plane_surface(document)
+    _assert_virtual_machine_operation_schemas(document)
+    _assert_all_local_json_pointers_resolve(document)
 
 
 def test_custom_openapi_contains_embedded_generated_proxmox_schema():

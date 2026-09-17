@@ -1,6 +1,6 @@
 # Proxmox Console Sessions
 
-This document is the canonical `proxbox-api` implementation guide for the private console-session broker used by the NMS browser console. It explains how the service selects a Proxmox guest, requests a `vncproxy` or `termproxy` ticket, constructs the upstream WebSocket URL, exports one bounded authentication value to the trusted relay, preserves endpoint TLS policy, and handles failures.
+This document is the canonical `proxbox-api` implementation guide for the private console-session broker used by the management browser console. It explains how the service selects a Proxmox guest, requests a `vncproxy` or `termproxy` ticket, constructs the upstream WebSocket URL, exports one bounded authentication value to the trusted relay, preserves endpoint TLS policy, and handles failures.
 
 The existing `/sessions` endpoint is service-to-service. Its response contains short-lived credentials and must never be returned directly to browser JavaScript. The existing trusted service consumer and its contract remain unchanged.
 
@@ -30,11 +30,11 @@ data.
 ## Ownership and trust boundary
 
 ```text
-nms browser
+control-plane browser
     |
-    | opaque NMS stream token only
+    | opaque control plane stream token only
     v
-nms-backend trusted relay
+trusted-relay-service trusted relay
     |
     | service-authenticated POST /proxmox/console/sessions
     | endpoint_id + vmid + node + vm_type + console_type
@@ -48,7 +48,7 @@ proxbox-api
 Proxmox API and WebSocket endpoint
 ```
 
-`proxbox-api` does not authorize an end user against a NetBox virtual machine. `nms-backend` performs that caller-scoped object authorization and maps any NetBox endpoint relation to the `proxbox-api` database ID before calling this route. This service trusts its authenticated service caller to supply an already authorized `endpoint_id` and then validates that the endpoint exists locally.
+`proxbox-api` does not authorize an end user against a NetBox virtual machine. `trusted-relay-service` performs that caller-scoped object authorization and maps any NetBox endpoint relation to the `proxbox-api` database ID before calling this route. This service trusts its authenticated service caller to supply an already authorized `endpoint_id` and then validates that the endpoint exists locally.
 
 ## Supported modes
 
@@ -89,7 +89,7 @@ The successful `ConsoleSessionResponse` is private transport material:
 | `verify_ssl` | Persisted endpoint TLS verification policy | Server-controlled policy |
 | `websocket_auth` | Exactly one private `authorization` or `cookie` value | Secret; server-side only |
 
-The route deliberately returns enough data for a trusted relay to open the Proxmox WebSocket. It is not a public browser-session schema. `nms-backend` must transform it into its much smaller public response.
+The route deliberately returns enough data for a trusted relay to open the Proxmox WebSocket. It is not a public browser-session schema. `trusted-relay-service` must transform it into its much smaller public response.
 
 ### Standalone browser contract
 
@@ -210,7 +210,7 @@ A Proxmox console WebSocket upgrade needs both the ticket in the URL and authent
 - `kind="authorization"` with the endpoint's API-token authorization value; or
 - `kind="cookie"` with the password session's `PVEAuthCookie` value.
 
-`ProxmoxWebSocketAuth.value` and `ConsoleWebSocketAuth.value` use `repr=False` so ordinary object rendering does not reveal the credential. The route returns the value only to the trusted relay. `nms-backend` validates its kind and bounds again, stores it inside the one-time ticket, and attaches it only to the server-side WebSocket handshake.
+`ProxmoxWebSocketAuth.value` and `ConsoleWebSocketAuth.value` use `repr=False` so ordinary object rendering does not reveal the credential. The route returns the value only to the trusted relay. `trusted-relay-service` validates its kind and bounds again, stores it inside the one-time ticket, and attaches it only to the server-side WebSocket handshake.
 
 Do not add a second authentication field, expose the value in logs, or move it into a browser response or URL.
 
@@ -225,7 +225,7 @@ wss://{host}:{proxmox_port}/api2/json/nodes/{node}/{vm_type}/{vmid}/vncwebsocket
 
 `_build_ws_url()` uses `quote(ticket, safe="")`. An empty safe set is required because Proxmox tickets commonly contain characters that would otherwise change query-string parsing. The host and HTTPS port come from the persisted endpoint, while the node, type, and VMID come from the schema-validated request.
 
-`nms-backend` validates that the URL uses `wss://` before storing it. Browser code never receives this URL.
+`trusted-relay-service` validates that the URL uses `wss://` before storing it. Browser code never receives this URL.
 
 ## TLS policy
 
@@ -274,17 +274,17 @@ the bounded frame relay directly.
 | Request schema or LXC/noVNC violation | HTTP 422 before endpoint or Proxmox access |
 | Unknown local endpoint | HTTP 404 |
 | Stored endpoint cannot create a session | Sanitized HTTP 502 |
-| `ProxmoxAPIError` from `vncproxy`/`termproxy` | HTTP 502 with a broker detail intended only for the trusted backend; `nms-backend` maps it to a bounded browser-safe message |
+| `ProxmoxAPIError` from `vncproxy`/`termproxy` | HTTP 502 with a broker detail intended only for the trusted backend; `trusted-relay-service` maps it to a bounded browser-safe message |
 | Unexpected proxy-call exception | Fixed HTTP 502 `Proxmox console request failed.` |
 | Missing or malformed ticket/port | Fixed HTTP 502 `Proxmox did not return a ticket/port.` |
 | WebSocket authentication cannot be prepared | Fixed HTTP 502 `Unable to authenticate the Proxmox console stream.` |
 
-Logs identify the endpoint or guest tuple and exception class needed for service diagnosis. Never log response bodies, ticket values, `ws_url`, authorization values, cookies, or credential-bearing exception text. The outer NMS relay applies an additional sanitization boundary before any failure reaches the browser.
+Logs identify the endpoint or guest tuple and exception class needed for service diagnosis. Never log response bodies, ticket values, `ws_url`, authorization values, cookies, or credential-bearing exception text. The outer control plane relay applies an additional sanitization boundary before any failure reaches the browser.
 
 ## Security invariants
 
 - Keep this endpoint service-authenticated and server-to-server; never call it directly from browser JavaScript.
-- Keep end-user object authorization in `nms-backend` before this route is called.
+- Keep end-user object authorization in `trusted-relay-service` before this route is called.
 - Keep `endpoint_id` defined as the local proxbox-api database ID.
 - Keep request models `extra="forbid"` and the QEMU/LXC mode matrix explicit.
 - Obtain host, port, credentials, authentication mode, and TLS policy from the stored endpoint only.
@@ -293,7 +293,7 @@ Logs identify the endpoint or guest tuple and exception class needed for service
 - Percent-encode the complete ticket with `safe=""`.
 - Return exactly one bounded authentication kind/value and keep secret values out of repr and logs.
 - Do not add credentials to query parameters beyond Proxmox's required one-time `vncticket` in the private upstream URL.
-- Keep the browser-facing schema in `nms-backend`; do not reuse `ConsoleSessionResponse` as a public contract.
+- Keep the browser-facing schema in `trusted-relay-service`; do not reuse `ConsoleSessionResponse` as a public contract.
 - Keep failures sanitized across the relay boundary.
 - Store standalone state only when Fernet encryption is configured; the
   plaintext credential opt-in is never sufficient.
@@ -347,10 +347,10 @@ uv run pytest -q tests/proxmox/test_console_route.py tests/proxmox/test_browser_
 When the console broker changes:
 
 1. update this guide, the short HTTP reference, `README.md`, and the related `CLAUDE.md`/`AGENTS.md` context;
-2. verify the request and private response schemas against `nms-backend`;
+2. verify the request and private response schemas against `trusted-relay-service`;
 3. preserve API-token and password-session behavior;
 4. verify all three supported workload/console combinations;
 5. test malformed SDK responses and ports;
 6. verify secrets remain absent from public schemas, repr output, logs, and browser responses;
 7. run the focused test above and the repository's normal quality gates; and
-8. coordinate any cross-service contract change with the NMS relay before deployment.
+8. coordinate any cross-service contract change with the control plane relay before deployment.

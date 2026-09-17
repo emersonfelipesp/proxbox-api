@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/scripts/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/scripts/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -17,14 +17,13 @@ Utility and maintenance scripts for the `proxbox-api` project. These are one-off
 
 | File | Role |
 |------|------|
-| `create-github-release.sh` | Fail-closed final public-release helper. It resolves and peels the exact `refs/tags/` object, requires its commit to match the supplied production-approved SHA, loads notes from that exact GitHub commit, creates only after an explicit GitHub API 404, and aborts on existing releases, provenance mismatches, or ambiguous lookup failures. |
+| `check_public_boundary.py` | Fail-closed public-tree scanner for protected integration identities, bounded encoded forms, and nested archive members. Run with `--mutation-test` to prove the hostile corpus before publication. |
 | `mounted_operation_inventory.py` | Explicit isolated `generate`, `verify`, and `readiness` commands for the maintained mounted-operation contracts. The child denies sockets, database access and external writes before importing the application; it never runs lifespan or handlers. |
 | `check_promotion_ancestor_blobs.py` | Base-owned promotion guard that exhaustively traverses merge history and rejects a changed path when its proposed blob matches a strictly older state superseded on the exact base branch. |
 | `operation_inventory_docs.py` | Standard-library-only MkDocs pre-build integrity and source check. It does not import the application and fails on missing, stale or symlinked inventory evidence before restricted snippets render. |
 | `refresh_schemas.py` | Regenerates the Proxmox and NetBox OpenAPI schema snapshots in `proxbox_api/generated/`. Run this when a new Proxmox or NetBox version is targeted. |
 | `prepare_offline_release.py` | Converts the reviewed `Dockerfile.release` plus a CI-populated wheelhouse into the canonical schema-2 offline context embedded only in release sdists. Its restricted Dockerfile reader keeps stage/order state in `_DockerfileState`, delegates each instruction type to a small reader, and checks complete image/cache/install invariants only after parsing. The `uv-source` and `raw` aliases, uv copy, wheel-cache copy, dependency sync, and project install are bound to their exact images and the actual `--target raw` stage. A final canonical-plan comparison rejects added, removed, reordered, or modified instructions so later writes cannot invalidate an already validated install. |
 | `verify_offline_release_sdist.py` | Streams a bounded release sdist into a new context, rehashes its exact offline wheelhouse/lock, and permits only the two literal pinned base images plus declared-stage `COPY --from` sources before the network-disabled CI Docker build. Its Dockerfile reader mirrors the preparer's state, instruction boundaries, and complete canonical plan so both sides enforce the same rule and error contract without a monolithic validator, including the exact `uv-source`/`raw` target binding and rejection of post-install mutations. The release gate separately binds that required GitHub job to the reviewed source-SHA workflow bytes. |
-| `release_artifacts.py` | Builds and verifies immutable Gitea release artifacts and validates the host-issued signed production receipt against `.gitea/deploy-receipt-public.pem` before publishing promotion evidence. |
 
 ## Running
 

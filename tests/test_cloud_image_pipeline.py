@@ -277,8 +277,8 @@ def test_pbs_cloud_image_pipeline_bakes_dns_qga_and_zabbix_userdata():
             vmid=9400,
             name="pbs42-template",
             hostname="pbs42-template",
-            domain="nmulti.cloud",
-            search_domain="nmulti.cloud",
+            domain="example.com",
+            search_domain="example.com",
             nameservers=["168.0.96.26", "168.0.96.27", "8.8.8.8"],
             execute=False,
             include_sensitive_preview=True,
@@ -295,14 +295,14 @@ def test_pbs_cloud_image_pipeline_bakes_dns_qga_and_zabbix_userdata():
         "168.0.96.27",
         "8.8.8.8",
     ]
-    assert parsed["resolv_conf"]["searchdomains"] == ["nmulti.cloud"]
+    assert parsed["resolv_conf"]["searchdomains"] == ["example.com"]
     assert "debian/pbs trixie pbs-no-subscription" in userdata
     assert "zabbix-release_latest_7.4+debian13_all.deb" in userdata
     assert (
         "DEBIAN_FRONTEND=noninteractive apt-get install -y "
         "proxmox-backup-server qemu-guest-agent zabbix-agent2"
     ) in userdata
-    assert "Server=zabbix.nmulti.cloud" in userdata
+    assert "Server=zabbix.example.com" in userdata
     assert "systemctl enable qemu-guest-agent" in userdata
     assert "systemctl enable zabbix-agent2" in userdata
     assert (
@@ -357,7 +357,7 @@ def test_pfsense_release_pipeline_returns_first_boot_script_and_qm_commands():
         'PRODUCT="pfsense"\n'
         'PRODUCT_VERSION="2.8.1"\n'
         'HOSTNAME="pfsense-template"\n'
-        'DOMAIN="nmulti.local"\n'
+        'DOMAIN="example.internal"\n'
         'NODE_CIDR=""\n'
         'GATEWAY=""\n'
         'NAMESERVERS="1.1.1.1 8.8.8.8"\n'

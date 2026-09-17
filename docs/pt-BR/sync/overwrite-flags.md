@@ -155,6 +155,19 @@ truth for the device allowlist. This guarantees that flipping
 was a regression from the per-VM path bypassing the allowlist and
 silently reverting `device_type` to `Proxmox Generic Device`.
 
+## Plataforma da VM
+
+A plataforma e definida quando a VM e criada. VMs existentes so recebem patch quando
+`overwrite_vm_platform=true`. O flag usa `false` por padrao; assim, um upgrade ou caller
+sem configuracao preserva a plataforma gerenciada pelo operador, enquanto novas VMs
+continuam recebendo a plataforma derivada do sistema operacional convidado.
+
+`overwrite_vm_platform` faz parte do contrato cross-repo validado pelo CI
+(`contracts/overwrite_flags.json`, espelhado no netbox-proxbox ao lado de
+`constants.OVERWRITE_FIELDS`). O plugin oferece a configuracao global default-false e o
+override tri-state por endpoint, resolve o valor efetivo e o encaminha ao proxbox-api.
+Nome, posicao e default devem permanecer alinhados nos dois repositorios.
+
 ## Plugin contract
 
 The plugin and the API rely on the same flag names being canonical on both

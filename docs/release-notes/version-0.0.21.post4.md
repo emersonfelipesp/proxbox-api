@@ -13,10 +13,10 @@ QEMU and LXC console-session contract introduced in `0.0.21.post2`.
 - Publishes the frozen manifest as an immutable generic package linked to the
   canonical `emersonfelipesp/proxbox-api` repository.
 - Binds the protected tag SHA, file names, byte lengths, and SHA-256 digests
-  consumed by the NMS signed production deployment-proof contract.
+  consumed by the control plane signed production deployment-proof contract.
 
 ## Upgrade
 
-Deploy the exact `proxbox-api 0.0.21.post4` package through the NMS
+Deploy the exact `proxbox-api 0.0.21.post4` package through the control plane
 `latest_package` source. Verify `/health`, then validate QEMU noVNC, QEMU
-terminal, and LXC terminal sessions through the NMS same-origin relay.
+terminal, and LXC terminal sessions through the control plane same-origin relay.

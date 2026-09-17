@@ -101,7 +101,6 @@ nav:
       - CI and E2E Workflows: development/ci-e2e-workflows.md
       - E2E Proxmox Service Matrix: development/e2e-proxmox-service-matrix.md
       - Deployment: development/deployment.md
-      - Release Publishing: development/release-publishing.md
       - Troubleshooting: development/troubleshooting.md
       - Contributing: development/contributing.md
       - Refactoring Summary: development/refactoring-summary.md

@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -73,9 +73,11 @@ Provenance sidecars detect corruption; they do not authenticate an artifact,
 because another process running as the same operating-system user can forge the
 artifact and its digest. Production therefore keeps runtime code generation off.
 
-- **`netbox-proxbox` v0.0.24** — the NetBox plugin that consumes this backend.
-  Source: <https://github.com/emersonfelipesp/netbox-proxbox>. The current
-  pairing is `netbox-proxbox 0.0.26.post7 ... proxbox-api 0.0.23 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
+- **`netbox-proxbox` 0.0.27rc4 (current source)** — the NetBox plugin that
+  consumes this backend. Source:
+  <https://github.com/emersonfelipesp/netbox-proxbox>. The current sibling-source
+  development pairing is `netbox-proxbox 0.0.27rc4 ... proxbox-api 0.0.23 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
+  This source-only tuple is not a published or certified runtime pairing.
   `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
   RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
   VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
@@ -170,35 +172,6 @@ Open the nearest scoped guide for the code you are changing.
 - `tasks/`: Development task tracking.
 - `Dockerfile` and `docker/`: runtime and reverse-proxy images for local and published deployments.
 - `.github/workflows/`: CI/CD pipelines for test, lint, publish, and docs.
-- `.gitea/workflows/mirror-github.yml`: Gitea Actions mirror from Gitea
-  `develop` and `main` to `github.com/emersonfelipesp/proxbox-api` using
-  `GH_MIRROR_TOKEN` for GitHub, `SOURCE_MIRROR_TOKEN` for authenticated Gitea
-  source fetches, the dedicated `mirror-host` runner label, `gh`
-  authentication, and a single triggering-branch push. Do not broaden it to
-  tags, `--all`, or `--mirror`.
-- `.gitea/workflows/deploy-production.yml`: Gitea Actions branch-tier deploy.
-  Pushes to `develop` deploy `proxbox-api-staging`; production uses an authorized
-  manual dispatch from canonical `main` through the `prod-deploy` runner.
-  **Staging is gated on CI**: a `verify-ci` job runs first and the staging deploy
-  job `needs` it, so a commit cannot reach staging unless the
-  `CI / Lint, smoke, and core coverage (push)` context is `success` for that
-  **exact SHA**. Previously CI and deploy were sibling workflows on the same
-  push -- they raced, and deploy never consulted CI
-  (N-MultiCloud/nmulticloud-context#204 requirement 6). The gate lives in
-  `.gitea/scripts/require_ci_status.py`, polls the commit-status API, and
-  **fails closed**: a missing context, an unreadable response, or a timeout all
-  block the deploy. The only bypass is the explicit, logged `skip_ci_gate`
-  dispatch input, kept so an incident rollback to a known-good older SHA is not
-  locked out. A dispatch `ref` that is not a full 40-character SHA is refused
-  rather than verified imprecisely. Contracts: `tests/test_deploy_ci_gate.py`.
-- `.gitea/workflows/publish-gitea.yml`: Gitea Package Registry publish workflow
-  committed to `main`. Handles `push: tags:`, `create`, and `workflow_dispatch`
-  events: builds dist, publishes to Gitea Package Registry (`PKG_TOKEN`), pushes
-  tag to GitHub, and creates/publishes the GitHub release for non-RC tags (which
-  fires `release: published` on GitHub Actions). Secret name: `PKG_TOKEN`
-  (`GITEA_` prefix is reserved by Gitea Actions and cannot be used for secrets).
-  If Gitea 1.26.2 tag triggers are not operational on this instance, use the
-  manual fallback documented in the Release Procedure section below.
 
 ## Architecture
 
@@ -279,7 +252,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
 - **Service monitoring** (`routes/proxmox/services.py`, `/proxmox/services/*`): `GET /proxmox/services/systemd` reads systemd unit status (`Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `MainPID`, `ExecMainCode`, `ExecMainStatus`, `NRestarts`, `ActiveEnterTimestamp`, `UnitFileState`) for a Proxmox endpoint over SSH, using the endpoint's own registered SSH credential (agentless — no Proxmox-side agent required). Gated on: NetBox `ProxmoxEndpoint` enabled, `service_monitoring_enabled`, `allow_writes`, `access_methods=api_ssh`, complete SSH credentials, and netbox-rpc not disabled for the endpoint. Bounded 10s SSH command timeout; unit names are validated (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, no `..`, ≤100 chars, ≤32 units/request) and `shlex.quote`'d as defense in depth before the fixed-argv `systemctl show` command runs. `reachable=False` (SSH unreachable) is returned as HTTP 200 — a legitimate monitoring result — while unknown endpoint id / missing or disabled SSH credential / malformed unit request surface as 4xx. Called by the RPC executor's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure, not meant to be called directly by end users. See `routes/proxmox/CLAUDE.md`.
 - **Metrics queries** (`routes/proxmox/metrics.py`, `/proxmox/metrics/*`): authenticated bounded routes provide structured InfluxDB v2 queries and direct Proxmox pulls. The Influx route constructs escaped Flux server-side, accepts no arbitrary Flux, and bounds both upstream and normalized output bytes. The pull route resolves one configured endpoint and calls only `cluster/metrics/export`, with no caller-supplied path. Both enforce response and row bounds and map failures to secret-safe reasons. Pull response bytes are bounded during the authenticated upstream stream, boolean parameters use Proxmox-compatible encodings, and redirects are rejected; `services/proxmox_bounded.py` calls the SDK's public `get_bounded()` (proxmox-sdk >= 0.0.15), encodes booleans as `0`/`1` because the SDK forwards query values verbatim, and maps `ResponseTooLargeError`/`UnsupportedResponseEncodingError` to backend-typed errors. See `routes/proxmox/CLAUDE.md`.
-- **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the management route `/cloud/azure-to-nmulticloud-migration`. See `routes/cloud/CLAUDE.md`.
+- **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image + a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom` user-data snippet (the only mechanism that runs a full `#cloud-config` at first boot), and the **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`): preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the management route `/cloud/azure-to-proxbox-migration`. See `routes/cloud/CLAUDE.md`.
 - **Intent** (`routes/intent/`, `/intent/*`): plan, apply, deletion-requests, tag/untag pending-deletion.
 - **Ceph v2 control plane** (`proxbox_api/ceph/`, `/ceph/v2/*`): Proxmox plans require one explicit durable local endpoint, one request-private full-schema HMAC-bound session, and one exact node per non-noop operation; first-node/`localhost` mutation fallbacks are forbidden. `netbox-ceph` resolves its plugin endpoint to this canonical backend endpoint ID; its plugin PK is not interchangeable. The canonical plan/digest, strict typed payload for each `(kind, action)`, stable server-keyed endpoint revision, hashed approval, owner-bound run lease, append-only dispatch/task events, and permanent provider-global task claims are persisted; a distinct delegated actor issues one opaque, expiring approval and the requester consumes it atomically once. `enabled`, `allow_writes`, revision, endpoint/session binding, and node are rechecked before every mutation, with freshness queries serialized against lease heartbeats. Task-based mutations atomically claim one complete UPID globally for the provider; only SDK-proven flag create/update/delete and OSD update may declare typed synchronous completion. Missing/multiple/reused/node-inconsistent UPIDs, expired leases, crash/cancellation, late workers, and ambiguous legacy cross-endpoint claims are never replayed or promoted to success. Post-dispatch evidence and cancellation checkpoints survive repeated `cancel()` calls until durable completion. Recursive persistence/API/SSE/log redaction covers normalized secret aliases, URLs, extras, exceptions, non-JSON fallbacks, and tracebacks. Writes are default-off unless both `PROXBOX_ENABLE_CEPH_V2_WRITES=true` and `PROXBOX_CEPH_TRUSTED_ACTOR_GATEWAY=true`; Dashboard/external apply and destructive capabilities stay false until durable provider authority exists, and the authenticated NetBox gateway must overwrite `X-Proxbox-Actor`. See `proxbox_api/ceph/CLAUDE.md` and `docs/operations/ceph-write-approvals.md`.
 - **Ceph timing, authority, and failure isolation**: every Proxmox Ceph mutation prepares through fresh typed `cluster/status` membership and an uncached endpoint/session gate, while an independent audit/lease session keeps heartbeating. The engine performs another live owner/expiry CAS after preparation and before invoking the prepared mutation boundary; renewal/checkpoint predicates evaluate database wall-clock time after row-lock waits so delayed statements cannot reclaim expired authority. `ceph_task_timeout`, `ceph_task_poll_interval`, and `ceph_run_lease_seconds` resolve once off-loop as environment override → plugin setting → default; poll interval is normalized to at most timeout, every task-status call/sleep uses the remaining deadline, and each run persists its immutable lease duration. Ambiguous provider-task migration collisions abort application construction, and sensitive-data filtering covers the DEBUG admin buffer as well as normal handlers.
@@ -289,51 +262,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
 - **Optional sidecars** (conditionally mounted): `/pbs/*`, `/ceph/*`, `/pdm/*` when the corresponding `proxmox-sdk` extras are installed and `PROXBOX_FEATURES` includes them.
 
-## Docker CI/CD
-
-Branch-tier deploys are Gitea-first. A push to Gitea `develop` deploys the
-staging backend at `https://staging.backend.proxbox.nmulti.cloud` via
-`proxbox-api-staging`. Production uses an authorized manual dispatch from
-canonical `main`, selecting `latest_package` by default or `main_branch` as an
-explicit override. The management gateway supplies the protected request
-identity and digest; agents must not manufacture these fields or invoke a host
-deployment command directly.
-
-The release validator accepts only the host-issued receipt's complete signed
-schema. It pins the trusted public key in `.gitea/deploy-receipt-public.pem`,
-verifies its DER digest, and verifies the Ed25519 signature over canonical
-unsigned receipt bytes before production evidence can authorize promotion.
-
-The production host is selected by the private inventory. Deploy host state is kept outside the
-repository under `/opt/nmulticloud/deploy`:
-
-- Compose project: `nmc-proxbox-api`
-- Repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api`
-- Compose env: `/opt/nmulticloud/deploy/env/proxbox-api.compose.env`
-- Runtime secrets: the operator-managed production environment file
-- SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api/database.db`
-- Staging compose project: `nmc-proxbox-api-staging`
-- Staging repo checkout: `/opt/nmulticloud/deploy/repos/proxbox-api-staging`
-- Staging compose env: `/opt/nmulticloud/deploy/env/proxbox-api-staging.compose.env`
-- Staging runtime secrets: the operator-managed staging environment file
-- Staging SQLite state: `/opt/nmulticloud/deploy/state/proxbox-api-staging/database.db`
-
-The Docker runtime uses this repo's raw uvicorn image, host networking,
-`PROXBOX_BIND_HOST=127.0.0.1`, `PORT=18800`, and `UVICORN_WORKERS=4`, matching
-the old `proxbox-api-production.service` port and worker count while keeping
-Nginx/TLS routing unchanged. Production mounts the state directory at
-`/var/lib/proxbox-api` and sets
-`PROXBOX_DATABASE_PATH=/var/lib/proxbox-api/database.db`.
-
-Resolve targets and run status, logs, and health checks through the authorized
-management tooling in the operator's private workspace operations guide. The
-public repository does not select deployment hosts or authorize direct host
-commands.
-
-`proxbox-api-production.service` remains the rollback fallback. Do not start it
-while the Docker container is healthy on port `18800`.
-
-### Error and data rules
+## Error and data rules
 
 - Use `ProxboxException` for expected API failures.
 - NetBox transport failures are mapped in `netbox_rest._handle_netbox_error()`:
@@ -572,7 +501,7 @@ See `proxbox_api/types/CLAUDE.md` for complete typing guidelines.
 The backend now has one optional native extension:
 `proxbox-reconcile-rs`, a PyO3/maturin Rust package for the deterministic VM
 operation-queue builder used by full VM sync. Python remains the default engine
-because live `netbox.nmulti.cloud` timing and synthetic benchmarks showed the
+because live `netbox.example.com` timing and synthetic benchmarks showed the
 full Rust path was not faster after JSON/adaptation overhead.
 
 The runtime seam is:
@@ -691,10 +620,10 @@ ratchet; 85% remains the long-term target rather than the current gate.
 
 **Coverage Reporting:**
 - Local: `uv run pytest tests/ -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --cov=proxbox_api --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml`
-- CI: the isolated `ci-untrusted-python312` Gitea Python 3.12 job gates feature
-  pushes and pull requests only after N-MultiCloud/nmulticloud-context#204
-  provisions that runner. Mirrored GitHub CI repeats the threshold on protected branches,
+- CI: the public GitHub `test` job enforces the threshold on protected branches,
   reports missing lines, and retains `coverage.xml`; a regression blocks merge.
+  The checked-in Gitea workflow is limited to untrusted validation and does not
+  encode private runner, deployment, package-registry, or promotion contracts.
 - Release validation: the TestPyPI and PyPI candidate jobs use two xdist
   workers with `--dist loadgroup` and retain `--durations=20`. Python 3.13
   remains the branch-coverage leg and uploads `coverage.xml` for 14 days
@@ -777,7 +706,7 @@ All checks MUST pass before committing.
 - Environment variable list (all new `.env` variables must be documented in CLAUDE.md)
 
 **Change Control Process:**
-1. **Before changing a configuration item**, post a comment on the related GitHub issue explaining the change and impact.
+1. **Before changing a configuration item**, document the change and impact in the repository's issue or pull request.
 2. **After merging**, update the relevant CLAUDE.md file to document the new requirement or floor.
 3. **Release notes** MUST include breaking changes (e.g., "requires NetBox ≥4.5.8").
 
@@ -804,8 +733,8 @@ All checks MUST pass before committing.
 
 **During release publishing**:
 
-- [ ] Only use Gitea `push: tags: vX.Y.Z` or `gh release create` (never force-push tags)
-- [ ] Monitor both Gitea Actions and GitHub Actions for successful publication
+- [ ] Create an immutable public tag or GitHub Release (never force-push tags)
+- [ ] Monitor the public GitHub Actions publication workflows
 - [ ] Verify dist is live on PyPI and Docker Hub before declaring success
 - [ ] Update netbox-proxbox compatibility floor if this release changes the API contract
 
@@ -813,153 +742,9 @@ All checks MUST pass before committing.
 
 ## Release Procedure
 
-The publish workflow (`.github/workflows/publish-testpypi.yml`) fires on `push: tags: v*` (RC and final), `release: published`, and `workflow_dispatch`. The repository has two mutually exclusive Gitea-first publication modes. Before the release-control cutover, `.gitea/workflows/publish-gitea.yml` publishes to the Gitea Package Registry, pushes the tag to GitHub, and creates the GitHub Release. After the private control is activated, that workflow uploads a data-only release request; the control publishes the private package and RC tags, while `.gitea/workflows/promote-final-tag.yml` pushes an approved final tag only after production validation. In the controlled mode, the operator intentionally creates the GitHub Release after promotion. Follow the detailed mode-specific runbook in `docs/development/release-publishing.md`.
+Public releases use the workflows in `.github/workflows/`. Release candidates
+publish to TestPyPI from immutable tags; final GitHub Releases publish to PyPI
+and then trigger the public Docker image workflow. Never reuse or replace a
+consumed version or tag.
 
 | Trigger | Use for | Publishes to |
-|---------|---------|--------------|
-| `push: tags: v*rc*` (plain Gitea tag push to Gitea mirrored to GitHub) | RC `vX.Y.ZrcN` | TestPyPI via GitHub Actions |
-| `release: published` (legacy automation or the controlled operator step) | Final `vX.Y.Z` and `vX.Y.Z.postN` | PyPI via GitHub Actions |
-| Docker Hub publish | Called after PyPI validation | Docker Hub (raw/nginx/granian images) |
-
-### Before release-control cutover: legacy Gitea-first flow
-
-1. **Bump versions** on the release branch: `pyproject.toml`, `uv.lock`. Local checks:
-   ```bash
-   uv run ruff check . && uv run python -m compileall proxbox_api tests && uv run pytest tests
-   ```
-2. **Merge to `main`** on Gitea (normal merge or PR merge). Verify:
-   ```bash
-   git log --oneline origin/main | head -5
-   grep '^version' pyproject.toml
-   ```
-3. **Push annotated tag to Gitea:**
-   ```bash
-   git tag -a vX.Y.Z -m "Release vX.Y.Z"
-   git push gitea vX.Y.Z
-   ```
-4. **Gitea Actions runs `.gitea/workflows/publish-gitea.yml`:**
-   - Builds dist, publishes to Gitea Package Registry (`PKG_TOKEN` secret).
-   - Pushes tag to GitHub. This fires `push: tags: v*` on GitHub Actions.
-   - For non-RC tags: creates a GitHub Release only when none exists, which fires `release: published`. Any existing draft or published Release fails closed for explicit operator inspection.
-   - The PyPI idempotency check in `publish-pypi` handles the `release: published` re-trigger gracefully (skips upload if already on PyPI).
-5. **Monitor both CI runs:**
-   ```bash
-   gh run list --repo emersonfelipesp/proxbox-api --event push --limit 3
-   gh run list --repo emersonfelipesp/proxbox-api --event release --limit 3
-   ```
-6. **Verify dist is live on PyPI:**
-   ```bash
-   pip index versions proxbox-api
-   ```
-7. **Cleanup**: delete the release branch locally and on both remotes.
-
-If the legacy workflow pushes the tag but fails before creating the Release,
-wait for the workflow to reach a terminal state and then run
-`scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>`,
-using the exact source SHA recorded by that completed job. The helper first
-requires the exact peeled GitHub tag commit to match that approved SHA and
-loads release notes from the same remote commit, never the local checkout. It
-then proceeds only when the GitHub API returns an explicit HTTP 404 for the
-Release, always supplies `--verify-tag`, and aborts on an existing Release,
-authentication or authorization error, API failure, or network failure.
-
-### After release-control cutover: controlled Gitea-first flow
-
-1. Push the annotated RC or final tag to Gitea only after the activation gate
-   in `AGENTS.md` reports that the private release control is ready.
-2. Wait for `.gitea/workflows/publish-gitea.yml` to upload the signed,
-   data-only `release-control-request`; it has no package or mirror credential.
-3. Dispatch the private control's `validate.yml`, then its separate irreversible
-   `publish.yml`, with the exact repository name, first-attempt target run ID,
-   and request SHA-256. The control publishes the private package and promotes
-   RC tags only.
-4. Validate an RC through TestPyPI. For the final version, verify the private
-   package, deploy it through the approved deployment control plane, and
-   validate production health before public promotion.
-5. Dispatch `.gitea/workflows/promote-final-tag.yml` from canonical `main`. It
-   verifies the exact private package and production attestation and pushes the
-   approved final tag to GitHub; it deliberately does not create a Release.
-   Wait for a successful terminal result and record the exact
-   production-approved source SHA.
-6. Run `scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>`.
-   The helper requires the exact peeled GitHub tag to equal that approved SHA
-   and loads release notes from the same remote commit. An explicit HTTP 404 is
-   the only Release-lookup result that authorizes creation; every ambiguous
-   failure aborts, and `--verify-tag` prevents GitHub from inventing or moving
-   the tag.
-7. Monitor the resulting `release: published` workflow through PyPI validation
-   and Docker Hub publication, then complete post-release validation and
-   cleanup.
-
-### RC flow (TestPyPI gate)
-
-1. Push `vX.Y.ZrcN` tag to Gitea. `publish-gitea.yml` publishes to Gitea registry and pushes tag to GitHub.
-2. GitHub Actions `push: tags: v*rc*` fires → publishes to TestPyPI → validates.
-3. Fix-forward with `rcN+1` if anything fails.
-
-### Publisher recovery
-
-Fix publisher failures through the issue-backed feature workflow and advance to
-the next immutable `rcN` or `postN`; never reuse or replace a consumed version.
-Before release-control cutover, the verified helper may finish GitHub Release
-creation only after the legacy workflow has reached a terminal state, pushed
-the exact approved tag, and failed before creating the Release. After cutover,
-do not bypass the data-only request, private validation/publication control,
-private package, production deployment evidence, or final-tag promotion with a
-local registry upload or direct GitHub tag push. Ambiguous package, tag,
-Release, or deployment results require authenticated read-back and explicit
-recovery; they are never permission to repeat an irreversible publication.
-
-### Legacy manual fallback (before release-control cutover only)
-
-If Gitea Actions tag triggers are not operational on this instance (Gitea 1.26.2 limitation — confirm with `git.nmulti.cloud` admin), use the following direct-upload path:
-
-```bash
-# Build and publish to Gitea registry directly
-uv build
-uv run --with twine twine upload \
-  --repository-url https://git.nmulti.cloud/api/packages/emersonfelipesp/pypi \
-  --username emersonfelipesp --password $PKG_TOKEN \
-  --non-interactive dist/*
-
-# Push tag directly to GitHub (fires push: tags: v* on GitHub Actions)
-git push origin vX.Y.Z
-
-# Watch the tag-push publish run
-gh run watch <run-id> --repo emersonfelipesp/proxbox-api
-
-# Then create the GitHub release through the fail-closed helper
-scripts/create-github-release.sh vX.Y.Z <approved-40-character-commit-sha>
-# The release: published run will fire; the PyPI idempotency check will skip the upload (already done)
-```
-
-Do not use this direct-upload fallback after the controlled publisher is
-activated. The controlled path requires private-package and production evidence
-before `promote-final-tag.yml` pushes the final tag. The helper refuses to
-create a Release unless the dereferenced tag matches the supplied exact approved
-source SHA and the Release lookup returns an explicit HTTP 404; do not bypass
-authentication, authorization, API, network, or commit-mismatch failures.
-
-Note: `PKG_TOKEN` is the secret name for Gitea package uploads. The `GITEA_` prefix is reserved by Gitea Actions and cannot be used as a secret name.
-
-### What was done for v0.0.16
-
-- Bumped versions, merged to main on Gitea.
-- Pushed tag `v0.0.16` to Gitea. `publish-gitea.yml` was present but Gitea 1.26.2 tag triggers were not fully operational at time of release.
-- Manual fallback path was used: built dist locally, uploaded to Gitea registry directly, pushed tag to GitHub → GitHub Actions `push: tags: v*` fired → proxbox-api 0.0.16 published to PyPI.
-- GitHub draft release `v0.0.16` was created in a prior session but left as Draft. One-time cleanup: `gh release edit v0.0.16 --repo emersonfelipesp/proxbox-api --draft=false`.
-- `release: published` re-triggered the workflow; the new PyPI idempotency check (added in this PR) skips the upload cleanly.
-- Paired plugin: `netbox-proxbox 0.0.22`.
-
-### What was done for v0.0.17.post2
-
-- Root cause: the published `0.0.17.post1` (PyPI, tag `ac0514a`) shipped `proxmox-sdk==0.0.11.post1` / `netbox-sdk==0.0.9.post1`. Four commits then landed on `main` re-pinning the SDKs to `proxmox-sdk==0.0.11.post2` / `netbox-sdk==0.0.9.post2` and adding independent IP/MAC gating to the inline + standalone VM-interface sync streams, but the `version` field stayed at `0.0.17.post1` — already immutable on PyPI.
-- Fix-forward to `0.0.17.post2` (PEP 440; never republish `post1`) carrying the validated `.post2` SDK pins and the IP/MAC gating fix. Bumped `pyproject.toml` + `uv.lock`, updated the pairing line.
-- Released via the standard Gitea-first flow: tag `v0.0.17.post2` pushed to Gitea → `publish-gitea.yml` publishes to the Gitea registry, pushes the tag to GitHub, and creates the GitHub release → GitHub Actions publishes to PyPI (idempotency check absorbs the `release: published` re-trigger).
-- Paired plugin: `netbox-proxbox 0.0.20.post1`.
-
-### Don't
-
-- Don't add `twine --skip-existing`. The `publish-pypi` job has a PyPI existence pre-check; fix forward with `.postN` per PEP 440 for new versions.
-- Don't force-push a published tag. Tags on the remote are immutable.
-- Don't create a GitHub release before Gitea Actions has pushed the tag — the release `--target` branch needs the tag commit reachable.

@@ -12,6 +12,7 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.netbox_probe import NetBoxProbeResult, probe_netbox_endpoint
 from proxbox_api.session.netbox import invalidate_netbox_api_cache
 from proxbox_api.settings_client import get_settings, invalidate_settings_cache
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
@@ -55,6 +56,13 @@ class NetBoxEndpointResponse(BaseModel):
     token_version: str
     verify_ssl: bool
     enabled: bool
+    probe: NetBoxProbeResult | None = None
+
+
+async def _endpoint_response_with_probe(endpoint: NetBoxEndpoint) -> NetBoxEndpointResponse:
+    response = NetBoxEndpointResponse.model_validate(endpoint)
+    probe = await probe_netbox_endpoint(endpoint)
+    return response.model_copy(update={"probe": probe})
 
 
 def _normalize_netbox_endpoint_fields(nb: NetBoxEndpoint) -> None:
@@ -140,7 +148,7 @@ async def create_netbox_endpoint(
     clear_endpoint_cache()
     await invalidate_netbox_api_cache(db_endpoint.id)
     invalidate_settings_cache()
-    return NetBoxEndpointResponse.model_validate(db_endpoint)
+    return await _endpoint_response_with_probe(db_endpoint)
 
 
 @router.get("/endpoint", response_model=list[NetBoxEndpointResponse])
@@ -161,6 +169,14 @@ async def get_netbox_endpoint(netbox_id: int, session: SessionDep) -> NetBoxEndp
     if not netbox_endpoint:
         raise HTTPException(status_code=404, detail="Netbox Endpoint not found")
     return NetBoxEndpointResponse.model_validate(netbox_endpoint)
+
+
+@router.get("/endpoint/{netbox_id}/probe", response_model=NetBoxProbeResult)
+async def probe_netbox_endpoint_route(netbox_id: int, session: SessionDep) -> NetBoxProbeResult:
+    netbox_endpoint = await _maybe_await(session.get(NetBoxEndpoint, netbox_id))
+    if not netbox_endpoint:
+        raise HTTPException(status_code=404, detail="NetBox Endpoint not found")
+    return await probe_netbox_endpoint(netbox_endpoint)
 
 
 @router.put("/endpoint/{netbox_id}", response_model=NetBoxEndpointResponse)
@@ -216,7 +232,7 @@ async def update_netbox_endpoint(
     clear_endpoint_cache()
     await invalidate_netbox_api_cache(db_netbox.id)
     invalidate_settings_cache()
-    return NetBoxEndpointResponse.model_validate(db_netbox)
+    return await _endpoint_response_with_probe(db_netbox)
 
 
 @router.delete("/endpoint/{netbox_id}")

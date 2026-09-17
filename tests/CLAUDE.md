@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/tests/CLAUDE.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/tests/CLAUDE.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -12,8 +12,6 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 ## Purpose
 
 Unit, integration, and end-to-end tests for the `proxbox_api` backend package. All tests run against the `proxbox_api` package with dependency-injected mocks for NetBox and Proxmox sessions. The `tests/e2e/` subdirectory holds API-level end-to-end tests that wire the full FastAPI app to a `proxmox-sdk` mock (HTTP container or in-process backend) — they use `httpx.AsyncClient`, not Playwright.
-
-`test_release_workflows.py` covers both standalone offline-release Dockerfile validators. Keep the target-binding cases paired: exact `uv-source` and `raw` aliases, the uv binary copy, the cache copy, dependency sync, and project install must all prove that `docker build --target raw` executes the validated offline path. The canonical-plan mutations must also remain paired so a later copy, environment change, or runtime-entry override cannot invalidate the installed raw image after its milestones pass. An accepted parser shape that moves or invalidates those operations is a release-boundary bypass.
 
 ## Test File Index
 
@@ -36,6 +34,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `fixtures.py` | Shared reusable fixtures imported by multiple test modules |
 | `test_admin_logs.py` | In-memory log buffer routes (`/admin/logs`) |
 | `test_api_routes.py` | API route integration tests (request/response contracts) |
+| `test_netbox_reachability_probe.py` | Short-timeout NetBox status probe response, credential redaction, fingerprinted recent-result cache, fail-fast sync dependency, repeated-cancellation closure, and stalled-close deadline contracts |
 | `test_backups_vm_sync.py` | VM backup discovery and sync workflow |
 | `test_bridge_interfaces.py` | VM bridge interface mapping and reconciliation |
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
@@ -64,6 +63,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_packer_execution_binding.py` | Keyed endpoint/recipe bindings and oracle canaries, signed-plan tamper/drift/expiry rejection, retained recovery blockers, expired/concurrent leases, authoritative post-preflight endpoint refresh, cancel/completion CAS, repeated-cancellation journal durability, final artifact verification, minimal session authority, and a producer-owned consumer-shaped fixture that does not claim downstream validation |
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
+| `test_public_boundary.py` | Complete proposed-tree scanning, bounded encoding/archive reconstruction, hostile mutation coverage, Git index/worktree overlays, and fail-closed path handling. |
 | `test_role_resolution.py` | VM default-role hierarchy, durable role-snapshot truth table, and verified compensation retries |
 | `test_proxmox_auth_pve9.py` | PVE 9 authentication/session fallback plus an effective logger-handler canary proving raw SDK exception secrets are not rendered |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
@@ -133,8 +133,7 @@ uv run pytest tests/test_vm_sync.py
 
 # With coverage (local / GitHub CI shape; the Gitea gate runs statement-only
 # coverage with COVERAGE_CORE=sysmon and -n 8 --dist worksteal to fit its
-# runner-pool timeout — see .gitea/workflows/ci.yml and
-# tests/test_release_workflows.py)
+# runner-pool timeout — see .gitea/workflows/ci.yml)
 uv run pytest tests/ -n auto \
   --ignore=tests/e2e \
   --ignore=tests/test_generated_proxmox_routes.py \
@@ -143,19 +142,9 @@ uv run pytest tests/ -n auto \
   --cov-report=term-missing \
   --cov-report=xml:coverage.xml
 
-# Release-only unit/static contract. This includes the verified-tag and
-# production-approved-commit GitHub Release boundary; fail-closed handling of
-# missing tags, branch/tag name collisions, mismatched commits, remote-note
-# provenance failures, existing Releases, unauthorized, server, and network
-# lookup results; refusal to auto-publish legacy drafts; and the
-# distinct legacy-versus-controlled publication runbook paths. GitHub CI also
-# prepares the real CPython 3.13 musllinux wheelhouse and builds the extracted
-# sdist context with Docker build networking disabled. Its candidate validation
-# contract also
-# pins two xdist workers with loadgroup isolation, retains duration telemetry,
-# and uploads branch-inclusive coverage XML from Python 3.13 for 14 days
-# without the terminal missing-lines report.
-uv run pytest tests/test_release_workflows.py -q
+# Public-boundary scanner and hostile corpus
+uv run pytest tests/test_public_boundary.py -q
+uv run python scripts/check_public_boundary.py --mutation-test
 
 # E2E tests against in-process MockBackend
 uv run pytest tests/e2e -m mock_backend
@@ -175,7 +164,7 @@ measured baseline (2026-07-17). Generated schema output and `proxbox_api/e2e/`
 support code are excluded from this core metric; the latter is exercised by the
 separate Docker E2E matrix. Gitea feature pushes and pull requests run the core
 gate on the isolated `ci-untrusted-python312` runner after
-N-MultiCloud/nmulticloud-context#204 provisions it, and mirrored GitHub CI repeats it
+public CI capacity provisions it, and mirrored GitHub CI repeats it
 on protected branches. The long-term target is 85%.
 
 ## Conventions

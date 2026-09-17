@@ -2,7 +2,7 @@
 
 ## Workspace Context
 
-This file lives at `/root/personal-context/nmulticloud-context/proxbox-api/nextjs-ui/AGENTS.md` inside the `personal-context` workspace.
+This file lives at `<repository-root>/nextjs-ui/AGENTS.md` inside the `personal-context` workspace.
 Workspace guidance: `/root/personal-context/CLAUDE.md`.
 Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
 Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
@@ -13,7 +13,7 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 
 This is the standalone Next.js 16.3.4 frontend for managing NetBox and Proxmox endpoint configuration as part of the `proxbox-api` project.
 
-**Parent project**: see `/root/nms/proxbox-api/CLAUDE.md` for the backend architecture and repo-wide rules.
+**Parent project**: see `<repository-root>/CLAUDE.md` for the backend architecture and repo-wide rules.
 
 ## Critical Next.js Notice
 
@@ -84,7 +84,7 @@ npm run build
 
 ## References
 
-- Backend architecture: `/root/nms/proxbox-api/CLAUDE.md`
-- Backend package: `/root/nms/proxbox-api/proxbox_api/`
+- Backend architecture: `<repository-root>/CLAUDE.md`
+- Backend package: `<repository-root>/proxbox_api/`
 - Setup instructions: `./README.md`
 - Version-specific Next.js docs: `node_modules/next/dist/docs/`

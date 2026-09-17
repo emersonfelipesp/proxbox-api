@@ -10,7 +10,7 @@ captured stdout into typed records. The actual SSH execution lives in
 Contract source of truth: the "Shared contract" section of the parent feature
 issue (``emersonfelipesp/netbox-proxbox#180``), which lists the collected
 systemd properties, the default Proxmox unit set, and the unit
-validation rule shared by every layer (proxbox-api, nms-backend, netbox-rpc).
+validation rule shared by every layer (proxbox-api, trusted-relay-service, netbox-rpc).
 """
 
 import re
@@ -88,7 +88,7 @@ class UnitValidationError(ValueError):
 def _validate_unit_name(unit: str) -> str:
     """Validate a single unit name against the shared contract rule.
 
-    Every layer of this feature (proxbox-api, nms-backend, netbox-rpc)
+    Every layer of this feature (proxbox-api, trusted-relay-service, netbox-rpc)
     enforces the same rule: ``^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$``, no ``..``,
     at most :data:`_MAX_UNIT_NAME_LENGTH` characters. The default Proxmox unit
     set is not a hard allowlist: operators may configure additional systemd
