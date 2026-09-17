@@ -89,6 +89,15 @@ class SyncOverwriteFlags(ProxboxBaseModel):
             "The type is still set when a VM is first created."
         ),
     )
+    overwrite_vm_platform: bool = Field(
+        default=False,
+        title="Overwrite VM Platform",
+        description=(
+            "When true, the platform derived from the Proxmox guest operating system is "
+            "patched on existing VMs. The default false preserves operator-managed NetBox "
+            "platform assignments; platform is still set when a VM is first created."
+        ),
+    )
     overwrite_vm_tags: bool = Field(
         default=True,
         title="Overwrite VM Tags",

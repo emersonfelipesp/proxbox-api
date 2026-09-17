@@ -11,7 +11,7 @@ matrix, and staged package publication.
 | `.github/workflows/ci.yml` | Push, pull request, release, manual dispatch | Runs core checks and the NetBox + Proxmox Docker E2E matrix. |
 | `.github/workflows/publish-testpypi.yml` | RC tag or RC-only manual dispatch; published GitHub Release | Publishes immutable RCs to TestPyPI and final/post releases to PyPI, followed by Docker images and post-publish E2E. |
 | `.github/workflows/docker-hub-publish.yml` | Reusable workflow / manual dispatch | Builds and publishes raw, nginx, granian, and experimental PyO3/Rust Docker image variants. |
-| `.github/workflows/release-docker-verify.yml` | Release / manual dispatch | Pulls the published Docker image tags, including experimental PyO3/Rust tags, and verifies container startup. |
+| `.github/workflows/release-docker-verify.yml` | Called after successful Docker publication / manual dispatch | Pulls the published Docker image tags, including experimental PyO3/Rust tags, and verifies container startup. |
 | `.github/workflows/docs.yml` | Docs changes on main / PR | Builds and publishes the MkDocs site. |
 | `.github/workflows/nightly-schema-refresh.yml` | Schedule / manual dispatch | Refreshes generated Proxmox schemas and opens a PR when they change. |
 

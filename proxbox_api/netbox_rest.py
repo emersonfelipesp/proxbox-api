@@ -22,6 +22,10 @@ from proxbox_api.schemas.netbox.extras import TagSchema
 from proxbox_api.utils.retry import (
     _is_connection_refused_error,
     _is_transient_netbox_error,
+    _resolve_configured_netbox_timeout,
+    describe_exception,
+    is_netbox_connection_error,
+    is_netbox_timeout_error,
 )
 from proxbox_api.utils.retry import (
     is_netbox_overwhelmed_error as _is_netbox_overwhelmed_error,
@@ -664,9 +668,50 @@ def _extract_payload(response: ApiResponse) -> object:
         ) from exc
 
 
+_NETBOX_REACHABILITY_HINT = (
+    "Verify that the NetBox URL stored on the proxbox-api NetBox endpoint is reachable "
+    "from the proxbox-api host or container (network, DNS, firewall, TLS)."
+)
+
+
+def _transport_failure_exception(
+    error: Exception, operation: str, error_str: str
+) -> ProxboxException | None:
+    """Map a NetBox transport failure to a ProxboxException with a real 5xx status.
+
+    Returns ``None`` when ``error`` is not a transport failure. Timeouts become
+    504 and connection failures 502 so the plugin classifies them as transient
+    and retryable instead of a deterministic client-side 400.
+    """
+    if is_netbox_timeout_error(error):
+        timeout_seconds = _resolve_configured_netbox_timeout()
+        return ProxboxException(
+            message=f"NetBox {operation} timed out",
+            detail=(
+                f"NetBox did not answer '{operation}' within the configured NetBox timeout "
+                f"of {timeout_seconds:g}s ({error_str}). {_NETBOX_REACHABILITY_HINT} "
+                "If NetBox is reachable but slow, raise PROXBOX_NETBOX_TIMEOUT "
+                "(settings key 'netbox_timeout')."
+            ),
+            python_exception=error_str,
+            http_status_code=504,
+        )
+    if is_netbox_connection_error(error):
+        return ProxboxException(
+            message=f"NetBox {operation} failed: NetBox is unreachable",
+            detail=(
+                f"Could not connect to NetBox for '{operation}' ({error_str}). "
+                f"{_NETBOX_REACHABILITY_HINT}"
+            ),
+            python_exception=error_str,
+            http_status_code=502,
+        )
+    return None
+
+
 def _handle_netbox_error(error: Exception, operation: str) -> None:
     """Log and re-raise NetBox errors with better context."""
-    error_str = str(error)
+    error_str = describe_exception(error)
     is_transient = _is_transient_netbox_error(error)
 
     if is_transient:
@@ -691,6 +736,10 @@ def _handle_netbox_error(error: Exception, operation: str) -> None:
             detail=f"{operation} failed: {error_str}",
             python_exception=error_str,
         ) from error
+
+    transport_failure = _transport_failure_exception(error, operation, error_str)
+    if transport_failure is not None:
+        raise transport_failure from error
 
     raise ProxboxException(
         message=f"NetBox {operation} failed",

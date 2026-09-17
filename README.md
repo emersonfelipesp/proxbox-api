@@ -37,6 +37,11 @@ The interactive version of this diagram lives at
 
 This repo uses [uv](https://docs.astral.sh/uv/) to install Python and dependencies, [Ruff](https://docs.astral.sh/ruff/) for linting and formatting, and [ty](https://github.com/astral-sh/ty) for type checking.
 
+`proxbox-api` supports POSIX runtimes only. Production containers target Linux,
+and development and test workflows support Linux and macOS. Windows is not a
+supported service runtime because database ownership, authentication lockout,
+and generated-artifact quarantine depend on POSIX advisory file locks.
+
 ```bash
 # Runtime only
 uv sync

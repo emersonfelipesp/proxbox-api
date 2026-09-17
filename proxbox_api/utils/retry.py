@@ -7,11 +7,81 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import aiohttp
+
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.runtime_settings import get_float, get_int
 
 T = TypeVar("T")
+
+# Mirrors ``proxbox_api.session.netbox._DEFAULT_NETBOX_TIMEOUT``; kept here so the
+# error path can name the effective timeout without importing the session module
+# (which pulls in the database layer and would create an import cycle).
+_DEFAULT_NETBOX_TIMEOUT_SECONDS = 120.0
+
+
+def _resolve_configured_netbox_timeout() -> float:
+    return get_float(
+        settings_key="netbox_timeout",
+        env="PROXBOX_NETBOX_TIMEOUT",
+        default=_DEFAULT_NETBOX_TIMEOUT_SECONDS,
+        minimum=1.0,
+    )
+
+
+def describe_exception(error: BaseException) -> str:
+    """Render ``error`` for logs and API detail, never as an empty string.
+
+    ``str()`` of every asyncio/aiohttp timeout class is ``""``, which used to
+    reach operators as ``"detail": ""`` and defeated every substring-based
+    classifier. The class name is the discriminator that always survives.
+    """
+    name = type(error).__name__
+    text = str(error).strip()
+    if not text:
+        return name
+    if text.startswith(f"{name}:"):
+        return text
+    return f"{name}: {text}"
+
+
+def is_netbox_timeout_error(error: BaseException) -> bool:
+    """True for any timeout raised by the NetBox HTTP transport.
+
+    ``asyncio.TimeoutError`` is ``TimeoutError`` on Python 3.11+, and every
+    aiohttp timeout class (``ServerTimeoutError``, ``ConnectionTimeoutError``,
+    ``SocketTimeoutError``) subclasses it.
+    """
+    return isinstance(error, TimeoutError)
+
+
+_CAUSE_CHAIN_LIMIT = 8
+
+
+def _exception_chain(error: BaseException) -> list[BaseException]:
+    """``error`` followed by its ``__cause__`` / ``__context__`` chain, bounded.
+
+    ``netbox_rest._handle_netbox_error()`` re-wraps a transport exception in a
+    ``ProxboxException`` *before* the surrounding retry loop classifies it, so
+    the type-based checks must look through the wrapper at the original cause.
+    """
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and len(chain) < _CAUSE_CHAIN_LIMIT and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def is_netbox_connection_error(error: BaseException) -> bool:
+    """True when the NetBox transport never got an HTTP answer (refused, DNS, reset)."""
+    if is_netbox_timeout_error(error):
+        return False
+    return isinstance(error, aiohttp.ClientConnectionError)
+
 
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_BASE_DELAY = 2.0
@@ -36,8 +106,17 @@ def _resolve_base_delay() -> float:
 
 
 def _is_transient_netbox_error(error: Exception) -> bool:
-    """Check if an error is transient and worth retrying."""
-    error_str = str(error).lower()
+    """Check if an error is transient and worth retrying.
+
+    Matches on exception type first: timeouts and connection failures carry an
+    empty or client-specific message, so substring matching alone misses them.
+    """
+    if any(
+        is_netbox_timeout_error(candidate) or is_netbox_connection_error(candidate)
+        for candidate in _exception_chain(error)
+    ):
+        return True
+    error_str = describe_exception(error).lower()
     transient_indicators = [
         "connection refused",
         "cannot connect",
@@ -82,7 +161,19 @@ def is_netbox_overwhelmed_error(error: Exception) -> bool:
 
 
 def _is_connection_refused_error(error: Exception) -> bool:
-    """Check if this is a connection refused error (NetBox completely unreachable)."""
+    """Check if this is a connection refused error (NetBox completely unreachable).
+
+    This predicate authorises lookup-free retries of non-idempotent POSTs, so it
+    must only match failures that prove the connection was never established.
+    ``ClientConnectorError`` (refused, DNS, unreachable) is such proof. A reset or
+    server disconnect (``ClientOSError``, ``ServerDisconnectedError``) is not:
+    NetBox may have committed the write before the response was lost, so those
+    stay transient for idempotent retries only (see ``_is_transient_netbox_error``).
+    """
+    if any(
+        isinstance(candidate, aiohttp.ClientConnectorError) for candidate in _exception_chain(error)
+    ):
+        return True
     error_str = str(error).lower()
     return "connection refused" in error_str or "connect call failed" in error_str
 

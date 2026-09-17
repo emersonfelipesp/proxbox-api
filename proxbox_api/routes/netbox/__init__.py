@@ -138,7 +138,7 @@ async def create_netbox_endpoint(
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(db_endpoint))
     clear_endpoint_cache()
-    invalidate_netbox_api_cache(db_endpoint.id)
+    await invalidate_netbox_api_cache(db_endpoint.id)
     invalidate_settings_cache()
     return NetBoxEndpointResponse.model_validate(db_endpoint)
 
@@ -214,7 +214,7 @@ async def update_netbox_endpoint(
     await _maybe_await(session.commit())
     await _maybe_await(session.refresh(db_netbox))
     clear_endpoint_cache()
-    invalidate_netbox_api_cache(db_netbox.id)
+    await invalidate_netbox_api_cache(db_netbox.id)
     invalidate_settings_cache()
     return NetBoxEndpointResponse.model_validate(db_netbox)
 
@@ -228,7 +228,7 @@ async def delete_netbox_endpoint(netbox_id: int, session: SessionDep) -> dict:
     await _maybe_await(session.delete(netbox_endpoint))
     await _maybe_await(session.commit())
     clear_endpoint_cache()
-    invalidate_netbox_api_cache(deleted_id)
+    await invalidate_netbox_api_cache(deleted_id)
     invalidate_settings_cache()
     return {"message": "NetBox Endpoint deleted."}
 

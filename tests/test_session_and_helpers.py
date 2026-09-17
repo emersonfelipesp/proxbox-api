@@ -902,9 +902,9 @@ def clear_cached_netbox_api():
     """Drop cached NetBox Api objects to prevent monkeypatch conflicts."""
     from proxbox_api.session.netbox import invalidate_netbox_api_cache
 
-    invalidate_netbox_api_cache()
+    asyncio.run(invalidate_netbox_api_cache())
     yield
-    invalidate_netbox_api_cache()
+    asyncio.run(invalidate_netbox_api_cache())
 
 
 def test_to_dict_supports_dict_and_serializable_objects():
@@ -1794,7 +1794,7 @@ def test_get_netbox_session_returns_facade(monkeypatch, db_engine):
 
 
 def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
-    netbox_session_module.invalidate_netbox_api_cache()
+    asyncio.run(netbox_session_module.invalidate_netbox_api_cache())
 
     api_client_calls = {"count": 0}
 
@@ -1802,6 +1802,10 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
         def __init__(self, config):
             api_client_calls["count"] += 1
             self.config = config
+            self.closed = 0
+
+        async def close(self):
+            self.closed += 1
 
     class DummyApi:
         def __init__(self, client, schema=None):
@@ -1826,6 +1830,12 @@ def test_netbox_api_from_endpoint_is_cached_by_config(monkeypatch):
 
     assert first is second
     assert api_client_calls["count"] == 1
+    asyncio.run(netbox_session_module.invalidate_netbox_api_cache(endpoint.id or 0))
+    assert first.client.closed == 0
+    asyncio.run(netbox_session_module.invalidate_netbox_api_cache(endpoint.id or 0))
+    assert first.client.closed == 0
+    asyncio.run(netbox_session_module.invalidate_netbox_api_cache())
+    assert first.client.closed == 1
 
 
 def test_get_netbox_session_requires_endpoint(db_engine):

@@ -84,6 +84,10 @@ from proxbox_api.services.auth_lockout import (
     resolve_auth_source_context,
     validate_auth_lockout_identity_key,
 )
+from proxbox_api.session.netbox import (
+    acquire_netbox_api_cache_owner,
+    release_netbox_api_cache_owner,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -291,12 +295,55 @@ async def _acquire_database_runtime_owner() -> database.DatabaseRuntimeOwner:
         bootstrap.refuse_ceph_task_claim_collision(error)
 
 
+def _record_cleanup_error(
+    primary_error: BaseException | None,
+    cleanup_error: BaseException,
+    resource: str,
+) -> BaseException:
+    """Preserve the first failure and attach later cleanup failures."""
+    if primary_error is None:
+        return cleanup_error
+    primary_error.add_note(
+        f"{resource} cleanup also failed: {type(cleanup_error).__name__}: {cleanup_error}"
+    )
+    logger.error(
+        "%s cleanup failed while preserving an earlier lifespan error",
+        resource,
+        exc_info=(type(cleanup_error), cleanup_error, cleanup_error.__traceback__),
+    )
+    return primary_error
+
+
+async def _release_lifespan_resources(
+    cache_owner: bool,
+    runtime_owner: database.DatabaseRuntimeOwner | None,
+    primary_error: BaseException | None,
+) -> None:
+    """Attempt both resource releases and propagate the first failure."""
+    cleanup_error = primary_error
+    if cache_owner:
+        try:
+            await release_netbox_api_cache_owner()
+        except BaseException as error:
+            cleanup_error = _record_cleanup_error(cleanup_error, error, "NetBox client cache")
+    if runtime_owner is not None:
+        try:
+            await database.release_database_runtime(runtime_owner)
+        except BaseException as error:
+            cleanup_error = _record_cleanup_error(cleanup_error, error, "Database runtime")
+    if primary_error is None and cleanup_error is not None:
+        raise cleanup_error
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     runtime_owner: database.DatabaseRuntimeOwner | None = None
+    cache_owner = False
     primary_error: BaseException | None = None
     try:
         runtime_owner = await _acquire_database_runtime_owner()
+        acquire_netbox_api_cache_owner()
+        cache_owner = True
         bootstrap.init_database_and_netbox(runtime_owner)
         validate_auth_lockout_identity_key()
         quarantine_legacy_codegen_artifacts()
@@ -342,20 +389,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         primary_error = error
         raise
     finally:
-        if runtime_owner is not None:
-            try:
-                await database.release_database_runtime(runtime_owner)
-            except BaseException as cleanup_error:
-                if primary_error is None:
-                    raise
-                primary_error.add_note(
-                    "Database runtime cleanup also failed: "
-                    f"{type(cleanup_error).__name__}: {cleanup_error}"
-                )
-                logger.error(
-                    "Database runtime cleanup failed while preserving the primary lifespan error",
-                    exc_info=(type(cleanup_error), cleanup_error, cleanup_error.__traceback__),
-                )
+        await _release_lifespan_resources(cache_owner, runtime_owner, primary_error)
 
 
 async def _run_bootstrap_pass(app: FastAPI) -> None:

@@ -7,6 +7,7 @@ import inspect
 import json
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -520,9 +521,15 @@ def test_proxmox_endpoint_requires_complete_token_pair(db_session):
 
 def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
     settings_cache_invalidations: list[None] = []
+    invalidate_client_cache = AsyncMock()
+
     monkeypatch.setattr(
         "proxbox_api.routes.netbox.invalidate_settings_cache",
         lambda: settings_cache_invalidations.append(None),
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.invalidate_netbox_api_cache",
+        invalidate_client_cache,
     )
     payload = NetBoxEndpoint(
         name="netbox-primary",
@@ -578,6 +585,11 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
         "message": "NetBox Endpoint deleted."
     }
     assert len(settings_cache_invalidations) == 3
+    assert invalidate_client_cache.await_args_list == [
+        call(endpoint_id),
+        call(endpoint_id),
+        call(endpoint_id),
+    ]
 
 
 def test_netbox_endpoint_rejects_v1_without_token(db_session):

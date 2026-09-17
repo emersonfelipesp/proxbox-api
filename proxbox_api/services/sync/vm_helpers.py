@@ -109,13 +109,8 @@ def _compute_vm_patchable_fields(
     fields.add("role")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_tags:
         fields.add("tags")
-    # ``platform`` is deliberately absent from every branch here: it is set when a VM is
-    # created and never patched afterwards. Proxbox has never owned this field, so an
-    # operator may well have set it by hand, and taking it over on the first sync after
-    # upgrading would be a regression dressed as a feature. Making that operator-tunable
-    # would mean adding a flag, and the overwrite_* set is a CI-enforced cross-repo
-    # contract (contracts/overwrite_flags.json, mirrored in netbox-proxbox) that must be
-    # changed in both repos in the same release -- out of scope for populating the field.
+    if overwrite_flags is not None and overwrite_flags.overwrite_vm_platform:
+        fields.add("platform")
     if overwrite_flags is None or overwrite_flags.overwrite_vm_description:
         fields.add("description")
         # ``comments`` carries the untruncated Proxmox note that ``description`` had to

@@ -3772,8 +3772,8 @@
 | 3740 | http | GET | /proxmox/api2/9.1/version | proxbox&#95;api/routes/proxmox/runtime&#95;generated.py:743 generated&#95;proxmox&#95;route&#95;&#95;get&#95;version | 9.1:get&#95;version:alias=False |
 | 3741 | http | GET,HEAD | /openapi.json | fastapi/applications.py:1107 FastAPI.setup.&lt;locals&gt;.openapi | - |
 | 3742 | mount |  | /static | starlette/staticfiles.py:87 StaticFiles.&#95;&#95;call&#95;&#95; | - |
-| 3743 | http | GET | /docs | proxbox&#95;api/app/factory.py:579 create&#95;app.&lt;locals&gt;.custom&#95;swagger&#95;ui | - |
-| 3744 | http | GET | /redoc | proxbox&#95;api/app/factory.py:589 create&#95;app.&lt;locals&gt;.custom&#95;redoc | - |
+| 3743 | http | GET | /docs | proxbox&#95;api/app/factory.py:613 create&#95;app.&lt;locals&gt;.custom&#95;swagger&#95;ui | - |
+| 3744 | http | GET | /redoc | proxbox&#95;api/app/factory.py:623 create&#95;app.&lt;locals&gt;.custom&#95;redoc | - |
 | 3745 | http | GET | / | proxbox&#95;api/app/root&#95;meta.py:13 standalone&#95;info | - |
 | 3746 | http | GET | /version | proxbox&#95;api/app/root&#95;meta.py:29 backend&#95;version | - |
 | 3747 | http | GET | /health | proxbox&#95;api/app/root&#95;meta.py:37 health&#95;check | - |

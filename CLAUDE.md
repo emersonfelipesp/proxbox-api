@@ -336,6 +336,14 @@ while the Docker container is healthy on port `18800`.
 ### Error and data rules
 
 - Use `ProxboxException` for expected API failures.
+- NetBox transport failures are mapped in `netbox_rest._handle_netbox_error()`:
+  timeouts (`TimeoutError`, all aiohttp timeout classes) become HTTP 504 and
+  connection failures (`aiohttp.ClientConnectionError`) HTTP 502, both with a
+  non-empty `detail` built by `utils.retry.describe_exception()` (class name +
+  text, because `str()` of a timeout is empty). `utils.retry` classifies them
+  as transient by type, so the retry loop and the plugin's 5xx stage retry
+  both engage. Never emit an empty `detail`; `dependencies.proxbox_tag()`
+  falls back through `python_exception` and the cause.
 - Keep parsing and normalization inside Pydantic schemas, especially in `proxbox_api/proxmox_to_netbox/`.
 - Keep generated artifacts under `proxbox_api/generated/` out of manual editing unless you are debugging generation itself.
 - Preserve parity between WebSocket progress payloads and SSE payloads.

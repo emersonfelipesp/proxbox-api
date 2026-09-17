@@ -18,7 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The service requires POSIX advisory locks; Windows is not a supported runtime.
+        os: [ubuntu-latest, macos-latest]
         python: ["3.12", "3.13"]
     steps:
       - name: Checkout
@@ -57,7 +58,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Build reconciliation wheels only for the service's supported POSIX runtimes.
+        os: [ubuntu-latest, macos-latest]
         python: ["3.12", "3.13"]
     steps:
       - name: Checkout

@@ -1,9 +1,12 @@
 name: Release Docker verification
 
 on:
-  release:
-    types:
-      - published
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to verify (e.g. v0.0.9.post1)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -24,16 +27,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.post[0-9]+)?$ ]]; then
+            echo "::error::Release tag must be a final or post-release version tag"
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
       - name: Pull release and latest images
+        id: capture-digests
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          REL="${{ github.event.release.tag_name || inputs.tag }}"
+          REL="$RELEASE_TAG"
           TAG="${REL#v}"
-          # Verify runs in parallel with publish-testpypi.yml's docker publish
-          # step, so retry until images appear (publish chain typically lands
-          # within ~30min: TestPyPI → validate → PyPI → docker push).
+          # Publication completed before the reusable workflow was called. Keep
+          # bounded retries for registry propagation and transient pull errors.
           pull_with_retry() {
             local image="$1"
             local attempt=0
@@ -64,11 +78,44 @@ jobs:
           pull_with_retry emersonfelipesp/proxbox-api:experimental-granian
           pull_with_retry emersonfelipesp/proxbox-api:pyo3-rust-granian
 
+          image_digest() {
+            docker buildx imagetools inspect "$1" --format '{{ .Manifest.Digest }}'
+          }
+          capture_digest() {
+            local output_name="$1"
+            local versioned="$2"
+            shift 2
+            local versioned_digest
+            local alias_digest
+            versioned_digest="$(image_digest "$versioned")"
+            test -n "$versioned_digest"
+            for alias in "$@"; do
+              alias_digest="$(image_digest "$alias")"
+              if [ "$versioned_digest" != "$alias_digest" ]; then
+                echo "::error::Alias $alias does not resolve to versioned image $versioned"
+                return 1
+              fi
+            done
+            printf '%s=%s\n' "$output_name" "$versioned_digest" >> "$GITHUB_OUTPUT"
+          }
+
+          capture_digest raw emersonfelipesp/proxbox-api:"$TAG" emersonfelipesp/proxbox-api:latest
+          capture_digest nginx emersonfelipesp/proxbox-api:"${TAG}-nginx" emersonfelipesp/proxbox-api:latest-nginx
+          capture_digest granian emersonfelipesp/proxbox-api:"${TAG}-granian" emersonfelipesp/proxbox-api:latest-granian
+          capture_digest rust_raw emersonfelipesp/proxbox-api:"${TAG}-pyo3-rust" emersonfelipesp/proxbox-api:experimental emersonfelipesp/proxbox-api:pyo3-rust
+          capture_digest rust_nginx emersonfelipesp/proxbox-api:"${TAG}-pyo3-rust-nginx" emersonfelipesp/proxbox-api:experimental-nginx emersonfelipesp/proxbox-api:pyo3-rust-nginx
+          capture_digest rust_granian emersonfelipesp/proxbox-api:"${TAG}-pyo3-rust-granian" emersonfelipesp/proxbox-api:experimental-granian emersonfelipesp/proxbox-api:pyo3-rust-granian
+
       - name: Smoke-test published startup
+        env:
+          RAW_REF: emersonfelipesp/proxbox-api@${{ steps.capture-digests.outputs.raw }}
+          NGINX_REF: emersonfelipesp/proxbox-api@${{ steps.capture-digests.outputs.nginx }}
+          GRANIAN_REF: emersonfelipesp/proxbox-api@${{ steps.capture-digests.outputs.granian }}
+          RUST_RAW_REF: emersonfelipesp/proxbox-api@${{ steps.capture-digests.outputs.rust_raw }}
+          RUST_NGINX_REF: emersonfelipesp/proxbox-api@${{ steps.capture-digests.outputs.rust_nginx }}
+          RUST_GRANIAN_REF: emersonfelipesp/proxbox-api@${{ steps.capture-digests.outputs.rust_granian }}
         run: |
           set -eux
-          REL="${{ github.event.release.tag_name || inputs.tag }}"
-          TAG="${REL#v}"
 
           # raw (HTTP)
           docker rm -f proxbox-release-raw 2>/dev/null || true
@@ -76,7 +123,7 @@ jobs:
             -p 127.0.0.1:18080:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
             -e PROXBOX_ENCRYPTION_KEY \
-            emersonfelipesp/proxbox-api:"$TAG"
+            "$RAW_REF"
           for i in $(seq 1 40); do
             if curl -fsS --max-time 5 http://127.0.0.1:18080/ >/dev/null 2>&1; then
               docker rm -f proxbox-release-raw
@@ -96,7 +143,7 @@ jobs:
             -p 127.0.0.1:18443:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
             -e PROXBOX_ENCRYPTION_KEY \
-            emersonfelipesp/proxbox-api:"${TAG}-nginx"
+            "$NGINX_REF"
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18443/ >/dev/null 2>&1; then
               docker rm -f proxbox-release-nginx
@@ -116,7 +163,7 @@ jobs:
             -p 127.0.0.1:18444:8000 \
             -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
             -e PROXBOX_ENCRYPTION_KEY \
-            emersonfelipesp/proxbox-api:"${TAG}-granian"
+            "$GRANIAN_REF"
           for i in $(seq 1 40); do
             if curl -kfsS --max-time 5 https://127.0.0.1:18444/ >/dev/null 2>&1; then
               docker rm -f proxbox-release-granian
@@ -131,15 +178,14 @@ jobs:
           done
 
           verify_rust_image() {
-            local tag="$1"
+            local image_ref="$1"
             local name="$2"
             local port="$3"
             local url="$4"
             local curl_flags="$5"
-
             docker run --rm \
               -e PROXBOX_ENCRYPTION_KEY \
-              "emersonfelipesp/proxbox-api:$tag" \
+              "$image_ref" \
               python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
 
             docker rm -f "$name" 2>/dev/null || true
@@ -147,7 +193,7 @@ jobs:
               -p "127.0.0.1:${port}:8000" \
               -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \
               -e PROXBOX_ENCRYPTION_KEY \
-              "emersonfelipesp/proxbox-api:$tag"
+              "$image_ref"
             for i in $(seq 1 40); do
               if curl $curl_flags --max-time 5 "$url" >/dev/null 2>&1; then
                 docker rm -f "$name"
@@ -162,14 +208,43 @@ jobs:
             done
           }
 
-          verify_rust_image "${TAG}-pyo3-rust" proxbox-release-pyo3-rust 18081 http://127.0.0.1:18081/ "-fsS"
-          verify_rust_image experimental proxbox-release-experimental 18082 http://127.0.0.1:18082/ "-fsS"
-          verify_rust_image pyo3-rust proxbox-release-pyo3-rust-alias 18083 http://127.0.0.1:18083/ "-fsS"
+          verify_rust_image "$RUST_RAW_REF" proxbox-release-pyo3-rust 18081 http://127.0.0.1:18081/ "-fsS"
+          verify_rust_image "$RUST_RAW_REF" proxbox-release-experimental 18082 http://127.0.0.1:18082/ "-fsS"
+          verify_rust_image "$RUST_RAW_REF" proxbox-release-pyo3-rust-alias 18083 http://127.0.0.1:18083/ "-fsS"
 
-          verify_rust_image "${TAG}-pyo3-rust-nginx" proxbox-release-pyo3-rust-nginx 18445 https://127.0.0.1:18445/ "-kfsS"
-          verify_rust_image experimental-nginx proxbox-release-experimental-nginx 18447 https://127.0.0.1:18447/ "-kfsS"
-          verify_rust_image pyo3-rust-nginx proxbox-release-pyo3-rust-nginx-alias 18448 https://127.0.0.1:18448/ "-kfsS"
+          verify_rust_image "$RUST_NGINX_REF" proxbox-release-pyo3-rust-nginx 18445 https://127.0.0.1:18445/ "-kfsS"
+          verify_rust_image "$RUST_NGINX_REF" proxbox-release-experimental-nginx 18447 https://127.0.0.1:18447/ "-kfsS"
+          verify_rust_image "$RUST_NGINX_REF" proxbox-release-pyo3-rust-nginx-alias 18448 https://127.0.0.1:18448/ "-kfsS"
 
-          verify_rust_image "${TAG}-pyo3-rust-granian" proxbox-release-pyo3-rust-granian 18446 https://127.0.0.1:18446/ "-kfsS"
-          verify_rust_image experimental-granian proxbox-release-experimental-granian 18449 https://127.0.0.1:18449/ "-kfsS"
-          verify_rust_image pyo3-rust-granian proxbox-release-pyo3-rust-granian-alias 18450 https://127.0.0.1:18450/ "-kfsS"
+          verify_rust_image "$RUST_GRANIAN_REF" proxbox-release-pyo3-rust-granian 18446 https://127.0.0.1:18446/ "-kfsS"
+          verify_rust_image "$RUST_GRANIAN_REF" proxbox-release-experimental-granian 18449 https://127.0.0.1:18449/ "-kfsS"
+          verify_rust_image "$RUST_GRANIAN_REF" proxbox-release-pyo3-rust-granian-alias 18450 https://127.0.0.1:18450/ "-kfsS"
+
+      - name: Confirm mutable aliases stayed bound to captured digests
+        env:
+          RAW_DIGEST: ${{ steps.capture-digests.outputs.raw }}
+          NGINX_DIGEST: ${{ steps.capture-digests.outputs.nginx }}
+          GRANIAN_DIGEST: ${{ steps.capture-digests.outputs.granian }}
+          RUST_RAW_DIGEST: ${{ steps.capture-digests.outputs.rust_raw }}
+          RUST_NGINX_DIGEST: ${{ steps.capture-digests.outputs.rust_nginx }}
+          RUST_GRANIAN_DIGEST: ${{ steps.capture-digests.outputs.rust_granian }}
+        run: |
+          assert_digest() {
+            local image="$1"
+            local expected="$2"
+            local actual
+            actual="$(docker buildx imagetools inspect "$image" --format '{{ .Manifest.Digest }}')"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Alias $image changed during verification"
+              return 1
+            fi
+          }
+          assert_digest emersonfelipesp/proxbox-api:latest "$RAW_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:latest-nginx "$NGINX_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:latest-granian "$GRANIAN_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:experimental "$RUST_RAW_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:pyo3-rust "$RUST_RAW_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:experimental-nginx "$RUST_NGINX_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:pyo3-rust-nginx "$RUST_NGINX_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:experimental-granian "$RUST_GRANIAN_DIGEST"
+          assert_digest emersonfelipesp/proxbox-api:pyo3-rust-granian "$RUST_GRANIAN_DIGEST"

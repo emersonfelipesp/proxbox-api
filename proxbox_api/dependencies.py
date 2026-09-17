@@ -16,6 +16,29 @@ from proxbox_api.schemas.sync import (
 )
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus, run_netbox_bootstrap
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep  # noqa: F401
+from proxbox_api.utils.retry import describe_exception
+
+
+def _non_empty_cause(error: Exception) -> str | dict[str, object]:
+    """Return a detail that is never empty for a re-wrapped tag-ensure failure.
+
+    A ``ProxboxException`` built from an exception whose ``str()`` is empty (every
+    aiohttp/asyncio timeout class) used to carry ``detail=""``; the plugin then
+    logged only the outer message. Fall back through the recorded Python
+    exception text, the original cause, and finally the exception itself.
+    """
+    detail = getattr(error, "detail", None)
+    if isinstance(detail, dict) and detail:
+        return detail
+    if isinstance(detail, str) and detail.strip():
+        return detail
+    python_exception = getattr(error, "python_exception", None)
+    if isinstance(python_exception, str) and python_exception.strip():
+        return python_exception
+    cause = error.__cause__
+    if cause is not None and not isinstance(cause, ProxboxException):
+        return describe_exception(cause)
+    return describe_exception(error)
 
 
 async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
@@ -34,8 +57,8 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
         # true cause rather than the opaque "Error ensuring Proxbox tag" 400.
         raise ProxboxException(
             message="Error ensuring Proxbox tag",
-            detail=getattr(error, "detail", None),
-            python_exception=error.python_exception or str(error),
+            detail=_non_empty_cause(error),
+            python_exception=error.python_exception or describe_exception(error),
             http_status_code=error.http_status_code,
         ) from error
     except Exception as error:
@@ -43,8 +66,8 @@ async def proxbox_tag(netbox_session: NetBoxAsyncSessionDep) -> RestRecord:
         # still expose the real cause in the detail so it is not swallowed.
         raise ProxboxException(
             message="Error ensuring Proxbox tag",
-            detail=str(error),
-            python_exception=str(error),
+            detail=describe_exception(error),
+            python_exception=describe_exception(error),
         ) from error
 
 

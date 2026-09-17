@@ -43,6 +43,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: proxbox-docker-publish-verify
+  cancel-in-progress: false
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Required since v0.0.10: proxbox-api refuses to start without an
@@ -52,6 +56,20 @@ env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
 
 jobs:
+  validate-publish-tag:
+    if: inputs.mode == 'publish'
+    name: Validate Docker publication tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject unsupported release tags before publication
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if [[ "$SOURCE_REF" == v* ]] && [[ ! "$SOURCE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.post[0-9]+)?$ ]]; then
+            echo "::error::Docker publication accepts only final or post-release version tags"
+            exit 1
+          fi
+
   # Sequential local test (manual); no registry login or push.
   docker-manual:
     if: inputs.mode == 'build-and-test-only'
@@ -282,6 +300,7 @@ jobs:
   # Parallel publish jobs — one per image variant.
   docker-raw:
     if: inputs.mode == 'publish'
+    needs: validate-publish-tag
     name: Docker Hub — raw (uvicorn only, HTTP)
     runs-on: ubuntu-latest
     steps:
@@ -425,6 +444,7 @@ jobs:
 
   docker-pyo3-rust:
     if: inputs.mode == 'publish'
+    needs: validate-publish-tag
     name: Docker Hub — ${{ matrix.variant }} PyO3/Rust experimental
     runs-on: ubuntu-latest
     strategy:
@@ -620,6 +640,7 @@ jobs:
 
   docker-nginx:
     if: inputs.mode == 'publish'
+    needs: validate-publish-tag
     name: Docker Hub — nginx (nginx + mkcert HTTPS + uvicorn)
     runs-on: ubuntu-latest
     steps:
@@ -763,6 +784,7 @@ jobs:
 
   docker-granian:
     if: inputs.mode == 'publish'
+    needs: validate-publish-tag
     name: Docker Hub — granian (granian + mkcert HTTPS)
     runs-on: ubuntu-latest
     steps:
@@ -903,3 +925,11 @@ jobs:
             fi
             docker rm -f "$NAME"
           done
+
+  verify-published-images:
+    name: verify published Docker images
+    if: inputs.mode == 'publish' && startsWith(inputs.source_ref, 'v')
+    needs: [docker-raw, docker-pyo3-rust, docker-nginx, docker-granian]
+    uses: ./.github/workflows/release-docker-verify.yml
+    with:
+      tag: ${{ inputs.source_ref }}

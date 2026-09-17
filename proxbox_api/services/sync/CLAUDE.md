@@ -236,6 +236,12 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   surfacing VM failure. Thus response loss cannot become a false operator lock
   on the next pass. Typed sidecar reads are the only ownership-evidence path.
 
+- **VM platform overwrite is explicit and default-off.**
+  `SyncOverwriteFlags.overwrite_vm_platform` is the only path that adds
+  `platform` to an existing VM's patchable fields. Omitted flags and the default
+  `false` preserve operator-managed NetBox platform assignments; the resolved
+  platform remains part of the create payload for new VMs.
+
 ## Orphan VM sweep
 
 `orphan_sweep.py` is the only owner of end-of-run orphan handling. Its enabled

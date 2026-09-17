@@ -1119,12 +1119,14 @@ def test_concurrent_requests_reserve_budget_before_bcrypt(
         assert row is not None and row.attempts == 1
 
 
-def test_live_verifier_heartbeat_holds_global_slot_beyond_lease(
+def _assert_live_verifier_heartbeat_holds_global_slot_beyond_lease(
     db_engine,
     stored_key: str,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(lockout_module, "_RESERVATION_LEASE_SECONDS", 0.15)
+    lease_seconds = 2.0
+    monkeypatch.setattr(lockout_module, "_RESERVATION_LEASE_SECONDS", lease_seconds)
+    monkeypatch.setattr(auth, "reservation_heartbeat_interval", lambda: 0.01)
     policy = AuthLockoutPolicy(
         threshold=100,
         source_threshold=100,
@@ -1133,7 +1135,26 @@ def test_live_verifier_heartbeat_holds_global_slot_beyond_lease(
         max_global_in_flight=1,
     )
     entered = threading.Event()
+    renewed = threading.Event()
     release = threading.Event()
+    original_renew = AuthLockoutService.renew_verification
+
+    def observe_renewal(
+        session: Session,
+        identity,
+        reservation: FailureResult,
+        now: float | None = None,
+    ) -> bool:  # noqa: ANN001
+        result = original_renew(session, identity, reservation, now)
+        if result:
+            renewed.set()
+        return result
+
+    monkeypatch.setattr(
+        AuthLockoutService,
+        "renew_verification",
+        staticmethod(observe_renewal),
+    )
 
     def slow_valid_verification(
         session: Session,
@@ -1160,13 +1181,22 @@ def test_live_verifier_heartbeat_holds_global_slot_beyond_lease(
         admitted = executor.submit(authenticate)
         assert entered.wait(timeout=5)
         try:
-            time.sleep(0.35)
+            assert renewed.wait(timeout=5)
             second_identity = build_lockout_identity(
                 resolve_auth_source_context("198.51.100.31", None, ()),
-                stored_key,
+                f"{stored_key}-global-capacity-probe",
             )
             with Session(db_engine) as session:
-                rejected = AuthLockoutService.reserve_verification(session, second_identity, policy)
+                reservation = session.exec(select(AuthLockoutReservation)).one()
+                original_expiry = reservation.created_at + lease_seconds
+                assert reservation.expires_at > original_expiry
+                probe_time = original_expiry + (reservation.expires_at - original_expiry) / 2
+                rejected = AuthLockoutService.reserve_verification(
+                    session,
+                    second_identity,
+                    policy,
+                    now=probe_time,
+                )
                 assert rejected is None
                 assert (
                     get_auth_lockout_metrics(session)["proxbox_auth_verifications_in_flight"] == 1
@@ -1177,6 +1207,18 @@ def test_live_verifier_heartbeat_holds_global_slot_beyond_lease(
 
     with Session(db_engine) as session:
         assert get_auth_lockout_metrics(session)["proxbox_auth_verifications_in_flight"] == 0
+
+
+def test_live_verifier_heartbeat_holds_global_slot_beyond_lease(
+    db_engine,
+    stored_key: str,
+    monkeypatch,
+) -> None:
+    _assert_live_verifier_heartbeat_holds_global_slot_beyond_lease(
+        db_engine,
+        stored_key,
+        monkeypatch,
+    )
 
 
 def test_wedged_verifier_is_reclaimed_at_deadline_and_late_result_is_discarded(

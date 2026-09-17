@@ -28,9 +28,13 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+RUST_RECONCILE_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "rust-reconcile.yml"
 GITEA_CI_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "ci.yml"
 GITEA_PROMOTION_HISTORY_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "promotion-history.yml"
 PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "publish-testpypi.yml"
+RELEASE_DOCKER_VERIFY_WORKFLOW_PATH = (
+    REPO_ROOT / ".github" / "workflows" / "release-docker-verify.yml"
+)
 GITEA_PUBLISH_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "publish-gitea.yml"
 GITEA_ARTIFACT_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "artifact-v3-compatibility.yml"
 GITEA_DEPLOY_WORKFLOW_PATH = REPO_ROOT / ".gitea" / "workflows" / "deploy-production.yml"
@@ -154,6 +158,76 @@ def test_ci_e2e_uses_http_mock_for_container_path_and_backend_mock_separately():
     assert 'uv run pytest tests/e2e/ -m "mock_http" --tb=short -v' in workflow
     assert "Run E2E tests with in-process MockBackend" in workflow
     assert 'uv run pytest tests/e2e/ -m "mock_backend" --tb=short -v' in workflow
+
+
+def test_rust_reconcile_uses_only_the_supported_posix_matrix():
+    workflow = yaml.safe_load(_read(RUST_RECONCILE_WORKFLOW_PATH))
+
+    expected_operating_systems = ["ubuntu-latest", "macos-latest"]
+    expected_python_versions = ["3.12", "3.13"]
+    for job_name in ("test", "build-wheels"):
+        matrix = workflow["jobs"][job_name]["strategy"]["matrix"]
+        assert matrix["os"] == expected_operating_systems
+        assert matrix["python"] == expected_python_versions
+
+
+def test_release_docker_verification_waits_for_successful_publication():
+    publish = yaml.safe_load(_read(PUBLISH_WORKFLOW_PATH))
+    docker_publish = yaml.safe_load(_read(REPO_ROOT / ".github/workflows/docker-hub-publish.yml"))
+    verifier = yaml.load(_read(RELEASE_DOCKER_VERIFY_WORKFLOW_PATH), Loader=yaml.BaseLoader)
+
+    triggers = verifier["on"]
+    assert set(triggers) == {"workflow_call", "workflow_dispatch"}
+    assert triggers["workflow_call"]["inputs"]["tag"]["required"] == "true"
+
+    assert "verify-published-docker" not in publish["jobs"]
+    job = docker_publish["jobs"]["verify-published-images"]
+    assert job["needs"] == ["docker-raw", "docker-pyo3-rust", "docker-nginx", "docker-granian"]
+    assert job["if"] == "inputs.mode == 'publish' && startsWith(inputs.source_ref, 'v')"
+    assert all(token not in job["if"] for token in ("always()", "failure()", "cancelled()"))
+    assert job["uses"] == "./.github/workflows/release-docker-verify.yml"
+    assert job["with"]["tag"] == "${{ inputs.source_ref }}"
+
+
+def test_release_docker_verification_validates_untrusted_tags_before_shell_use():
+    verifier = yaml.load(_read(RELEASE_DOCKER_VERIFY_WORKFLOW_PATH), Loader=yaml.BaseLoader)
+    verify_job = verifier["jobs"]["verify-image"]
+    shell_bodies = [step["run"] for step in verify_job["steps"] if "run" in step]
+    assert all("${{ inputs.tag }}" not in body for body in shell_bodies)
+    assert verify_job["steps"][0]["env"]["RELEASE_TAG"] == "${{ inputs.tag }}"
+    assert "^v[0-9]+\\.[0-9]+\\.[0-9]+(\\.post[0-9]+)?$" in shell_bodies[0]
+    assert "capture_digest" in shell_bodies[1]
+
+
+def test_docker_publication_validates_release_tags_before_every_push():
+    docker_publish = yaml.safe_load(_read(REPO_ROOT / ".github/workflows/docker-hub-publish.yml"))
+    validator = docker_publish["jobs"]["validate-publish-tag"]
+    assert validator["if"] == "inputs.mode == 'publish'"
+    validator_body = validator["steps"][0]["run"]
+    assert "^v[0-9]+\\.[0-9]+\\.[0-9]+(\\.post[0-9]+)?$" in validator_body
+    for job_name in ("docker-raw", "docker-pyo3-rust", "docker-nginx", "docker-granian"):
+        assert docker_publish["jobs"][job_name]["needs"] == "validate-publish-tag"
+
+
+def test_release_docker_verification_resolves_registry_manifests():
+    verifier = yaml.load(_read(RELEASE_DOCKER_VERIFY_WORKFLOW_PATH), Loader=yaml.BaseLoader)
+    verify_job = verifier["jobs"]["verify-image"]
+    shell_bodies = [step["run"] for step in verify_job["steps"] if "run" in step]
+    assert 'docker buildx imagetools inspect "$1"' in shell_bodies[1]
+    assert "imagetools inspect" not in shell_bodies[2]
+    assert "steps.capture-digests.outputs.raw" in verify_job["steps"][4]["env"]["RAW_DIGEST"]
+    assert 'docker buildx imagetools inspect "$image"' in shell_bodies[3]
+    assert all("docker image inspect" not in body for body in shell_bodies)
+
+
+def test_docker_publication_and_verification_share_serialization():
+    verifier = yaml.load(_read(RELEASE_DOCKER_VERIFY_WORKFLOW_PATH), Loader=yaml.BaseLoader)
+    assert "concurrency" not in verifier
+    docker_publish = yaml.safe_load(_read(REPO_ROOT / ".github/workflows/docker-hub-publish.yml"))
+    assert docker_publish["concurrency"] == {
+        "group": "proxbox-docker-publish-verify",
+        "cancel-in-progress": False,
+    }
 
 
 def test_every_event_e2e_matrix_stays_within_github_limit_and_keeps_coverage():

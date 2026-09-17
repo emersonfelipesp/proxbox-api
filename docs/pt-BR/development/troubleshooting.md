@@ -155,3 +155,28 @@ Resolucao:
 - Verifique os campos `error` e `detail` no payload do evento de erro.
 - Causas comuns: NetBox indisponivel, falha de autenticacao no Proxmox, modelos obrigatorios do plugin NetBox ausentes.
 - Refaca com o modo WebSocket (`/ws`) para logging mais verboso, se necessario.
+
+## Estagio de sync falha com `Error ensuring Proxbox tag`
+
+Sintoma:
+
+- Um job de sync do plugin NetBox falha no estagio `devices`, cerca de um timeout do NetBox
+  (120 s por padrao) apos o inicio, com `Error ensuring Proxbox tag`.
+
+Causa:
+
+- Garantir a tag `Proxbox` e a primeira chamada REST ao NetBox do estagio. Quando o NetBox
+  nao e alcancavel a partir do processo do proxbox-api, a requisicao expira ou e recusada
+  antes de existir qualquer resposta. Versoes antigas reportavam isso como HTTP 400 generico
+  com `detail` vazio, porque toda classe de timeout do asyncio/aiohttp vira string vazia.
+
+Resolucao:
+
+- Versoes atuais respondem com a causa real de transporte: timeout vira HTTP 504
+  (`NetBox <operation> timed out`, com a operacao, a classe da excecao, o
+  `PROXBOX_NETBOX_TIMEOUT` configurado e uma dica de conectividade); conexao recusada ou
+  falha vira HTTP 502 (`NetBox <operation> failed: NetBox is unreachable`). Ambos sao
+  tratados como transitorios e repetidos com backoff antes de falhar.
+- Verifique se a URL do NetBox armazenada no endpoint NetBox do proxbox-api e alcancavel
+  **a partir do host ou container do proxbox-api** (rede Docker, DNS, firewall, TLS).
+- Se o NetBox e alcancavel mas lento, aumente `PROXBOX_NETBOX_TIMEOUT` (`netbox_timeout`).

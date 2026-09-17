@@ -189,6 +189,17 @@ sequenceDiagram
 - Tags Docker usam a mesma versao do pacote PyPI que passou na validacao. As
   imagens experimentais PyO3/Rust adicionam sufixos `-pyo3-rust` e aliases
   opt-in (`experimental`, `pyo3-rust` e sufixos para variantes HTTPS).
+- A verificacao das imagens publicadas e um workflow reutilizavel chamado
+  somente depois que o job de publicacao Docker termina com sucesso. Ele recebe
+  a tag de release ja validada e entao baixa e testa as tags padrao e
+  experimentais; nao disputa mais o evento Release original nem consome seu
+  limite de tentativas enquanto um job de publicacao aguarda para iniciar. O
+  workflow reutilizavel de publicacao Docker mantem seu bloqueio de
+  concorrencia sem cancelamento ate o job dependente de verificacao terminar.
+  A verificacao exige que cada alias mutavel corresponda ao digest da imagem
+  versionada e executa os smoke tests pelas referencias de digest imutaveis
+  capturadas, impedindo que uma atualizacao concorrente do alias substitua
+  outra release.
 - O Dockerfile de release incluido no pacote fixa por digest completo o ultimo
   runtime raw revisado (`0.0.19.post5`) e a imagem uv 0.11.28. O build alvo
   exporta requisitos com hashes usando CPython 3.13, baixa apenas wheels

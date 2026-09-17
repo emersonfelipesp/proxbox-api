@@ -25,9 +25,9 @@ under `.gitea/workflows/`.
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
 | `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Downloads the exact linked Gitea wheel/sdist and validates both on Python 3.12/3.13. Candidate validation uses two xdist workers with loadgroup isolation; Python 3.13 keeps branch coverage, uploads XML evidence for 14 days, and retains duration telemetry while omitting the terminal missing-lines report. `rcN` versions publish to TestPyPI; final/post events additionally require immutable successful deployment evidence before those bytes reach PyPI. PyPI success then publishes Docker images and runs post-publish E2E. |
-| `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across Linux/macOS/Windows for Python 3.12 and 3.13. |
+| `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across the supported POSIX Linux/macOS runtimes for Python 3.12 and 3.13. Windows is not a supported service runtime because safety-critical state uses POSIX advisory locks. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
-| `release-docker-verify.yml` | Release published | Post-release smoke test of all three published Docker images |
+| `release-docker-verify.yml` | Called after successful Docker publication / manual dispatch | Pulls and smoke-tests every published standard and experimental Docker tag only after the release publication workflow succeeds. |
 
 ## CI Job Dependencies
 
@@ -53,7 +53,7 @@ ci.yml (push/PR — dev mode E2E only)
 
 rust-reconcile.yml
 ├── test         (cargo test --no-default-features, local native install, strict parity)
-└── build-wheels (needs: test; maturin wheel artifacts for Linux/macOS/Windows)
+└── build-wheels (needs: test; maturin wheel artifacts for supported Linux/macOS runtimes)
 
 ci.yml (release event — both dev + pypi modes)
 └── e2e-docker matrix runs both netbox_proxbox_mode=dev and netbox_proxbox_mode=pypi
@@ -69,7 +69,7 @@ publish-testpypi.yml (staged package release)
     ├── e2e-pre-publish         (needs: prepare-release; dev deps — proxbox-api local build + DEV_OVERRIDES; same 20-minute NetBox readiness gate)
     ├── publish-pypi            (needs: prepare-release + validate-pypi-candidate + e2e-pre-publish)
     ├── validate-pypi           (needs: prepare-release + publish-pypi; installs package from PyPI)
-    ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish)
+    ├── publish-docker          (needs: prepare-release + validate-pypi; calls docker-hub-publish.yml mode=publish, which verifies the published images before returning)
     └── e2e-post-publish        (needs: publish-docker + prepare-release; published Docker Hub image + PyPI netbox-proxbox; same 20-minute NetBox readiness gate)
 
 publish-gitea.yml (credential-free target request; ci-release-proxbox-api)

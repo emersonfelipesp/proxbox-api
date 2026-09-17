@@ -126,6 +126,34 @@ Resolution:
 - Stored credentials are no longer leaked into auth attempts after a credential switch: on the NetBox-side endpoint edit form, use the **"Clear stored API token on save"** and **"Clear stored password on save"** checkboxes to wipe the unused secret before saving. The form rejects rows that end up with neither a password nor a complete `(token name, token value)` pair.
 - The aiohttp `ClientSession` is now closed on every auth failure path (domain probe, IP fallback, both attempts failing). If you still see `Unclosed client session` warnings in proxbox-api logs after an auth failure, you are running an older build — re-check the installed package version.
 
+## Sync stage fails with `Error ensuring Proxbox tag`
+
+Symptom:
+
+- A NetBox plugin sync job fails on the `devices` stage, roughly one NetBox timeout
+  (default 120 s) after the stage starts, with `Error ensuring Proxbox tag`.
+
+Cause:
+
+- Ensuring the `Proxbox` NetBox tag is the first NetBox REST call of the stage. When NetBox is
+  unreachable from the proxbox-api process, the request times out or is refused before any
+  NetBox response exists. Older builds reported that as a generic HTTP 400 with an empty
+  `detail`, because every asyncio/aiohttp timeout class stringifies to an empty string.
+
+Resolution:
+
+- Current builds answer with the real transport cause: a timeout is HTTP 504 with
+  `NetBox <operation> timed out` and a `detail` naming the operation, the exception class, the
+  configured `PROXBOX_NETBOX_TIMEOUT`, and a reachability hint; a refused or failed connection
+  is HTTP 502 with `NetBox <operation> failed: NetBox is unreachable`. Both are classified as
+  transient and retried with backoff (`PROXBOX_NETBOX_MAX_RETRIES`) before the failure is
+  reported, and the plugin retries the stage on a 5xx.
+- Verify the NetBox URL stored on the proxbox-api NetBox endpoint is reachable **from the
+  proxbox-api host or container** (Docker network, DNS, firewall, TLS), not only from your
+  browser. A NetBox reachable only via `localhost` on the NetBox host is the usual culprit.
+- If NetBox is reachable but slow, raise `PROXBOX_NETBOX_TIMEOUT` (plugin setting
+  `netbox_timeout`).
+
 ## Sync endpoints return partial data
 
 Symptom:

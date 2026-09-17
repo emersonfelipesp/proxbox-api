@@ -55,6 +55,7 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
   discovery. Production leaves it unset so startup and source rendering use
   bundled schemas only.
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP=1` disables the default endpoint bootstrap (useful in test environments).
+- Each application lifespan owns the shared NetBox client cache. Endpoint mutation retires obsolete SDK generations without disrupting existing borrowers; shutdown releases ownership and atomically detaches current and retired clients only after the final overlapping lifespan exits. NetBox-client and database-runtime releases are attempted independently, so repeated cancellation or failure in one cannot skip the other; cleanup failures preserve an active primary lifespan error.
 - Full-update is the sole owner of its task-history stage: both REST and SSE
   VM-stage calls pass `sync_task_history=False`, then invoke
   `sync_all_virtual_machine_task_histories()` once. Forward

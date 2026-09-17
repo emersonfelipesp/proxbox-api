@@ -338,6 +338,7 @@ The response includes:
 
 - `POST /netbox/endpoint` - Create the singleton NetBox endpoint.
 - `GET /netbox/endpoint` - List NetBox endpoint records.
+- NetBox endpoint updates and deletion atomically retire every cached SDK facade for that endpoint, so new requests cannot acquire an obsolete credential generation. Retired transports remain available to requests that already borrowed them and are closed with the current generation only after the final application lifespan exits. Failed shutdown closures remain queued for retry instead of becoming unreachable.
 - `GET /netbox/endpoint/{netbox_id}` - Get endpoint by ID.
 - `PUT /netbox/endpoint/{netbox_id}` - Update endpoint.
 - `DELETE /netbox/endpoint/{netbox_id}` - Delete endpoint.
@@ -869,8 +870,13 @@ dependency and extending `tests/test_stage_route_bootstrap.py`.
 
 Every VM stream endpoint listed above (`/virtualization/virtual-machines/...create/stream`) accepts the `SyncOverwriteFlags` query parameters defined in `proxbox_api/schemas/sync.py`. They control which user-managed NetBox fields the sync may overwrite:
 
-- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
+- `overwrite_vm_tags`, `overwrite_vm_role`, `overwrite_vm_platform`, `overwrite_vm_description`, `overwrite_vm_custom_fields`
 - `overwrite_cluster_tags`, `overwrite_storage_tags`, `overwrite_node_interface_tags`, `overwrite_ip_tags`
+
+`overwrite_vm_platform` defaults to `false`. Enable it explicitly to reconcile an
+existing VM's NetBox platform from the Proxmox guest operating system; when it is
+false or omitted, platform remains operator-managed after initial VM creation.
+
 - `sync_vm_network` - when `false`, skips the VM-network sub-step.
 - `sync_task_history` - defaults to `true`; when `false`, skips the single
   post-VM task-history aggregate because a dedicated stage owns it. This flag

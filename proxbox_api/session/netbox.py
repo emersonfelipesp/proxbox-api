@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import threading
 from typing import TYPE_CHECKING, Annotated, Any, cast
@@ -69,6 +70,8 @@ _API_CACHE_LOCK = threading.Lock()
 # Config (URL/token/version) so token rotation produces a new key and the stale
 # Api becomes unreachable; explicit invalidation drops it from memory.
 _API_CACHE: dict[tuple[int, str], Api] = {}
+_RETIRED_APIS: list[Api] = []
+_API_CACHE_OWNERS = 0
 
 
 def _config_fingerprint(cfg: Config, ssl_verify: bool) -> str:
@@ -83,19 +86,90 @@ def _config_fingerprint(cfg: Config, ssl_verify: bool) -> str:
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
-def invalidate_netbox_api_cache(endpoint_id: int | None = None) -> None:
-    """Drop cached Api objects for an endpoint, or for all endpoints when id is None.
+def _detach_cached_apis(endpoint_id: int | None) -> list[Api]:
+    """Retire one endpoint or detach every client at the shutdown boundary."""
+    with _API_CACHE_LOCK:
+        if endpoint_id is None:
+            detached = list(_RETIRED_APIS) + list(_API_CACHE.values())
+            _RETIRED_APIS.clear()
+            _API_CACHE.clear()
+            return detached
+        keys = [key for key in _API_CACHE if key[0] == endpoint_id]
+        _RETIRED_APIS.extend(_API_CACHE.pop(key) for key in keys)
+        return []
+
+
+async def _close_cached_apis(apis: list[Api]) -> None:
+    """Close every detached client and retain failures for a later retry."""
+    seen: set[int] = set()
+    failed: list[tuple[Api, str]] = []
+    for api in apis:
+        client = api.client
+        identity = id(client)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        try:
+            await _maybe_await(client.close())
+        except Exception as error:  # noqa: BLE001
+            failed.append((api, type(error).__name__))
+    if failed:
+        with _API_CACHE_LOCK:
+            _RETIRED_APIS.extend(api for api, _error_type in failed)
+        error_types = ", ".join(error_type for _api, error_type in failed)
+        raise RuntimeError(f"Failed to close retired NetBox API clients: {error_types}")
+
+
+async def _finish_close_despite_cancellation(apis: list[Api]) -> None:
+    """Finish closure through repeated cancellation, then forward cancellation."""
+    close_task = asyncio.create_task(_close_cached_apis(apis))
+    cancelled = False
+    while not close_task.done():
+        try:
+            await asyncio.shield(close_task)
+        except asyncio.CancelledError:
+            cancelled = True
+            current = asyncio.current_task()
+            if current is not None:
+                current.uncancel()
+    await close_task
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+async def invalidate_netbox_api_cache(endpoint_id: int | None = None) -> None:
+    """Detach and close cached clients for one endpoint or the entire cache.
 
     Call this after updating or deleting a NetBoxEndpoint so that the next session
     request rebuilds the client with fresh credentials and no decrypted token is
     retained in memory beyond its useful life.
     """
+    detached = _detach_cached_apis(endpoint_id)
+    if detached:
+        await _finish_close_despite_cancellation(detached)
+
+
+def acquire_netbox_api_cache_owner() -> None:
+    """Register one active application lifespan as a cache owner."""
+    global _API_CACHE_OWNERS
     with _API_CACHE_LOCK:
-        if endpoint_id is None:
+        _API_CACHE_OWNERS += 1
+
+
+async def release_netbox_api_cache_owner() -> None:
+    """Release one lifespan owner and drain clients after the final owner exits."""
+    global _API_CACHE_OWNERS
+    detached: list[Api] = []
+    with _API_CACHE_LOCK:
+        if _API_CACHE_OWNERS <= 0:
+            raise RuntimeError("NetBox API cache owner release without acquisition")
+        _API_CACHE_OWNERS -= 1
+        if _API_CACHE_OWNERS == 0:
+            detached = list(_RETIRED_APIS) + list(_API_CACHE.values())
+            _RETIRED_APIS.clear()
             _API_CACHE.clear()
-            return
-        for key in [k for k in _API_CACHE if k[0] == endpoint_id]:
-            _API_CACHE.pop(key, None)
+    if detached:
+        await _finish_close_despite_cancellation(detached)
 
 
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
@@ -107,10 +181,12 @@ def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
         cached = _API_CACHE.get(cache_key)
         if cached is not None:
             return cached
-    api = Api(client=NetBoxApiClient(cfg), schema=build_schema_index(version=NETBOX_SCHEMA_VERSION))
-    with _API_CACHE_LOCK:
-        _API_CACHE.setdefault(cache_key, api)
-        return _API_CACHE[cache_key]
+        api = Api(
+            client=NetBoxApiClient(cfg),
+            schema=build_schema_index(version=NETBOX_SCHEMA_VERSION),
+        )
+        _API_CACHE[cache_key] = api
+        return api
 
 
 def get_netbox_session(

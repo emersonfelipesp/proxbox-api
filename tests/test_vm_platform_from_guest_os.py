@@ -181,27 +181,15 @@ def test_distinct_platforms_do_not_collide_on_slug() -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_platform_is_never_patched_on_an_existing_vm() -> None:
-    """Set at creation, never afterwards.
-
-    Proxbox has never owned this field, so an operator may well have set it by hand and
-    taking it over on the first sync after upgrading would be a regression dressed as a
-    feature. Making that operator-tunable would mean adding an `overwrite_*` flag, and
-    that set is a CI-enforced cross-repo contract that must change in both repos in the
-    same release -- see `test_overwrite_flags_contract.py`.
-    """
-    for flags in (SyncOverwriteFlags(), None):
-        assert "platform" not in _compute_vm_patchable_fields(flags)
+def test_platform_is_preserved_by_default_on_an_existing_vm() -> None:
+    assert "platform" not in _compute_vm_patchable_fields(SyncOverwriteFlags())
+    assert "platform" not in _compute_vm_patchable_fields(None)
 
 
-def test_no_overwrite_flag_was_invented_for_platform() -> None:
-    """Guard the contract, not just today's behaviour.
+def test_platform_is_patchable_when_operator_opts_in() -> None:
+    flags = SyncOverwriteFlags(overwrite_vm_platform=True)
 
-    Adding `overwrite_vm_platform` to the schema without updating both repos' manifests
-    is exactly the drift `contracts/overwrite_flags.json` exists to catch. This fails
-    fast and locally if someone reaches for that shortcut again.
-    """
-    assert "overwrite_vm_platform" not in SyncOverwriteFlags.model_fields
+    assert "platform" in _compute_vm_patchable_fields(flags)
 
 
 def test_reconciler_diff_can_see_the_current_platform() -> None:
@@ -402,14 +390,14 @@ def test_the_guest_agent_refinement_can_actually_be_switched_on() -> None:
     assert resolved.sync_vm_platform_from_guest_agent is True
 
 
-def test_an_unknown_overwrite_query_param_cannot_make_platform_patchable() -> None:
-    """A stray query parameter must not resurrect the gate by accident."""
+def test_platform_overwrite_query_parameter_is_reachable() -> None:
+    """The explicit operator opt-in must reach the reconciliation allowlist."""
     from proxbox_api.schemas.sync import overwrite_flags_from_query_params
 
     resolved = overwrite_flags_from_query_params(
         {"overwrite_vm_platform": "true"}, SyncOverwriteFlags()
     )
-    assert "platform" not in _compute_vm_patchable_fields(resolved)
+    assert "platform" in _compute_vm_patchable_fields(resolved)
 
 
 def test_the_guest_agent_read_is_bounded_by_a_timeout() -> None:
@@ -485,26 +473,15 @@ def test_a_metadata_block_can_pin_the_platform_on_creation() -> None:
 
 
 def test_a_metadata_pinned_platform_is_still_create_only() -> None:
-    """The create-only rule holds regardless of where the value came from.
-
-    A metadata-pinned platform lands when the VM is created, but must not start patching
-    existing VMs through the back door -- otherwise the fence becomes an overwrite gate
-    that bypasses the one deliberately not added.
-    """
+    """Metadata cannot bypass the default-off overwrite gate."""
     assert "platform" not in _compute_vm_patchable_fields(SyncOverwriteFlags())
 
 
-def test_the_http_reference_does_not_advertise_a_platform_overwrite_parameter() -> None:
-    """It listed `overwrite_vm_platform` as an accepted query parameter.
-
-    That flag has never existed in `SyncOverwriteFlags`, so the reference documented a
-    parameter callers could not use — a pre-existing error, and plausibly why this name
-    felt like the obvious one to reach for. It is doubly wrong now that the flag's
-    absence is a deliberate, tested decision, so the reference is corrected and pinned.
-    """
+def test_the_http_reference_documents_the_platform_overwrite_parameter() -> None:
+    """The public contract identifies the explicit opt-in and its safe default."""
     import pathlib
 
     reference = (
         pathlib.Path(__file__).resolve().parent.parent / "docs" / "api" / "http-reference.md"
     ).read_text(encoding="utf-8")
-    assert "overwrite_vm_platform" not in reference
+    assert "`overwrite_vm_platform` defaults to `false`" in reference

@@ -197,6 +197,15 @@ sequenceDiagram
 - Docker image tags use the same version as the PyPI package that passed
   validation. Experimental PyO3/Rust images add `-pyo3-rust` tag suffixes and
   opt-in aliases (`experimental`, `pyo3-rust`, and HTTPS variant suffixes).
+- Published-image verification is a reusable workflow called only after the
+  Docker publication job succeeds. It receives the already validated release
+  tag, then pulls and smoke-tests the standard and experimental tags; it no
+  longer races the original Release event or spends its retry budget waiting
+  for a queued publication job to start. The reusable Docker publication
+  workflow holds its non-canceling concurrency lock until its dependent
+  verification job finishes. Verification requires every mutable alias to
+  match its versioned image digest and smoke-tests captured immutable digest
+  references, so a concurrent alias update cannot substitute another release.
 - The package-carried release Dockerfile pins the last reviewed raw runtime
   (`0.0.19.post5`) and uv 0.11.28 source image by full digest. The target build
   exports hash-locked runtime requirements with CPython 3.13, downloads only

@@ -154,11 +154,12 @@ jobs:
 
   test-free-threaded:
     runs-on: ubuntu-latest
-    continue-on-error: true
-    # This lane validates that the package compiles and imports cleanly on the
-    # 3.14t free-threaded binary. It does NOT run the full pytest suite because
+    # The package supports Python <3.14, while CFFI supports free-threaded
+    # Python >=3.14. Use an isolated 3.14t environment without installing the
+    # root project metadata to run this focused compatibility regression.
+    # It does NOT run the full pytest suite because
     # SQLAlchemy's C-extension event registry segfaults during engine.dispose()
-    # teardown under 3.14t (crash trace points at
+    # teardown under a free-threaded runtime (crash trace points at
     # sqlalchemy/event/registry.py:_stored_in_collection_multi via
     # pool.recreate → engine.dispose), and the crash persists even with
     # PYTHON_GIL=1. The Python 3.12 lane already exercises the full test suite.
@@ -172,17 +173,25 @@ jobs:
           enable-cache: true
           python-version: "3.14t"
 
-      - name: Sync dependencies
-        run: uv sync --frozen --extra test --group dev
+      - name: Install focused regression dependencies
+        run: |
+          uv venv --python 3.14t .venv-free-threaded
+          uv pip install --python .venv-free-threaded/bin/python \
+            "aiosqlite>=0.20.0,<1.0.0" \
+            "bcrypt>=5.0.0,<6.0.0" \
+            "cryptography>=50.0.0,<51.0.0" \
+            "fastapi==0.137.2" \
+            "httpx>=0.28.1" \
+            "jinja2>=3.1.6" \
+            "netbox-sdk==0.0.13" \
+            "pytest>=9.0.3" \
+            "sqlmodel==0.0.38"
 
       - name: Compile package
-        run: uv run python -m compileall proxbox_api scripts tests
+        run: .venv-free-threaded/bin/python -m compileall proxbox_api scripts tests
 
-      - name: Import smoke checks
-        run: |
-          uv run python -c "import proxbox_api.main"
-          uv run python -c "import proxmox_sdk.mock_main"
-          uv run python -c "from proxbox_api.proxmox_to_netbox.proxmox_schema import load_proxmox_generated_openapi; assert load_proxmox_generated_openapi().get('paths')"
+      - name: Test deterministic authentication reservation heartbeat
+        run: .venv-free-threaded/bin/python -m scripts.verify_free_threaded_auth_heartbeat
 
   docker-bind-smoke:
     name: Docker bind-host smoke (issue #52)
