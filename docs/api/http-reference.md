@@ -299,8 +299,9 @@ Request highlights:
   `memory_mb`, `cores`, `cpu`, `description`
 - `vm_generation`: `gen1` or `gen2`
 - `guest_profile`: `linux_standard` or `windows_first_boot_safe`
-- Execution fields: `execute`, `endpoint_id`, `ssh_host`, `ssh_user`,
-  `ssh_port`, `ssh_identity_file`
+- Execution fields: `execute`, `endpoint_id`, plus compatibility assertions
+  `ssh_host`, `ssh_user`, `ssh_port`, `ssh_identity_file`, and
+  `ssh_known_host_fingerprint`
 
 Execution rules:
 
@@ -308,7 +309,17 @@ Execution rules:
 - `execute=true` requires `endpoint_id` so the route can enforce
   `ProxmoxEndpoint.allow_writes`.
 - `execute=true` also requires `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`.
-- `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR`.
+- The persisted endpoint binding exclusively supplies the execution node,
+  host, user, port, identity path, and pinned SHA-256 host-key fingerprint.
+  Any caller-supplied SSH field must match that binding.
+- Execution refuses incomplete bindings or a host-key mismatch.
+  `ssh_identity_file` must resolve under `PROXBOX_SSH_KEY_DIR`; the service
+  opens it once and passes its descriptor to a fixed `/usr/bin/ssh -F none`
+  invocation with strict host-key checking and all proxy authority disabled.
+- After host-key pinning, the service refreshes the endpoint from the database
+  and repeats the complete authorization/binding check immediately before the
+  child starts. Each import runs in a unique server-generated systemd unit so
+  bounded timeout and cancellation cleanup can target only that operation.
 
 Generated pipeline behavior:
 
@@ -332,7 +343,13 @@ The response includes:
 - `follow_up_steps`
 - `bios`, `machine`, `disk_interface`, `network_model`, `boot_order`
 - `source_vhd_filename`, `source_vhd_path`, `qcow2_filename`, `qcow2_path`
-- when executed remotely: `status`, `returncode`, `stdout`, `stderr`
+- when executed remotely: `status`, `returncode`, bounded execution byte/line
+  counts, fixed diagnostics, and `recovery_required`. Execute-mode responses
+  blank the SAS URL, generated script, and command list and never return raw
+  stdout or stderr.
+- `recovery_required` is false for failures proven to occur before the remote
+  child starts and for timeouts whose targeted unit stop is confirmed. It is
+  true for nonzero remote exits and unconfirmed timeout/cancellation outcomes.
 
 ## NetBox Routes (`/netbox`)
 

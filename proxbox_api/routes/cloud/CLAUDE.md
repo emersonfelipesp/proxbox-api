@@ -380,8 +380,31 @@ Execution details:
 - `execute=true` is gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`.
 - `endpoint_id` is required for execute mode so `_gate()` can enforce
   `ProxmoxEndpoint.allow_writes`.
-- `ssh_host`, `ssh_user`, and optional `ssh_identity_file` reuse the same SSH
-  validation boundary as the cloud-image build pipeline.
+- Host, user, port, identity, and host-key fingerprint come only from the
+  complete persisted endpoint binding. Caller SSH fields, including
+  `ssh_known_host_fingerprint`, are compatibility assertions and must match the
+  binding when supplied.
+- Execution refuses endpoints without a pinned fingerprint. It opens the
+  identity once, verifies and pins the scanned key, and invokes absolute
+  `/usr/bin/ssh` asynchronously with `-F none`, disabled proxy/canonicalization
+  options, strict host-key checking, and the identity descriptor in `pass_fds`.
+  Identity and temporary known-hosts resources are closed on every outcome.
+- After host-key pinning, execution forces an authoritative endpoint refresh
+  and revalidates enabled/write/SSH/node/binding/assertion authority immediately
+  before spawning the child. The script runs inside one unique server-generated
+  `systemd-run --wait --pipe` unit; timeout and cancellation perform bounded
+  local termination and remote unit cancellation through repeated caller
+  cancellation, with uncertain outcomes marked as recovery-required.
+- Execute-mode responses never echo the SAS URL, script, commands, stdout, or
+  stderr. They expose only bounded byte/line counts, exit status, fixed
+  diagnostics, and recovery state. Planning mode retains the operator plan.
+- Identity rejection, host-key rejection, and failure to spawn the main SSH
+  child are known pre-mutation outcomes and do not require recovery. A nonzero
+  remote exit requires recovery; timeout or startup failure after child
+  creation requires recovery unless targeted remote-unit cancellation is
+  confirmed. Request cancellation is re-raised only after the same mandatory
+  cleanup completes. Endpoint refresh failures are fixed, secret-free 409
+  responses and never trigger main SSH or remote cancellation.
 - The Windows-safe profile intentionally uses `sata0` + `e1000` for first boot;
   Linux defaults to `virtio-scsi-single` + `scsi0` with `discard=on` and
   `iothread=1`.
@@ -395,5 +418,5 @@ Execution details:
 - Keep Cloud Image Pipeline SSH identity restricted to
   `PROXBOX_SSH_KEY_DIR`; executable target values must come from the complete
   persisted endpoint/node binding, and strict host-key pinning must remain in
-  place. Azure VHD import retains its separately documented request-validation
+  place. Azure VHD import uses the same persisted-authority and pinned-host-key
   boundary.

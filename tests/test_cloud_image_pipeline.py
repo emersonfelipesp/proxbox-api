@@ -95,6 +95,50 @@ class _FakeAsyncProcess:
         self.returncode = -9
 
 
+@pytest.mark.asyncio
+async def test_stop_process_bounds_terminate_and_post_kill_waits(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class StalledProcess:
+        returncode = None
+
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+        def kill(self) -> None:
+            calls.append("kill")
+
+        async def wait(self) -> int:
+            raise AssertionError("wait coroutine should be bounded by the fake")
+
+    async def timeout(_awaitable: object, _seconds: int) -> int:
+        if hasattr(_awaitable, "close"):
+            _awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr(pipeline_scripts.asyncio, "wait_for", timeout)
+    await pipeline_scripts._stop_process(StalledProcess())
+
+    assert calls == ["terminate", "kill"]
+
+
+@pytest.mark.asyncio
+async def test_stop_process_contains_terminate_and_wait_failures() -> None:
+    class FailedProcess:
+        returncode = None
+
+        def terminate(self) -> None:
+            raise OSError("SECRET-TERMINATE")
+
+        def kill(self) -> None:
+            raise AssertionError("kill is not needed after a terminal wait failure")
+
+        async def wait(self) -> int:
+            raise RuntimeError("SECRET-WAIT")
+
+    await pipeline_scripts._stop_process(FailedProcess())
+
+
 def _trusted_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
     key_dir = tmp_path / "ssh_keys"
     key_dir.mkdir(exist_ok=True)

@@ -3993,7 +3993,7 @@
 | 3961 | http | POST | /cloud/vm/provision/stream | proxbox&#95;api/routes/cloud/provision&#95;stream.py:418 provision&#95;vm&#95;stream | - |
 | 3962 | http | POST | /cloud/firecracker/provision | proxbox&#95;api/routes/cloud/firecracker.py:214 provision&#95;firecracker&#95;microvm | - |
 | 3963 | http | POST | /cloud/firecracker/provision/stream | proxbox&#95;api/routes/cloud/firecracker.py:222 provision&#95;firecracker&#95;microvm&#95;stream | - |
-| 3964 | http | POST | /cloud/azure/vhd-imports | proxbox&#95;api/routes/cloud/azure&#95;vhd&#95;imports.py:17 import&#95;azure&#95;vhd | - |
+| 3964 | http | POST | /cloud/azure/vhd-imports | proxbox&#95;api/routes/cloud/azure&#95;vhd&#95;imports.py:60 import&#95;azure&#95;vhd | - |
 | 3965 | http | GET | /cloud/network/available-ips | proxbox&#95;api/routes/cloud/network.py:39 cloud&#95;network&#95;available&#95;ips | - |
 | 3966 | http | GET | /cloud/proxmox-endpoint/by-url | proxbox&#95;api/routes/cloud/image&#95;factory.py:220 get&#95;endpoint&#95;by&#95;url | - |
 | 3967 | http | POST | /cloud/image-factory/builds | proxbox&#95;api/routes/cloud/image&#95;factory.py:245 create&#95;image&#95;factory&#95;build | - |
@@ -4001,10 +4001,10 @@
 | 3969 | http | GET | /cloud/image-factory/builds/{build&#95;id}/stream | proxbox&#95;api/routes/cloud/image&#95;factory.py:433 stream&#95;image&#95;factory&#95;build | - |
 | 3970 | http | POST | /cloud/image-factory/builds/{build&#95;id}/cancel | proxbox&#95;api/routes/cloud/image&#95;factory.py:464 cancel&#95;image&#95;factory&#95;build | - |
 | 3971 | http | POST | /cloud/image-factory/validate | proxbox&#95;api/routes/cloud/image&#95;factory.py:488 validate&#95;image&#95;factory&#95;build | - |
-| 3972 | http | POST | /cloud/templates/images/preflight | proxbox&#95;api/routes/cloud/template&#95;images.py:519 preflight&#95;cloud&#95;image&#95;template | - |
-| 3973 | http | GET | /cloud/templates/images/operations/{operation&#95;id} | proxbox&#95;api/routes/cloud/template&#95;images.py:556 get&#95;cloud&#95;image&#95;build&#95;operation | - |
-| 3974 | http | POST | /cloud/templates/images/operations/{operation&#95;id}/cancel | proxbox&#95;api/routes/cloud/template&#95;images.py:579 cancel&#95;cloud&#95;image&#95;build&#95;operation | - |
-| 3975 | http | POST | /cloud/templates/images | proxbox&#95;api/routes/cloud/template&#95;images.py:966 build&#95;cloud&#95;image&#95;template | - |
+| 3972 | http | POST | /cloud/templates/images/preflight | proxbox&#95;api/routes/cloud/template&#95;images.py:442 preflight&#95;cloud&#95;image&#95;template | - |
+| 3973 | http | GET | /cloud/templates/images/operations/{operation&#95;id} | proxbox&#95;api/routes/cloud/template&#95;images.py:479 get&#95;cloud&#95;image&#95;build&#95;operation | - |
+| 3974 | http | POST | /cloud/templates/images/operations/{operation&#95;id}/cancel | proxbox&#95;api/routes/cloud/template&#95;images.py:502 cancel&#95;cloud&#95;image&#95;build&#95;operation | - |
+| 3975 | http | POST | /cloud/templates/images | proxbox&#95;api/routes/cloud/template&#95;images.py:889 build&#95;cloud&#95;image&#95;template | - |
 | 3976 | http | POST | /cloud/templates/pve | proxbox&#95;api/routes/cloud/pve&#95;template.py:144 build&#95;pve&#95;template | - |
 | 3977 | http | GET | /cloud/vm/templates | proxbox&#95;api/routes/cloud/qemu&#95;templates.py:204 qemu&#95;cloud&#95;init&#95;templates | - |
 | 3978 | http | GET | /cloud/templates | proxbox&#95;api/routes/cloud/templates.py:91 list&#95;cloud&#95;templates | - |

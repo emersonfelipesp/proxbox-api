@@ -2,7 +2,56 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+from fastapi import HTTPException
+
+from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.routes.cloud import azure_vhd_imports, azure_vhd_pipeline
+from proxbox_api.schemas.cloud_provision import (
+    AzureVhdImportRequest,
+    CloudImageTemplateExecutionSummary,
+    PackerFinding,
+    PackerFindingSeverity,
+)
+
 PUBLIC_VHD_URL = "https://93.184.216.34/exported-osdisk.vhd"
+
+
+def _request(**overrides: object) -> AzureVhdImportRequest:
+    values: dict[str, object] = {
+        "endpoint_id": 7,
+        "target_node": "pve-node-01",
+        "vmid": 9401,
+        "name": "azure-linux-migrated",
+        "azure_vhd_url": PUBLIC_VHD_URL,
+        "execute": True,
+    }
+    values.update(overrides)
+    return AzureVhdImportRequest(**values)
+
+
+def _endpoint(**overrides: object) -> ProxmoxEndpoint:
+    values: dict[str, object] = {
+        "id": 7,
+        "name": "azure-import-target",
+        "ip_address": "192.0.2.10",
+        "port": 8006,
+        "username": "root@pam",
+        "password": "secret",
+        "enabled": True,
+        "allow_writes": True,
+        "access_methods": "api_ssh",
+        "ssh_target_node": "pve-node-01",
+        "ssh_host": "pve.example.test",
+        "ssh_username": "root",
+        "ssh_port": 2222,
+        "ssh_identity_file": "/etc/proxbox/ssh_keys/id_ed25519",
+        "ssh_known_host_fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    }
+    values.update(overrides)
+    return ProxmoxEndpoint(**values)
 
 
 def test_azure_vhd_import_route_returns_linux_plan(auth_test_client) -> None:
@@ -146,3 +195,172 @@ def test_azure_vhd_import_rejects_internal_urls() -> None:
         assert "azure_vhd_url rejected by SSRF protection" in str(exc)
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected SSRF validation failure for loopback URL")
+
+
+@pytest.mark.asyncio
+async def test_azure_execution_uses_safe_shared_executor_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authorized = False
+
+    async def authorize() -> None:
+        nonlocal authorized
+        authorized = True
+
+    async def fake_execute(*_args: object, **kwargs: object) -> tuple[object, ...]:
+        await kwargs["authorize_execution"]()
+        assert str(kwargs["remote_unit"]).startswith("proxbox-azure-vhd-")
+        return (
+            "verification_pending",
+            0,
+            CloudImageTemplateExecutionSummary(
+                attempted=True,
+                enabled=True,
+                stdout_bytes=10_000_000,
+                stderr_bytes=20_000_000,
+                stdout_lines=300_000,
+                stderr_lines=400_000,
+            ),
+            [
+                PackerFinding(
+                    code="execution_awaiting_verification",
+                    severity=PackerFindingSeverity.warning,
+                    target="endpoint:7",
+                    message="Remote execution completed.",
+                )
+            ],
+            None,
+        )
+
+    monkeypatch.setenv("PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION", "true")
+    monkeypatch.setattr(azure_vhd_pipeline, "execute_remote_script", fake_execute)
+    target = azure_vhd_imports._resolve_target(_endpoint(), _request())
+    response = await azure_vhd_pipeline.build_azure_vhd_import_response(
+        _request(azure_vhd_url="https://93.184.216.34/exported.vhd?sig=SECRET-CANARY"),
+        execution_target=target,
+        authorize_execution=authorize,
+    )
+
+    rendered = response.model_dump_json()
+    assert authorized
+    assert response.azure_vhd_url == ""
+    assert response.build_script == ""
+    assert response.commands == []
+    assert response.stdout is None and response.stderr is None
+    assert response.execution.stdout_bytes == 10_000_000
+    assert "SECRET-CANARY" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_azure_execution_rejects_caller_binding_mismatch_before_resources_open() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        azure_vhd_imports._resolve_target(_endpoint(), _request(ssh_host="other.example.test"))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "endpoint_ssh_binding_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_azure_execution_requires_persisted_host_fingerprint() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        azure_vhd_imports._resolve_target(_endpoint(ssh_known_host_fingerprint=None), _request())
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "endpoint_ssh_binding_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_azure_authority_refresh_reloads_identity_map_and_rejects_revocation() -> None:
+    endpoint = _endpoint()
+
+    class Session:
+        async def get(self, _model: object, _endpoint_id: int) -> ProxmoxEndpoint:
+            return endpoint
+
+        async def refresh(self, value: ProxmoxEndpoint) -> None:
+            value.allow_writes = False
+
+    refreshed = await azure_vhd_imports._refresh_endpoint(Session(), 7)
+    with pytest.raises(HTTPException) as exc_info:
+        azure_vhd_imports._resolve_target(refreshed, _request())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "endpoint_writes_disabled"
+
+
+@pytest.mark.asyncio
+async def test_azure_refresh_failure_never_starts_or_cancels_ssh(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class Session:
+        async def get(self, _model: object, _endpoint_id: int) -> ProxmoxEndpoint:
+            return _endpoint()
+
+        async def refresh(self, _value: ProxmoxEndpoint) -> None:
+            raise RuntimeError("SECRET-DATABASE-CANARY")
+
+    async def forbidden(*_args: object, **_kwargs: object) -> None:
+        calls.append("ssh")
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.cloud.pipeline_scripts.asyncio.create_subprocess_exec",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.cloud.pipeline_scripts._cancel_remote_unit",
+        forbidden,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await azure_vhd_imports._refresh_endpoint(Session(), 7)
+
+    assert exc_info.value.detail["code"] == "endpoint_authority_refresh_failed"
+    assert "SECRET-DATABASE-CANARY" not in str(exc_info.value.detail)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("error_code", "attempted", "cancel_attempted", "cancel_succeeded", "expected"),
+    [
+        ("ssh_identity_untrusted", False, False, None, False),
+        ("ssh_host_key_unverified", True, False, None, False),
+        ("execution_unavailable", True, False, None, False),
+        ("execution_timeout", True, True, True, False),
+        ("execution_timeout", True, True, False, True),
+        ("execution_failed", True, False, None, True),
+    ],
+)
+def test_azure_recovery_truth_table(
+    error_code: str,
+    attempted: bool,
+    cancel_attempted: bool,
+    cancel_succeeded: bool | None,
+    expected: bool,
+) -> None:
+    summary = CloudImageTemplateExecutionSummary(
+        attempted=attempted,
+        cancellation_attempted=cancel_attempted,
+        cancellation_succeeded=cancel_succeeded,
+    )
+    assert azure_vhd_pipeline._recovery_required(error_code, summary) is expected
+
+
+@pytest.mark.asyncio
+async def test_azure_restores_cancellation_after_shared_cleanup(monkeypatch) -> None:
+    cleanup = CloudImageTemplateExecutionSummary(
+        attempted=True,
+        cancellation_attempted=True,
+        cancellation_succeeded=True,
+    )
+
+    async def cancelled(*_args: object, **_kwargs: object) -> None:
+        raise azure_vhd_pipeline.PipelineExecutionCancelled(cleanup)
+
+    monkeypatch.setattr(azure_vhd_pipeline, "execute_remote_script", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await azure_vhd_pipeline._execution_result(
+            _request(),
+            azure_vhd_imports._resolve_target(_endpoint(), _request()),
+            "true\n",
+            execution_allowed=True,
+            authorize_execution=None,
+        )

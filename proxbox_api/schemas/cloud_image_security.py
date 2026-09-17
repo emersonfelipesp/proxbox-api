@@ -8,6 +8,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -178,14 +179,154 @@ class CloudImageSSHExecutionTarget(BaseModel):
         return normalize_ssh_fingerprint(value)
 
 
+class SSHBindingEndpoint(Protocol):
+    id: int | None
+    enabled: bool
+    allow_writes: bool
+    ssh_enabled: bool
+    has_cloud_image_ssh_binding: bool
+    ssh_target_node: str | None
+    ssh_host: str | None
+    ssh_username: str | None
+    ssh_port: int
+    ssh_identity_file: str | None
+    ssh_known_host_fingerprint: str | None
+
+
+class SSHBindingAssertions(Protocol):
+    ssh_host: str | None
+    ssh_user: str
+    ssh_port: int
+    ssh_identity_file: str | None
+    ssh_known_host_fingerprint: str | None
+    model_fields_set: set[str]
+
+    @property
+    def target_node(self) -> str | None: ...
+
+
+class SSHBindingError(ValueError):
+    """Stable route-independent persisted SSH binding failure."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int,
+        endpoint_id: int,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.endpoint_id = endpoint_id
+        self.field = field
+
+
+def _binding_failure(
+    endpoint: SSHBindingEndpoint, request: SSHBindingAssertions
+) -> tuple[str, int, str] | None:
+    checks = (
+        (
+            not endpoint.enabled,
+            "endpoint_disabled",
+            422,
+            "The persisted Proxmox endpoint is disabled.",
+        ),
+        (
+            not endpoint.allow_writes,
+            "endpoint_writes_disabled",
+            403,
+            "The persisted Proxmox endpoint does not allow writes.",
+        ),
+        (
+            not endpoint.ssh_enabled,
+            "endpoint_ssh_disabled",
+            403,
+            "The persisted Proxmox endpoint does not allow SSH execution.",
+        ),
+        (
+            not request.target_node,
+            "target_node_required",
+            422,
+            "target_node is required for executable builds.",
+        ),
+        (
+            not endpoint.has_cloud_image_ssh_binding,
+            "endpoint_ssh_binding_incomplete",
+            422,
+            "The endpoint has no complete persisted Cloud Image SSH binding.",
+        ),
+        (
+            request.target_node != endpoint.ssh_target_node,
+            "endpoint_node_mismatch",
+            409,
+            "target_node does not match the endpoint's persisted SSH node.",
+        ),
+    )
+    return next(
+        ((code, status_code, message) for failed, code, status_code, message in checks if failed),
+        None,
+    )
+
+
+def resolve_ssh_execution_target(
+    endpoint: SSHBindingEndpoint,
+    request: SSHBindingAssertions,
+) -> CloudImageSSHExecutionTarget:
+    """Derive an SSH target only from persisted endpoint authority."""
+
+    endpoint_id = int(endpoint.id or 0)
+    if failure := _binding_failure(endpoint, request):
+        raise SSHBindingError(
+            failure[0], failure[2], status_code=failure[1], endpoint_id=endpoint_id
+        )
+    try:
+        target = CloudImageSSHExecutionTarget(
+            host=str(endpoint.ssh_host),
+            user=str(endpoint.ssh_username),
+            port=endpoint.ssh_port,
+            identity_file=str(endpoint.ssh_identity_file),
+            known_host_fingerprint=str(endpoint.ssh_known_host_fingerprint),
+        )
+    except Exception as error:
+        raise SSHBindingError(
+            "endpoint_ssh_binding_invalid",
+            "The endpoint's persisted Cloud Image SSH binding is invalid.",
+            status_code=422,
+            endpoint_id=endpoint_id,
+        ) from error
+    assertions = {
+        "ssh_host": target.host,
+        "ssh_user": target.user,
+        "ssh_port": target.port,
+        "ssh_identity_file": target.identity_file,
+        "ssh_known_host_fingerprint": target.known_host_fingerprint,
+    }
+    for field, expected in assertions.items():
+        if field in request.model_fields_set and getattr(request, field) != expected:
+            raise SSHBindingError(
+                "endpoint_ssh_binding_mismatch",
+                "Caller SSH assertions do not match the persisted endpoint binding.",
+                status_code=409,
+                endpoint_id=endpoint_id,
+                field=field,
+            )
+    return target
+
+
 __all__ = (
     "CloudImageSSHExecutionTarget",
     "OpenSSHIdentityFile",
+    "SSHBindingError",
     "is_valid_hostname",
     "normalize_ssh_fingerprint",
     "normalize_ssh_host",
     "normalize_ssh_identity_file",
     "normalize_ssh_user",
     "open_ssh_identity_file",
+    "resolve_ssh_execution_target",
     "validate_ssh_identity_file_security",
 )
