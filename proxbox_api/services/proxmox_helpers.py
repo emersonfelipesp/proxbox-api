@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeVar, get_args
 
+from proxmox_sdk.generated.proxmox.latest import pydantic_models as generated_models
 from proxmox_sdk.sdk.exceptions import (
     ProxmoxConnectionError,
     ProxmoxTimeoutError,
@@ -18,7 +19,6 @@ from proxmox_sdk.sdk.exceptions import (
 )
 
 from proxbox_api.exception import ProxboxException, ProxmoxAPIError
-from proxbox_api.generated.proxmox.latest import pydantic_models as generated_models
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.session.proxmox import ProxmoxSession
@@ -64,31 +64,6 @@ def _normalize_blank_optional_boolean_fields(
             value = normalized.get(key)
             if isinstance(value, str) and not value.strip():
                 normalized[key] = None
-    return normalized
-
-
-def _normalize_optional_numeric_string_fields(
-    payload: object,
-    model_type: type[object],
-) -> object:
-    """Coerce numeric Proxmox values for optional string fields.
-
-    Proxmox can serialize string-typed QEMU config values as JSON numbers
-    (observed for ``memory``). Normalize only optional string fields before
-    validation, while preserving booleans and every other upstream value.
-    """
-    if not isinstance(payload, dict):
-        return payload
-
-    normalized = dict(payload)
-    for field_name, field_info in getattr(model_type, "model_fields", {}).items():
-        annotation = field_info.annotation
-        if not (annotation is str or str in get_args(annotation)) or field_info.is_required():
-            continue
-        for key in {field_name, field_info.alias} - {None}:
-            value = normalized.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                normalized[key] = str(value)
     return normalized
 
 
@@ -352,13 +327,11 @@ async def get_vm_config(
             payload = await resolve_async(session.session.nodes(node).qemu(vmid).config.get())
             model_type = generated_models.GetNodesNodeQemuVmidConfigResponse
             payload = _normalize_blank_optional_boolean_fields(payload, model_type)
-            payload = _normalize_optional_numeric_string_fields(payload, model_type)
             return model_type.model_validate(payload)
         if vm_type == "lxc":
             payload = await resolve_async(session.session.nodes(node).lxc(vmid).config.get())
             model_type = generated_models.GetNodesNodeLxcVmidConfigResponse
             payload = _normalize_blank_optional_boolean_fields(payload, model_type)
-            payload = _normalize_optional_numeric_string_fields(payload, model_type)
             return model_type.model_validate(payload)
         raise ValueError(f"Unsupported VM type: {vm_type}")
     except ProxboxException:

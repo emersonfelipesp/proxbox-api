@@ -1924,21 +1924,12 @@ def test_typed_lxc_config_normalizes_blank_optional_boolean() -> None:
     assert raw_payload["unprivileged"] == " "
 
 
-@pytest.mark.parametrize(
-    ("numeric_value", "expected"),
-    [
-        (65536, "65536"),
-        (65536.5, "65536.5"),
-    ],
-)
-def test_typed_qemu_config_normalizes_numeric_optional_string(
-    numeric_value: int | float,
-    expected: str,
-) -> None:
+@pytest.mark.parametrize("memory", [16, 65536, "65536"])
+def test_typed_qemu_config_preserves_sdk_supported_memory_scalar(memory: int | str) -> None:
     session = FakeTypedProxmoxSession()
     raw_payload = {
         "digest": "abc123",
-        "memory": numeric_value,
+        "memory": memory,
         "name": "vm01",
     }
 
@@ -1954,11 +1945,63 @@ def test_typed_qemu_config_normalizes_numeric_optional_string(
 
     config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
 
-    assert config.memory == expected
-    assert raw_payload["memory"] == numeric_value
+    assert config.memory == memory
+    assert type(config.memory) is type(memory)
+    assert raw_payload["memory"] == memory
 
 
-def test_typed_qemu_config_normalizes_alias_keyed_optional_string() -> None:
+@pytest.mark.parametrize("agent", [True, False, 0, 1, "0", "1", "1,fstrim_cloned_disks=1"])
+def test_typed_qemu_config_preserves_sdk_supported_agent_scalar(agent: bool | int | str) -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {"digest": "abc123", "agent": agent, "memory": 4096}
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+    assert config.agent == agent
+    assert type(config.agent) is type(agent)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("memory", True),
+        ("memory", 15),
+        ("memory", 4096.5),
+        ("memory", {"current": 4096}),
+        ("agent", 2),
+        ("agent", 1.0),
+        ("agent", {"enabled": True}),
+    ],
+)
+def test_typed_qemu_config_rejects_malformed_sdk_scalars(field: str, value: object) -> None:
+    session = FakeTypedProxmoxSession()
+    raw_payload = {"digest": "abc123", field: value}
+
+    class _QemuAccessor:
+        config = FakeNestedResource(raw_payload)
+
+    class _NodeAccessor:
+        def qemu(self, vmid):
+            assert vmid == 101
+            return _QemuAccessor()
+
+    session.session.nodes = lambda node: _NodeAccessor()
+
+    with pytest.raises(ProxboxException, match="Error fetching Proxmox VM config"):
+        get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+
+
+def test_typed_qemu_config_rejects_numeric_composite_string() -> None:
     session = FakeTypedProxmoxSession()
     raw_payload = {
         "digest": "abc123",
@@ -1975,14 +2018,14 @@ def test_typed_qemu_config_normalizes_alias_keyed_optional_string() -> None:
 
     session.session.nodes = lambda node: _NodeAccessor()
 
-    config = get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
+    with pytest.raises(ProxboxException, match="Error fetching Proxmox VM config"):
+        get_typed_vm_config(session, node="pve01", vm_type="qemu", vmid=101)
 
-    assert config.amd_sev == "7"
     assert raw_payload["amd-sev"] == 7
 
 
 @pytest.mark.parametrize("boolean_value", [True, False])
-def test_typed_qemu_config_does_not_normalize_boolean_as_optional_string(
+def test_typed_qemu_memory_rejects_boolean(
     boolean_value: bool,
 ) -> None:
     session = FakeTypedProxmoxSession()

@@ -77,6 +77,143 @@ def _existing_vm_snapshot(*, name: str, vmid: int = 101, record_id: int = 55) ->
     }
 
 
+class _FakeConfigResource:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def get(self) -> dict[str, object]:
+        return dict(self._payload)
+
+
+class _FakeVMResource:
+    def __init__(self, payload_factory, vmid: int) -> None:
+        self.config = _FakeConfigResource(payload_factory(vmid))
+
+
+class _FakeNodeResource:
+    def __init__(self, payload_factory) -> None:
+        self._payload_factory = payload_factory
+
+    def qemu(self, vmid: int) -> _FakeVMResource:
+        return _FakeVMResource(self._payload_factory, vmid)
+
+
+class _FakeSDKClient:
+    def __init__(self, payload_factory) -> None:
+        self._payload_factory = payload_factory
+
+    def nodes(self, _node: str) -> _FakeNodeResource:
+        return _FakeNodeResource(self._payload_factory)
+
+
+class _MixedBatchHarness:
+    def __init__(self) -> None:
+        self.prepared: list[tuple[str, int, str]] = []
+        self.sync_identities: list[tuple[int | None, int, str]] = []
+        self.vm_create_payloads: list[dict[str, object]] = []
+        self.vm_patch_calls: list[tuple[int, dict[str, object]]] = []
+        self.sidecar_patch_calls: list[tuple[int, dict[str, object]]] = []
+        self.created_ids = iter(range(10_000, 11_000))
+        self.sync_state_builder = sync_vm.build_virtual_machine_sync_state_fields
+        self.existing_vm = _existing_vm_snapshot(name="vm-105", vmid=105, record_id=55)
+        self.existing_sidecar = {
+            "id": 700,
+            "virtual_machine": {"id": 55},
+            "proxmox_endpoint_raw_id": 11,
+            "proxmox_vm_id": 105,
+            "proxmox_vm_type": "qemu",
+            "proxmox_node_name": "pve-old-a",
+            "proxmox_cluster_name": "cluster-a",
+            "proxmox_vm_name": "vm-105",
+        }
+
+    def capture_prepared(self, kwargs: dict[str, object]) -> None:
+        resource = kwargs["proxmox_resource"]
+        self.prepared.append((str(resource["name"]), int(resource["vmid"]), str(resource["node"])))
+
+    def capture_sync_state(self, **kwargs) -> dict[str, object]:
+        state = self.sync_state_builder(**kwargs)
+        self.sync_identities.append(
+            (
+                state.get("proxmox_endpoint_id"),
+                int(state["proxmox_vm_id"]),
+                str(state["proxmox_node"]),
+            )
+        )
+        return state
+
+    async def rest_create(self, _nb, _path, payload, *, lookup=None):
+        assert lookup == {"id": 0}
+        self.vm_create_payloads.append(dict(payload))
+        return {"id": next(self.created_ids), **payload}
+
+    async def rest_patch(self, _nb, path, record_id, payload):
+        assert path == "/api/virtualization/virtual-machines/"
+        self.vm_patch_calls.append((record_id, dict(payload)))
+        return {**self.existing_vm, **payload, "id": record_id}
+
+    async def sidecar_patch(self, _nb, path, record_id, payload):
+        assert path == sync_state_reader.VM_SYNC_STATE_PATH
+        self.sidecar_patch_calls.append((record_id, dict(payload)))
+        return {**self.existing_sidecar, **payload, "id": record_id}
+
+
+def _fake_vm_config_session(*, name: str, endpoint_id: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        cluster_name=name,
+        domain=f"{name}.example.test",
+        http_port=8006,
+        db_endpoint_id=endpoint_id,
+        session=_FakeSDKClient(_mixed_batch_upstream_payload),
+    )
+
+
+def _mixed_batch_upstream_payload(vmid: int) -> dict[str, object]:
+    payload = {**PROXMOX_VM_CONFIG, "digest": "test", "memory": 4096, "agent": 1}
+    if vmid == 999:
+        payload["memory"] = True
+    return payload
+
+
+def _mixed_endpoint_resources() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    endpoint_a = [{**_resource(vmid), "node": "pve-new-a"} for vmid in range(1, 175)]
+    endpoint_b = [{**_resource(vmid), "node": "pve-new-b"} for vmid in range(175, 348)]
+    endpoint_b.extend(
+        [
+            {**_resource(105), "node": "pve-new-b"},
+            {**_resource(999), "name": "vm-invalid", "node": "pve-new-b"},
+        ]
+    )
+    return endpoint_a, endpoint_b
+
+
+def _assert_mixed_batch_identity(
+    result: list[dict[str, object]],
+    harness: _MixedBatchHarness,
+    bridge: _CapturingBridge,
+) -> None:
+    assert len(result) == 348
+    assert len(harness.prepared) == 348
+    assert ("vm-105", 105, "pve-new-a") in harness.prepared
+    assert ("vm-105", 105, "pve-new-b") in harness.prepared
+    assert (11, 105, "pve-new-a") in harness.sync_identities
+    assert (22, 105, "pve-new-b") in harness.sync_identities
+    assert len(set(harness.sync_identities)) == 348
+    assert bridge.phase_summaries[-1]["created"] == 348
+    assert bridge.phase_summaries[-1]["failed"] == 1
+
+
+def _assert_mixed_batch_adoption(harness: _MixedBatchHarness) -> None:
+    assert len(harness.vm_create_payloads) == 347
+    assert len(harness.vm_patch_calls) == 1
+    assert harness.vm_patch_calls[0][0] == 55
+    assert harness.vm_patch_calls[0][1]["description"] == "Synced from Proxmox node pve-new-a"
+    assert len(harness.sidecar_patch_calls) == 1
+    assert harness.sidecar_patch_calls[0][0] == 700
+    assert harness.sidecar_patch_calls[0][1]["proxmox_node_name"] == "pve-new-a"
+
+
 def _install_full_update_stubs(
     monkeypatch,
     *,
@@ -95,7 +232,11 @@ def _install_full_update_stubs(
             offset = int((query or {}).get("offset", 0) or 0)
             return [dict(record) for record in netbox_snapshot[offset : offset + limit]]
         if path == sync_state_reader.VM_SYNC_STATE_PATH:
-            return [dict(row) for row in sidecar_rows or []]
+            rows = [dict(row) for row in sidecar_rows or []]
+            for field in ("proxmox_vm_id", "proxmox_endpoint_raw_id"):
+                if field in (query or {}):
+                    rows = [row for row in rows if row.get(field) == query[field]]
+            return rows
         return []
 
     async def _fake_sidecar_paginated(_nb, path, *, base_query, page_size):
@@ -127,7 +268,7 @@ def _install_full_update_stubs(
             "memory": 1024,
             "disk": 0,
             "tags": kwargs["tag_ids"],
-            "description": "Synced from Proxmox node pve01",
+            "description": f"Synced from Proxmox node {resource.get('node')}",
         }
 
     async def _fake_rest_create(_nb, _path, payload, *, lookup=None):
@@ -136,7 +277,15 @@ def _install_full_update_stubs(
         return {"id": vmid, **payload}
 
     async def _fake_sidecar_first(_nb, _path, *, query=None):
-        return None
+        parent_id = int((query or {}).get("virtual_machine_id", 0) or 0)
+        return next(
+            (
+                dict(row)
+                for row in sidecar_rows or []
+                if int((row.get("virtual_machine") or {}).get("id", 0) or 0) == parent_id
+            ),
+            None,
+        )
 
     async def _fake_vm_first(_nb, path, *, query=None):
         if path == sync_state_reader.VIRTUAL_MACHINES_PATH:
@@ -358,7 +507,13 @@ def test_full_update_batch_applies_proxmox_rename_when_sidecar_matches_stored_na
         existing_name="web-01",
         incoming_name="web-renamed",
         sidecar_rows=[
-            {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+            {
+                "id": 1,
+                "virtual_machine": {"id": 55},
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+                "proxmox_vm_name": "web-01",
+            },
         ],
     )
 
@@ -376,7 +531,13 @@ def test_full_update_batch_preserves_operator_rename_when_sidecar_differs(
         existing_name="gateway-prod",
         incoming_name="web-renamed",
         sidecar_rows=[
-            {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": "web-01"},
+            {
+                "id": 1,
+                "virtual_machine": {"id": 55},
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+                "proxmox_vm_name": "web-01",
+            },
         ],
     )
 
@@ -393,7 +554,13 @@ def test_full_update_batch_preserves_netbox_name_when_sidecar_name_is_blank(
         existing_name="web-01",
         incoming_name="web-renamed",
         sidecar_rows=[
-            {"id": 1, "virtual_machine": {"id": 55}, "proxmox_vm_name": ""},
+            {
+                "id": 1,
+                "virtual_machine": {"id": 55},
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+                "proxmox_vm_name": "",
+            },
         ],
     )
 
@@ -433,6 +600,49 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
     assert sorted(fetch_calls) == [101, 102]
     assert bridge.phase_summaries[-1]["created"] == 1
     assert bridge.phase_summaries[-1]["failed"] == 1
+
+
+def test_mixed_endpoint_batch_preserves_identity_live_node_and_failure_isolation(monkeypatch):
+    harness = _MixedBatchHarness()
+    _install_full_update_stubs(
+        monkeypatch,
+        payload_side_effect=harness.capture_prepared,
+        netbox_snapshot=[harness.existing_vm],
+        sidecar_rows=[harness.existing_sidecar],
+    )
+    monkeypatch.setattr(sync_vm, "rest_create_async", harness.rest_create)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", harness.rest_patch)
+    monkeypatch.setattr(sync_state_writer, "rest_patch_async", harness.sidecar_patch)
+    monkeypatch.setattr(
+        sync_vm,
+        "build_virtual_machine_sync_state_fields",
+        harness.capture_sync_state,
+    )
+    bridge = _CapturingBridge()
+    endpoint_a = _fake_vm_config_session(name="cluster-a", endpoint_id=11)
+    endpoint_b = _fake_vm_config_session(name="cluster-b", endpoint_id=22)
+    endpoint_a_resources, endpoint_b_resources = _mixed_endpoint_resources()
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[endpoint_a, endpoint_b],
+            cluster_status=[
+                SimpleNamespace(name="cluster-a", mode="cluster"),
+                SimpleNamespace(name="cluster-b", mode="cluster"),
+            ],
+            cluster_resources=[
+                {"cluster-a": endpoint_a_resources},
+                {"cluster-b": endpoint_b_resources},
+            ],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            websocket=bridge,
+            sync_vm_network=False,
+        )
+    )
+
+    _assert_mixed_batch_identity(result, harness, bridge)
+    _assert_mixed_batch_adoption(harness)
 
 
 def test_full_update_fetch_timeout_isolated_and_stage_completes(monkeypatch):

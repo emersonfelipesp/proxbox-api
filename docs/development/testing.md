@@ -314,6 +314,13 @@ When changing `proxbox_api/proxmox_codegen/` or the sync-facing Proxmox service 
 - Confirm array-of-object responses still emit concrete `...ResponseItem` schemas.
 - Confirm helper-backed routes still return payloads compatible with existing sync code.
 
+The backend-local generated artifacts support the proxy and viewer surfaces;
+they are not the runtime response-model authority for synchronization. Sync
+helpers validate Proxmox responses with the generated models from the exactly
+pinned `proxmox-sdk` version in `pyproject.toml` and `uv.lock`. Update that pin
+and lock together, then run `tests/test_proxmox_sdk_model_authority.py` plus the
+VM synchronization suites whenever the SDK response contract changes.
+
 ## Troubleshooting
 
 ### Container Won't Start

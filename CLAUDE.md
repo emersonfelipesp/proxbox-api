@@ -274,7 +274,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
   both engage. Never emit an empty `detail`; `dependencies.proxbox_tag()`
   falls back through `python_exception` and the cause.
 - Keep parsing and normalization inside Pydantic schemas, especially in `proxbox_api/proxmox_to_netbox/`.
-- Keep generated artifacts under `proxbox_api/generated/` out of manual editing unless you are debugging generation itself.
+- Keep generated artifacts under `proxbox_api/generated/` out of manual editing unless you are debugging generation itself. These artifacts serve the backend proxy/viewer surface; the exactly pinned `proxmox-sdk` generated models are the single runtime response-validation authority used by sync helpers.
 - Preserve parity between WebSocket progress payloads and SSE payloads.
 - Prefer `proxbox_api.logger.logger` over `print`.
 

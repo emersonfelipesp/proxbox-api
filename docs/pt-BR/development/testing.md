@@ -288,6 +288,14 @@ Ao alterar `proxbox_api/proxmox_codegen/` ou a camada de servico Proxmox voltada
 - Confirme que respostas array-de-objetos continuam emitindo schemas concretos `...ResponseItem`.
 - Confirme que rotas com helpers continuam retornando payloads compativeis com o codigo de sync existente.
 
+Os artefatos gerados locais do backend atendem as superficies de proxy e viewer;
+eles nao sao a autoridade dos modelos de resposta em tempo de execucao para a
+sincronizacao. Os helpers de sync validam respostas do Proxmox com os modelos
+gerados da versao exata de `proxmox-sdk` fixada em `pyproject.toml` e `uv.lock`.
+Atualize o pin e o lock em conjunto e execute
+`tests/test_proxmox_sdk_model_authority.py` mais as suites de sincronizacao de
+VM sempre que o contrato de resposta do SDK mudar.
+
 ## Solucao de Problemas
 
 ### Container Nao Inicia
