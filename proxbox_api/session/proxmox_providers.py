@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import threading
+from collections.abc import Awaitable, Callable
 from json import JSONDecodeError
 from typing import Annotated
 
@@ -18,6 +19,11 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
+from proxbox_api.services.interactive_policy import (
+    InteractiveDenied,
+    acquire_interactive_resource,
+    current_interactive_runtime,
+)
 from proxbox_api.session.netbox import get_netbox_async_session
 from proxbox_api.session.proxmox_core import ProxmoxSession
 from proxbox_api.settings_client import (
@@ -110,7 +116,9 @@ async def _create_filtered_session(
             detail="Check if the provided parameters are correct",
         )
     try:
-        return [await ProxmoxSession.create(schema)]
+        return [await _create_request_session(schema)]
+    except InteractiveDenied:
+        raise
     except Exception as error:
         raise _session_acquisition_error(error) from error
 
@@ -119,7 +127,7 @@ async def _create_all_sessions(
     proxmox_schemas: list[ProxmoxSessionSchema],
 ) -> list[ProxmoxSession]:
     results = await asyncio.gather(
-        *[ProxmoxSession.create(schema) for schema in proxmox_schemas],
+        *[_create_request_session(schema) for schema in proxmox_schemas],
         return_exceptions=True,
     )
     failures = [result for result in results if isinstance(result, BaseException)]
@@ -128,7 +136,8 @@ async def _create_all_sessions(
         return sessions
 
     failure = failures[0]
-    await _close_sessions_after_failed_acquisition(sessions)
+    if current_interactive_runtime() is None:
+        await _close_sessions_after_failed_acquisition(sessions)
     if not isinstance(failure, Exception):
         raise failure
     raise _session_acquisition_error(failure) from failure
@@ -234,7 +243,7 @@ async def proxmox_sessions(
 
     endpoint_id_list = _parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
 
-    proxmox_schemas = await load_proxmox_session_schemas(
+    proxmox_schemas = await _load_request_schemas(
         database_session=database_session,
         source=source,
         endpoint_ids=endpoint_id_list,
@@ -255,16 +264,57 @@ async def proxmox_sessions(
 async def proxmox_sessions_dep(
     sessions: Annotated[list[ProxmoxSession], Depends(proxmox_sessions)],
 ):
+    owner = current_interactive_runtime()
     try:
         yield sessions
     finally:
-        for session in sessions:
-            close_method = getattr(session, "aclose", None)
-            if callable(close_method):
-                try:
-                    await close_method()
-                except Exception as error:  # pragma: no cover
-                    logger.debug("Failed to clean up proxmox session: %s", error)
+        if owner is None:
+            await close_proxmox_sessions(sessions)
+
+
+async def _load_request_schemas(
+    *, database_session: AsyncSession | Session, source: str, endpoint_ids: list[int] | None
+) -> list[ProxmoxSessionSchema]:
+    async def load() -> list[ProxmoxSessionSchema]:
+        return await load_proxmox_session_schemas(
+            database_session=database_session, source=source, endpoint_ids=endpoint_ids
+        )
+
+    if current_interactive_runtime() is None:
+        return await load()
+
+    async def discard(schemas: list[ProxmoxSessionSchema]) -> None:
+        """Release late schema references without connecting or delivering them."""
+
+    return await _interactive_acquisition(load, discard)
+
+
+async def _create_request_session(schema: ProxmoxSessionSchema) -> ProxmoxSession:
+    if current_interactive_runtime() is None:
+        return await ProxmoxSession.create(schema)
+    return await _interactive_acquisition(
+        lambda: ProxmoxSession.create(schema), _close_interactive_session
+    )
+
+
+async def _interactive_acquisition[T](
+    acquisition: Callable[[], Awaitable[T]], close: Callable[[T], Awaitable[object]]
+) -> T:
+    try:
+        return await acquire_interactive_resource(acquisition, close)
+    except InteractiveDenied:
+        raise
+    except Exception:
+        raise ProxboxException(
+            message="Interactive Proxmox provider is unavailable.",
+            http_status_code=502,
+            redact_log_details=True,
+        ) from None
+
+
+async def _close_interactive_session(session: ProxmoxSession) -> None:
+    """Let the interactive owner retain cleanup failure as uncertainty."""
+    await session.aclose()
 
 
 async def close_proxmox_sessions(pxs: list[ProxmoxSession]) -> None:
@@ -318,6 +368,7 @@ def _parse_db_endpoint(
     endpoint: ProxmoxEndpoint,
     plugin_settings: dict[str, object] | None = None,
 ) -> ProxmoxSessionSchema:
+    current_interactive_runtime()
     settings = plugin_settings or {}
     password = _decrypt_db_secret(
         endpoint=endpoint,
@@ -421,6 +472,7 @@ async def _load_netbox_source_plugin_settings(
     if inspect.isawaitable(netbox_session):
         netbox_session = await netbox_session
 
+    current_interactive_runtime()
     plugin_settings = await asyncio.to_thread(
         get_settings,
         netbox_session=netbox_session,
@@ -503,6 +555,7 @@ def _parse_netbox_endpoint(
     endpoint: object,
     plugin_settings: dict[str, object] | None = None,
 ) -> ProxmoxSessionSchema:
+    current_interactive_runtime()
     ip = None
     ip_address_object = _netbox_field(endpoint, "ip_address")
     if ip_address_object:
@@ -543,7 +596,133 @@ def _parse_netbox_endpoint(
     )
 
 
-async def load_proxmox_session_schemas(  # noqa: C901
+def _netbox_endpoint_id(endpoint: object) -> int | None:
+    try:
+        return int(str(_netbox_field(endpoint, "id")))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _load_selected_netbox_endpoints(
+    netbox_session: object,
+    url: str,
+    endpoint_ids: list[int],
+) -> list[object]:
+    selected_ids = set(endpoint_ids)
+    endpoints_by_id: dict[int, object] = {}
+    for chunk in _chunk_endpoint_ids(endpoint_ids):
+        current_interactive_runtime()
+        endpoints = await rest_list_async(
+            netbox_session,
+            url,
+            query={"id": [str(endpoint_id) for endpoint_id in chunk]},
+        )
+        for endpoint in endpoints:
+            endpoint_id = _netbox_endpoint_id(endpoint)
+            if endpoint_id in selected_ids:
+                endpoints_by_id.setdefault(endpoint_id, endpoint)
+    return [
+        endpoints_by_id[endpoint_id]
+        for endpoint_id in dict.fromkeys(endpoint_ids)
+        if endpoint_id in endpoints_by_id
+    ]
+
+
+async def _load_netbox_endpoints(
+    netbox_session: object,
+    endpoint_ids: list[int] | None,
+) -> list[object]:
+    url = "/api/plugins/proxbox/endpoints/proxmox/"
+    try:
+        if endpoint_ids:
+            return await _load_selected_netbox_endpoints(netbox_session, url, endpoint_ids)
+        return await rest_list_async(netbox_session, url)
+    except JSONDecodeError as error:
+        raise ProxboxException(
+            message="NetBox returned invalid JSON while fetching Proxmox endpoints",
+            python_exception=str(error),
+        ) from error
+
+
+async def _load_netbox_schemas(
+    database_session: AsyncSession | Session,
+    endpoint_ids: list[int] | None,
+) -> list[ProxmoxSessionSchema]:
+    netbox_session, plugin_settings = await _load_netbox_source_plugin_settings(database_session)
+    current_interactive_runtime()
+    endpoints = await _load_netbox_endpoints(netbox_session, endpoint_ids)
+    return [
+        _parse_netbox_endpoint(endpoint, plugin_settings)
+        for endpoint in endpoints
+        if _netbox_field(endpoint, "enabled", True)
+    ]
+
+
+def _database_endpoint_query(endpoint_ids: list[int] | None) -> object:
+    query = select(ProxmoxEndpoint).where(ProxmoxEndpoint.enabled == True)  # noqa: E712
+    if endpoint_ids:
+        query = query.where(ProxmoxEndpoint.id.in_(endpoint_ids))
+    return query
+
+
+def _database_settings_requirements(
+    endpoints: list[ProxmoxEndpoint],
+) -> tuple[bool, bool]:
+    needs_transport = any(
+        endpoint.timeout is None or endpoint.max_retries is None or endpoint.retry_backoff is None
+        for endpoint in endpoints
+    )
+    needs_credentials = any(
+        isinstance(secret, str) and secret.startswith("enc:")
+        for endpoint in endpoints
+        for secret in (endpoint.password, endpoint.token_value)
+    )
+    return needs_transport, needs_credentials
+
+
+def _parse_database_endpoints(
+    endpoints: list[ProxmoxEndpoint],
+    settings: ProxboxSettingsDict | None,
+    needs_credentials: bool,
+) -> list[ProxmoxSessionSchema]:
+    plugin_settings: dict[str, object] = settings or {}
+    if settings is not None and needs_credentials:
+        with override_settings_for_current_thread(settings):
+            return [_parse_db_endpoint(endpoint, plugin_settings) for endpoint in endpoints]
+    return [_parse_db_endpoint(endpoint, plugin_settings) for endpoint in endpoints]
+
+
+async def _load_database_schemas(
+    database_session: AsyncSession | Session,
+    endpoint_ids: list[int] | None,
+) -> list[ProxmoxSessionSchema]:
+    query = _database_endpoint_query(endpoint_ids)
+    db_endpoints = await _load_db_endpoints(database_session, query)
+    if not db_endpoints:
+        return []
+
+    needs_transport_settings, needs_credential_settings = _database_settings_requirements(
+        db_endpoints
+    )
+    needs_settings = needs_transport_settings or needs_credential_settings
+    effective_settings: ProxboxSettingsDict | None = (
+        await _load_db_transport_settings() if needs_settings else None
+    )
+    if isinstance(database_session, Session):
+        return await asyncio.to_thread(
+            _parse_database_endpoints,
+            db_endpoints,
+            effective_settings,
+            needs_credential_settings,
+        )
+    return _parse_database_endpoints(
+        db_endpoints,
+        effective_settings,
+        needs_credential_settings,
+    )
+
+
+async def load_proxmox_session_schemas(
     database_session: AsyncSession | Session,
     source: str = "database",
     endpoint_ids: list[int] | None = None,
@@ -551,79 +730,8 @@ async def load_proxmox_session_schemas(  # noqa: C901
     """Load configured Proxmox endpoint schemas without creating Proxmox API sessions."""
 
     if source == "netbox":
-        netbox_session, plugin_settings = await _load_netbox_source_plugin_settings(
-            database_session
-        )
-
-        try:
-            url = "/api/plugins/proxbox/endpoints/proxmox/"
-            if endpoint_ids:
-                selected_ids = set(endpoint_ids)
-                netbox_endpoints_by_id: dict[int, object] = {}
-                for chunk in _chunk_endpoint_ids(endpoint_ids):
-                    endpoints = await rest_list_async(
-                        netbox_session,
-                        url,
-                        query={"id": [str(endpoint_id) for endpoint_id in chunk]},
-                    )
-                    for endpoint in endpoints:
-                        raw_endpoint_id = _netbox_field(endpoint, "id")
-                        try:
-                            endpoint_id = int(str(raw_endpoint_id))
-                        except (TypeError, ValueError):
-                            continue
-                        if endpoint_id in selected_ids:
-                            netbox_endpoints_by_id.setdefault(endpoint_id, endpoint)
-                netbox_endpoints = [
-                    netbox_endpoints_by_id[endpoint_id]
-                    for endpoint_id in dict.fromkeys(endpoint_ids)
-                    if endpoint_id in netbox_endpoints_by_id
-                ]
-            else:
-                netbox_endpoints = await rest_list_async(netbox_session, url)
-        except JSONDecodeError as error:
-            raise ProxboxException(
-                message="NetBox returned invalid JSON while fetching Proxmox endpoints",
-                python_exception=str(error),
-            )
-        return [
-            _parse_netbox_endpoint(endpoint, plugin_settings)
-            for endpoint in netbox_endpoints
-            if _netbox_field(endpoint, "enabled", True)
-        ]
-
-    query = select(ProxmoxEndpoint).where(ProxmoxEndpoint.enabled == True)  # noqa: E712
-    if endpoint_ids:
-        query = query.where(ProxmoxEndpoint.id.in_(endpoint_ids))
-    db_endpoints = await _load_db_endpoints(database_session, query)
-    if not db_endpoints:
-        return []
-
-    needs_transport_settings = any(
-        endpoint.timeout is None or endpoint.max_retries is None or endpoint.retry_backoff is None
-        for endpoint in db_endpoints
-    )
-    needs_credential_settings = any(
-        isinstance(secret, str) and secret.startswith("enc:")
-        for endpoint in db_endpoints
-        for secret in (endpoint.password, endpoint.token_value)
-    )
-    needs_settings = needs_transport_settings or needs_credential_settings
-    effective_settings: ProxboxSettingsDict | None = (
-        await _load_db_transport_settings() if needs_settings else None
-    )
-    plugin_settings: dict[str, object] = effective_settings or {}
-
-    def parse() -> list[ProxmoxSessionSchema]:
-        if effective_settings is not None and needs_credential_settings:
-            with override_settings_for_current_thread(effective_settings):
-                return [_parse_db_endpoint(endpoint, plugin_settings) for endpoint in db_endpoints]
-        else:
-            return [_parse_db_endpoint(endpoint, plugin_settings) for endpoint in db_endpoints]
-
-    if isinstance(database_session, Session):
-        return await asyncio.to_thread(parse)
-    return parse()
+        return await _load_netbox_schemas(database_session, endpoint_ids)
+    return await _load_database_schemas(database_session, endpoint_ids)
 
 
 async def resolve_proxmox_target_session(

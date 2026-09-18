@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from proxbox_api import __version__
 from proxbox_api.app import bootstrap
+from proxbox_api.services.interactive_policy import InteractiveStatus
 
 root_meta_router = APIRouter()
+
+
+@root_meta_router.get("/execution-policy", response_model=InteractiveStatus)
+async def execution_policy(request: Request) -> InteractiveStatus:
+    """Return local capability evidence without claiming fleet-wide cutover."""
+    return InteractiveStatus.model_validate(request.app.state.interactive_runtime.status())
 
 
 @root_meta_router.get("/")

@@ -112,6 +112,13 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 
 ## Extension Guidance
 
+- Interactive services require a live owned admission independently of routes.
+  Keep connect, credential acquisition, PTY creation, pumps, and cancellation
+  cleanup within that ownership. Recheck after waits and before sinks; late
+  resources must be closed, never delivered. Cleanup uncertainty is sticky and
+  must remain visible after active work disappears. Do not conflate ticket
+  removal with active-session termination or local close with remote rollback.
+
 - Keep service functions independent from request objects where possible.
 - Prefer idempotent operations so repeated sync runs are safe.
 - Keep Proxbox reflection state in the typed netbox-proxbox sync-state sidecars.

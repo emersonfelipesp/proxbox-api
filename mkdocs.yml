@@ -90,6 +90,7 @@ nav:
       - Scheduler Container: sync/scheduler-container.md
   - Operations:
       - Operation Inventory: operations/operation-inventory.md
+      - Interactive RPC-Only Boundary: operations/interactive-rpc-boundary.md
       - Database: operations/database.md
       - Custom Field Retirement: operations/custom-fields.md
       - Hardware Discovery: operations/hardware-discovery.md

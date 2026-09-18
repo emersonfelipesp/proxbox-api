@@ -18,6 +18,26 @@ from proxbox_api.services.ssh_terminal import (
 _FINGERPRINT = "SHA256:abcdefghijklmnopqrstuvwxyz12345678901234567"
 
 
+@pytest.fixture
+def auth_test_client(legacy_auth_test_client):
+    """Existing successful terminal contracts require explicit legacy mode."""
+    return legacy_auth_test_client
+
+
+@pytest.fixture
+def test_client(legacy_test_client):
+    return legacy_test_client
+
+
+@pytest.fixture(autouse=True)
+async def legacy_service_admission():
+    """Direct service tests use an honest owned compatibility admission."""
+    from proxbox_api.services.interactive_policy import ExecutionPolicy, InteractiveRuntime
+
+    async with InteractiveRuntime(ExecutionPolicy("legacy", "test-native")).admission():
+        yield
+
+
 @pytest.fixture(autouse=True)
 def clear_terminal_sessions():
     terminal_session_manager._sessions.clear()
@@ -121,7 +141,7 @@ def test_ssh_terminal_websocket_uses_ticket_without_backend_api_key(
         },
     ).json()
 
-    async def fake_fetch_terminal_credential(netbox_session, session):
+    async def fake_fetch_terminal_credential(session):
         return TerminalCredential(
             target_type="node",
             target_id=session.node_id or 0,
@@ -146,7 +166,7 @@ def test_ssh_terminal_websocket_uses_ticket_without_backend_api_key(
         await websocket.send_json({"type": "exit", "status": 0})
 
     monkeypatch.setattr(
-        "proxbox_api.routes.ssh_terminal.fetch_terminal_credential",
+        "proxbox_api.routes.ssh_terminal._resolve_terminal_credential",
         fake_fetch_terminal_credential,
     )
     monkeypatch.setattr(

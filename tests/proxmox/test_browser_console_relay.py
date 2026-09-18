@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import ssl
+import threading
 import time
+from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
@@ -24,10 +27,17 @@ from proxbox_api import credentials, database
 from proxbox_api.database import BrowserConsoleRelaySession, ProxmoxEndpoint
 from proxbox_api.routes.proxmox import console
 from proxbox_api.services import console_relay, console_relay_policy
+from proxbox_api.services.interactive_policy import ExecutionPolicy, InteractiveRuntime
 
 ORIGIN = "https://netbox.example"
 TICKET_CANARY = "PVE-ticket-secret-canary"
 AUTH_CANARY = "PVEAPIToken=relay@pve!browser=auth-secret-canary"
+
+
+@pytest.fixture
+def auth_test_client(legacy_auth_test_client):
+    """Existing browser-relay contracts require explicit legacy mode."""
+    return legacy_auth_test_client
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +46,14 @@ def relay_encryption(monkeypatch):
     credentials.reset_encryption_cache()
     yield
     credentials.reset_encryption_cache()
+
+
+@pytest.fixture(autouse=True)
+async def legacy_service_admission():
+    """Direct relay-service tests run inside the required owned admission."""
+    runtime = InteractiveRuntime(ExecutionPolicy("legacy", "browser-relay-test"))
+    async with runtime.admission():
+        yield
 
 
 def _make_endpoint(
@@ -903,6 +921,166 @@ def _create_browser_ticket(monkeypatch, auth_test_client, db_engine, *, console_
     )
     assert response.status_code == 201
     return response.json()
+
+
+def _mounted_stream_result(client, created, *, receive: bool) -> object:
+    try:
+        with client.websocket_connect(
+            created["websocket_path"],
+            headers={"origin": ORIGIN},
+            subprotocols=_browser_protocols(created),
+        ) as websocket:
+            if receive:
+                return websocket.receive()
+    except WebSocketDisconnect as exc:
+        return exc.code
+    except FutureCancelledError:
+        return 1001
+    return None
+
+
+class _MountedLifetimeUpstream(_FakeUpstream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_receive = threading.Event()
+        self.close_started = threading.Event()
+        self.release_close = threading.Event()
+        self.close_cancelled = threading.Event()
+        self.close_calls = 0
+        self.resist_receive_cancellation = False
+        self.resist_close_cancellation = False
+
+    async def recv(self) -> bytes:
+        self.recv_started.set()
+        try:
+            await _wait_thread_event(self.release_receive)
+        except asyncio.CancelledError:
+            self.recv_cancelled = True
+            if not self.resist_receive_cancellation:
+                raise
+            await _wait_thread_event(self.release_receive)
+        return b"synthetic-private-frame"
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        self.close_calls += 1
+        self.close_started.set()
+        try:
+            await _wait_thread_event(self.release_close)
+        except asyncio.CancelledError:
+            self.close_cancelled.set()
+            if not self.resist_close_cancellation:
+                raise
+            await _wait_thread_event(self.release_close)
+        self.closed = True
+
+
+async def _wait_thread_event(event: threading.Event) -> None:
+    while not event.is_set():
+        await asyncio.sleep(0.001)
+
+
+def test_mounted_blocked_open_closes_late_upstream_once(
+    monkeypatch,
+    auth_test_client,
+    db_engine,
+) -> None:
+    created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
+    started = threading.Event()
+    release = threading.Event()
+    upstream = _MountedLifetimeUpstream()
+    upstream.release_close.set()
+
+    async def blocked_open(_payload):
+        started.set()
+        try:
+            await asyncio.to_thread(release.wait)
+        except asyncio.CancelledError:
+            await asyncio.to_thread(release.wait)
+        return upstream
+
+    monkeypatch.setattr(console_relay, "open_upstream", blocked_open)
+    runtime = auth_test_client.app.state.interactive_runtime
+    runtime.cleanup_timeout = 0.05
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stream = executor.submit(_mounted_stream_result, auth_test_client, created, receive=True)
+        assert started.wait(1)
+        auth_test_client.portal.call(runtime.quiesce)
+        release.set()
+        assert stream.result(timeout=2) == 1001
+    assert upstream.close_started.wait(1)
+    assert upstream.close_calls == 1
+    assert runtime.status()["remote_outcome_unknown"] is True
+
+
+def test_mounted_idle_frame_is_not_sent_after_quiesce(
+    monkeypatch,
+    auth_test_client,
+    db_engine,
+) -> None:
+    created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
+    upstream = _MountedLifetimeUpstream()
+    upstream.resist_receive_cancellation = True
+    upstream.release_close.set()
+    monkeypatch.setattr(console_relay, "open_upstream", AsyncMock(return_value=upstream))
+    runtime = auth_test_client.app.state.interactive_runtime
+    runtime.cleanup_timeout = 0.05
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stream = executor.submit(_mounted_stream_result, auth_test_client, created, receive=True)
+        assert auth_test_client.portal.call(upstream.recv_started.wait)
+        auth_test_client.portal.call(runtime.quiesce)
+        upstream.release_receive.set()
+        assert stream.result(timeout=2) == 1001
+    assert upstream.close_calls == 1
+    assert runtime.status()["remote_outcome_unknown"] is True
+
+
+def test_mounted_repeated_quiesce_cannot_interrupt_upstream_close(
+    monkeypatch,
+    auth_test_client,
+    db_engine,
+) -> None:
+    created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
+    upstream = _MountedLifetimeUpstream()
+    monkeypatch.setattr(console_relay, "open_upstream", AsyncMock(return_value=upstream))
+    runtime = auth_test_client.app.state.interactive_runtime
+    runtime.cleanup_timeout = 1
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        stream = executor.submit(_mounted_stream_result, auth_test_client, created, receive=True)
+        assert auth_test_client.portal.call(upstream.recv_started.wait)
+        first = executor.submit(auth_test_client.portal.call, runtime.quiesce)
+        assert upstream.close_started.wait(1)
+        second = executor.submit(auth_test_client.portal.call, runtime.quiesce)
+        upstream.release_close.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+        assert stream.result(timeout=2) == 1001
+    assert upstream.close_calls == 1
+    assert upstream.closed is True
+    assert runtime.status()["cleanup_active"] == 0
+
+
+def test_mounted_close_timeout_is_sticky_uncertainty(
+    monkeypatch,
+    auth_test_client,
+    db_engine,
+) -> None:
+    created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
+    upstream = _MountedLifetimeUpstream()
+    upstream.resist_close_cancellation = True
+    monkeypatch.setattr(console_relay, "open_upstream", AsyncMock(return_value=upstream))
+    monkeypatch.setattr(console_relay, "CLOSE_TIMEOUT_SECONDS", 0.01)
+    runtime = auth_test_client.app.state.interactive_runtime
+    runtime.cleanup_timeout = 0.02
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        stream = executor.submit(_mounted_stream_result, auth_test_client, created, receive=False)
+        assert upstream.close_cancelled.wait(1)
+        time.sleep(0.05)
+        assert runtime.status()["remote_outcome_unknown"] is True
+        assert runtime.status()["cleanup_active"] == 1
+        upstream.release_close.set()
+        assert stream.result(timeout=2) is None
+    auth_test_client.portal.call(asyncio.sleep, 0.05)
+    assert runtime.status()["cleanup_active"] == 0
 
 
 def test_mounted_websocket_keeps_token_out_of_uri_and_access_log(

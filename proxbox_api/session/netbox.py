@@ -19,6 +19,7 @@ from proxbox_api.constants import NETBOX_SCHEMA_VERSION
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.runtime_settings import get_float
+from proxbox_api.services.interactive_policy import current_interactive_runtime
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
 if TYPE_CHECKING:
@@ -174,6 +175,7 @@ async def release_netbox_api_cache_owner() -> None:
 
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     """Instantiate netbox-sdk Api using NetBoxApiClient + Config (no string token shortcut)."""
+    current_interactive_runtime()
     cfg = netbox_config_from_endpoint(endpoint)
     fingerprint = _config_fingerprint(cfg, bool(endpoint.verify_ssl))
     cache_key = (endpoint.id or 0, fingerprint)

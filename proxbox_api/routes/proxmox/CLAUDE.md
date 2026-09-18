@@ -1,5 +1,21 @@
 # proxbox_api/routes/proxmox Directory Guide
 
+
+## Interactive Execution Boundary
+
+Read `docs/operations/interactive-rpc-boundary.md` before changing interactive
+admission, SSH or console acquisition, synchronization WebSocket dependencies,
+or shutdown ownership. `PROXBOX_EXECUTION_MODE` is process-pinned and defaults
+to `rpc_only`; `PROXBOX_EXECUTION_GENERATION` has no generated default. Denial
+must occur before eager providers and must also protect capability consumption.
+Explicit legacy mode preserves authentication, endpoint restrictions, host-key
+pins, and private console TLS/authentication. Keep local readiness scoped and
+`aggregate_ready=false`; companion services and fleet coordination are separate
+required capabilities. Never add a hot activation endpoint or silently restore
+legacy behavior. Preserve native and mounted-ASGI ordering/cancellation tests,
+including dependency-upgrade verification, and both language versions of the
+documentation.
+
 ## Workspace Context
 
 This file lives at `<repository-root>/proxbox_api/routes/proxmox/CLAUDE.md` inside the `personal-context` workspace.
@@ -31,7 +47,9 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
   and consume, preserves stored `verify_ssl`, and mediates RFB 3.8 VNC
   authentication for noVNC so the ticket never reaches the browser. The
   complete code path and invariants are documented in
-  `../../../docs/api/console-sessions.md`.
+  `../../../docs/api/console-sessions.md`. All three interactive boundaries
+  require explicit legacy execution mode; RPC-only denial occurs before
+  endpoint access, relay-state consumption, or upstream connection.
 - `datacenter.py`: Custom CPU models CRUD and datacenter options endpoints (PVE 9.2+).
 - `endpoints.py`: Proxmox endpoint CRUD handlers. The create/update/public
   schemas carry `access_methods` (`api` default / `api_ssh`) and the default-off

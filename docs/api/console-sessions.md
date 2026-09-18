@@ -10,6 +10,10 @@ one-use relay state and browser WebSocket. It encrypts the complete private
 upstream session in shared SQLite and returns only opaque browser-safe routing
 data.
 
+Both contracts require explicit `PROXBOX_EXECUTION_MODE=legacy`. The default
+`rpc_only` policy refuses browser-session creation before endpoint access and
+closes the browser stream before token consumption or upstream connection.
+
 ## Contents
 
 1. [Ownership and trust boundary](#ownership-and-trust-boundary)
@@ -190,7 +194,9 @@ It then calls:
 - `vncproxy.post(websocket=1)` for a graphical QEMU console; or
 - `termproxy.post()` for QEMU and LXC terminal consoles.
 
-`resolve_async()` normalizes synchronous and asynchronous SDK result styles. The route does not start, stop, or mutate the guest configuration; it requests only the ephemeral Proxmox console proxy.
+`resolve_async()` normalizes synchronous and asynchronous SDK result styles. The route does not start, stop, or mutate the guest configuration, but its ephemeral console proxy grants future interactive write capability. The default `rpc_only` process policy therefore refuses both console-session creation contracts before endpoint resolution, decryption, or connection. The successful contracts described here require explicit `legacy` mode and normal service authentication. See [Interactive RPC-Only Boundary](../operations/interactive-rpc-boundary.md).
+
+The request owns its Proxmox client through acquisition, proxy creation, private authentication, and cleanup. Late acquisitions are closed after cancellation; quiesce prevents further authentication requests and private response delivery. An ambiguous proxy outcome remains explicitly uncertain and is not described as rolled back.
 
 ## Response normalization
 
@@ -274,7 +280,7 @@ the bounded frame relay directly.
 | Request schema or LXC/noVNC violation | HTTP 422 before endpoint or Proxmox access |
 | Unknown local endpoint | HTTP 404 |
 | Stored endpoint cannot create a session | Sanitized HTTP 502 |
-| `ProxmoxAPIError` from `vncproxy`/`termproxy` | HTTP 502 with a broker detail intended only for the trusted backend; `trusted-relay-service` maps it to a bounded browser-safe message |
+| `ProxmoxAPIError` from `vncproxy`/`termproxy` | Fixed HTTP 502 `Proxmox console request failed.`; upstream exception text is never returned |
 | Unexpected proxy-call exception | Fixed HTTP 502 `Proxmox console request failed.` |
 | Missing or malformed ticket/port | Fixed HTTP 502 `Proxmox did not return a ticket/port.` |
 | WebSocket authentication cannot be prepared | Fixed HTTP 502 `Unable to authenticate the Proxmox console stream.` |
