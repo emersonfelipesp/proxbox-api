@@ -28,6 +28,7 @@ from proxbox_api.database import BrowserConsoleRelaySession, ProxmoxEndpoint
 from proxbox_api.routes.proxmox import console
 from proxbox_api.services import console_relay, console_relay_policy
 from proxbox_api.services.interactive_policy import ExecutionPolicy, InteractiveRuntime
+from tests.websocket_test_support import rejected_websocket_session, websocket_session
 
 ORIGIN = "https://netbox.example"
 TICKET_CANARY = "PVE-ticket-secret-canary"
@@ -1092,7 +1093,9 @@ def test_mounted_websocket_keeps_token_out_of_uri_and_access_log(
     created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
     upstream = _FakeUpstream()
     observed_targets: list[str] = []
+    consumer = AsyncMock(wraps=console_relay.consume_relay_session)
     caplog.set_level(logging.INFO, logger="uvicorn.access")
+    monkeypatch.setattr(console_relay, "consume_relay_session", consumer)
     monkeypatch.setattr(console_relay, "open_upstream", AsyncMock(return_value=upstream))
 
     async def mounted_relay(websocket, _upstream):
@@ -1106,7 +1109,8 @@ def test_mounted_websocket_keeps_token_out_of_uri_and_access_log(
         await websocket.send_text("text-frame")
 
     monkeypatch.setattr(console_relay, "relay_frames", mounted_relay)
-    with auth_test_client.websocket_connect(
+    with websocket_session(
+        auth_test_client,
         created["websocket_path"],
         headers={"origin": ORIGIN},
         subprotocols=_browser_protocols(created),
@@ -1119,14 +1123,15 @@ def test_mounted_websocket_keeps_token_out_of_uri_and_access_log(
     assert created["stream_token"] not in created["websocket_path"]
     assert created["stream_token"] not in caplog.text
 
-    with pytest.raises(WebSocketDisconnect) as replay:
-        with auth_test_client.websocket_connect(
-            created["websocket_path"],
-            headers={"origin": ORIGIN},
-            subprotocols=_browser_protocols(created),
-        ):
-            pass
-    assert replay.value.code == 1008
+    with rejected_websocket_session(
+        auth_test_client,
+        created["websocket_path"],
+        headers={"origin": ORIGIN},
+        subprotocols=_browser_protocols(created),
+        expected_code=1008,
+    ):
+        pass
+    assert consumer.await_count == 2
 
 
 def test_mounted_query_token_form_is_rejected_before_upstream_access(
@@ -1238,7 +1243,8 @@ def test_mounted_qemu_novnc_invokes_rfb_mediation(
     monkeypatch.setattr(console_relay, "mediate_rfb_auth", mediated)
     monkeypatch.setattr(console_relay, "relay_frames", AsyncMock())
 
-    with auth_test_client.websocket_connect(
+    with websocket_session(
+        auth_test_client,
         created["websocket_path"],
         headers={"origin": ORIGIN},
         subprotocols=_browser_protocols(created),

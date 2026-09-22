@@ -4,6 +4,7 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from proxbox_api.services.ssh_terminal import terminal_session_manager
+from tests.websocket_test_support import websocket_session
 
 
 def test_default_rpc_only_denies_ticket_creation_before_store(auth_test_client):
@@ -138,14 +139,14 @@ def test_legacy_sync_auth_precedes_the_entire_provider_graph(
 
     for path in ("/ws", "/ws/virtual-machines"):
         events.clear()
-        with legacy_auth_test_client.websocket_connect(path) as websocket:
+        with websocket_session(legacy_auth_test_client, path) as websocket:
             websocket.send_json({"api_key": "synthetic-invalid-key"})
             with pytest.raises(WebSocketDisconnect):
                 websocket.receive_text()
         assert events == ["auth-denied"]
 
         events.clear()
-        with legacy_auth_test_client.websocket_connect(path) as websocket:
+        with websocket_session(legacy_auth_test_client, path) as websocket:
             websocket.send_json({"api_key": legacy_auth_test_client.headers["X-Proxbox-API-Key"]})
             assert websocket.receive_text() == "Connected!"
             if path == "/ws":
@@ -197,7 +198,7 @@ def test_legacy_one_shot_skips_netbox_configuration_and_invalid_ticket_skips_mat
         websocket.send_json({"type": "auth", "ticket": "invalid"})
         assert websocket.receive_json()["type"] == "error"
     assert calls == []
-    with legacy_auth_test_client.websocket_connect(created["websocket_path"]) as websocket:
+    with websocket_session(legacy_auth_test_client, created["websocket_path"]) as websocket:
         websocket.send_json({"type": "auth", "ticket": created["ticket"]})
         assert websocket.receive_json() == {"type": "ready"}
     assert calls == ["synthetic-user"]

@@ -14,6 +14,7 @@ from proxbox_api.services.ssh_terminal import (
     fetch_terminal_credential,
     terminal_session_manager,
 )
+from tests.websocket_test_support import websocket_session
 
 _FINGERPRINT = "SHA256:abcdefghijklmnopqrstuvwxyz12345678901234567"
 
@@ -174,7 +175,7 @@ def test_ssh_terminal_websocket_uses_ticket_without_backend_api_key(
         fake_connect_and_relay,
     )
 
-    with auth_test_client.websocket_connect(created["websocket_path"]) as websocket:
+    with websocket_session(auth_test_client, created["websocket_path"]) as websocket:
         websocket.send_json({"type": "auth", "ticket": created["ticket"]})
         ready = websocket.receive_json()
         websocket.send_json({"type": "close"})
