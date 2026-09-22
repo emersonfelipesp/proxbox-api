@@ -25,6 +25,11 @@ from proxbox_api.services.hardware_discovery import (
     HardwareDiscoveryError,
     fetch_credential,
 )
+from proxbox_api.services.interactive_policy import (
+    InteractiveRuntime,
+    owned_resource,
+    require_interactive,
+)
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
@@ -99,6 +104,8 @@ class TerminalSession:
     expires_at: datetime
     last_activity_at: datetime
     consumed: bool = False
+    execution_generation: str | None = None
+    owner_runtime: InteractiveRuntime | None = field(default=None, repr=False)
     # In-memory only, never persisted or logged; repr-suppressed as defense in
     # depth (its own __repr__ also redacts the secrets).
     one_shot_credential: OneShotTerminalCredential | None = field(default=None, repr=False)
@@ -114,8 +121,8 @@ class TerminalCredential:
     port: int
     username: str
     known_host_fingerprint: str
-    password: str | None = None
-    private_key: str | None = None
+    password: str | None = field(default=None, repr=False)
+    private_key: str | None = field(default=None, repr=False)
     display: str = ""
 
 
@@ -164,7 +171,9 @@ class TerminalSessionManager:
         one_shot_credential: OneShotTerminalCredential | None = None,
     ) -> tuple[TerminalSession, str]:
         """Create a short-lived ticket and return ``(session, plaintext_ticket)``."""
+        require_interactive()
         async with self._lock:
+            runtime = require_interactive()
             now = datetime.now(UTC)
             self._cleanup_locked(now)
             if len(self._sessions) >= self.max_sessions:
@@ -186,18 +195,28 @@ class TerminalSessionManager:
                 expires_at=now + timedelta(seconds=self.ticket_ttl_seconds),
                 last_activity_at=now,
                 one_shot_credential=one_shot_credential,
+                execution_generation=runtime.policy.generation,
+                owner_runtime=runtime,
             )
             self._sessions[session.session_id] = session
+            runtime.retain_pending(session.session_id, lambda: self.release(session.session_id))
             return session, ticket
 
     async def consume_ticket(self, session_id: str, ticket: str) -> TerminalSession:
         """Validate and consume a one-time ticket for WebSocket upgrade."""
+        require_interactive()
         async with self._lock:
+            runtime = require_interactive()
             now = datetime.now(UTC)
             self._cleanup_locked(now)
             session = self._sessions.get(session_id)
             if session is None:
                 raise TerminalSessionError("SSH terminal session not found")
+            if (
+                session.execution_generation != runtime.policy.generation
+                or session.owner_runtime is not runtime
+            ):
+                raise TerminalSessionError("SSH terminal generation is no longer valid")
             if session.consumed:
                 raise TerminalSessionError("SSH terminal ticket has already been used")
             if now > session.expires_at:
@@ -206,6 +225,7 @@ class TerminalSessionManager:
             if not secrets.compare_digest(session.ticket_hash, self._hash_ticket(ticket)):
                 raise TerminalSessionError("Invalid SSH terminal ticket")
             session.consumed = True
+            runtime.forget_pending(session.session_id)
             session.last_activity_at = now
             return session
 
@@ -217,7 +237,10 @@ class TerminalSessionManager:
 
     async def release(self, session_id: str) -> None:
         async with self._lock:
-            self._sessions.pop(session_id, None)
+            session = self._sessions.pop(session_id, None)
+            if session is not None and session.owner_runtime is not None:
+                session.owner_runtime.forget_pending(session_id)
+                session.one_shot_credential = None
 
     def idle_remaining_seconds(self, session: TerminalSession) -> float:
         deadline = session.last_activity_at + timedelta(seconds=self.idle_timeout_seconds)
@@ -240,7 +263,10 @@ class TerminalSessionManager:
             elif now > lifetime_deadline:
                 expired.append(session_id)
         for session_id in expired:
-            self._sessions.pop(session_id, None)
+            session = self._sessions.pop(session_id, None)
+            if session is not None and session.owner_runtime is not None:
+                session.owner_runtime.forget_pending(session_id)
+                session.one_shot_credential = None
 
 
 terminal_session_manager = TerminalSessionManager()
@@ -392,12 +418,15 @@ def _credential_from_one_shot(session: TerminalSession) -> TerminalCredential:
 
 
 async def fetch_terminal_credential(
-    netbox_session: "Api",
+    netbox_session: "Api | None",
     session: TerminalSession,
 ) -> TerminalCredential:
     """Resolve node or endpoint SSH credential material from netbox-proxbox."""
+    require_interactive()
     if session.one_shot_credential is not None:
         return _credential_from_one_shot(session)
+    if netbox_session is None:
+        raise TerminalCredentialError("Stored SSH credentials require NetBox configuration")
 
     if session.target_type == "node":
         if session.node_id is None or not session.host:
@@ -619,6 +648,7 @@ async def _pump_process_output(
         if isinstance(chunk, bytes):
             chunk = chunk.decode("utf-8", errors="replace")
         await manager.mark_activity(session.session_id)
+        require_interactive()
         await _send_json_safe(websocket, {"type": "output", "data": str(chunk)})
 
 
@@ -691,6 +721,7 @@ async def _handle_terminal_message(
     session: TerminalSession,
     message: dict,
 ) -> bool:
+    require_interactive()
     message_type = message.get("type")
     if message_type == "input":
         stdin = getattr(process, "stdin", None)
@@ -705,7 +736,7 @@ async def _handle_terminal_message(
         return False
     await _send_json_safe(
         websocket,
-        {"type": "error", "message": f"Unsupported message type: {message_type}"},
+        {"type": "error", "message": "Unsupported terminal message type"},
     )
     return True
 
@@ -746,21 +777,22 @@ async def _close_process(process: object) -> int | None:
         kill = getattr(process, "kill", None)
         if callable(kill):
             kill()
+        try:
+            await asyncio.wait_for(wait(), timeout=5)
+        except TimeoutError:
+            pass
         return None
     try:
-        return int(status) if status is not None else None
+        value = getattr(status, "exit_status", status)
+        exit_status = int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+    return exit_status if exit_status is not None and exit_status >= 0 else None
 
 
-async def connect_and_relay(
-    websocket: WebSocket,
-    session: TerminalSession,
-    credential: TerminalCredential,
-    *,
-    manager: TerminalSessionManager = terminal_session_manager,
-) -> None:
-    """Open an AsyncSSH PTY and relay terminal frames until either side closes."""
+async def _connect_terminal(credential: TerminalCredential) -> object:
+    """Acquire only the fingerprint-pinned SSH transport."""
+    require_interactive()
     if not (credential.password or credential.private_key):
         raise TerminalCredentialError("SSH credential has no password or private key")
 
@@ -772,7 +804,7 @@ async def connect_and_relay(
         except Exception as exc:  # noqa: BLE001
             raise TerminalCredentialError("SSH private key could not be loaded") from exc
 
-    conn = await asyncssh.connect(
+    return await asyncssh.connect(
         credential.host,
         port=credential.port,
         username=credential.username,
@@ -786,40 +818,92 @@ async def connect_and_relay(
         ),
     )
 
-    async with conn:
-        process = await conn.create_process(
+
+async def _close_terminal_connection(conn: object) -> None:
+    getattr(conn, "close")()
+    await getattr(conn, "wait_closed")()
+
+
+async def _terminal_process(conn: object, session: TerminalSession) -> object:
+    require_interactive()
+    create_process = getattr(conn, "create_process", None)
+    if callable(create_process):
+        return await create_process(
             term_type="xterm-256color",
             term_size=(session.cols, session.rows, 0, 0),
             encoding="utf-8",
             errors="replace",
         )
-        await _send_json_safe(
-            websocket,
-            {
-                "type": "ready",
-                "session_id": session.session_id,
-                "target": credential.display,
-            },
-        )
-        output_task = asyncio.create_task(
-            _pump_process_output(websocket, process, session, manager)
-        )
-        input_task = asyncio.create_task(
-            _pump_websocket_input(websocket, process, session, manager)
-        )
+    raise TerminalCredentialError("SSH terminal process is unavailable")
+
+
+async def _stop_terminal_pumps(tasks: set[asyncio.Task]) -> None:
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _relay_terminal(
+    websocket: WebSocket,
+    process: object,
+    session: TerminalSession,
+    manager: TerminalSessionManager,
+) -> None:
+    runtime = require_interactive()
+    tasks = {
+        asyncio.create_task(_pump_process_output(websocket, process, session, manager)),
+        asyncio.create_task(_pump_websocket_input(websocket, process, session, manager)),
+    }
+    try:
         done, pending = await asyncio.wait(
-            {output_task, input_task},
+            tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
         for task in done:
-            error = task.exception()
-            if error is not None:
-                raise error
+            task.result()
+    finally:
+        await runtime.finish_cleanup(_stop_terminal_pumps(tasks))
+
+
+async def connect_and_relay(
+    websocket: WebSocket,
+    session: TerminalSession,
+    credential: TerminalCredential,
+    *,
+    manager: TerminalSessionManager = terminal_session_manager,
+) -> None:
+    """Own connect, PTY acquisition, both pumps, and all transport cleanup."""
+    runtime = require_interactive()
+
+    async def finish_process(process: object) -> None:
         status = await _close_process(process)
-        await _send_json_safe(websocket, {"type": "exit", "status": status})
+        if status is None:
+            runtime.uncertain = True
+        if not runtime.quiescing:
+            await _send_json_safe(websocket, {"type": "exit", "status": status})
+
+    async with owned_resource(
+        lambda: _connect_terminal(credential), _close_terminal_connection
+    ) as conn:
+        _verify_terminal_host_key(conn, credential)
+        async with owned_resource(
+            lambda: _terminal_process(conn, session), finish_process
+        ) as process:
+            require_interactive()
+            await _send_json_safe(
+                websocket,
+                {"type": "ready", "session_id": session.session_id, "target": credential.display},
+            )
+            await _relay_terminal(websocket, process, session, manager)
+
+
+def _verify_terminal_host_key(conn: object, credential: TerminalCredential) -> None:
+    """Verify the acquired transport before PTY even if a callback is skipped."""
+    require_interactive()
+    actual = _fingerprint_from_key(getattr(conn, "get_server_host_key")())
+    expected = _canonical_fingerprint(credential.known_host_fingerprint)
+    if not secrets.compare_digest(actual, expected):
+        raise TerminalCredentialError("SSH server host key does not match the pinned fingerprint")
 
 
 async def run_endpoint_command(

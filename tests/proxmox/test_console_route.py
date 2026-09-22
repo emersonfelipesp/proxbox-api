@@ -13,6 +13,12 @@ from proxbox_api.routes.proxmox import console
 from proxbox_api.session.proxmox_core import ProxmoxSession, ProxmoxWebSocketAuth, SensitiveString
 
 
+@pytest.fixture
+def auth_test_client(legacy_auth_test_client):
+    """Existing private broker contracts require explicit legacy mode."""
+    return legacy_auth_test_client
+
+
 def _make_endpoint(db_engine, *, ip_address: str = "pve.example.test") -> int:
     """Insert a minimal ProxmoxEndpoint into the test DB and return its PK."""
     with Session(db_engine) as session:
@@ -80,6 +86,10 @@ class _FakePx:
         self._websocket_auth = websocket_auth or ProxmoxWebSocketAuth(
             kind="authorization", value="PVEAPIToken=test@pve!console=secret"
         )
+        self.closed = 0
+
+    async def aclose(self) -> None:
+        self.closed += 1
 
     async def get_websocket_auth(self) -> ProxmoxWebSocketAuth:
         return self._websocket_auth
@@ -114,6 +124,27 @@ async def test_session_builds_password_cookie_websocket_auth() -> None:
     assert "PVE:user@pam:session" not in repr(auth)
 
 
+def _assert_qemu_console_response(data: dict[str, object]) -> None:
+    expected = {
+        "ticket": "ABCTICKET123",
+        "port": 5900,
+        "proxmox_host": "pve.example.test",
+        "proxmox_port": 8006,
+        "console_type": "novnc",
+        "verify_ssl": False,
+        "websocket_auth": {
+            "kind": "authorization",
+            "value": "PVEAPIToken=test@pve!console=secret",
+        },
+    }
+    assert {key: data[key] for key in expected} == expected
+    ws_url = data["ws_url"]
+    assert isinstance(ws_url, str)
+    assert ws_url.startswith("wss://")
+    assert "ABCTICKET123" in ws_url
+    assert "vncwebsocket" in ws_url
+
+
 def test_novnc_qemu_returns_200_with_ws_url(auth_test_client, db_engine):
     """noVNC + QEMU: returns 200 with a valid wss:// URL containing the ticket."""
     endpoint_id = _make_endpoint(db_engine)
@@ -135,20 +166,8 @@ def test_novnc_qemu_returns_200_with_ws_url(auth_test_client, db_engine):
         )
 
     assert resp.status_code == 200, resp.text
-    data = resp.json()
-    assert data["ticket"] == "ABCTICKET123"
-    assert data["port"] == 5900
-    assert data["ws_url"].startswith("wss://")
-    assert "ABCTICKET123" in data["ws_url"]
-    assert "vncwebsocket" in data["ws_url"]
-    assert data["proxmox_host"] == "pve.example.test"
-    assert data["proxmox_port"] == 8006
-    assert data["console_type"] == "novnc"
-    assert data["verify_ssl"] is False
-    assert data["websocket_auth"] == {
-        "kind": "authorization",
-        "value": "PVEAPIToken=test@pve!console=secret",
-    }
+    assert fake_px.closed == 1
+    _assert_qemu_console_response(resp.json())
 
 
 def test_private_session_brackets_ipv6_websocket_authority(auth_test_client, db_engine):
@@ -297,10 +316,10 @@ def test_session_open_failure_returns_502(auth_test_client, db_engine):
     assert "Unable to connect" in resp.json()["detail"]
 
 
-def test_proxmox_api_error_returns_502(auth_test_client, db_engine):
+def test_proxmox_api_error_returns_502(auth_test_client, db_engine, caplog):
     """ProxmoxAPIError raised during the vncproxy/termproxy call returns 502."""
     endpoint_id = _make_endpoint(db_engine)
-    fake_px = _FakePx({}, exc=ProxmoxAPIError("node offline"))
+    fake_px = _FakePx({}, exc=ProxmoxAPIError("synthetic-private-console-canary"))
 
     with patch(
         "proxbox_api.routes.proxmox.console._open_session",
@@ -318,7 +337,9 @@ def test_proxmox_api_error_returns_502(auth_test_client, db_engine):
         )
 
     assert resp.status_code == 502
-    assert "Proxmox console error" in resp.json()["detail"]
+    assert resp.json()["detail"] == "Proxmox console request failed."
+    assert fake_px.closed == 1
+    assert "synthetic-private-console-canary" not in resp.text + caplog.text
 
 
 def test_lxc_novnc_returns_422(auth_test_client, db_engine):

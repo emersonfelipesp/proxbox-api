@@ -1,5 +1,14 @@
 # Referencia HTTP da API
 
+
+A política padrão recusa `POST /ssh/sessions` e
+`POST /proxmox/console/sessions` com HTTP 403 fixo antes da autenticação, do
+corpo e de dependências com efeitos. Os contratos interativos de sucesso
+exigem `PROXBOX_EXECUTION_MODE=legacy` explícito e a autenticação existente.
+`GET /execution-policy` exige autenticação local, informa apenas a prontidão
+do limite deste componente e mantém `aggregate_ready=false`. Consulte o
+[contrato de política interativa](../operations/interactive-rpc-boundary.md).
+
 Esta pagina resume os endpoints HTTP expostos por `proxbox-api`.
 
 Para schemas completos de request e response, use o OpenAPI em tempo de execucao em `/docs`.

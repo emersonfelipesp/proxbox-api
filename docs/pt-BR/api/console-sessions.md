@@ -10,6 +10,10 @@ estado de uso único e o WebSocket do navegador. Todo o material privado da
 sessão upstream fica criptografado no SQLite compartilhado, e a resposta contém
 somente dados opacos e seguros para o navegador.
 
+Os dois contratos exigem `PROXBOX_EXECUTION_MODE=legacy` explícito. A política
+`rpc_only` padrão recusa a criação da sessão de navegador antes de acessar o
+endpoint e fecha o stream antes de consumir o token ou conectar ao upstream.
+
 ## Responsabilidade e limite de confiança
 
 ```text
@@ -150,7 +154,9 @@ guest = px.session.nodes(req.node)
 guest = guest.qemu(req.vmid) if req.vm_type == "qemu" else guest.lxc(req.vmid)
 ```
 
-Em seguida, chama `vncproxy.post(websocket=1)` para noVNC ou `termproxy.post()` para terminal. `resolve_async()` normaliza resultados síncronos e assíncronos do SDK. A rota não inicia, desliga ou altera a configuração do guest; ela solicita somente o proxy efêmero do console.
+Em seguida, chama `vncproxy.post(websocket=1)` para noVNC ou `termproxy.post()` para terminal. `resolve_async()` normaliza resultados síncronos e assíncronos do SDK. A rota não inicia, desliga ou altera a configuração do guest, mas seu proxy efêmero concede capacidade interativa de escrita futura. O padrão `rpc_only` recusa os dois contratos de criação de sessão de console antes de resolver o endpoint, descriptografar ou conectar. Os contratos de sucesso exigem `legacy` explícito e autenticação normal. Consulte [Limite interativo exclusivo de RPC](../operations/interactive-rpc-boundary.md).
+
+A requisição mantém a propriedade do cliente Proxmox durante aquisição, criação do proxy, autenticação privada e encerramento. Aquisições tardias são encerradas após cancelamento; o encerramento local impede novas requisições de autenticação e entrega de respostas privadas. Um resultado ambíguo do proxy permanece explicitamente incerto e não é declarado revertido.
 
 ## Normalização da resposta
 
@@ -210,7 +216,7 @@ O `trusted-relay-service` exige `wss://` antes de guardar a URL. O navegador nun
 
 ## Falhas, logs e invariantes de segurança
 
-Violações do schema retornam 422; endpoint ausente retorna 404; falhas de conexão, proxy, ticket, porta ou autenticação retornam 502 com detalhes limitados. Um `ProxmoxAPIError` pode ser detalhado para o backend confiável, mas o `trusted-relay-service` o converte antes de qualquer resposta ao navegador.
+Violações do schema retornam 422; endpoint ausente retorna 404; falhas de conexão, proxy, ticket, porta ou autenticação retornam 502 com detalhes limitados. Um `ProxmoxAPIError` retorna somente `Proxmox console request failed.`; o texto da exceção upstream nunca é retornado.
 
 Preserve estas invariantes:
 

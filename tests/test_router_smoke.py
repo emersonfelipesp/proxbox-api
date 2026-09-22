@@ -89,6 +89,7 @@ def test_auth_register_key_is_public_but_requires_body(test_client: TestClient) 
 
 PROTECTED_ROUTES: list[tuple[str, str]] = [
     ("GET", "/version"),
+    ("GET", "/execution-policy"),
     ("GET", "/admin/encryption/status"),
     ("GET", "/auth/keys"),
     ("GET", "/cache"),
@@ -116,8 +117,9 @@ def test_protected_route_requires_api_key(test_client: TestClient, method: str, 
     """Every protected prefix rejects an unauthenticated request with 401 and
     is genuinely registered in the OpenAPI schema."""
     resp = test_client.request(method, path)
-    assert resp.status_code == 401, (
-        f"{method} {path} returned {resp.status_code}; expected 401 "
+    expected = 403 if path == "/ssh/sessions" else 401
+    assert resp.status_code == expected, (
+        f"{method} {path} returned {resp.status_code}; expected {expected} "
         f"without an X-Proxbox-API-Key header."
     )
     _assert_route_in_openapi(path)

@@ -8,6 +8,7 @@ normalizer ``_normalize_sync_mode`` exported from
 from __future__ import annotations
 
 from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
+    _deduplicate_vm_resources_by_identity,
     _filter_cluster_resources_by_sync_modes,
     _normalize_sync_mode,
     _vm_resource_allowed_by_sync_modes,
@@ -24,6 +25,43 @@ TEMPLATE_RESOURCE_BOOL = {"type": "qemu", "vmid": 103, "name": "tpl-bool", "temp
 TEMPLATE_RESOURCE_ZERO = {"type": "qemu", "vmid": 104, "name": "not-tpl", "template": 0}
 TEMPLATE_RESOURCE_STR_ZERO = {"type": "qemu", "vmid": 105, "name": "not-tpl-str", "template": "0"}
 NO_TEMPLATE_KEY = {"type": "qemu", "vmid": 106, "name": "no-key"}
+
+
+def test_deduplicate_vm_resources_preserves_first_cluster_guest_identity():
+    first = {"type": "qemu", "vmid": 101, "name": "first", "status": "running"}
+    duplicate = {"type": "qemu", "vmid": " 101 ", "name": "duplicate"}
+    lxc_same_vmid = {"type": "lxc", "vmid": 101, "name": "container"}
+    node = {"type": "node", "node": "pve01"}
+
+    result = _deduplicate_vm_resources_by_identity(
+        [
+            {"cluster-a": [node, first]},
+            {"cluster-a": [duplicate, lxc_same_vmid]},
+            {"cluster-b": [duplicate]},
+        ]
+    )
+
+    assert result == [
+        {"cluster-a": [node, first]},
+        {"cluster-a": [lxc_same_vmid]},
+        {"cluster-b": [duplicate]},
+    ]
+
+
+def test_deduplicate_vm_resources_preserves_malformed_vmids_without_collisions():
+    malformed_resources = [
+        {"type": "qemu", "vmid": True, "name": "boolean"},
+        {"type": "qemu", "vmid": 1.5, "name": "float"},
+        {"type": "qemu", "vmid": "-1", "name": "negative"},
+        {"type": "qemu", "vmid": "0", "name": "zero"},
+    ]
+    valid = {"type": "qemu", "vmid": 1, "name": "valid"}
+
+    result = _deduplicate_vm_resources_by_identity(
+        [{"cluster-a": [*malformed_resources, valid, {**valid, "name": "duplicate"}]}]
+    )
+
+    assert result == [{"cluster-a": [*malformed_resources, valid]}]
 
 
 # ---------------------------------------------------------------------------

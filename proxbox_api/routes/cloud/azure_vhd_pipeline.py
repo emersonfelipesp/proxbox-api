@@ -2,19 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shlex
-import subprocess
+from collections.abc import Awaitable, Callable
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import HTTPException
 
+from proxbox_api.routes.cloud.pipeline_scripts import (
+    PipelineExecutionCancelled,
+    execute_remote_script,
+)
+from proxbox_api.schemas.cloud_image_security import CloudImageSSHExecutionTarget
 from proxbox_api.schemas.cloud_provision import (
     AzureVhdGuestProfile,
     AzureVhdImportRequest,
     AzureVhdImportResponse,
     AzureVmGeneration,
+    CloudImageTemplateExecutionSummary,
+    PackerFinding,
 )
 
 
@@ -85,8 +94,77 @@ def _follow_up_steps(request: AzureVhdImportRequest) -> list[str]:
     ]
 
 
-def build_azure_vhd_import_response(
+async def _execution_result(
     request: AzureVhdImportRequest,
+    execution_target: CloudImageSSHExecutionTarget | None,
+    build_script: str,
+    *,
+    execution_allowed: bool,
+    authorize_execution: Callable[[], Awaitable[None]] | None,
+) -> tuple[
+    str,
+    int | None,
+    CloudImageTemplateExecutionSummary,
+    list[PackerFinding],
+    bool,
+]:
+    """Return the planned state or execute through persisted SSH authority."""
+
+    if not request.execute:
+        return (
+            "planned",
+            None,
+            CloudImageTemplateExecutionSummary(enabled=execution_allowed),
+            [],
+            False,
+        )
+    if not execution_allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Remote Azure VHD import execution is disabled. "
+                "Set PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true to enable it."
+            ),
+        )
+    if execution_target is None:
+        raise HTTPException(status_code=422, detail="Persisted endpoint authority is required.")
+    try:
+        status, returncode, execution, diagnostics, error_code = await execute_remote_script(
+            request,
+            build_script,
+            execution_allowed=True,
+            execution_target=execution_target,
+            remote_unit=f"proxbox-azure-vhd-{uuid4().hex}",
+            authorize_execution=authorize_execution,
+        )
+    except PipelineExecutionCancelled as cancelled:
+        raise asyncio.CancelledError from cancelled
+    recovery_required = _recovery_required(error_code, execution)
+    return status, returncode, execution, diagnostics, recovery_required
+
+
+def _recovery_required(
+    error_code: str | None,
+    execution: CloudImageTemplateExecutionSummary,
+) -> bool:
+    """Classify whether remote mutation state remains uncertain or partial."""
+
+    if error_code in {None, "ssh_identity_untrusted", "ssh_host_key_unverified"}:
+        return False
+    if error_code == "execution_failed":
+        return True
+    if error_code in {"execution_timeout", "execution_unavailable"}:
+        return bool(
+            execution.cancellation_attempted and execution.cancellation_succeeded is not True
+        )
+    return execution.attempted
+
+
+async def build_azure_vhd_import_response(
+    request: AzureVhdImportRequest,
+    *,
+    execution_target: CloudImageSSHExecutionTarget | None = None,
+    authorize_execution: Callable[[], Awaitable[None]] | None = None,
 ) -> AzureVhdImportResponse:
     source_vhd_filename = _source_filename(request)
     qcow2_filename = _qcow_filename(source_vhd_filename)
@@ -175,37 +253,14 @@ def build_azure_vhd_import_response(
         "true",
         "yes",
     }
-    status = "planned"
-    returncode = None
-    stdout = None
-    stderr = None
-    if request.execute:
-        if not execution_allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Remote Azure VHD import execution is disabled. "
-                    "Set PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true to enable it."
-                ),
-            )
-        if not request.ssh_host:
-            raise HTTPException(status_code=422, detail="ssh_host is required when execute=true.")
-        ssh_command = ["ssh", "-p", str(request.ssh_port)]
-        if request.ssh_identity_file:
-            ssh_command.extend(["-i", request.ssh_identity_file])
-        ssh_command.extend([f"{request.ssh_user}@{request.ssh_host}", "bash -s"])
-        proc = subprocess.run(
-            ssh_command,
-            input=build_script,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=3600,
-        )
-        status = "completed" if proc.returncode == 0 else "failed"
-        returncode = proc.returncode
-        stdout = proc.stdout
-        stderr = proc.stderr
+    status, returncode, execution, diagnostics, recovery_required = await _execution_result(
+        request,
+        execution_target,
+        build_script,
+        execution_allowed=execution_allowed,
+        authorize_execution=authorize_execution,
+    )
+    executed = bool(request.execute)
 
     return AzureVhdImportResponse(
         status=status,
@@ -220,13 +275,13 @@ def build_azure_vhd_import_response(
         disk_interface=disk_interface,
         network_model=network_model,
         boot_order=boot_order,
-        azure_vhd_url=request.azure_vhd_url,
+        azure_vhd_url="" if executed else request.azure_vhd_url,
         source_vhd_filename=source_vhd_filename,
         source_vhd_path=source_vhd_path,
         qcow2_filename=qcow2_filename,
         qcow2_path=qcow2_path,
-        build_script=build_script,
-        commands=commands,
+        build_script="" if executed else build_script,
+        commands=[] if executed else commands,
         follow_up_steps=_follow_up_steps(request),
         operator_instructions=(
             "Review the generated Azure VHD Import Pipeline script, verify the target "
@@ -235,6 +290,9 @@ def build_azure_vhd_import_response(
         ),
         execution_enabled=execution_allowed,
         returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
+        stdout=None,
+        stderr=None,
+        execution=execution,
+        diagnostics=diagnostics,
+        recovery_required=recovery_required,
     )

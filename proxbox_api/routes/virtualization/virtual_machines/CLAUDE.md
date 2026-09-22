@@ -165,6 +165,16 @@ Main synchronization endpoints for virtual machines and related resources.
   as success even when a stale existing record is present. Coverage:
   `tests/test_vm_sync_reconciliation_queue.py`.
 
+- **Full-sync resource identities are deduplicated before dispatch (issue
+  #472).** Proxmox discovery can expose the same guest through cluster and node
+  views. Immediately after sync-mode filtering, collapse duplicate VM
+  resources by normalized `(cluster_name, guest_type, positive_vmid)` before
+  dependency discovery and concurrent NetBox operation dispatch. Integer and
+  whitespace-padded ASCII numeric-string VMIDs share one identity; preserve the
+  first authoritative payload. QEMU and LXC guests with the same VMID, guests
+  in different clusters, non-VM resources, and malformed VMIDs remain distinct
+  and must not be dropped. Coverage: `tests/test_vm_sync_modes.py`.
+
 - **CREATE recovery respects the existing-VM ownership allowlist.** A VM queued
   as CREATE can be re-resolved during dispatch when the snapshot was stale or
   incomplete. Recovery reclassifies the resolved existing record through the

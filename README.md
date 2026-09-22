@@ -1,5 +1,14 @@
 # Installing proxbox-api (Plugin backend made using FastAPI)
 
+
+Unrestricted SSH, Proxmox console creation, and the two legacy synchronization
+WebSockets now default to refusal with `PROXBOX_EXECUTION_MODE=rpc_only`.
+Compatibility deployments must explicitly choose `legacy`; there is no hot
+activation or automatic fallback. Missing `PROXBOX_EXECUTION_GENERATION` keeps
+cutover unready without preventing inventory startup. Read the
+[interactive boundary and companion prerequisites](docs/operations/interactive-rpc-boundary.md)
+before rollout. This scoped boundary does not certify all-operation RPC readiness.
+
 ## Integrations Architecture
 
 <p align="center">

@@ -230,8 +230,8 @@ def test_real_collect_orchestration_with_bounded_schema(
         inventory = collection.collect(ROOT)
         assert len(inventory.modes) == 2
         assert inventory.modes[0].registrations == inventory.modes[1].registrations
-        assert len(inventory.modes[0].registrations) == 259
-        assert len(inventory.runtime_codegen_opt_in.registrations) == 261
+        assert len(inventory.modes[0].registrations) == 260
+        assert len(inventory.runtime_codegen_opt_in.registrations) == 262
         assert inventory.provenance.imported_modules
 
 

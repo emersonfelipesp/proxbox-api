@@ -84,6 +84,11 @@ from proxbox_api.services.auth_lockout import (
     resolve_auth_source_context,
     validate_auth_lockout_identity_key,
 )
+from proxbox_api.services.interactive_policy import (
+    ExecutionPolicy,
+    InteractiveBoundaryMiddleware,
+    InteractiveRuntime,
+)
 from proxbox_api.session.netbox import (
     acquire_netbox_api_cache_owner,
     release_netbox_api_cache_owner,
@@ -315,12 +320,19 @@ def _record_cleanup_error(
 
 
 async def _release_lifespan_resources(
+    app: FastAPI,
     cache_owner: bool,
     runtime_owner: database.DatabaseRuntimeOwner | None,
     primary_error: BaseException | None,
 ) -> None:
-    """Attempt both resource releases and propagate the first failure."""
+    """Quiesce interactive work, release resources, and preserve the first failure."""
     cleanup_error = primary_error
+    interactive_runtime = getattr(app.state, "interactive_runtime", None)
+    if interactive_runtime is not None:
+        try:
+            await interactive_runtime.quiesce()
+        except BaseException as error:
+            cleanup_error = _record_cleanup_error(cleanup_error, error, "Interactive runtime")
     if cache_owner:
         try:
             await release_netbox_api_cache_owner()
@@ -389,7 +401,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         primary_error = error
         raise
     finally:
-        await _release_lifespan_resources(cache_owner, runtime_owner, primary_error)
+        await _release_lifespan_resources(app, cache_owner, runtime_owner, primary_error)
 
 
 async def _run_bootstrap_pass(app: FastAPI) -> None:
@@ -595,6 +607,7 @@ def create_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
+    app.state.interactive_runtime = InteractiveRuntime(ExecutionPolicy.from_environment())
 
     def custom_openapi():
         return custom_openapi_builder(app)
@@ -658,6 +671,7 @@ def create_app() -> FastAPI:
     except ValueError:
         rate_limit = 300
     app.add_middleware(RateLimitMiddleware, requests_per_minute=rate_limit)
+    app.add_middleware(InteractiveBoundaryMiddleware, runtime=app.state.interactive_runtime)
 
     register_exception_handlers(app)
 
@@ -667,5 +681,20 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
 
     _include_selected_routes(app)
-
     return app
+
+
+def _register_ceph_routers(app: FastAPI) -> None:
+    """Keep the two independent Ceph capabilities optional."""
+    try:
+        from proxbox_api.ceph import router as ceph_router
+    except ImportError as exc:
+        logger.info("Ceph subpackage unavailable; /ceph/* routes disabled (%s)", exc)
+    else:
+        app.include_router(ceph_router, prefix="/ceph", tags=["ceph"])
+    try:
+        from proxbox_api.ceph.v2_routes import router as ceph_v2_router
+    except ImportError as exc:
+        logger.info("Ceph v2 subpackage unavailable; /ceph/v2/* routes disabled (%s)", exc)
+    else:
+        app.include_router(ceph_v2_router, prefix="/ceph/v2", tags=["ceph-v2"])

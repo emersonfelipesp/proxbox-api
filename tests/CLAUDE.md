@@ -1,5 +1,21 @@
 # tests/ Directory Guide
 
+
+## Interactive Execution Boundary
+
+Read `docs/operations/interactive-rpc-boundary.md` before changing interactive
+admission, SSH or console acquisition, synchronization WebSocket dependencies,
+or shutdown ownership. `PROXBOX_EXECUTION_MODE` is process-pinned and defaults
+to `rpc_only`; `PROXBOX_EXECUTION_GENERATION` has no generated default. Denial
+must occur before eager providers and must also protect capability consumption.
+Explicit legacy mode preserves authentication, endpoint restrictions, host-key
+pins, and private console TLS/authentication. Keep local readiness scoped and
+`aggregate_ready=false`; companion services and fleet coordination are separate
+required capabilities. Never add a hot activation endpoint or silently restore
+legacy behavior. Preserve native and mounted-ASGI ordering/cancellation tests,
+including dependency-upgrade verification, and both language versions of the
+documentation.
+
 ## Workspace Context
 
 This file lives at `<repository-root>/tests/CLAUDE.md` inside the `personal-context` workspace.
@@ -27,7 +43,8 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | File | What it tests |
 |------|---------------|
 | `proxmox/test_console_route.py` | Private console-session broker: strict mode schema, endpoint loading, QEMU/LXC `vncproxy`/`termproxy` routing, ticket/port normalization, URL encoding, API-token and password-session WebSocket authentication, TLS policy, and sanitized failures. Keep aligned with `docs/api/console-sessions.md`. |
-| `proxmox/test_browser_console_relay.py` | Standalone browser console relay: supported mode matrix, HTTPS Origin validation and exact binding, Fernet-only shared SQLite state, atomic one-use consumption across sessions, expiry/replay/capacity/length bounds, URI-free token subprotocol transport, access-log/query-token checks, redirect credential non-replay, policy seams, `binary` negotiation, RFB 3.8 VNC authentication mediation, binary/text frame relay, deterministic cancellation/cleanup, malformed payloads, and secret-safe failures. |
+| `proxmox/test_browser_console_relay.py` | Explicit-legacy standalone browser console relay: supported mode matrix, HTTPS Origin validation and exact binding, Fernet-only shared SQLite state, atomic one-use consumption across sessions, expiry/replay/capacity/length bounds, URI-free token subprotocol transport, access-log/query-token checks, redirect credential non-replay, policy seams, `binary` negotiation, RFB 3.8 VNC authentication mediation, binary/text frame relay, deterministic cancellation/cleanup, malformed payloads, and secret-safe failures. Default RPC-only pre-provider denial is covered by `test_interactive_boundary.py`. |
+| `test_interactive_guard_mutations.py` | Explicit guard-removal mutation oracles for every guarded ASGI creator and consumer surface, independent SSH creator and consumer service checks, synchronization authentication-before-provider ordering, and post-wait SSH and console quiesce rechecks. Each mutation must reach its named effect sentinel; a setup error or an unrelated refusal is not equivalent evidence. |
 | `test_proxmox_influx_metrics.py` | Bounded structured Flux generation, destination controls, upstream and normalized response-byte limits, response normalization, and secret-safe Influx failures. |
 | `test_proxmox_metrics_pull.py` | Fixed `cluster/metrics/export` routing, endpoint selection, request and response bounds, filtering, deterministic sorting/deduplication, session closure, authentication, and secret-safe pull failures. |
 | `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers |

@@ -857,6 +857,7 @@ class AzureVhdImportRequest(BaseModel):
     ssh_user: str = "root"
     ssh_port: int = Field(22, ge=1, le=65535)
     ssh_identity_file: str | None = None
+    ssh_known_host_fingerprint: str | None = None
 
     @field_validator("azure_vhd_url")
     @classmethod
@@ -884,6 +885,13 @@ class AzureVhdImportRequest(BaseModel):
         if value is None:
             return value
         return normalize_ssh_identity_file(value)
+
+    @field_validator("ssh_known_host_fingerprint")
+    @classmethod
+    def validate_ssh_known_host_fingerprint(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return normalize_ssh_fingerprint(value)
 
 
 class AzureVhdImportResponse(BaseModel):
@@ -913,6 +921,11 @@ class AzureVhdImportResponse(BaseModel):
     returncode: int | None = None
     stdout: str | None = None
     stderr: str | None = None
+    execution: CloudImageTemplateExecutionSummary = Field(
+        default_factory=CloudImageTemplateExecutionSummary
+    )
+    diagnostics: list[PackerFinding] = Field(default_factory=list)
+    recovery_required: bool = False
 
 
 class PVETemplateBuildRequest(BaseModel):

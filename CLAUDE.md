@@ -1,5 +1,21 @@
 # proxbox-api Project Guide
 
+
+## Interactive Execution Boundary
+
+Read `docs/operations/interactive-rpc-boundary.md` before changing interactive
+admission, SSH or console acquisition, synchronization WebSocket dependencies,
+or shutdown ownership. `PROXBOX_EXECUTION_MODE` is process-pinned and defaults
+to `rpc_only`; `PROXBOX_EXECUTION_GENERATION` has no generated default. Denial
+must occur before eager providers and must also protect capability consumption.
+Explicit legacy mode preserves authentication, endpoint restrictions, host-key
+pins, and private console TLS/authentication. Keep local readiness scoped and
+`aggregate_ready=false`; companion services and fleet coordination are separate
+required capabilities. Never add a hot activation endpoint or silently restore
+legacy behavior. Preserve native and mounted-ASGI ordering/cancellation tests,
+including dependency-upgrade verification, and both language versions of the
+documentation.
+
 ## Workspace Context
 
 This file lives at `<repository-root>/CLAUDE.md` inside the `personal-context` workspace.
@@ -274,7 +290,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
   both engage. Never emit an empty `detail`; `dependencies.proxbox_tag()`
   falls back through `python_exception` and the cause.
 - Keep parsing and normalization inside Pydantic schemas, especially in `proxbox_api/proxmox_to_netbox/`.
-- Keep generated artifacts under `proxbox_api/generated/` out of manual editing unless you are debugging generation itself.
+- Keep generated artifacts under `proxbox_api/generated/` out of manual editing unless you are debugging generation itself. These artifacts serve the backend proxy/viewer surface; the exactly pinned `proxmox-sdk` generated models are the single runtime response-validation authority used by sync helpers.
 - Preserve parity between WebSocket progress payloads and SSE payloads.
 - Prefer `proxbox_api.logger.logger` over `print`.
 

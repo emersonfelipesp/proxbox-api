@@ -30,6 +30,10 @@ from proxbox_api.routes.cloud.pipeline_scripts import (
 from proxbox_api.routes.cloud.provision import _extract_task_id, _wait_for_upid
 from proxbox_api.routes.proxmox.access_gate import gate_ssh_access
 from proxbox_api.routes.proxmox_actions import _gate, _open_proxmox_session
+from proxbox_api.schemas.cloud_image_security import (
+    SSHBindingError,
+    resolve_ssh_execution_target,
+)
 from proxbox_api.schemas.cloud_provision import (
     CloudImageBuildOperationResponse,
     CloudImageBuildProvider,
@@ -377,101 +381,20 @@ def _resolve_execution_ssh_target(
 ) -> CloudImageSSHExecutionTarget:
     """Derive one executable SSH target exclusively from persisted authority."""
 
-    endpoint_id = int(endpoint.id or 0)
-    if not endpoint.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "endpoint_disabled",
-                "endpoint_id": endpoint_id,
-                "message": "The persisted Proxmox endpoint is disabled.",
-            },
-        )
-    if not endpoint.allow_writes:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "endpoint_writes_disabled",
-                "endpoint_id": endpoint_id,
-                "message": "The persisted Proxmox endpoint does not allow writes.",
-            },
-        )
-    if not endpoint.ssh_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "endpoint_ssh_disabled",
-                "endpoint_id": endpoint_id,
-                "message": "The persisted Proxmox endpoint does not allow SSH execution.",
-            },
-        )
-    if not request.target_node:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "target_node_required",
-                "endpoint_id": endpoint_id,
-                "message": "target_node is required for executable builds.",
-            },
-        )
-    if not endpoint.has_cloud_image_ssh_binding:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "endpoint_ssh_binding_incomplete",
-                "endpoint_id": endpoint_id,
-                "message": "The endpoint has no complete persisted Cloud Image SSH binding.",
-            },
-        )
-    if request.target_node != endpoint.ssh_target_node:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "endpoint_node_mismatch",
-                "endpoint_id": endpoint_id,
-                "message": "target_node does not match the endpoint's persisted SSH node.",
-            },
-        )
-
     try:
-        target = CloudImageSSHExecutionTarget(
-            host=str(endpoint.ssh_host),
-            user=str(endpoint.ssh_username),
-            port=endpoint.ssh_port,
-            identity_file=str(endpoint.ssh_identity_file),
-            known_host_fingerprint=str(endpoint.ssh_known_host_fingerprint),
-        )
-    except Exception:  # noqa: BLE001 - return only a stable, non-secret boundary error
+        return resolve_ssh_execution_target(endpoint, request)
+    except SSHBindingError as error:
+        detail = {
+            "code": error.code,
+            "endpoint_id": error.endpoint_id,
+            "message": error.message,
+        }
+        if error.field is not None:
+            detail["field"] = error.field
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "endpoint_ssh_binding_invalid",
-                "endpoint_id": endpoint_id,
-                "message": "The endpoint's persisted Cloud Image SSH binding is invalid.",
-            },
+            status_code=error.status_code,
+            detail=detail,
         ) from None
-
-    assertions = {
-        "ssh_host": target.host,
-        "ssh_user": target.user,
-        "ssh_port": target.port,
-        "ssh_identity_file": target.identity_file,
-        "ssh_known_host_fingerprint": target.known_host_fingerprint,
-    }
-    for field, expected in assertions.items():
-        if field not in request.model_fields_set:
-            continue
-        if getattr(request, field) != expected:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "endpoint_ssh_binding_mismatch",
-                    "endpoint_id": endpoint_id,
-                    "field": field,
-                    "message": "Caller SSH assertions do not match the persisted endpoint binding.",
-                },
-            )
-    return target
 
 
 def _packer_template_builds_gate(endpoint: ProxmoxEndpoint) -> JSONResponse | None:

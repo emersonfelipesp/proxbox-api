@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
+from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
@@ -47,6 +48,10 @@ _SSH_BINARY = "/usr/bin/ssh"
 _SSH_KEYSCAN_BINARY = "/usr/bin/ssh-keyscan"
 _LEGACY_PIPELINE_VM_STORAGE = "local-lvm"
 _RECIPE_BINDING_CONTEXT = "packer-recipe-binding-v1"
+
+
+class SSHExecutionRequest(Protocol):
+    endpoint_id: int | None
 
 
 def _q(value: object) -> str:
@@ -861,14 +866,21 @@ async def _stream_stats(stream: asyncio.StreamReader) -> tuple[int, int]:
 async def _stop_process(process: asyncio.subprocess.Process) -> None:
     if process.returncode is not None:
         return
-    with suppress(ProcessLookupError):
+    with suppress(ProcessLookupError, OSError):
         process.terminate()
     try:
         await asyncio.wait_for(process.wait(), 10)
     except TimeoutError:
-        with suppress(ProcessLookupError):
+        with suppress(ProcessLookupError, OSError):
             process.kill()
-        await process.wait()
+        try:
+            await asyncio.wait_for(process.wait(), 10)
+        except TimeoutError:
+            logger.warning("SSH child did not exit after bounded kill wait")
+        except Exception as error:  # noqa: BLE001 - cleanup must remain secret-safe
+            logger.warning("SSH child kill wait failed error_type=%s", type(error).__name__)
+    except Exception as error:  # noqa: BLE001 - cleanup must remain secret-safe
+        logger.warning("SSH child terminate wait failed error_type=%s", type(error).__name__)
 
 
 async def _cancel_remote_unit(
@@ -949,7 +961,8 @@ async def _execution_cleanup_summary(
     if process is not None:
         await _stop_process(process)
     cancellation_succeeded = bool(
-        known_hosts_file is not None
+        process is not None
+        and known_hosts_file is not None
         and identity is not None
         and await _cancel_remote_unit(target, known_hosts_file, identity, remote_unit)
     )
@@ -964,8 +977,8 @@ async def _execution_cleanup_summary(
         stderr_bytes=stderr_stats[0],
         stdout_lines=stdout_stats[1],
         stderr_lines=stderr_stats[1],
-        cancellation_attempted=True,
-        cancellation_succeeded=cancellation_succeeded,
+        cancellation_attempted=process is not None,
+        cancellation_succeeded=cancellation_succeeded if process is not None else None,
     )
 
 
@@ -1265,6 +1278,27 @@ async def _pipeline_execution_result(  # noqa: C901
         execution,
         [diagnostic],
         None if succeeded else "execution_failed",
+    )
+
+
+async def execute_remote_script(
+    request: SSHExecutionRequest,
+    build_script: str,
+    *,
+    execution_allowed: bool,
+    execution_target: CloudImageSSHExecutionTarget,
+    remote_unit: str,
+    authorize_execution: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[str, int | None, CloudImageTemplateExecutionSummary, list[PackerFinding], str | None]:
+    """Run a script through the shared bounded, pinned SSH executor."""
+
+    return await _pipeline_execution_result(
+        cast(CloudImageTemplateBuildRequest, request),
+        build_script,
+        execution_allowed=execution_allowed,
+        execution_target=execution_target,
+        remote_unit=remote_unit,
+        authorize_execution=authorize_execution,
     )
 
 

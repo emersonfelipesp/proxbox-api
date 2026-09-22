@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from proxbox_api.dependencies import NetBoxSessionDep
+from proxbox_api.database import get_async_session
 from proxbox_api.logger import logger
+from proxbox_api.services.interactive_policy import owned_resource, require_interactive
 from proxbox_api.services.ssh_terminal import (
     HostKeyScanError,
     OneShotTerminalCredential,
+    TerminalCredential,
     TerminalCredentialError,
+    TerminalSession,
     TerminalSessionError,
     connect_and_relay,
     fetch_terminal_credential,
     scan_host_key_fingerprint,
     terminal_session_manager,
 )
+from proxbox_api.session.netbox import get_netbox_async_session
 
 router = APIRouter()
 
@@ -137,6 +142,7 @@ async def create_terminal_session(
     # authority for terminal SSH access. proxbox-api enforces access_methods only
     # for its own SQLite-id SSH paths (Cloud Image Build Pipeline / Azure VHD
     # import). See routes/proxmox/access_gate.py and the netbox-proxbox plugin.
+    require_interactive()
     actor = payload.actor or request.headers.get("X-Proxbox-Actor")
     one_shot = None
     if payload.one_shot_credential is not None:
@@ -190,9 +196,9 @@ async def _receive_auth_message(websocket: WebSocket) -> dict:
 async def ssh_terminal_websocket(
     websocket: WebSocket,
     session_id: str,
-    netbox_session: NetBoxSessionDep,
 ) -> None:
     """Authenticate a ticket, resolve SSH credentials, and bridge the PTY."""
+    runtime = require_interactive()
     await websocket.accept()
     session = None
     try:
@@ -207,12 +213,15 @@ async def ssh_terminal_websocket(
         return
 
     try:
-        credential = await fetch_terminal_credential(netbox_session, session)
-        await connect_and_relay(websocket, session, credential)
-    except TerminalCredentialError as exc:
-        await websocket.send_json({"type": "error", "message": str(exc)})
+        async with owned_resource(
+            lambda: _resolve_terminal_credential(session), _release_credential
+        ) as credential:
+            require_interactive()
+            await connect_and_relay(websocket, session, credential)
+    except TerminalCredentialError:
+        await websocket.send_json({"type": "error", "message": "SSH credentials are unavailable"})
     except Exception:  # noqa: BLE001
-        logger.exception(
+        logger.warning(
             "SSH terminal session failed",
             extra={
                 "session_id": session.session_id,
@@ -224,8 +233,27 @@ async def ssh_terminal_websocket(
         await websocket.send_json({"type": "error", "message": "SSH terminal failed"})
     finally:
         if session is not None:
-            await terminal_session_manager.release(session.session_id)
-        try:
-            await websocket.close()
-        except Exception:  # noqa: BLE001
-            pass
+            await runtime.finish_cleanup(_finish_terminal(websocket, session.session_id))
+
+
+async def _resolve_terminal_credential(session: TerminalSession) -> TerminalCredential:
+    """Open a stored provider only after ticket authentication; bypass it for inline material."""
+    require_interactive()
+    if session.one_shot_credential is not None:
+        return await fetch_terminal_credential(None, session)
+    async with asynccontextmanager(get_async_session)() as database_session:
+        netbox_session = await get_netbox_async_session(database_session)
+        require_interactive()
+        return await fetch_terminal_credential(netbox_session, session)
+
+
+async def _release_credential(credential: TerminalCredential) -> None:
+    """Do not persist or expose a result acquired after its caller was cancelled."""
+
+
+async def _finish_terminal(websocket: WebSocket, session_id: str) -> None:
+    await terminal_session_manager.release(session_id)
+    try:
+        await websocket.close()
+    except Exception:
+        pass

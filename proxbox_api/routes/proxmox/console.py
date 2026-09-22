@@ -26,6 +26,11 @@ from proxbox_api.exception import ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services import console_relay, console_relay_policy
+from proxbox_api.services.interactive_policy import (
+    InteractiveRuntime,
+    owned_resource,
+    require_interactive,
+)
 from proxbox_api.session.proxmox import ProxmoxSession
 from proxbox_api.session.proxmox_core import ProxmoxWebSocketAuth
 from proxbox_api.session.proxmox_providers import _parse_db_endpoint
@@ -188,6 +193,7 @@ def _websocket_authority_host(host: str) -> str:
 
 
 async def _open_session(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
+    require_interactive()
     schema = _parse_db_endpoint(endpoint)
     return await ProxmoxSession.create(schema)
 
@@ -217,6 +223,7 @@ async def _connect_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxSession:
 
 
 async def _request_console_proxy(px: ProxmoxSession, req: ConsoleSessionRequest) -> object:
+    require_interactive()
     guest = px.session.nodes(req.node)
     guest = guest.qemu(req.vmid) if req.vm_type == "qemu" else guest.lxc(req.vmid)
     try:
@@ -232,7 +239,7 @@ async def _request_console_proxy(px: ProxmoxSession, req: ConsoleSessionRequest)
             req.console_type,
             type(exc).__name__,
         )
-        raise HTTPException(status_code=502, detail="Proxmox console error.") from exc
+        raise HTTPException(status_code=502, detail="Proxmox console request failed.") from exc
     except Exception as exc:
         logger.warning(
             "console: unexpected error for %s/%s/%s: %s",
@@ -300,7 +307,7 @@ async def create_console_session(
     req: ConsoleSessionRequest,
     db_session: SessionDep,
 ) -> ConsoleSessionResponse:
-    """Create a one-time session for the trusted-relay service."""
+    """Create a one-time session for the trusted control-plane relay."""
     endpoint = await _load_endpoint(req, db_session)
     return await _create_console_session_for_endpoint(req, endpoint)
 
@@ -311,10 +318,30 @@ async def _create_console_session_for_endpoint(
 ) -> ConsoleSessionResponse:
     """Broker private Proxmox state for one already resolved endpoint."""
 
-    px = await _connect_endpoint(endpoint)
+    runtime = require_interactive()
+    async with owned_resource(lambda: _connect_endpoint(endpoint), _close_console_session) as px:
+        try:
+            response = await _console_response(req, endpoint, px)
+            require_interactive()
+            return response
+        except BaseException:
+            runtime.uncertain = True
+            raise
+
+
+async def _close_console_session(px: ProxmoxSession) -> None:
+    await px.aclose()
+
+
+async def _console_response(
+    req: ConsoleSessionRequest, endpoint: ProxmoxEndpoint, px: ProxmoxSession
+) -> ConsoleSessionResponse:
+    require_interactive()
     raw = await _request_console_proxy(px, req)
+    require_interactive()
     ticket, vnc_port = _console_ticket(raw, req)
     websocket_auth = await _console_websocket_auth(px, req.endpoint_id)
+    require_interactive()
     host = endpoint.host
     proxmox_port = endpoint.port
 
@@ -415,6 +442,29 @@ def _browser_stream_token(websocket: WebSocket) -> str:
     return console_relay.parse_browser_subprotocols(websocket.headers.get("sec-websocket-protocol"))
 
 
+async def _close_browser_upstream(
+    upstream: console_relay.RelayUpstream,
+    runtime: InteractiveRuntime,
+) -> None:
+    closed = await console_relay.close_upstream(upstream)
+    if not closed:
+        runtime.uncertain = True
+
+
+async def _relay_browser_upstream(
+    websocket: WebSocket,
+    payload: console_relay.ConsoleRelayPayload,
+    upstream: console_relay.RelayUpstream,
+) -> None:
+    if upstream.subprotocol != "binary":
+        raise console_relay.ConsoleRelayProtocolError("Console stream failed.")
+    require_interactive()
+    await websocket.accept(subprotocol="binary")
+    if payload.console_type == "novnc":
+        await console_relay.mediate_rfb_auth(websocket, upstream, payload.ticket)
+    await console_relay.relay_frames(websocket, upstream)
+
+
 @console_router.websocket("/browser-stream")
 async def browser_console_stream(
     websocket: WebSocket,
@@ -422,7 +472,6 @@ async def browser_console_stream(
 ) -> None:
     """Consume one Origin-bound token and relay the selected Proxmox console."""
 
-    upstream: console_relay.RelayUpstream | None = None
     accepted = False
     try:
         token = _browser_stream_token(websocket)
@@ -437,14 +486,13 @@ async def browser_console_stream(
         except console_relay_policy.ConsoleRelayPolicyDenied as exc:
             raise console_relay.ConsoleRelayRejected("Browser console session is invalid.") from exc
 
-        upstream = await console_relay.open_upstream(payload)
-        if upstream.subprotocol != "binary":
-            raise console_relay.ConsoleRelayProtocolError("Console stream failed.")
-        await websocket.accept(subprotocol="binary")
-        accepted = True
-        if payload.console_type == "novnc":
-            await console_relay.mediate_rfb_auth(websocket, upstream, payload.ticket)
-        await console_relay.relay_frames(websocket, upstream)
+        runtime = require_interactive()
+        async with owned_resource(
+            lambda: console_relay.open_upstream(payload),
+            lambda upstream: _close_browser_upstream(upstream, runtime),
+        ) as upstream:
+            await _relay_browser_upstream(websocket, payload, upstream)
+            accepted = True
     except console_relay.ConsoleRelayRejected as exc:
         logger.warning("console relay: browser session rejected: %s", type(exc).__name__)
         await _close_browser_socket(
@@ -462,6 +510,3 @@ async def browser_console_stream(
     else:
         if accepted:
             await _close_browser_socket(websocket, code=1000, reason="Console relay closed.")
-    finally:
-        if upstream is not None:
-            await console_relay.close_upstream(upstream)

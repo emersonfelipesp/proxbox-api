@@ -1390,6 +1390,67 @@ def _filter_cluster_resources_by_sync_modes(
     return filtered
 
 
+def _vm_resource_identity(cluster_name: object, resource: object) -> tuple[str, str, int] | None:
+    """Return the stable identity of a VM-like cluster resource."""
+    if not isinstance(resource, dict):
+        return None
+    resource_type = resource.get("type")
+    vmid = resource.get("vmid")
+    if resource_type not in {"qemu", "lxc"} or isinstance(vmid, bool):
+        return None
+    if isinstance(vmid, int):
+        canonical_vmid = vmid
+    elif isinstance(vmid, str) and vmid.strip().isascii() and vmid.strip().isdigit():
+        canonical_vmid = int(vmid.strip())
+    else:
+        return None
+    if canonical_vmid <= 0:
+        return None
+    return (str(cluster_name), str(resource_type), canonical_vmid)
+
+
+def _deduplicate_cluster_vm_resources(
+    cluster_name: object, resources: list, seen: set[tuple[str, str, int]]
+) -> list:
+    """Preserve the first occurrence of each VM identity in one resource list."""
+    unique_resources = []
+    for resource in resources:
+        identity = _vm_resource_identity(cluster_name, resource)
+        if identity is None:
+            unique_resources.append(resource)
+        elif identity not in seen:
+            seen.add(identity)
+            unique_resources.append(resource)
+    return unique_resources
+
+
+def _deduplicate_vm_resources_by_identity(cluster_resources: list) -> list:
+    """Keep one VM resource for each cluster, guest type, and VMID.
+
+    Some SDK discovery paths can return the same cluster resource through both
+    cluster and node views. Dispatching both copies concurrently creates two
+    NetBox rows before either create becomes visible to the other lookup.
+    Preserve non-VM resources and the first authoritative VM payload while
+    removing only exact guest identities within the same cluster.
+    """
+    seen: set[tuple[str, str, int]] = set()
+    deduplicated: list = []
+    for cluster in cluster_resources:
+        if not isinstance(cluster, dict):
+            deduplicated.append(cluster)
+            continue
+        normalized_cluster: dict = {}
+        for cluster_name, resources in cluster.items():
+            if not isinstance(resources, list):
+                normalized_cluster[cluster_name] = resources
+                continue
+            normalized_cluster[cluster_name] = _deduplicate_cluster_vm_resources(
+                cluster_name, resources, seen
+            )
+        deduplicated.append(normalized_cluster)
+    return deduplicated
+
+
 async def _resolve_netbox_virtual_machine_by_proxmox_id(
     netbox_session: NetBoxSessionDep,
     proxmox_vm_id: int | str | None,
@@ -2077,6 +2138,7 @@ async def create_virtual_machines(  # noqa: C901
     filtered_cluster_resources = _filter_cluster_resources_by_sync_modes(
         filtered_cluster_resources, sync_mode_vm, sync_mode_vm_template
     )
+    filtered_cluster_resources = _deduplicate_vm_resources_by_identity(filtered_cluster_resources)
 
     # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link,
     # and a parallel mapping to the ProxmoxEndpoint DB ID for typed ownership state.

@@ -26,6 +26,7 @@ from websockets.typing import Subprotocol
 
 from proxbox_api.credentials import decrypt_value, encrypt_value, is_encryption_enabled
 from proxbox_api.database import BrowserConsoleRelaySession
+from proxbox_api.services.interactive_policy import require_interactive
 
 TOKEN_BYTES = 32
 TOKEN_LENGTH = 43
@@ -434,10 +435,10 @@ async def mediate_rfb_auth(
         version = await upstream_reader.read_exactly(12)
         if version != b"RFB 003.008\n":
             raise ConsoleRelayProtocolError("Console handshake failed.")
-        await websocket.send_bytes(version)
+        await _send_browser_bytes(websocket, version)
         if await browser_reader.read_exactly(12) != version:
             raise ConsoleRelayProtocolError("Console handshake failed.")
-        await upstream.send(version)
+        await _send_upstream(upstream, version)
 
         security_count = (await upstream_reader.read_exactly(1))[0]
         if security_count == 0 or security_count > 32:
@@ -445,23 +446,41 @@ async def mediate_rfb_auth(
         security_types = await upstream_reader.read_exactly(security_count)
         if 2 not in security_types:
             raise ConsoleRelayProtocolError("Console handshake failed.")
-        await upstream.send(b"\x02")
+        await _send_upstream(upstream, b"\x02")
         challenge = await upstream_reader.read_exactly(16)
-        await upstream.send(_vnc_challenge_response(ticket, challenge))
+        await _send_upstream(upstream, _vnc_challenge_response(ticket, challenge))
         if await upstream_reader.read_exactly(4) != b"\x00\x00\x00\x00":
             raise ConsoleRelayProtocolError("Console handshake failed.")
 
-        await websocket.send_bytes(b"\x01\x01")
+        await _send_browser_bytes(websocket, b"\x01\x01")
         if await browser_reader.read_exactly(1) != b"\x01":
             raise ConsoleRelayProtocolError("Console handshake failed.")
-        await websocket.send_bytes(b"\x00\x00\x00\x00")
+        await _send_browser_bytes(websocket, b"\x00\x00\x00\x00")
 
         buffered_browser = browser_reader.take_buffered()
         if buffered_browser:
-            await upstream.send(buffered_browser)
+            await _send_upstream(upstream, buffered_browser)
         buffered_upstream = upstream_reader.take_buffered()
         if buffered_upstream:
-            await websocket.send_bytes(buffered_upstream)
+            await _send_browser_bytes(websocket, buffered_upstream)
+
+
+async def _send_upstream(upstream: RelayUpstream, data: str | bytes) -> None:
+    require_interactive()
+    await upstream.send(data)
+
+
+async def _send_browser_bytes(websocket: WebSocket, data: bytes) -> None:
+    require_interactive()
+    await websocket.send_bytes(data)
+
+
+async def _send_browser_frame(websocket: WebSocket, data: str | bytes) -> None:
+    require_interactive()
+    if isinstance(data, bytes):
+        await websocket.send_bytes(data)
+    else:
+        await websocket.send_text(data)
 
 
 class _RelayActivity:
@@ -516,7 +535,7 @@ async def _relay_browser_to_upstream(
         if not isinstance(data, (bytes, str)) or _frame_size(data) > MAX_RELAY_FRAME_SIZE:
             raise ConsoleRelayProtocolError("Console stream failed.")
         activity.touch()
-        await asyncio.wait_for(upstream.send(data), timeout=RELAY_IDLE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(_send_upstream(upstream, data), timeout=RELAY_IDLE_TIMEOUT_SECONDS)
 
 
 async def _relay_upstream_to_browser(
@@ -532,10 +551,10 @@ async def _relay_upstream_to_browser(
         if _frame_size(data) > MAX_RELAY_FRAME_SIZE:
             raise ConsoleRelayProtocolError("Console stream failed.")
         activity.touch()
-        if isinstance(data, bytes):
-            await asyncio.wait_for(websocket.send_bytes(data), timeout=RELAY_IDLE_TIMEOUT_SECONDS)
-        else:
-            await asyncio.wait_for(websocket.send_text(data), timeout=RELAY_IDLE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(
+            _send_browser_frame(websocket, data),
+            timeout=RELAY_IDLE_TIMEOUT_SECONDS,
+        )
 
 
 def _frame_size(data: str | bytes) -> int:
@@ -545,27 +564,30 @@ def _frame_size(data: str | bytes) -> int:
 async def relay_frames(websocket: WebSocket, upstream: RelayUpstream) -> None:
     """Relay both frame kinds and deterministically settle both peer tasks."""
 
+    runtime = require_interactive()
     activity = _RelayActivity(RELAY_IDLE_TIMEOUT_SECONDS)
-    tasks = [
+    tasks = {
         asyncio.create_task(_relay_browser_to_upstream(websocket, upstream, activity)),
         asyncio.create_task(_relay_upstream_to_browser(websocket, upstream, activity)),
         asyncio.create_task(activity.wait_until_idle()),
-    ]
+    }
+    done: set[asyncio.Task] = set()
     try:
-        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-    for result in results:
-        if isinstance(result, BaseException) and not isinstance(
-            result, (asyncio.CancelledError, StopAsyncIteration)
-        ):
-            raise result
+        await runtime.finish_cleanup(_stop_relay_tasks(tasks))
+    for task in done:
+        task.result()
 
 
-async def close_upstream(upstream: RelayUpstream) -> None:
+async def _stop_relay_tasks(tasks: set[asyncio.Task]) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def close_upstream(upstream: RelayUpstream) -> bool:
     """Close the upstream under a final timeout without leaking its reason."""
 
     try:
@@ -573,5 +595,6 @@ async def close_upstream(upstream: RelayUpstream) -> None:
             upstream.close(code=1000, reason="Console relay closed."),
             timeout=CLOSE_TIMEOUT_SECONDS,
         )
+        return True
     except Exception:
-        return
+        return False

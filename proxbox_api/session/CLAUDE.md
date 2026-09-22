@@ -36,6 +36,15 @@ Session management utilities for NetBox and Proxmox API clients.
 
 ## Extension Guidance
 
+- An interactive admission owns every Proxmox provider acquisition separately,
+  including clients returned after cancellation or another sibling's failure.
+  Do not rely on the yield dependency to own clients before its entry. Its
+  interactive path delegates teardown to the admission; ordinary inventory
+  calls retain the existing dependency cleanup. Schema waits and credential
+  parsing must recheck an inherited interactive policy without requiring an
+  interactive admission for independent inventory callers. Keep late tasks
+  retained through bounded cleanup and report unresolved work as uncertainty.
+
 - Keep connection bootstrapping deterministic and avoid hidden global state.
 - Normalize upstream connection errors into `ProxboxException`.
 - Never pass raw SDK exception objects or their text to loggers. Emit a fixed,

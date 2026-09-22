@@ -40,6 +40,12 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 
 ## Key Rules
 
+- The outer interactive ASGI middleware owns guarded lifetimes before FastAPI
+  dependencies. Synchronization WebSocket route-level authentication must stay
+  ahead of the complete provider graph; mounted tests pin this solver ordering.
+  Quiesce the local interactive runtime before database disposal. The local
+  authenticated status route must not acquire managed providers or certify peers.
+
 - Keep `factory.py` as the single composition root. Do not initialize sessions or routes elsewhere at module level.
 - Preserve the transport peer in the ASGI scope: Uvicorn/FastAPI entrypoints
   must disable their proxy-header rewriting. `factory.py` alone applies the
