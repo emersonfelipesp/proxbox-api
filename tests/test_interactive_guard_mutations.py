@@ -16,6 +16,7 @@ from proxbox_api.services.interactive_policy import (
     InteractiveDenied,
     InteractiveRuntime,
 )
+from tests.websocket_test_support import websocket_session
 
 
 class GuardMutationReached(RuntimeError):
@@ -347,10 +348,11 @@ def test_sync_auth_guard_mutation_reaches_effect_provider(legacy_test_client):
     app = legacy_test_client.app
     app.dependency_overrides[proxmox_sessions_dep] = provider
     try:
-        with pytest.raises(WebSocketDisconnect):
-            with legacy_test_client.websocket_connect("/ws") as websocket:
-                websocket.send_json({"api_key": "invalid"})
+        with websocket_session(legacy_test_client, "/ws") as websocket:
+            websocket.send_json({"api_key": "invalid"})
+            with pytest.raises(WebSocketDisconnect) as denied:
                 websocket.receive_text()
+            assert denied.value.code == 4001
         assert reached == []
 
         async def removed_authentication():
