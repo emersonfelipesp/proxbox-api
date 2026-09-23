@@ -53,13 +53,16 @@ def test_publication_is_manual_package_only_and_serialized() -> None:
 
 def test_jobs_bind_to_canonical_main_and_existing_runner() -> None:
     jobs = _workflow()["jobs"]
-    assert set(jobs) == {"validate-version", "publish-gitea"}
+    assert set(jobs) == {"validate-version", "build-artifacts", "publish-gitea"}
     for job in jobs.values():
-        assert job["runs-on"] == "mirror-host"
         condition = str(job["if"])
         assert "emersonfelipesp/proxbox-api" in condition
         assert "refs/heads/main" in condition
-    assert jobs["publish-gitea"]["needs"] == "validate-version"
+    assert jobs["validate-version"]["runs-on"] == "mirror-host"
+    assert jobs["build-artifacts"]["runs-on"] == "ci-untrusted-python312"
+    assert jobs["publish-gitea"]["runs-on"] == "mirror-host"
+    assert jobs["build-artifacts"]["needs"] == "validate-version"
+    assert jobs["publish-gitea"]["needs"] == ["validate-version", "build-artifacts"]
 
 
 def test_registry_bytes_are_verified_before_manifest_publication() -> None:
@@ -75,7 +78,7 @@ def test_registry_bytes_are_verified_before_manifest_publication() -> None:
         "env.ARTIFACT_ACTION == 'upload'"
     )
     upload_run = _step(publish, "Publish to Gitea Package Registry")["run"]
-    assert ".venv/bin/python -m twine upload --non-interactive upload-dist/*" in upload_run
+    assert '"${GITHUB_WORKSPACE}/.venv/bin/python" -m twine upload' in upload_run
     verify_run = _step(publish, "Verify package in Gitea registry")["run"]
     assert "verify-registry" in verify_run
     assert "release-manifest.json" in verify_run
@@ -86,17 +89,83 @@ def test_candidate_tag_is_bound_across_jobs() -> None:
     outputs = jobs["validate-version"]["outputs"]
     assert "source_sha" in outputs
     assert "tag_object" in outputs
-    publish = jobs["publish-gitea"]
+    build = jobs["build-artifacts"]
     assert outputs["source_sha"] == "${{ steps.extract.outputs.source_sha }}"
     assert outputs["tag_object"] == "${{ steps.extract.outputs.tag_object }}"
-    assert publish["env"]["SOURCE_SHA"] == "${{ needs.validate-version.outputs.source_sha }}"
-    assert publish["env"]["EXPECTED_TAG_OBJECT"] == (
+    assert build["env"]["SOURCE_SHA"] == "${{ needs.validate-version.outputs.source_sha }}"
+    assert build["env"]["EXPECTED_TAG_OBJECT"] == (
         "${{ needs.validate-version.outputs.tag_object }}"
     )
-    checkout = _step(publish, "Checkout exact public tag without Node.js")["run"]
+    checkout = _step(build, "Checkout exact public tag without Node.js")["run"]
     assert 'test "${RESOLVED_SHA}" = "${SOURCE_SHA}"' in checkout
     assert 'test "${TAG_OBJECT}" = "${EXPECTED_TAG_OBJECT}"' in checkout
     assert "git merge-base --is-ancestor" in checkout
+
+
+def test_historical_tag_uses_helper_from_verified_control_main() -> None:
+    jobs = _workflow()["jobs"]
+    validate = jobs["validate-version"]
+    assert "helper_blob" in validate["outputs"]
+    extract = _step(validate, "Extract and validate version")["run"]
+    assert "refs/release-policy/control-main:scripts/release_artifacts.py" in extract
+
+
+def test_publication_materializes_helper_after_artifact_transfer() -> None:
+    publish = _workflow()["jobs"]["publish-gitea"]
+    names = [step["name"] for step in publish["steps"]]
+    materialize_name = "Materialize audited publication helper"
+    assert names.index(materialize_name) > names.index("Download exact release artifacts")
+    assert names.index(materialize_name) < names.index("Create exact release manifest")
+    materialize = _step(publish, materialize_name)["run"]
+    assert '/usr/bin/git cat-file blob "${EXPECTED_HELPER_BLOB}"' in materialize
+    assert "mktemp -d" in materialize
+    assert "git hash-object" in materialize
+    assert "RELEASE_ARTIFACTS_HELPER=" in materialize
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Create exact release manifest",
+        "Preflight immutable package state",
+        "Link package to source repository",
+        "Verify package in Gitea registry",
+        "Publish repository-linked release manifest",
+    ],
+)
+def test_each_helper_use_rechecks_immutable_blob(name: str) -> None:
+    publish = _workflow()["jobs"]["publish-gitea"]
+    step = _step(publish, name)
+    run = step["run"]
+    assert step["env"]["EXPECTED_HELPER_BLOB"] == (
+        "${{ needs.validate-version.outputs.helper_blob }}"
+    )
+    assert 'test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" =' in run
+    assert '"${EXPECTED_HELPER_BLOB}"' in run
+    assert '/usr/bin/python3 "${RELEASE_ARTIFACTS_HELPER}"' in run
+    assert "scripts/release_artifacts.py" not in run
+
+
+def test_tag_derived_code_is_isolated_from_registry_credentials() -> None:
+    jobs = _workflow()["jobs"]
+    build = jobs["build-artifacts"]
+    publish = jobs["publish-gitea"]
+    build_text = json.dumps(build, sort_keys=True)
+    publish_text = json.dumps(publish, sort_keys=True)
+    assert "secrets.PKG_TOKEN" not in build_text
+    assert "TWINE_PASSWORD" not in build_text
+    assert "scripts/prepare_offline_release.py" in build_text
+    assert "scripts/verify_offline_release_sdist.py" in build_text
+    assert "scripts/prepare_offline_release.py" not in publish_text
+    assert "scripts/verify_offline_release_sdist.py" not in publish_text
+    assert "Checkout exact public tag without Node.js" not in publish_text
+    assert "secrets.PKG_TOKEN" in publish_text
+    assert _step(build, "Upload exact release artifacts")["uses"].startswith(
+        "actions/upload-artifact@"
+    )
+    assert _step(publish, "Download exact release artifacts")["uses"].startswith(
+        "actions/download-artifact@"
+    )
 
 
 def test_manifest_is_canonical_and_byte_sensitive(tmp_path: Path) -> None:

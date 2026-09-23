@@ -29,6 +29,7 @@ jobs:
       tag: ${{ steps.extract.outputs.tag }}
       source_sha: ${{ steps.extract.outputs.source_sha }}
       tag_object: ${{ steps.extract.outputs.tag_object }}
+      helper_blob: ${{ steps.extract.outputs.helper_blob }}
       resume_existing: ${{ steps.resolve_tag.outputs.resume_existing }}
     steps:
       - name: Determine tag
@@ -91,6 +92,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "tag_object=$(git rev-parse "refs/tags/${TAG}")" >> "$GITHUB_OUTPUT"
+          echo "helper_blob=$(git rev-parse refs/release-policy/control-main:scripts/release_artifacts.py)" >> "$GITHUB_OUTPUT"
           if echo "${VERSION}" | grep -qE 'rc[0-9]+$'; then
             echo "is_rc=true" >> "$GITHUB_OUTPUT"
             echo "RC release: ${VERSION}"
@@ -106,17 +108,15 @@ jobs:
           fi
           echo "Version ${VERSION} validated against pyproject.toml"
 
-  publish-gitea:
+  build-artifacts:
     needs: validate-version
     if: ${{ github.repository == 'emersonfelipesp/proxbox-api' && github.ref == 'refs/heads/main' && needs.validate-version.outputs.version != '' }}
-    runs-on: mirror-host
+    runs-on: ci-untrusted-python312
     env:
       VERSION: ${{ needs.validate-version.outputs.version }}
       TAG: ${{ needs.validate-version.outputs.tag }}
       SOURCE_SHA: ${{ needs.validate-version.outputs.source_sha }}
       EXPECTED_TAG_OBJECT: ${{ needs.validate-version.outputs.tag_object }}
-      RESUME_EXISTING: ${{ needs.validate-version.outputs.resume_existing }}
-      GITEA_PACKAGE_REGISTRY_ORIGIN: ${{ github.server_url }}
     steps:
       - name: Checkout exact public tag without Node.js
         run: |
@@ -230,25 +230,111 @@ jobs:
             --sdist "$SDIST" --version "${VERSION}" \
             --output "${RUNNER_TEMP}/proxbox-release-context"
 
-      - name: Create exact release manifest
+      - name: Upload exact release artifacts
+        uses: actions/upload-artifact@c6a3b2bd78b3985e4b2f15397fec357f0fd808de # v3.2.2-node20
+        with:
+          name: proxbox-api-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-gitea:
+    needs: [validate-version, build-artifacts]
+    if: ${{ github.repository == 'emersonfelipesp/proxbox-api' && github.ref == 'refs/heads/main' && needs.validate-version.outputs.version != '' }}
+    runs-on: mirror-host
+    env:
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      SOURCE_SHA: ${{ needs.validate-version.outputs.source_sha }}
+      RESUME_EXISTING: ${{ needs.validate-version.outputs.resume_existing }}
+      GITEA_PACKAGE_REGISTRY_ORIGIN: ${{ github.server_url }}
+    steps:
+      - name: Checkout trusted publication controls
+        env:
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          test "${GITHUB_REPOSITORY}" = "emersonfelipesp/proxbox-api"
+          printf '%s' "${EXPECTED_HELPER_BLOB}" | grep -Eq '^[a-f0-9]{40}$'
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          env -u GIT_ASKPASS -u SSH_ASKPASS \
+            /usr/bin/git -c credential.helper= -c http.extraHeader= fetch \
+            --no-tags origin "refs/heads/main:refs/release-policy/control-main"
+          test "$(/usr/bin/git rev-parse refs/release-policy/control-main:scripts/release_artifacts.py)" = \
+            "${EXPECTED_HELPER_BLOB}"
+          /usr/bin/git checkout --detach refs/release-policy/control-main
+
+      - name: Download exact release artifacts
+        uses: actions/download-artifact@ad191675b41f6a5b46da9a048cb6893812da158b # v3.1.0-node20
+        with:
+          name: proxbox-api-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+
+      - name: Install trusted publication tools
+        run: |
+          set -euo pipefail
+          RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+          BOOTSTRAP_ROOT="${RUNNER_TEMP}/uv-publish-bootstrap"
+          UV_ARCHIVE="${RUNNER_TEMP}/uv-publish-x86_64-unknown-linux-gnu.tar.gz"
+          UV_URL="https://releases.astral.sh/github/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz"
+          UV_SHA256="e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"
+          test "$(uname -m)" = "x86_64"
+          test ! -e "${BOOTSTRAP_ROOT}"
+          mkdir -m 0700 "${BOOTSTRAP_ROOT}"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --silent --show-error --max-filesize 104857600 \
+            --output "${UV_ARCHIVE}" "${UV_URL}"
+          printf '%s  %s\n' "${UV_SHA256}" "${UV_ARCHIVE}" \
+            | sha256sum --check --strict
+          tar -xzf "${UV_ARCHIVE}" -C "${BOOTSTRAP_ROOT}" \
+            --no-same-owner --strip-components=1 \
+            uv-x86_64-unknown-linux-gnu/uv
+          chmod 0755 "${BOOTSTRAP_ROOT}/uv"
+          "${BOOTSTRAP_ROOT}/uv" sync --frozen --only-group publish \
+            --no-install-project --python 3.13.14
+
+      - name: Materialize audited publication helper
+        env:
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${EXPECTED_HELPER_BLOB}" | grep -Eq '^[a-f0-9]{40}$'
+          HELPER_ROOT="$(mktemp -d)"
+          chmod 0700 "${HELPER_ROOT}"
+          RELEASE_ARTIFACTS_HELPER="${HELPER_ROOT}/release_artifacts.py"
+          /usr/bin/git cat-file blob "${EXPECTED_HELPER_BLOB}" > "${RELEASE_ARTIFACTS_HELPER}"
+          test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" = \
+            "${EXPECTED_HELPER_BLOB}"
+          chmod 0500 "${RELEASE_ARTIFACTS_HELPER}"
+          echo "RELEASE_ARTIFACTS_HELPER=${RELEASE_ARTIFACTS_HELPER}" >> "${GITHUB_ENV}"
+
+      - name: Create exact release manifest
+        env:
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
+        run: |
+          set -euo pipefail
           printf '%s' "${SOURCE_SHA}" | grep -Eq '^[a-f0-9]{40}$'
-          uv run python scripts/release_artifacts.py manifest \
+          test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" = \
+            "${EXPECTED_HELPER_BLOB}"
+          /usr/bin/python3 "${RELEASE_ARTIFACTS_HELPER}" manifest \
             --dist dist --package proxbox_api --version "${VERSION}" \
             --source-sha "${SOURCE_SHA}" --manifest release-manifest.json
 
       - name: Preflight immutable package state
         env:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
         run: |
           set -euo pipefail
+          test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" = \
+            "${EXPECTED_HELPER_BLOB}"
           RESUME_ARGS=()
           if [ "${RESUME_EXISTING}" = "true" ]; then
             RESUME_ARGS+=(--resume-existing)
           fi
-          ARTIFACT_ACTION="$(uv run python scripts/release_artifacts.py prepare-upload \
+          ARTIFACT_ACTION="$(/usr/bin/python3 "${RELEASE_ARTIFACTS_HELPER}" prepare-upload \
             --owner emersonfelipesp --repository proxbox-api \
             --manifest release-manifest.json --dist dist --upload-dist upload-dist \
             "${RESUME_ARGS[@]}")"
@@ -264,7 +350,7 @@ jobs:
           set -euo pipefail
           export HOME="${HOME:-/root}"
           export PATH="${HOME}/.local/bin:${PATH}"
-          REGISTRY_ORIGIN="$(python3 - <<'PY'
+          REGISTRY_ORIGIN="$(/usr/bin/python3 - <<'PY'
           import os
           import urllib.parse
 
@@ -284,33 +370,43 @@ jobs:
           PY
           )"
           export TWINE_REPOSITORY_URL="${REGISTRY_ORIGIN}/api/packages/emersonfelipesp/pypi"
-          .venv/bin/python -m twine upload --non-interactive upload-dist/*
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -m twine upload \
+            --non-interactive upload-dist/*
 
       - name: Link package to source repository
         env:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
         run: |
           set -euo pipefail
-          uv run python scripts/release_artifacts.py link-package \
+          test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" = \
+            "${EXPECTED_HELPER_BLOB}"
+          /usr/bin/python3 "${RELEASE_ARTIFACTS_HELPER}" link-package \
             --owner emersonfelipesp --repository proxbox-api \
             --package proxbox_api
 
       - name: Verify package in Gitea registry
         env:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
         run: |
           set -euo pipefail
+          test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" = \
+            "${EXPECTED_HELPER_BLOB}"
           VERIFY_ROOT="$(mktemp -d)"
           trap 'rm -rf -- "${VERIFY_ROOT}"' EXIT
-          uv run python scripts/release_artifacts.py verify-registry \
+          /usr/bin/python3 "${RELEASE_ARTIFACTS_HELPER}" verify-registry \
             --owner emersonfelipesp --repository proxbox-api \
             --manifest release-manifest.json --dist "${VERIFY_ROOT}"
 
       - name: Publish repository-linked release manifest
         env:
           GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+          EXPECTED_HELPER_BLOB: ${{ needs.validate-version.outputs.helper_blob }}
         run: |
           set -euo pipefail
-          uv run python scripts/release_artifacts.py publish-manifest \
+          test "$(/usr/bin/git hash-object "${RELEASE_ARTIFACTS_HELPER}")" = \
+            "${EXPECTED_HELPER_BLOB}"
+          /usr/bin/python3 "${RELEASE_ARTIFACTS_HELPER}" publish-manifest \
             --owner emersonfelipesp --repository proxbox-api \
             --manifest release-manifest.json
