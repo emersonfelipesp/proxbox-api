@@ -12,10 +12,3 @@
   deployment generation. Local boundary readiness does not certify fleet
   cutover or complete RPC coverage; compatible peer and caller enforcement
   remains a deployment prerequisite.
-
-## Synchronization reliability
-
-- Deduplicate repeated Proxmox VM discovery records by cluster, guest type,
-  and normalized positive VMID before concurrent NetBox writes. This prevents
-  cluster and node views of the same guest from racing to create duplicate
-  NetBox virtual machines whose first row can retain an offline status.

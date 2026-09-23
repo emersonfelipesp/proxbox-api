@@ -62,3 +62,12 @@ def test_certified_stack_dependency_pins_are_locked() -> None:
         ("pbs",): f"=={PROXMOX_SDK_VERSION}",
         ("pdm",): f"=={PROXMOX_SDK_VERSION}",
     }
+
+
+def test_release_version_has_source_bound_release_notes() -> None:
+    release_notes = REPO_ROOT / "docs" / "release-notes" / f"version-{PROXBOX_API_VERSION}.md"
+
+    assert release_notes.is_file()
+    assert release_notes.read_text(encoding="utf-8").startswith(
+        f"# proxbox-api {PROXBOX_API_VERSION}\n"
+    )
