@@ -19,6 +19,9 @@ from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
     create_netbox_backups,
     get_node_backups,
 )
+from proxbox_api.services.sync.vm_filter import (
+    hydrate_vm_identities_from_sidecars as production_hydrate_vm_identities,
+)
 
 
 def _netbox_vm(
@@ -42,6 +45,16 @@ def _allow_dict_proxmox_rows(monkeypatch):
     """Production receives Pydantic SDK rows; focused tests use equivalent dicts."""
 
     monkeypatch.setattr(backups_vm, "dump_models", lambda items: items)
+
+    async def _preserve_vm_identities(_nb, vms, *, require_all):
+        assert require_all is False
+        return vms
+
+    monkeypatch.setattr(
+        backups_vm,
+        "hydrate_vm_identities_from_sidecars",
+        _preserve_vm_identities,
+    )
 
 
 @pytest.fixture
@@ -400,6 +413,17 @@ def _vm_sidecar_scan(netbox_id: int, *, endpoint_id: int, cluster_name: str, vmi
     return _scan
 
 
+def _vm_sidecar_rows(*rows: dict[str, object], unavailable=False, failed=False):
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=rows,
+            sidecar_unavailable=unavailable,
+            sidecar_read_failed=failed,
+        )
+
+    return _scan
+
+
 @pytest.mark.asyncio
 async def test_selected_backup_scope_never_queries_same_vmid_on_another_endpoint(monkeypatch):
     queries: list[dict] = []
@@ -507,6 +531,259 @@ async def test_selected_backup_scope_resolves_sidecar_only_identity_by_default(m
 
     assert fetched_endpoints == [1]
     assert [payload["virtual_machine"] for payload in reconciled_payloads] == [7]
+
+
+@pytest.mark.asyncio
+async def test_full_backup_sync_hydrates_sidecar_only_vm_identity(monkeypatch):
+    reconciled_payloads: list[dict] = []
+    hydration_calls: list[bool] = []
+
+    async def _all_vms(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        assert query is None
+        return [
+            {
+                "id": 7,
+                "name": "vm-7",
+                "cluster": None,
+                "custom_fields": {},
+            }
+        ]
+
+    async def _empty_storage_index(_nb):
+        return {}
+
+    async def _hydrate(_nb, vms, *, require_all):
+        hydration_calls.append(require_all)
+        assert vms == [
+            {
+                "id": 7,
+                "name": "vm-7",
+                "cluster": None,
+                "custom_fields": {},
+            }
+        ]
+        return [_netbox_vm(7, endpoint_id=1, cluster_name="cluster-a")]
+
+    async def _get_backups(_proxmox, **_kwargs):
+        return [
+            {
+                "content": "backup",
+                "vmid": 101,
+                "volid": "pbs:backup/vm/101/shared",
+                "format": "pbs-vm",
+                "subtype": "qemu",
+            }
+        ]
+
+    async def _bulk(_nb, payloads, **_kwargs):
+        reconciled_payloads.extend(payloads)
+        return payloads, len(payloads), 0
+
+    monkeypatch.setattr(backups_vm, "rest_list_async", _all_vms)
+    monkeypatch.setattr(backups_vm, "hydrate_vm_identities_from_sidecars", _hydrate)
+    monkeypatch.setattr(backups_vm, "_load_storage_index", _empty_storage_index)
+    monkeypatch.setattr(backups_vm, "get_node_storage_content", _get_backups)
+    monkeypatch.setattr(backups_vm, "_bulk_reconcile_backups", _bulk)
+
+    await _create_all_virtual_machine_backups(
+        netbox_session=object(),
+        pxs=[_px(1)],
+        cluster_status=[_cluster("cluster-a", "pve-a")],
+        tag=object(),
+    )
+
+    assert hydration_calls == [False]
+    assert [payload["virtual_machine"] for payload in reconciled_payloads] == [7]
+
+
+@pytest.mark.asyncio
+async def test_full_backup_cache_uses_real_sidecar_authority_and_excludes_unmanaged_vm(
+    monkeypatch,
+):
+    async def _all_vms(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        return [
+            _netbox_vm(7, endpoint_id=99, cluster_name="legacy-cluster", vmid=999),
+            _netbox_vm(8, endpoint_id=2, cluster_name="cluster-b", vmid=102),
+        ]
+
+    sidecar = {
+        "virtual_machine": {"id": 7},
+        "proxmox_cluster_name": "cluster-a",
+        "proxmox_endpoint_raw_id": 1,
+        "proxmox_vm_id": 101,
+        "proxmox_vm_type": "qemu",
+    }
+    monkeypatch.setattr(backups_vm, "rest_list_async", _all_vms)
+    monkeypatch.setattr(
+        backups_vm, "hydrate_vm_identities_from_sidecars", production_hydrate_vm_identities
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_rows(sidecar),
+    )
+
+    cache = await backups_vm._prefetch_vm_cache(object())
+
+    assert cache.resolve(endpoint_id=1, cluster_name="cluster-a", proxmox_vmid=101)["id"] == 7
+    assert cache.resolve(endpoint_id=99, cluster_name="legacy-cluster", proxmox_vmid=999) is None
+    assert cache.resolve(endpoint_id=2, cluster_name="cluster-b", proxmox_vmid=102) is None
+    assert [scope.netbox_vm_id for scope in cache.selected_scopes] == [7]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sidecars",
+    [
+        (
+            {
+                "virtual_machine": {"id": 7},
+                "proxmox_cluster_name": "cluster-a",
+                "proxmox_endpoint_raw_id": 1,
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+            },
+            {
+                "virtual_machine": {"id": 7},
+                "proxmox_cluster_name": "cluster-a",
+                "proxmox_endpoint_raw_id": 1,
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+            },
+        ),
+        (
+            {
+                "virtual_machine": {"id": 7},
+                "proxmox_cluster_name": "cluster-a",
+                "proxmox_endpoint_raw_id": 1,
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": None,
+            },
+        ),
+    ],
+    ids=("duplicate", "incomplete"),
+)
+async def test_full_backup_cache_rejects_invalid_sidecar_ownership(monkeypatch, sidecars):
+    async def _all_vms(_nb, _path, *, query=None):
+        return [{"id": 7, "name": "vm-7", "cluster": None, "custom_fields": {}}]
+
+    monkeypatch.setattr(backups_vm, "rest_list_async", _all_vms)
+    monkeypatch.setattr(
+        backups_vm, "hydrate_vm_identities_from_sidecars", production_hydrate_vm_identities
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_rows(*sidecars),
+    )
+
+    with pytest.raises(ProxboxException, match="typed Proxbox sync-state owner"):
+        await backups_vm._prefetch_vm_cache(object())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable,failed", [(True, False), (False, True)])
+async def test_full_backup_sync_aborts_before_reconcile_or_cleanup_on_sidecar_failure(
+    monkeypatch,
+    unavailable,
+    failed,
+):
+    async def _all_vms(_nb, _path, *, query=None):
+        return [{"id": 7, "name": "vm-7", "cluster": None, "custom_fields": {}}]
+
+    async def _empty_storage_index(_nb):
+        return {}
+
+    async def _unexpected(*_args, **_kwargs):
+        raise AssertionError("sidecar failure must abort before discovery, reconcile, or cleanup")
+
+    monkeypatch.setattr(backups_vm, "rest_list_async", _all_vms)
+    monkeypatch.setattr(
+        backups_vm, "hydrate_vm_identities_from_sidecars", production_hydrate_vm_identities
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_rows(unavailable=unavailable, failed=failed),
+    )
+    monkeypatch.setattr(backups_vm, "_load_storage_index", _empty_storage_index)
+    monkeypatch.setattr(backups_vm, "get_node_storage_content", _unexpected)
+    monkeypatch.setattr(backups_vm, "_bulk_reconcile_backups", _unexpected)
+    monkeypatch.setattr(backups_vm, "rest_list_paginated_async", _unexpected)
+
+    with pytest.raises(ProxboxException, match="sync-state lookup"):
+        await _create_all_virtual_machine_backups(
+            netbox_session=object(),
+            pxs=[_px(1)],
+            cluster_status=[_cluster("cluster-a", "pve-a")],
+            tag=object(),
+            delete_nonexistent_backup=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_full_backup_cleanup_excludes_vm_without_typed_sidecar(monkeypatch):
+    deleted_ids: list[int] = []
+
+    async def _all_vms(_nb, _path, *, query=None):
+        return [
+            {"id": 7, "name": "managed", "cluster": None, "custom_fields": {}},
+            _netbox_vm(8, endpoint_id=1, cluster_name="cluster-a", vmid=102),
+        ]
+
+    async def _empty_storage_index(_nb):
+        return {}
+
+    async def _empty_backups(*_args, **_kwargs):
+        return []
+
+    async def _existing(_nb, path, **_kwargs):
+        return [
+            RestRecord(
+                SimpleNamespace(),
+                path,
+                {"id": 70, "virtual_machine": {"id": 7}, "volume_id": "pbs:managed-stale"},
+            ),
+            RestRecord(
+                SimpleNamespace(),
+                path,
+                {"id": 80, "virtual_machine": {"id": 8}, "volume_id": "pbs:unmanaged-stale"},
+            ),
+        ]
+
+    async def _delete(_nb, _path, ids):
+        deleted_ids.extend(ids)
+        return len(ids)
+
+    sidecar = {
+        "virtual_machine": {"id": 7},
+        "proxmox_cluster_name": "cluster-a",
+        "proxmox_endpoint_raw_id": 1,
+        "proxmox_vm_id": 101,
+        "proxmox_vm_type": "qemu",
+    }
+    monkeypatch.setattr(backups_vm, "rest_list_async", _all_vms)
+    monkeypatch.setattr(
+        backups_vm, "hydrate_vm_identities_from_sidecars", production_hydrate_vm_identities
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_rows(sidecar),
+    )
+    monkeypatch.setattr(backups_vm, "_load_storage_index", _empty_storage_index)
+    monkeypatch.setattr(backups_vm, "get_node_storage_content", _empty_backups)
+    monkeypatch.setattr(backups_vm, "rest_list_paginated_async", _existing)
+    monkeypatch.setattr(backups_vm, "rest_bulk_delete_async", _delete)
+    monkeypatch.setattr(backups_vm, "_resolve_bulk_batch_delay_ms", lambda: 0)
+
+    await _create_all_virtual_machine_backups(
+        netbox_session=object(),
+        pxs=[_px(1)],
+        cluster_status=[_cluster("cluster-a", "pve-a")],
+        tag=object(),
+        delete_nonexistent_backup=True,
+    )
+
+    assert deleted_ids == [70]
 
 
 @pytest.mark.asyncio

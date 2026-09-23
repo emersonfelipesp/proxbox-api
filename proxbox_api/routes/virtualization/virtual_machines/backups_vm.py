@@ -34,7 +34,10 @@ from proxbox_api.services.sync.storage_links import (
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
-from proxbox_api.services.sync.vm_filter import hydrate_selected_vm_identities
+from proxbox_api.services.sync.vm_filter import (
+    hydrate_selected_vm_identities,
+    hydrate_vm_identities_from_sidecars,
+)
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     parse_selected_netbox_vm_ids,
@@ -956,7 +959,12 @@ async def _prefetch_vm_cache(
     """Load a collision-safe VM identity cache, optionally for exact NetBox IDs."""
 
     if netbox_vm_ids is None:
-        vms = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
+        listed = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
+        vms = await hydrate_vm_identities_from_sidecars(
+            nb,
+            [to_mapping(vm) for vm in listed],
+            require_all=False,
+        )
     else:
         selected = await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
         # Explicit selections resolve ownership sidecar-first (authoritative
