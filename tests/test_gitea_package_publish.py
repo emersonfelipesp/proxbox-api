@@ -63,6 +63,9 @@ def test_jobs_bind_to_canonical_main_and_existing_runner() -> None:
     assert jobs["publish-gitea"]["runs-on"] == "mirror-host"
     assert jobs["build-artifacts"]["needs"] == "validate-version"
     assert jobs["publish-gitea"]["needs"] == ["validate-version", "build-artifacts"]
+    assert jobs["publish-gitea"]["env"]["GITEA_PACKAGE_REGISTRY_ORIGIN"] == (
+        "${{ vars.PACKAGE_REGISTRY_ORIGIN }}"
+    )
 
 
 def test_registry_bytes_are_verified_before_manifest_publication() -> None:

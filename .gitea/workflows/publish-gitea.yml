@@ -245,7 +245,7 @@ jobs:
       VERSION: ${{ needs.validate-version.outputs.version }}
       SOURCE_SHA: ${{ needs.validate-version.outputs.source_sha }}
       RESUME_EXISTING: ${{ needs.validate-version.outputs.resume_existing }}
-      GITEA_PACKAGE_REGISTRY_ORIGIN: ${{ github.server_url }}
+      GITEA_PACKAGE_REGISTRY_ORIGIN: ${{ vars.PACKAGE_REGISTRY_ORIGIN }}
     steps:
       - name: Checkout trusted publication controls
         env:
