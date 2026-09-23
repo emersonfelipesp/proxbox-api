@@ -143,3 +143,24 @@ Uploads de pacote intencionalmente nao usam `twine --skip-existing`. Se alguma
 validacao falhar depois do upload, publique uma versao fix-forward:
 `vX.Y.ZrcN` para novas tentativas de release candidate no TestPyPI e
 `vX.Y.Z.postN` para correcoes pos-release.
+
+### Publicacao de pacote no Gitea
+
+`.gitea/workflows/publish-gitea.yml` e o controle exclusivo de pacotes para o
+Gitea Package Registry. Ele somente pode ser acionado a partir da `main`
+canonica com uma tag imutavel exata. Ele nao espelha tags, cria releases no
+GitHub, implanta servicos nem acessa ambientes de runtime.
+
+O workflow faz checkout isolado da tag solicitada, valida sua versao, constroi
+exatamente um wheel e um source distribution e registra tamanhos e digests
+SHA-256 em um manifesto canonico. Por padrao, a versao deve estar ausente.
+`resume_existing=true` so e aceito quando todos os artefatos existentes, o
+vinculo ao repositorio, o commit de origem, os tamanhos e os digests coincidem
+com o manifesto reconstruido. Os bytes do registro sao verificados antes da
+publicacao do manifesto vinculado ao repositorio; portanto, o manifesto continua
+sendo o sinal final de que a versao pode ser consumida.
+
+O workflow usa o grupo de dependencias `publish` bloqueado pelo repositorio e o
+secret existente `PKG_TOKEN`. Credenciais ficam limitadas aos passos que leem ou
+escrevem no registro. Uma versao incompleta nunca e sobrescrita: a recuperacao
+exige retomada com bytes identicos ou uma nova versao fix-forward.

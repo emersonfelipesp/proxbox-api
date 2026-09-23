@@ -763,4 +763,13 @@ publish to TestPyPI from immutable tags; final GitHub Releases publish to PyPI
 and then trigger the public Docker image workflow. Never reuse or replace a
 consumed version or tag.
 
+Gitea package publication is a separate package-only control in
+`.gitea/workflows/publish-gitea.yml`. Dispatch it only from canonical `main`
+with an exact immutable tag. It must not mirror tags, create GitHub releases,
+deploy services, or contact runtime environments. Registry artifacts are
+verified against a canonical source-bound manifest before that repository-
+linked manifest is published. Existing versions require explicit
+`resume_existing=true` and exact byte equality; otherwise publish a new
+fixed-forward version.
+
 | Trigger | Use for | Publishes to |

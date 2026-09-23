@@ -1,0 +1,316 @@
+name: Gitea Package Registry — Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to publish (e.g. v0.0.16rc1 or v0.0.16)'
+        required: true
+      resume_existing:
+        description: 'Reuse an existing version only after exact manifest verification'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: proxbox-api-package-publication
+  cancel-in-progress: false
+
+jobs:
+  validate-version:
+    if: ${{ github.repository == 'emersonfelipesp/proxbox-api' && github.ref == 'refs/heads/main' }}
+    runs-on: mirror-host
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+      is_rc: ${{ steps.extract.outputs.is_rc }}
+      tag: ${{ steps.extract.outputs.tag }}
+      source_sha: ${{ steps.extract.outputs.source_sha }}
+      tag_object: ${{ steps.extract.outputs.tag_object }}
+      resume_existing: ${{ steps.resolve_tag.outputs.resume_existing }}
+    steps:
+      - name: Determine tag
+        id: resolve_tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          # Validate tag format before use (v1.2.3 or v1.2.3rc4)
+          TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          test "$EVENT_NAME" = "workflow_dispatch"
+          TAG="$INPUT_TAG"
+          if ! echo "${TAG}" | grep -qE "${TAG_PATTERN}"; then
+            echo "ERROR: tag '${TAG}' does not match expected pattern ${TAG_PATTERN}"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_ENV"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.resume_existing }}" = "true" ]; then
+            echo "resume_existing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "resume_existing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout exact public tag without Node.js
+        if: ${{ steps.resolve_tag.outputs.tag != '' }}
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "emersonfelipesp/proxbox-api"
+          printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          env -u GIT_ASKPASS -u SSH_ASKPASS \
+            git -c credential.helper= -c http.extraHeader= fetch \
+            --no-tags origin \
+            "refs/tags/${TAG}:refs/tags/${TAG}" \
+            "refs/heads/main:refs/release-policy/control-main"
+          RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          git merge-base --is-ancestor "${RESOLVED_SHA}" refs/release-policy/control-main
+          case "${GITHUB_EVENT_NAME}" in
+            push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}" ;;
+            workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main" ;;
+            *) exit 1 ;;
+          esac
+          git checkout --detach "${RESOLVED_SHA}"
+          test "$(git rev-parse HEAD)" = "${RESOLVED_SHA}"
+
+      - id: extract
+        name: Extract and validate version
+        if: ${{ steps.resolve_tag.outputs.tag != '' }}
+        env:
+          TAG: ${{ steps.resolve_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag_object=$(git rev-parse "refs/tags/${TAG}")" >> "$GITHUB_OUTPUT"
+          if echo "${VERSION}" | grep -qE 'rc[0-9]+$'; then
+            echo "is_rc=true" >> "$GITHUB_OUTPUT"
+            echo "RC release: ${VERSION}"
+          else
+            echo "is_rc=false" >> "$GITHUB_OUTPUT"
+            echo "Official release: ${VERSION}"
+          fi
+          # Validate pyproject.toml matches tag
+          PYVER=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "${VERSION}" != "${PYVER}" ]; then
+            echo "ERROR: tag ${TAG} (${VERSION}) does not match pyproject.toml version ${PYVER}"
+            exit 1
+          fi
+          echo "Version ${VERSION} validated against pyproject.toml"
+
+  publish-gitea:
+    needs: validate-version
+    if: ${{ github.repository == 'emersonfelipesp/proxbox-api' && github.ref == 'refs/heads/main' && needs.validate-version.outputs.version != '' }}
+    runs-on: mirror-host
+    env:
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      TAG: ${{ needs.validate-version.outputs.tag }}
+      SOURCE_SHA: ${{ needs.validate-version.outputs.source_sha }}
+      EXPECTED_TAG_OBJECT: ${{ needs.validate-version.outputs.tag_object }}
+      RESUME_EXISTING: ${{ needs.validate-version.outputs.resume_existing }}
+      GITEA_PACKAGE_REGISTRY_ORIGIN: ${{ github.server_url }}
+    steps:
+      - name: Checkout exact public tag without Node.js
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "emersonfelipesp/proxbox-api"
+          printf '%s' "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.post[0-9]+)?$'
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          env -u GIT_ASKPASS -u SSH_ASKPASS \
+            git -c credential.helper= -c http.extraHeader= fetch \
+            --no-tags origin \
+            "refs/tags/${TAG}:refs/tags/${TAG}" \
+            "refs/heads/main:refs/release-policy/control-main"
+          RESOLVED_SHA="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          TAG_OBJECT="$(git rev-parse FETCH_HEAD)"
+          test "${RESOLVED_SHA}" = "${SOURCE_SHA}"
+          test "${TAG_OBJECT}" = "${EXPECTED_TAG_OBJECT}"
+          git merge-base --is-ancestor "${RESOLVED_SHA}" refs/release-policy/control-main
+          case "${GITHUB_EVENT_NAME}" in
+            push) test "${RESOLVED_SHA}" = "${GITHUB_SHA}" ;;
+            workflow_dispatch) test "${GITHUB_REF}" = "refs/heads/main" ;;
+            *) exit 1 ;;
+          esac
+          git checkout --detach "${RESOLVED_SHA}"
+          test "$(git rev-parse HEAD)" = "${RESOLVED_SHA}"
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+          BOOTSTRAP_ROOT="${RUNNER_TEMP}/uv-bootstrap"
+          UV_ARCHIVE="${RUNNER_TEMP}/uv-x86_64-unknown-linux-gnu.tar.gz"
+          UV_URL="https://releases.astral.sh/github/uv/releases/download/0.11.28/uv-x86_64-unknown-linux-gnu.tar.gz"
+          UV_SHA256="e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"
+          test "$(uname -m)" = "x86_64"
+          test ! -e "${BOOTSTRAP_ROOT}"
+          mkdir -m 0700 "${BOOTSTRAP_ROOT}"
+          if ! command -v uv >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --location \
+              --silent --show-error --max-filesize 104857600 \
+              --output "${UV_ARCHIVE}" "${UV_URL}"
+            printf '%s  %s\n' "${UV_SHA256}" "${UV_ARCHIVE}" \
+              | sha256sum --check --strict
+            tar -xzf "${UV_ARCHIVE}" -C "${BOOTSTRAP_ROOT}" \
+              --no-same-owner --strip-components=1 \
+              uv-x86_64-unknown-linux-gnu/uv
+            chmod 0755 "${BOOTSTRAP_ROOT}/uv"
+            export PATH="${BOOTSTRAP_ROOT}:${PATH}"
+            echo "${BOOTSTRAP_ROOT}" >> "${GITHUB_PATH}"
+          fi
+          UV_VERSION="$(uv --version)"
+          case "${UV_VERSION}" in
+            "uv 0.11.28"|"uv 0.11.28 "*) ;;
+            *) echo "Unexpected uv version: ${UV_VERSION}" >&2; exit 1 ;;
+          esac
+
+      - name: Build distributions
+        run: |
+          set -euo pipefail
+          export HOME="${HOME:-/root}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          # The Gitea act runner does not always export RUNNER_TEMP, and `set -u`
+          # would abort on it. The same guard the tool install step uses for HOME.
+          RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+          echo "RUNNER_TEMP=${RUNNER_TEMP}" >> "$GITHUB_ENV"
+
+          # The wheel is built first, from the untouched checkout: it packages
+          # proxbox_api only, and the offline preparation below rewrites
+          # Dockerfile and populates docker/, which the wheel must not carry.
+          uv build --wheel
+
+          # The sdist carries the byte-inventoried, network-free image build
+          # context. Prepare it through the same offline release lane used by
+          # CI so the published source is the source that lane verifies.
+          uv sync --frozen --only-group publish --no-install-project --python 3.13.14
+          test ! -e docker/build-cache
+          test ! -e docker/offline-build-inputs.json
+          mkdir -m 0700 -p docker/build-cache
+          # The requirements file lives inside the cache directory so the pinned
+          # versions and hashes the image installs from are covered by the same
+          # inventory digests as the wheels themselves.
+          uv export --frozen --no-dev --group publish --no-emit-project \
+            --format requirements-txt --python .venv/bin/python \
+            --output-file docker/build-cache/offline-requirements.txt
+          uv run python -m ensurepip --default-pip
+          uv run python -m pip download \
+            --disable-pip-version-check --require-hashes --only-binary=:all: \
+            --platform musllinux_1_2_x86_64 --platform musllinux_1_1_x86_64 \
+            --python-version 3.13 --implementation cp \
+            --abi cp313 --abi abi3 --abi none \
+            --dest docker/build-cache \
+            --requirement docker/build-cache/offline-requirements.txt
+          find docker/build-cache -mindepth 1 -maxdepth 1 -type f \
+            \( -name '*.whl' -o -name 'offline-requirements.txt' \) \
+            -exec chmod 0444 {} +
+          uv run python scripts/prepare_offline_release.py
+          uv run python -m build --no-isolation --sdist --outdir dist
+
+          ls dist/
+
+      - name: Verify the published sdist carries its offline build context
+        run: |
+          set -euo pipefail
+          export HOME="${HOME:-/root}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          RUNNER_TEMP="${RUNNER_TEMP:-$(mktemp -d)}"
+          SDIST="$(find dist -mindepth 1 -maxdepth 1 -type f -name 'proxbox_api-*.tar.gz' -print)"
+          test -n "$SDIST"
+          test "$(printf '%s\n' "$SDIST" | wc -l)" -eq 1
+          uv run python scripts/verify_offline_release_sdist.py \
+            --sdist "$SDIST" --version "${VERSION}" \
+            --output "${RUNNER_TEMP}/proxbox-release-context"
+
+      - name: Create exact release manifest
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+          printf '%s' "${SOURCE_SHA}" | grep -Eq '^[a-f0-9]{40}$'
+          uv run python scripts/release_artifacts.py manifest \
+            --dist dist --package proxbox_api --version "${VERSION}" \
+            --source-sha "${SOURCE_SHA}" --manifest release-manifest.json
+
+      - name: Preflight immutable package state
+        env:
+          GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          RESUME_ARGS=()
+          if [ "${RESUME_EXISTING}" = "true" ]; then
+            RESUME_ARGS+=(--resume-existing)
+          fi
+          ARTIFACT_ACTION="$(uv run python scripts/release_artifacts.py prepare-upload \
+            --owner emersonfelipesp --repository proxbox-api \
+            --manifest release-manifest.json --dist dist --upload-dist upload-dist \
+            "${RESUME_ARGS[@]}")"
+          case "${ARTIFACT_ACTION}" in upload|reuse) ;; *) exit 1 ;; esac
+          echo "ARTIFACT_ACTION=${ARTIFACT_ACTION}" >> "$GITHUB_ENV"
+
+      - name: Publish to Gitea Package Registry
+        if: env.ARTIFACT_ACTION == 'upload'
+        env:
+          TWINE_USERNAME: emersonfelipesp
+          TWINE_PASSWORD: ${{ secrets.PKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          export HOME="${HOME:-/root}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          REGISTRY_ORIGIN="$(python3 - <<'PY'
+          import os
+          import urllib.parse
+
+          value = os.environ["GITEA_PACKAGE_REGISTRY_ORIGIN"].rstrip("/")
+          parsed = urllib.parse.urlsplit(value)
+          if (
+              parsed.scheme != "https"
+              or not parsed.hostname
+              or parsed.username is not None
+              or parsed.password is not None
+              or parsed.path
+              or parsed.query
+              or parsed.fragment
+          ):
+              raise SystemExit("invalid HTTPS package-registry authority")
+          print(value)
+          PY
+          )"
+          export TWINE_REPOSITORY_URL="${REGISTRY_ORIGIN}/api/packages/emersonfelipesp/pypi"
+          .venv/bin/python -m twine upload --non-interactive upload-dist/*
+
+      - name: Link package to source repository
+        env:
+          GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/release_artifacts.py link-package \
+            --owner emersonfelipesp --repository proxbox-api \
+            --package proxbox_api
+
+      - name: Verify package in Gitea registry
+        env:
+          GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERIFY_ROOT="$(mktemp -d)"
+          trap 'rm -rf -- "${VERIFY_ROOT}"' EXIT
+          uv run python scripts/release_artifacts.py verify-registry \
+            --owner emersonfelipesp --repository proxbox-api \
+            --manifest release-manifest.json --dist "${VERIFY_ROOT}"
+
+      - name: Publish repository-linked release manifest
+        env:
+          GITEA_PACKAGE_TOKEN: ${{ secrets.PKG_TOKEN }}
+        run: |
+          set -euo pipefail
+          uv run python scripts/release_artifacts.py publish-manifest \
+            --owner emersonfelipesp --repository proxbox-api \
+            --manifest release-manifest.json

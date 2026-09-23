@@ -110,6 +110,16 @@ This source-only tuple is not a published or certified runtime pairing.
 typed-sidecar-only inventory state, NetBox 4.6.6 certification, strict Python
 3.12/3.13 support, and a verified network-free production release context.
 
+## Gitea Package Publication
+
+`.gitea/workflows/publish-gitea.yml` is a package-only control. Dispatch it
+only from canonical `main` with an exact immutable tag. It must not mirror tags,
+create GitHub releases, deploy services, or contact runtime environments.
+Registry artifacts are verified against a canonical source-bound manifest
+before the repository-linked manifest is published. Existing versions require
+explicit `resume_existing=true` and exact byte equality; otherwise use a new
+fixed-forward version.
+
 ## VM Interface Sync Strategy
 
 VM sync routes accept `vm_interface_sync_strategy`. The default

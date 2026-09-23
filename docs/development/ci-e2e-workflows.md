@@ -141,3 +141,24 @@ sequenceDiagram
 Package uploads intentionally omit `twine --skip-existing`. If any validation
 fails after upload, publish a fixed-forward version: `vX.Y.ZrcN` for TestPyPI
 release-candidate retries and `vX.Y.Z.postN` for post-release fixes.
+
+### Gitea package publication
+
+`.gitea/workflows/publish-gitea.yml` is the package-only control for the Gitea
+Package Registry. It can be dispatched only from canonical `main` with an exact
+immutable tag. It does not mirror tags, create GitHub releases, deploy services,
+or contact any runtime environment.
+
+The workflow checks out the requested tag in isolation, verifies its version,
+builds exactly one wheel and one source distribution, and records their sizes
+and SHA-256 digests in a canonical release manifest. The package version must be
+absent by default. `resume_existing=true` is accepted only when every existing
+registry artifact, repository link, source commit, size, and digest matches the
+rebuilt manifest. Registry bytes are verified before the repository-linked
+manifest is published, so the manifest remains the final deployability signal.
+
+The workflow uses the repository's locked `publish` dependency group and the
+existing `PKG_TOKEN` secret. Credentials are scoped only to the steps that read
+or write the package registry. A failed or partially published version is never
+overwritten; recovery requires an exact-byte resume or a new fixed-forward
+version.
