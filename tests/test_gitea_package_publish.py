@@ -168,6 +168,22 @@ def test_tag_derived_code_is_isolated_from_registry_credentials() -> None:
     )
 
 
+def test_untrusted_build_always_uses_verified_pinned_uv() -> None:
+    build = _workflow()["jobs"]["build-artifacts"]
+    install = _step(build, "Install build tools")["run"]
+    assert "command -v uv" not in install
+    assert 'UV_SHA256="e490a6464492183c5d4534a5527fb4440f7f2bb2f228162ad7e4afe076dc0224"' in install
+    assert 'UV_VERSION="$("${BOOTSTRAP_ROOT}/uv" --version)"' in install
+    assert 'echo "UV_BIN=${BOOTSTRAP_ROOT}/uv" >> "${GITHUB_ENV}"' in install
+    for name in (
+        "Build distributions",
+        "Verify the published sdist carries its offline build context",
+    ):
+        run = _step(build, name)["run"]
+        assert '"${UV_BIN}"' in run
+        assert not any(line.lstrip().startswith("uv ") for line in run.splitlines())
+
+
 def test_manifest_is_canonical_and_byte_sensitive(tmp_path: Path) -> None:
     helper = _helper()
     dist = tmp_path / "dist"

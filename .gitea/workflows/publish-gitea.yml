@@ -154,24 +154,21 @@ jobs:
           test "$(uname -m)" = "x86_64"
           test ! -e "${BOOTSTRAP_ROOT}"
           mkdir -m 0700 "${BOOTSTRAP_ROOT}"
-          if ! command -v uv >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 --fail --location \
-              --silent --show-error --max-filesize 104857600 \
-              --output "${UV_ARCHIVE}" "${UV_URL}"
-            printf '%s  %s\n' "${UV_SHA256}" "${UV_ARCHIVE}" \
-              | sha256sum --check --strict
-            tar -xzf "${UV_ARCHIVE}" -C "${BOOTSTRAP_ROOT}" \
-              --no-same-owner --strip-components=1 \
-              uv-x86_64-unknown-linux-gnu/uv
-            chmod 0755 "${BOOTSTRAP_ROOT}/uv"
-            export PATH="${BOOTSTRAP_ROOT}:${PATH}"
-            echo "${BOOTSTRAP_ROOT}" >> "${GITHUB_PATH}"
-          fi
-          UV_VERSION="$(uv --version)"
+          curl --proto '=https' --tlsv1.2 --fail --location \
+            --silent --show-error --max-filesize 104857600 \
+            --output "${UV_ARCHIVE}" "${UV_URL}"
+          printf '%s  %s\n' "${UV_SHA256}" "${UV_ARCHIVE}" \
+            | sha256sum --check --strict
+          tar -xzf "${UV_ARCHIVE}" -C "${BOOTSTRAP_ROOT}" \
+            --no-same-owner --strip-components=1 \
+            uv-x86_64-unknown-linux-gnu/uv
+          chmod 0755 "${BOOTSTRAP_ROOT}/uv"
+          UV_VERSION="$("${BOOTSTRAP_ROOT}/uv" --version)"
           case "${UV_VERSION}" in
             "uv 0.11.28"|"uv 0.11.28 "*) ;;
             *) echo "Unexpected uv version: ${UV_VERSION}" >&2; exit 1 ;;
           esac
+          echo "UV_BIN=${BOOTSTRAP_ROOT}/uv" >> "${GITHUB_ENV}"
 
       - name: Build distributions
         run: |
@@ -186,23 +183,23 @@ jobs:
           # The wheel is built first, from the untouched checkout: it packages
           # proxbox_api only, and the offline preparation below rewrites
           # Dockerfile and populates docker/, which the wheel must not carry.
-          uv build --wheel
+          "${UV_BIN}" build --wheel
 
           # The sdist carries the byte-inventoried, network-free image build
           # context. Prepare it through the same offline release lane used by
           # CI so the published source is the source that lane verifies.
-          uv sync --frozen --only-group publish --no-install-project --python 3.13.14
+          "${UV_BIN}" sync --frozen --only-group publish --no-install-project --python 3.13.14
           test ! -e docker/build-cache
           test ! -e docker/offline-build-inputs.json
           mkdir -m 0700 -p docker/build-cache
           # The requirements file lives inside the cache directory so the pinned
           # versions and hashes the image installs from are covered by the same
           # inventory digests as the wheels themselves.
-          uv export --frozen --no-dev --group publish --no-emit-project \
+          "${UV_BIN}" export --frozen --no-dev --group publish --no-emit-project \
             --format requirements-txt --python .venv/bin/python \
             --output-file docker/build-cache/offline-requirements.txt
-          uv run python -m ensurepip --default-pip
-          uv run python -m pip download \
+          "${UV_BIN}" run python -m ensurepip --default-pip
+          "${UV_BIN}" run python -m pip download \
             --disable-pip-version-check --require-hashes --only-binary=:all: \
             --platform musllinux_1_2_x86_64 --platform musllinux_1_1_x86_64 \
             --python-version 3.13 --implementation cp \
@@ -212,8 +209,8 @@ jobs:
           find docker/build-cache -mindepth 1 -maxdepth 1 -type f \
             \( -name '*.whl' -o -name 'offline-requirements.txt' \) \
             -exec chmod 0444 {} +
-          uv run python scripts/prepare_offline_release.py
-          uv run python -m build --no-isolation --sdist --outdir dist
+          "${UV_BIN}" run python scripts/prepare_offline_release.py
+          "${UV_BIN}" run python -m build --no-isolation --sdist --outdir dist
 
           ls dist/
 
@@ -226,7 +223,7 @@ jobs:
           SDIST="$(find dist -mindepth 1 -maxdepth 1 -type f -name 'proxbox_api-*.tar.gz' -print)"
           test -n "$SDIST"
           test "$(printf '%s\n' "$SDIST" | wc -l)" -eq 1
-          uv run python scripts/verify_offline_release_sdist.py \
+          "${UV_BIN}" run python scripts/verify_offline_release_sdist.py \
             --sdist "$SDIST" --version "${VERSION}" \
             --output "${RUNNER_TEMP}/proxbox-release-context"
 
