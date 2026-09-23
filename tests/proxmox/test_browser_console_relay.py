@@ -1219,15 +1219,20 @@ def test_mounted_websocket_requires_exact_origin_and_binary_subprotocol(
     created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
     subprotocols = _browser_protocols(created) if protocol_case == "valid" else []
     opener = AsyncMock()
+    closer = AsyncMock(wraps=console._close_browser_socket)
     monkeypatch.setattr(console_relay, "open_upstream", opener)
+    monkeypatch.setattr(console, "_close_browser_socket", closer)
 
-    with pytest.raises(WebSocketDisconnect) as rejected:
-        with auth_test_client.websocket_connect(
-            created["websocket_path"], headers=headers, subprotocols=subprotocols
-        ):
-            pass
-
-    assert rejected.value.code == 1008
+    with rejected_websocket_session(
+        auth_test_client,
+        created["websocket_path"],
+        headers=headers,
+        subprotocols=subprotocols,
+        expected_code=1008,
+    ):
+        pass
+    closer.assert_awaited_once()
+    assert closer.await_args.kwargs["code"] == 1008
     opener.assert_not_awaited()
 
 

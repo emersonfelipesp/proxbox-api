@@ -1,6 +1,6 @@
 """Narrow helpers for deterministic Starlette WebSocket test teardown."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager
 from typing import Any
@@ -40,4 +40,28 @@ def rejected_websocket_session(
         # unwinding its portal future. This helper is restricted to callers
         # that independently assert the server-side rejection contract.
         pass
+    yield
+
+
+@contextmanager
+def websocket_error_after_effect(
+    client: Any,
+    *args: Any,
+    expected_error: type[BaseException],
+    effect_observed: Callable[[], bool],
+    **kwargs: Any,
+) -> Iterator[None]:
+    """Accept an application error even when Starlette masks it during cleanup."""
+    try:
+        with client.websocket_connect(*args, **kwargs):
+            pass
+    except FutureCancelledError:
+        if not effect_observed():
+            raise
+    except expected_error:
+        pass
+    else:
+        raise AssertionError("WebSocket application error was not raised")
+    if not effect_observed():
+        raise AssertionError("WebSocket application effect was not observed")
     yield

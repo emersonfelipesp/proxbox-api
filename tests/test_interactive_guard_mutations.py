@@ -16,7 +16,7 @@ from proxbox_api.services.interactive_policy import (
     InteractiveDenied,
     InteractiveRuntime,
 )
-from tests.websocket_test_support import websocket_session
+from tests.websocket_test_support import websocket_error_after_effect, websocket_session
 
 
 class GuardMutationReached(RuntimeError):
@@ -359,9 +359,14 @@ def test_sync_auth_guard_mutation_reaches_effect_provider(legacy_test_client):
             return None
 
         app.dependency_overrides[websockets._authorize_sync_websocket] = removed_authentication
-        with pytest.raises(GuardMutationReached, match="sync auth mutation reached provider"):
-            with legacy_test_client.websocket_connect("/ws"):
-                pytest.fail("The mutated route reached its handler")
+        with websocket_error_after_effect(
+            legacy_test_client,
+            "/ws",
+            expected_error=GuardMutationReached,
+            effect_observed=lambda: reached == ["provider"],
+        ):
+            pass
+        assert reached == ["provider"]
     finally:
         app.dependency_overrides.pop(websockets._authorize_sync_websocket, None)
         app.dependency_overrides.pop(proxmox_sessions_dep, None)
