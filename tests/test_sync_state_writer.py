@@ -490,6 +490,24 @@ async def test_sidecar_unavailable_memo_is_cleared_between_sync_runs(
 
 
 @pytest.mark.asyncio
+async def test_device_sidecar_writer_persists_endpoint_identity(
+    recorder: _Recorder,
+) -> None:
+    result = await writer.write_device_sync_state(
+        object(),
+        device_id=10,
+        proxmox_last_updated="2026-07-20T00:00:00+00:00",
+        proxmox_node_name="pve01",
+        proxmox_cluster_name="cluster-a",
+        proxmox_endpoint_raw_id=501,
+        overwrite_custom_fields=True,
+    )
+
+    assert result is not None
+    assert recorder.calls[-1]["payload"]["proxmox_endpoint_raw_id"] == 501
+
+
+@pytest.mark.asyncio
 async def test_sidecar_writer_tolerates_transient_failure(
     recorder: _Recorder,
     monkeypatch: pytest.MonkeyPatch,

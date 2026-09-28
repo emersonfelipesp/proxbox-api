@@ -110,6 +110,188 @@ def _patch_sidecar_scan(monkeypatch, rows: list[dict[str, object]]) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            SimpleNamespace(
+                endpoint_name="west",
+                node_device_name_template="{endpoint}-{node}",
+            ),
+            {
+                "cluster_name": "cluster-a",
+                "endpoint_name": "west",
+                "node_device_name_template": "{endpoint}-{node}",
+                "endpoint_id": None,
+            },
+        ),
+        (
+            None,
+            {
+                "cluster_name": "cluster-a",
+                "endpoint_name": "cluster-a",
+                "node_device_name_template": "{node}",
+                "endpoint_id": None,
+            },
+        ),
+    ],
+)
+def test_node_naming_kwargs_preserves_endpoint_fallbacks(source, expected):
+    assert sync_vm._node_naming_kwargs(source, "cluster-a") == expected
+
+
+def test_bridge_device_lookup_args_normalizes_values():
+    assert sync_vm._bridge_device_lookup_args(
+        {
+            "cluster_name": None,
+            "resource_node": 12,
+            "site_id": "7",
+        }
+    ) == ("", "12", None, None)
+    assert sync_vm._bridge_device_lookup_args(
+        {
+            "cluster_name": "cluster-a",
+            "resource_node": "node-1",
+            "site_id": 7,
+            "proxmox_endpoint_id": 501,
+        }
+    ) == ("cluster-a", "node-1", 7, 501)
+
+
+@pytest.mark.asyncio
+async def test_resolve_bridge_device_id_uses_rendered_name_site_and_cache(monkeypatch):
+    queries: list[dict[str, object]] = []
+
+    async def _list(_nb, path, *, query):
+        queries.append(query)
+        if path == "/api/plugins/proxbox/sync-state/devices/":
+            return []
+        assert path == "/api/dcim/devices/"
+        return [{"id": 42}]
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    cache: dict[tuple[int | None, str, str], int | None] = {}
+    status = [
+        SimpleNamespace(
+            name="cluster-a",
+            endpoint_name="west",
+            node_device_name_template="{endpoint}-{cluster}-{node}",
+        )
+    ]
+
+    first = await sync_vm._resolve_bridge_device_id(
+        object(), cache, status, "cluster-a", "node-1", 7, 501
+    )
+    second = await sync_vm._resolve_bridge_device_id(
+        object(), cache, status, "cluster-a", "node-1", 99, 501
+    )
+
+    assert first == second == 42
+    assert queries == [
+        {
+            "proxmox_cluster_name": "cluster-a",
+            "proxmox_node_name": "node-1",
+            "proxmox_endpoint_raw_id": 501,
+            "limit": 3,
+        },
+        {"name": "west-cluster-a-node-1", "limit": 3, "site_id": 7},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_bridge_device_id_prefers_endpoint_scoped_sidecar(monkeypatch):
+    queries: list[dict[str, object]] = []
+
+    async def _list(_nb, path, *, query):
+        queries.append(query)
+        assert path == "/api/plugins/proxbox/sync-state/devices/"
+        return [
+            {"device": 41, "proxmox_endpoint_raw_id": 501},
+            {"device": 42, "proxmox_endpoint_raw_id": 502},
+        ]
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    status = [SimpleNamespace(name="cluster-a")]
+
+    resolved = await sync_vm._resolve_bridge_device_id(
+        object(), {}, status, "cluster-a", "node-1", 7, 502
+    )
+
+    assert resolved == 42
+    assert queries[0]["proxmox_endpoint_raw_id"] == 502
+
+
+@pytest.mark.asyncio
+async def test_resolve_bridge_device_fallback_uses_matching_endpoint_template(monkeypatch):
+    queries: list[tuple[str, dict[str, object]]] = []
+
+    async def _list(_nb, path, *, query):
+        queries.append((path, query))
+        if path == "/api/plugins/proxbox/sync-state/devices/":
+            return []
+        return [{"id": 42}]
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    statuses = [
+        SimpleNamespace(
+            name="shared",
+            db_endpoint_id=501,
+            endpoint_name="endpoint-501",
+            node_device_name_template="{node}.{endpoint}",
+        ),
+        SimpleNamespace(
+            name="shared",
+            db_endpoint_id=502,
+            endpoint_name="endpoint-502",
+            node_device_name_template="{node}.{endpoint}",
+        ),
+    ]
+
+    resolved = await sync_vm._resolve_bridge_device_id(
+        object(), {}, statuses, "shared", "pve01", 7, 502
+    )
+
+    assert resolved == 42
+    assert queries[-1] == (
+        "/api/dcim/devices/",
+        {"name": "pve01.endpoint-502", "limit": 3, "site_id": 7},
+    )
+    assert all(query.get("name") != "pve01.endpoint-501" for _path, query in queries)
+
+
+@pytest.mark.asyncio
+async def test_resolve_bridge_device_fallback_rejects_ambiguous_cluster_status(monkeypatch):
+    async def _list(_nb, path, *, query):
+        assert path == "/api/plugins/proxbox/sync-state/devices/"
+        return []
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+    statuses = [
+        SimpleNamespace(name="shared", endpoint_name="first"),
+        SimpleNamespace(name="shared", endpoint_name="second"),
+    ]
+
+    with pytest.raises(ProxboxException, match="Ambiguous Proxmox bridge endpoint status"):
+        await sync_vm._resolve_bridge_device_id(object(), {}, statuses, "shared", "pve01", 7, 502)
+
+
+@pytest.mark.asyncio
+async def test_resolve_bridge_device_id_fails_closed_without_endpoint_identity(monkeypatch):
+    async def _list(_nb, path, *, query):
+        assert path == "/api/plugins/proxbox/sync-state/devices/"
+        return [
+            {"device": 41, "proxmox_endpoint_raw_id": 501},
+            {"device": 42, "proxmox_endpoint_raw_id": 502},
+        ]
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _list)
+
+    with pytest.raises(ProxboxException, match="Ambiguous Proxmox bridge device identity"):
+        await sync_vm._resolve_bridge_device_id(
+            object(), {}, [SimpleNamespace(name="cluster-a")], "cluster-a", "node-1", 7, None
+        )
+
+
 def test_selected_vm_resource_filter_uses_repeated_chunked_ids_and_dedupes(monkeypatch):
     queries: list[dict[str, object]] = []
 
@@ -921,11 +1103,16 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_overwrite_gate(mo
         return 400
 
     async def _fake_rest_first(_nb, path, *, query=None):
-        if path == "/api/dcim/devices/":
-            return {"id": 12}
         if path == "/api/virtualization/interfaces/":
             return {"id": 66, "name": query["name"], "virtual_machine": query["virtual_machine_id"]}
         return None
+
+    async def _fake_rest_list(_nb, path, *, query=None):
+        if path == "/api/plugins/proxbox/sync-state/devices/":
+            return []
+        if path == "/api/dcim/devices/":
+            return [{"id": 12}]
+        return []
 
     async def _fake_rest_patch(_nb, path, record_id, payload):
         patch_calls.append({"path": path, "record_id": record_id, "payload": payload})
@@ -950,6 +1137,7 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_overwrite_gate(mo
         _fake_ensure_bridge,
     )
     monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _fake_rest_list)
     monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_rest_patch)
     monkeypatch.setattr(sync_vm, "write_vm_interface_sync_state", _fake_sidecar)
     monkeypatch.setattr(sync_vm, "reconcile_guest_vm_interfaces", _fake_guest_sidecars)

@@ -256,7 +256,7 @@ attempted only for a VM that is **QEMU**, **running**, and **already known to ha
 agent enabled** — all three of which the sync knows without asking, so no request is
 wasted. Any failure, timeout, or malformed response falls back to the tier-1 value; it
 never fails the VM's sync and never fails the stage. The request is bounded by the same
-`guest_agent_timeout` setting (env `PROXBOX_GUEST_AGENT_TIMEOUT`, default 15s) the
+`PROXBOX_GUEST_AGENT_TIMEOUT` environment variable only (default 15 s, range 1–600) the
 network-interface agent call uses, so a wedged agent cannot stall the run.
 
 ### Naming

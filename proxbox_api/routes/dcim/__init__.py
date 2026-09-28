@@ -27,6 +27,7 @@ from proxbox_api.services.sync.network import (
     load_proxmox_node_network,
     sync_node_interface_and_ip,
 )
+from proxbox_api.services.sync.node_device_name import render_node_device_name
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
@@ -154,6 +155,32 @@ def _record_relation_id(record: dict[str, object], field: str) -> int | None:
     return _relation_id_or_none(record.get(f"{field}_id") or record.get(field))
 
 
+def _device_name_for_cluster_status(cluster_status: object, node_name: str) -> str:
+    cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
+    return render_node_device_name(
+        node_name,
+        cluster_name,
+        str(getattr(cluster_status, "endpoint_name", "") or cluster_name),
+        str(getattr(cluster_status, "node_device_name_template", "{node}") or "{node}"),
+    )
+
+
+def _device_record_matches_scope(
+    data: dict[str, object],
+    *,
+    device_name: str,
+    site_id: int | None,
+    cluster_id: int | None,
+) -> bool:
+    if str(data.get("name") or "").strip() != device_name:
+        return False
+    data_site_id = _record_relation_id(data, "site")
+    data_cluster_id = _record_relation_id(data, "cluster")
+    return (site_id is None or data_site_id == site_id) and (
+        site_id is not None or cluster_id is None or data_cluster_id == cluster_id
+    )
+
+
 def _node_interface_config(node_interface: object) -> dict[str, object]:
     return {
         "type": _value_from_record(node_interface, "type", "other"),
@@ -276,17 +303,19 @@ async def _resolve_netbox_device_by_name(
             ),
         )
 
+    device_name = _device_name_for_cluster_status(cluster_status, node_name)
+
     for candidate in candidates or []:
         candidate_data = _serialize_record(candidate)
-        if str(candidate_data.get("name") or "").strip() == node_name:
-            candidate_site_id = _record_relation_id(candidate_data, "site")
-            candidate_cluster_id = _record_relation_id(candidate_data, "cluster")
-            if site_id is not None and candidate_site_id == site_id:
-                return candidate_data
-            if site_id is None and cluster_id is not None and candidate_cluster_id == cluster_id:
-                return candidate_data
+        if _device_record_matches_scope(
+            candidate_data,
+            device_name=device_name,
+            site_id=site_id,
+            cluster_id=cluster_id,
+        ):
+            return candidate_data
 
-    query: dict[str, object] = {"name": node_name, "limit": 2}
+    query: dict[str, object] = {"name": device_name, "limit": 2}
     if site_id is not None:
         query["site_id"] = site_id
     elif cluster_id is not None:
@@ -298,12 +327,11 @@ async def _resolve_netbox_device_by_name(
     )
     for record in records:
         data = _serialize_record(record)
-        data_site_id = _record_relation_id(data, "site")
-        data_cluster_id = _record_relation_id(data, "cluster")
-        if (
-            str(data.get("name") or "").strip() == node_name
-            and (site_id is None or data_site_id == site_id)
-            and (site_id is not None or cluster_id is None or data_cluster_id == cluster_id)
+        if _device_record_matches_scope(
+            data,
+            device_name=device_name,
+            site_id=site_id,
+            cluster_id=cluster_id,
         ):
             return data
 

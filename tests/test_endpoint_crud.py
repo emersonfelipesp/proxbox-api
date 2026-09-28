@@ -7,10 +7,181 @@ and DB persistence via the overridden get_session dependency.
 
 from __future__ import annotations
 
+import threading
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
-from proxbox_api.routes.proxmox.endpoints import ProxmoxEndpointUpdate
+from proxbox_api import credentials
+from proxbox_api.database import ProxmoxEndpoint
+from proxbox_api.routes.proxmox import endpoints as proxmox_endpoints
+from proxbox_api.routes.proxmox.endpoints import (
+    ProxmoxEndpointUpdate,
+    _endpoint_update_changes,
+    update_proxmox_endpoint,
+)
+
+_PERSISTED_UPDATE_VALUES = {
+    "name": "pve-complete",
+    "node_device_name_template": "{node}.{cluster}",
+    "ip_address": "192.0.2.10",
+    "domain": "pve-complete.example.com",
+    "port": 8006,
+    "username": "root@pam",
+    "password": "password-secret",
+    "verify_ssl": True,
+    "enabled": True,
+    "allow_writes": False,
+    "allow_packer_template_builds": False,
+    "access_methods": "api_ssh",
+    "ssh_target_node": "pve01",
+    "ssh_host": "192.0.2.10",
+    "ssh_username": "root",
+    "ssh_port": 22,
+    "ssh_identity_file": "/etc/proxbox/ssh_keys/id_ed25519",
+    "ssh_known_host_fingerprint": "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "token_name": "sync",
+    "token_value": "token-secret",
+    "site_id": 11,
+    "site_slug": "site-one",
+    "site_name": "Site One",
+    "tenant_id": 12,
+    "tenant_slug": "tenant-one",
+    "tenant_name": "Tenant One",
+    "timeout": 30,
+    "max_retries": 2,
+    "retry_backoff": 1.5,
+}
+
+
+def _complete_endpoint() -> ProxmoxEndpoint:
+    values = dict(_PERSISTED_UPDATE_VALUES)
+    values["password"] = None
+    values["token_value"] = None
+    endpoint = ProxmoxEndpoint(**values)
+    endpoint.set_encrypted_password(_PERSISTED_UPDATE_VALUES["password"])
+    endpoint.set_encrypted_token_value(_PERSISTED_UPDATE_VALUES["token_value"])
+    return endpoint
+
+
+def _changed_value(field: str, value: object) -> object:
+    if field in {"verify_ssl", "enabled", "allow_writes", "allow_packer_template_builds"}:
+        return not value
+    if field in {"port", "ssh_port", "site_id", "tenant_id", "timeout", "max_retries"}:
+        return int(value) + 1
+    if field == "retry_backoff":
+        return float(value) + 0.5
+    if field == "access_methods":
+        return "api"
+    return f"changed-{value}"
+
+
+@pytest.mark.parametrize("field", sorted(_PERSISTED_UPDATE_VALUES))
+def test_endpoint_update_change_decision_covers_every_persisted_field(
+    field: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "endpoint-field-coverage-key")
+    credentials.reset_encryption_cache()
+    endpoint = _complete_endpoint()
+
+    assert not _endpoint_update_changes(endpoint, {field: _PERSISTED_UPDATE_VALUES[field]})
+    assert _endpoint_update_changes(
+        endpoint,
+        {field: _changed_value(field, _PERSISTED_UPDATE_VALUES[field])},
+    )
+    assert set(ProxmoxEndpointUpdate.model_fields) == set(_PERSISTED_UPDATE_VALUES)
+
+
+@pytest.mark.parametrize(
+    ("field", "persisted"),
+    [
+        ("domain", "pve.example.com"),
+        ("password", "secret"),
+        ("token_name", "sync"),
+        ("token_value", "secret-token"),
+        ("site_id", 1),
+        ("site_slug", "site"),
+        ("site_name", "Site"),
+        ("tenant_id", 2),
+        ("tenant_slug", "tenant"),
+        ("tenant_name", "Tenant"),
+        ("timeout", 30),
+        ("max_retries", 2),
+        ("retry_backoff", 1.5),
+        ("ssh_target_node", "pve01"),
+        ("ssh_host", "192.0.2.10"),
+        ("ssh_username", "root"),
+        ("ssh_identity_file", "/etc/proxbox/ssh_keys/id_ed25519"),
+        ("ssh_known_host_fingerprint", "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+    ],
+)
+def test_endpoint_update_distinguishes_omitted_and_explicit_null_optional_fields(
+    field: str,
+    persisted: object,
+) -> None:
+    endpoint = ProxmoxEndpoint(
+        name="pve-null",
+        ip_address="192.0.2.20",
+        port=8006,
+        username="root@pam",
+    )
+    if field == "password":
+        endpoint.set_encrypted_password(persisted)
+    elif field == "token_value":
+        endpoint.set_encrypted_token_value(persisted)
+    else:
+        setattr(endpoint, field, persisted)
+
+    omitted = ProxmoxEndpointUpdate.model_validate({}).model_dump(exclude_unset=True)
+    explicit_null = ProxmoxEndpointUpdate.model_construct(**{field: None}).model_dump(
+        exclude_unset=True
+    )
+
+    assert not _endpoint_update_changes(endpoint, omitted)
+    assert _endpoint_update_changes(endpoint, explicit_null)
+
+
+@pytest.mark.asyncio
+async def test_credential_noop_resolves_cold_key_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    event_loop_thread = threading.get_ident()
+    settings_threads: list[int] = []
+
+    def get_settings() -> dict[str, object]:
+        settings_threads.append(threading.get_ident())
+        assert threading.get_ident() != event_loop_thread
+        return {}
+
+    endpoint = ProxmoxEndpoint(
+        id=1,
+        name="pve-cold-key",
+        ip_address="192.0.2.30",
+        port=8006,
+        username="root@pam",
+        password="same-secret",
+    )
+    session = SimpleNamespace(get=AsyncMock(return_value=endpoint))
+    monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY_FILE", str(tmp_path / "missing-key"))
+    monkeypatch.setattr("proxbox_api.settings_client.get_settings", get_settings)
+    credentials.reset_encryption_cache()
+
+    result = await update_proxmox_endpoint(
+        1,
+        ProxmoxEndpointUpdate(password="same-secret"),
+        session,
+    )
+
+    assert result.id == 1
+    assert settings_threads
+    credentials.reset_encryption_cache()
 
 
 def test_proxmox_endpoint_update_rejects_explicit_null_ssh_port() -> None:
@@ -153,6 +324,7 @@ class TestProxmoxEndpointCRUD:
             "timeout": 30,
             "max_retries": 2,
             "retry_backoff": 1.5,
+            "node_device_name_template": "{node}.{cluster_slug}.example.com",
         }
         resp = auth_test_client.post("/proxmox/endpoints", json=payload)
         assert resp.status_code == 200, resp.text
@@ -161,8 +333,204 @@ class TestProxmoxEndpointCRUD:
         assert data["timeout"] == 30
         assert data["max_retries"] == 2
         assert data["retry_backoff"] == 1.5
+        assert data["node_device_name_template"] == "{node}.{cluster_slug}.example.com"
         assert data["allow_packer_template_builds"] is False
         assert "password" not in data
+
+        updated = auth_test_client.put(
+            f"/proxmox/endpoints/{data['id']}",
+            json={"node_device_name_template": "{node}.{endpoint}"},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["node_device_name_template"] == "{node}.{endpoint}"
+
+    def test_identical_update_skips_validation_settings_and_write(self, auth_test_client):
+        payload = {
+            "name": "pve-idempotent",
+            "ip_address": "192.168.1.130",
+            "domain": "",
+            "port": 8006,
+            "username": "root@pam",
+            "password": "secret",
+            "verify_ssl": False,
+            "enabled": True,
+            "allow_writes": False,
+            "allow_packer_template_builds": False,
+            "access_methods": "api",
+            "ssh_port": 22,
+            "timeout": 30,
+            "max_retries": 2,
+            "retry_backoff": 1.5,
+        }
+        created = auth_test_client.post("/proxmox/endpoints", json=payload)
+        assert created.status_code == 200, created.text
+
+        settings = Mock(side_effect=AssertionError("get_settings must not be called"))
+        commit = AsyncMock(side_effect=AssertionError("commit must not be called"))
+        with (
+            patch.object(proxmox_endpoints, "get_settings", settings),
+            patch("proxbox_api.ssrf.socket.getaddrinfo") as getaddrinfo,
+            patch.object(AsyncSession, "commit", commit),
+        ):
+            updated = auth_test_client.put(
+                f"/proxmox/endpoints/{created.json()['id']}",
+                json=payload,
+            )
+
+        assert updated.status_code == 200, updated.text
+        assert updated.json() == created.json()
+        settings.assert_not_called()
+        getaddrinfo.assert_not_called()
+        commit.assert_not_awaited()
+
+    def test_changed_update_still_rejects_blocked_host(self, auth_test_client, monkeypatch):
+        created = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "pve-blocked-update",
+                "ip_address": "192.168.1.131",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+            },
+        )
+        assert created.status_code == 200, created.text
+        monkeypatch.setattr(proxmox_endpoints, "pre_allow_endpoint_hosts", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            proxmox_endpoints,
+            "get_settings",
+            lambda: {
+                "ssrf_protection_enabled": True,
+                "allow_private_ips": False,
+                "allowed_ip_ranges": [],
+                "blocked_ip_ranges": [],
+            },
+        )
+
+        updated = auth_test_client.put(
+            f"/proxmox/endpoints/{created.json()['id']}",
+            json={"ip_address": "127.0.0.1"},
+        )
+
+        assert updated.status_code == 400
+        assert updated.json() == {
+            "detail": (
+                "Invalid IP address: Host '127.0.0.1' is a reserved/internal IP address. "
+                "Either add it to ProxmoxEndpoint first, or adjust SSRF settings in "
+                "ProxboxPluginSettings.. Adjust SSRF settings in ProxboxPluginSettings."
+            )
+        }
+
+    def test_credentials_change_is_persisted(self, auth_test_client, db_session):
+        created = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "pve-credential-change",
+                "ip_address": "192.168.1.132",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "old-secret",
+            },
+        )
+        assert created.status_code == 200, created.text
+
+        updated = auth_test_client.put(
+            f"/proxmox/endpoints/{created.json()['id']}",
+            json={"password": "new-secret"},
+        )
+
+        assert updated.status_code == 200, updated.text
+        db_session.expire_all()
+        stored = db_session.exec(
+            select(ProxmoxEndpoint).where(ProxmoxEndpoint.id == created.json()["id"])
+        ).one()
+        assert stored.get_decrypted_password() == "new-secret"
+
+    def test_node_device_name_template_rejects_unknown_placeholder(
+        self,
+        auth_test_client,
+    ):
+        response = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "pve-invalid-template",
+                "ip_address": "192.168.1.199",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+                "node_device_name_template": "{node}.{rack}",
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_create_rejects_template_invalid_for_actual_endpoint_name(
+        self,
+        auth_test_client,
+    ):
+        response = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "endpoint with spaces",
+                "ip_address": "192.168.1.198",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+                "node_device_name_template": "{node}.{endpoint}",
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_template_only_update_validates_existing_endpoint_name(
+        self,
+        auth_test_client,
+    ):
+        created = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "endpoint with spaces",
+                "ip_address": "192.168.1.197",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+            },
+        )
+        assert created.status_code == 200, created.text
+
+        response = auth_test_client.put(
+            f"/proxmox/endpoints/{created.json()['id']}",
+            json={"node_device_name_template": "{node}.{endpoint}"},
+        )
+
+        assert response.status_code == 422
+
+    def test_simultaneous_name_and_template_update_uses_new_endpoint_name(
+        self,
+        auth_test_client,
+    ):
+        created = auth_test_client.post(
+            "/proxmox/endpoints",
+            json={
+                "name": "endpoint with spaces",
+                "ip_address": "192.168.1.196",
+                "port": 8006,
+                "username": "root@pam",
+                "password": "secret",
+            },
+        )
+        assert created.status_code == 200, created.text
+
+        response = auth_test_client.put(
+            f"/proxmox/endpoints/{created.json()['id']}",
+            json={
+                "name": "endpoint-valid",
+                "node_device_name_template": "{node}.{endpoint}",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["name"] == "endpoint-valid"
 
     def test_packer_template_authorization_round_trips_and_can_be_revoked(
         self,

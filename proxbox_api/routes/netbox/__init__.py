@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -118,8 +119,10 @@ async def create_netbox_endpoint(
     # Auto-allow the endpoint's own addresses so they pass SSRF validation below.
     pre_allow_endpoint_hosts(netbox.ip_address, netbox.domain or "", source="NetBox")
 
-    settings = get_settings()
-    ip_safe, ip_reason = validate_endpoint_host(netbox.ip_address, settings)
+    settings = await asyncio.to_thread(get_settings)
+    ip_safe, ip_reason = await asyncio.to_thread(
+        validate_endpoint_host, netbox.ip_address, settings
+    )
     if not ip_safe:
         raise HTTPException(
             status_code=400,
@@ -127,7 +130,9 @@ async def create_netbox_endpoint(
         )
 
     if netbox.domain:
-        domain_safe, domain_reason = validate_endpoint_host(netbox.domain, settings)
+        domain_safe, domain_reason = await asyncio.to_thread(
+            validate_endpoint_host, netbox.domain, settings
+        )
         if not domain_safe:
             raise HTTPException(
                 status_code=400,
@@ -196,9 +201,11 @@ async def update_netbox_endpoint(
         source="NetBox",
     )
 
-    settings = get_settings()
+    settings = await asyncio.to_thread(get_settings)
     if "ip_address" in update_data:
-        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"], settings)
+        ip_safe, ip_reason = await asyncio.to_thread(
+            validate_endpoint_host, update_data["ip_address"], settings
+        )
         if not ip_safe:
             raise HTTPException(
                 status_code=400,
@@ -206,7 +213,9 @@ async def update_netbox_endpoint(
             )
 
     if "domain" in update_data and update_data["domain"]:
-        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"], settings)
+        domain_safe, domain_reason = await asyncio.to_thread(
+            validate_endpoint_host, update_data["domain"], settings
+        )
         if not domain_safe:
             raise HTTPException(
                 status_code=400,

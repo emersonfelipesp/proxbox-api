@@ -519,6 +519,7 @@ async def write_device_sync_state(
     proxmox_last_updated: object,
     proxmox_node_name: object = None,
     proxmox_cluster_name: object = None,
+    proxmox_endpoint_raw_id: object = None,
     overwrite_custom_fields: bool,
 ) -> dict[str, object] | None:
     if not overwrite_custom_fields:
@@ -528,6 +529,8 @@ async def write_device_sync_state(
         payload["proxmox_node_name"] = _text_or_blank(proxmox_node_name)
     if proxmox_cluster_name is not None:
         payload["proxmox_cluster_name"] = _text_or_blank(proxmox_cluster_name)
+    if proxmox_endpoint_raw_id is not None:
+        payload["proxmox_endpoint_raw_id"] = proxmox_endpoint_raw_id
     return await _upsert_parent_sidecar(
         nb,
         path=DEVICE_SYNC_STATE_PATH,

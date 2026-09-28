@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
-from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.session.proxmox import ProxmoxSessionsDep, ProxmoxSessionsPartialDep
 
 router = APIRouter()
 
@@ -68,7 +68,7 @@ def _to_cpu_model(cluster_name: str, raw: object) -> CustomCpuModelSchema:
 
 
 @router.get("/datacenter/cpu-models", response_model=list[CustomCpuModelSchema])
-async def list_custom_cpu_models(pxs: ProxmoxSessionsDep) -> list[CustomCpuModelSchema]:
+async def list_custom_cpu_models(pxs: ProxmoxSessionsPartialDep) -> list[CustomCpuModelSchema]:
     """List all custom CPU models across all clusters (PVE 9.2+).
 
     Proxies ``GET /cluster/qemu/custom-cpu-models``.  Custom CPU models

@@ -1083,6 +1083,7 @@ class ProxmoxEndpoint(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    node_device_name_template: str = Field(default="")
     ip_address: str = Field(index=True)
     domain: str | None = Field(default=None, index=True)
     port: int = Field(default=8006)
@@ -2027,6 +2028,10 @@ def _migrate_proxmox_endpoint_columns() -> None:  # noqa: C901
     stmts: list[str] = []
     if "timeout" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN timeout INTEGER")
+    if "node_device_name_template" not in existing:
+        stmts.append(
+            f"ALTER TABLE {table} ADD COLUMN node_device_name_template VARCHAR NOT NULL DEFAULT ''"
+        )
     if "max_retries" not in existing:
         stmts.append(f"ALTER TABLE {table} ADD COLUMN max_retries INTEGER")
     if "retry_backoff" not in existing:

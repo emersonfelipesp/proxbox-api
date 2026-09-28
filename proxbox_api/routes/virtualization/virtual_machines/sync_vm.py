@@ -87,6 +87,7 @@ from proxbox_api.services.sync.network import (
     _resolve_vm_interface_identity,
     normalize_vm_interface_name,
 )
+from proxbox_api.services.sync.node_device_name import NodeDeviceNameError, render_node_device_name
 from proxbox_api.services.sync.reconciliation.types import (
     NetBoxVMOperation as _NetBoxVMOperation,
 )
@@ -207,12 +208,12 @@ class _VMPreparationContext:
     overwrite_flags: SyncOverwriteFlags
     behavior_flags: SyncBehaviorFlags
     effective_vm_overwrite_flags: SyncOverwriteFlags
-    cluster_dependency_cache: dict[str, dict[str, object]]
-    node_device_cache: dict[tuple[str, str], object]
+    cluster_dependency_cache: dict[object, dict[str, object]]
+    node_device_cache: dict[tuple[int | None, str, str], object]
     vm_role_cache: dict[str, object]
     vm_role_mapping: dict[str, dict[str, object]]
     tag_refs: list[dict[str, object]]
-    proxmox_url_by_cluster: dict[str, str]
+    proxmox_url_by_cluster: dict[object, str]
     endpoint_id_by_cluster: dict[str, int]
     resolve_vm_type: Callable[[str], Awaitable[object | None]]
     resolve_vm_proxmox_tag_ids: Callable[[str, dict[str, object]], Awaitable[list[int]]]
@@ -222,10 +223,185 @@ class _VMPreparationContext:
     #
     # Only consulted for the opt-in guest-agent platform refinement. Absent entries are
     # normal and simply mean the refinement is skipped for that cluster.
-    px_by_cluster: dict[str, object] = field(default_factory=dict)
+    px_by_cluster: dict[object, object] = field(default_factory=dict)
     # Run-scoped {platform name: id or None}. An estate's VMs share a handful of
     # operating systems, so without this the sync reconciles a platform per VM.
     platform_cache: dict[str, int | None] = field(default_factory=dict)
+
+
+def _node_naming_kwargs(source: object, cluster_name: str) -> dict[str, object]:
+    """Return normalized node naming inputs for a Proxmox endpoint or cluster."""
+
+    return {
+        "cluster_name": cluster_name,
+        "endpoint_name": str(getattr(source, "endpoint_name", "") or cluster_name),
+        "node_device_name_template": str(
+            getattr(source, "node_device_name_template", "{node}") or "{node}"
+        ),
+        "endpoint_id": extract_proxmox_session_endpoint_id(source),
+    }
+
+
+def _endpoint_node_naming_kwargs(
+    source: object,
+    cluster_name: str,
+    endpoint_id: int | None,
+) -> dict[str, object]:
+    naming = _node_naming_kwargs(source, cluster_name)
+    naming["endpoint_id"] = endpoint_id
+    return naming
+
+
+def _bridge_device_lookup_args(
+    info: dict[str, object],
+) -> tuple[str, str, int | None, int | None]:
+    """Extract normalized node-device lookup inputs from interface metadata."""
+
+    site_id = info.get("site_id")
+    return (
+        str(info.get("cluster_name", "") or ""),
+        str(info.get("resource_node", "") or ""),
+        site_id if isinstance(site_id, int) else None,
+        extract_proxmox_endpoint_id(info),
+    )
+
+
+def _select_bridge_cluster_status(
+    cluster_status: object,
+    *,
+    cluster_name: str,
+    endpoint_id: int | None,
+) -> object | None:
+    candidates = [
+        item
+        for item in cast("list[object]", cluster_status)
+        if str(getattr(item, "name", "") or "") == cluster_name
+    ]
+    if endpoint_id is not None:
+        endpoint_matches = [
+            item for item in candidates if extract_proxmox_session_endpoint_id(item) == endpoint_id
+        ]
+        if len(endpoint_matches) == 1:
+            return endpoint_matches[0]
+        if endpoint_matches:
+            raise ProxboxException(
+                message="Ambiguous Proxmox bridge endpoint status",
+                detail=(
+                    f"Multiple status records match endpoint {endpoint_id} and "
+                    f"cluster {cluster_name!r}."
+                ),
+            )
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        raise ProxboxException(
+            message="Ambiguous Proxmox bridge endpoint status",
+            detail=(
+                f"Endpoint {endpoint_id!r} cannot uniquely select cluster status "
+                f"for {cluster_name!r}."
+            ),
+        )
+    return None
+
+
+async def _resolve_bridge_device_id(
+    nb: object,
+    cache: dict[tuple[int | None, str, str], int | None],
+    cluster_status: object,
+    cluster_name: str,
+    node_name: str,
+    site_id: int | None,
+    endpoint_id: int | None,
+) -> int | None:
+    """Resolve and cache the NetBox node device used by a VM bridge."""
+
+    from proxbox_api.netbox_rest import rest_list_async
+
+    cache_key = (endpoint_id, cluster_name, node_name)
+    if cache_key in cache:
+        return cache[cache_key]
+    status = _select_bridge_cluster_status(
+        cluster_status,
+        cluster_name=cluster_name,
+        endpoint_id=endpoint_id,
+    )
+    naming = _node_naming_kwargs(status, cluster_name)
+    try:
+        device_name = render_node_device_name(
+            node_name,
+            naming["cluster_name"],
+            naming["endpoint_name"],
+            naming["node_device_name_template"],
+        )
+    except NodeDeviceNameError:
+        cache[cache_key] = None
+        return None
+    sidecar_query: dict[str, object] = {
+        "proxmox_cluster_name": cluster_name,
+        "proxmox_node_name": node_name,
+        "limit": 3,
+    }
+    if endpoint_id is not None:
+        sidecar_query["proxmox_endpoint_raw_id"] = endpoint_id
+    try:
+        sidecars = await rest_list_async(
+            nb, "/api/plugins/proxbox/sync-state/devices/", query=sidecar_query
+        )
+    except Exception:
+        sidecars = []
+    if endpoint_id is not None:
+        sidecars = [
+            row for row in sidecars if extract_proxmox_endpoint_id(row) in {None, endpoint_id}
+        ]
+    elif (
+        len(
+            {
+                claimed_id
+                for row in sidecars
+                if (claimed_id := extract_proxmox_endpoint_id(row)) is not None
+            }
+        )
+        > 1
+    ):
+        raise ProxboxException(
+            message="Ambiguous Proxmox bridge device identity",
+            detail=f"Multiple endpoints claim node {node_name!r} in cluster {cluster_name!r}.",
+        )
+    sidecar_device_ids = {
+        device_id for row in sidecars if (device_id := _relation_id(row.get("device"))) is not None
+    }
+    if len(sidecar_device_ids) > 1:
+        raise ProxboxException(
+            message="Ambiguous Proxmox bridge device identity",
+            detail=f"Multiple devices claim node {node_name!r} in cluster {cluster_name!r}.",
+        )
+    if sidecar_device_ids:
+        device_id = next(iter(sidecar_device_ids))
+        cache[cache_key] = device_id
+        return device_id
+
+    query: dict[str, object] = {"name": device_name, "limit": 3}
+    if site_id is not None:
+        query["site_id"] = site_id
+    try:
+        device_records = await rest_list_async(nb, "/api/dcim/devices/", query=query)
+        device_ids = {
+            device_id
+            for record in device_records
+            if (device_id := _relation_id(record.get("id"))) is not None
+        }
+        if len(device_ids) > 1:
+            raise ProxboxException(
+                message="Ambiguous Proxmox bridge device identity",
+                detail=f"Multiple devices match rendered node name {device_name!r}.",
+            )
+        device_id = next(iter(device_ids), None)
+    except ProxboxException:
+        raise
+    except Exception:
+        device_id = None
+    cache[cache_key] = device_id
+    return device_id
 
 
 async def _resolve_vm_platform_id(
@@ -315,6 +491,58 @@ def _endpoint_id_by_cluster_names(
     return endpoint_id_by_cluster
 
 
+def _build_vm_endpoint_contexts(
+    pxs: object,
+    cluster_status: object,
+) -> tuple[
+    list[object],
+    list[object],
+    dict[str, int],
+    dict[object, str],
+    dict[object, object],
+]:
+    px_list = list(pxs or [])
+    status_list = list(cluster_status or [])
+    endpoint_id_by_cluster = _endpoint_id_by_cluster_names(px_list, status_list)
+    proxmox_url_by_cluster: dict[object, str] = {}
+    px_by_cluster: dict[object, object] = {}
+    for px, status in zip(px_list, status_list):
+        cluster_name = getattr(status, "name", None) or getattr(px, "cluster_name", None)
+        endpoint_id = extract_proxmox_session_endpoint_id(px)
+        cluster_key = (endpoint_id, str(cluster_name or ""))
+        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
+        px_port = getattr(px, "http_port", 8006)
+        if cluster_name and px_domain:
+            url = f"https://{px_domain}:{px_port}"
+            proxmox_url_by_cluster[cluster_key] = url
+            proxmox_url_by_cluster.setdefault(str(cluster_name), url)
+        px_by_cluster[cluster_key] = px
+        for candidate_name in {
+            cluster_name,
+            getattr(px, "name", None),
+            getattr(px, "cluster_name", None),
+            getattr(px, "node_name", None),
+        }:
+            name_text = str(candidate_name or "").strip()
+            if name_text:
+                px_by_cluster.setdefault(name_text, px)
+    return (
+        px_list,
+        status_list,
+        endpoint_id_by_cluster,
+        proxmox_url_by_cluster,
+        px_by_cluster,
+    )
+
+
+def _session_endpoint_id_at(pxs: object, index: int) -> int | None:
+    """Return one run-ordered endpoint id without requiring a sized dependency."""
+    try:
+        return extract_proxmox_session_endpoint_id(list(pxs or [])[index])
+    except IndexError:
+        return None
+
+
 def _cluster_dependency_site_id(cluster_dependencies: dict[str, object]) -> int | None:
     cached_site_id = cluster_dependencies.get("site_id")
     try:
@@ -348,6 +576,10 @@ async def _prepare_vm_from_config(  # noqa: C901
     resource: dict[str, object],
     vm_config: dict[str, object],
     context: _VMPreparationContext,
+    *,
+    endpoint_id: int | None = None,
+    cluster_source: object | None = None,
+    px_source: object | None = None,
 ) -> _PreparedVMState:
     """Prepare desired NetBox VM state from an already fetched Proxmox config."""
 
@@ -358,7 +590,11 @@ async def _prepare_vm_from_config(  # noqa: C901
 
     vm_config_obj = await asyncio.to_thread(ProxmoxVmConfigInput.model_validate, vm_config)
 
-    cluster_dependencies = context.cluster_dependency_cache.get(str(cluster_name), {})
+    dependency_key = (endpoint_id, str(cluster_name))
+    cluster_dependencies = context.cluster_dependency_cache.get(
+        dependency_key,
+        context.cluster_dependency_cache.get(str(cluster_name), {}),
+    )
     cluster = cluster_dependencies.get("cluster")
     if cluster is None:
         raise ProxboxException(
@@ -368,11 +604,18 @@ async def _prepare_vm_from_config(  # noqa: C901
 
     node_name = str(resource.get("node"))
     site_id = _cluster_dependency_site_id(cluster_dependencies)
-    device = context.node_device_cache.get((str(cluster_name), node_name))
+    endpoint_id = endpoint_id or context.endpoint_id_by_cluster.get(str(cluster_name))
+    device_key = (endpoint_id, str(cluster_name), node_name)
+    device = context.node_device_cache.get(device_key)
     if device is None:
         device = await _ensure_device(
             context.nb,
             device_name=node_name,
+            **_endpoint_node_naming_kwargs(
+                cluster_source or px_source or context.px_by_cluster.get(dependency_key),
+                cluster_name,
+                endpoint_id,
+            ),
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
             role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
@@ -383,7 +626,7 @@ async def _prepare_vm_from_config(  # noqa: C901
             overwrite_device_tags=context.overwrite_flags.overwrite_device_tags,
             overwrite_flags=context.overwrite_flags,
         )
-        context.node_device_cache[(str(cluster_name), node_name)] = device
+        context.node_device_cache[device_key] = device
 
     role = context.vm_role_cache.get(vm_type_key)
     if role is None:
@@ -419,7 +662,7 @@ async def _prepare_vm_from_config(  # noqa: C901
     merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
     platform_id = await _resolve_vm_platform_id(
         context.nb,
-        px_session=context.px_by_cluster.get(str(cluster_name)),
+        px_session=px_source or context.px_by_cluster.get(dependency_key),
         node=str(resource.get("node") or ""),
         vmid=int(resource.get("vmid") or 0),
         resource=resource,
@@ -444,14 +687,16 @@ async def _prepare_vm_from_config(  # noqa: C901
         parse_description_metadata=context.behavior_flags.parse_description_metadata,
         overwrite_flags=context.effective_vm_overwrite_flags,
     )
-    endpoint_id = context.endpoint_id_by_cluster.get(str(cluster_name))
     lookup = _missing_vm_lookup()
     sync_state_fields = build_virtual_machine_sync_state_fields(
         proxmox_resource=resource,
         proxmox_config=vm_config,
         last_updated=now,
         cluster_name=str(cluster_name),
-        proxmox_url=context.proxmox_url_by_cluster.get(str(cluster_name)),
+        proxmox_url=(
+            context.proxmox_url_by_cluster.get(dependency_key)
+            or context.proxmox_url_by_cluster.get(str(cluster_name))
+        ),
         endpoint_id=endpoint_id,
     )
 
@@ -1410,12 +1655,16 @@ def _vm_resource_identity(cluster_name: object, resource: object) -> tuple[str, 
 
 
 def _deduplicate_cluster_vm_resources(
-    cluster_name: object, resources: list, seen: set[tuple[str, str, int]]
+    cluster_name: object,
+    resources: list,
+    seen: set[tuple[int | None, str, str, int]],
+    endpoint_id: int | None,
 ) -> list:
     """Preserve the first occurrence of each VM identity in one resource list."""
     unique_resources = []
     for resource in resources:
-        identity = _vm_resource_identity(cluster_name, resource)
+        resource_identity = _vm_resource_identity(cluster_name, resource)
+        identity = (endpoint_id, *resource_identity) if resource_identity is not None else None
         if identity is None:
             unique_resources.append(resource)
         elif identity not in seen:
@@ -1424,7 +1673,10 @@ def _deduplicate_cluster_vm_resources(
     return unique_resources
 
 
-def _deduplicate_vm_resources_by_identity(cluster_resources: list) -> list:
+def _deduplicate_vm_resources_by_identity(
+    cluster_resources: list,
+    endpoint_ids: list[int | None] | None = None,
+) -> list:
     """Keep one VM resource for each cluster, guest type, and VMID.
 
     Some SDK discovery paths can return the same cluster resource through both
@@ -1433,9 +1685,10 @@ def _deduplicate_vm_resources_by_identity(cluster_resources: list) -> list:
     Preserve non-VM resources and the first authoritative VM payload while
     removing only exact guest identities within the same cluster.
     """
-    seen: set[tuple[str, str, int]] = set()
+    seen: set[tuple[int | None, str, str, int]] = set()
     deduplicated: list = []
-    for cluster in cluster_resources:
+    for cluster_index, cluster in enumerate(cluster_resources):
+        endpoint_id = endpoint_ids[cluster_index] if endpoint_ids else None
         if not isinstance(cluster, dict):
             deduplicated.append(cluster)
             continue
@@ -1445,7 +1698,7 @@ def _deduplicate_vm_resources_by_identity(cluster_resources: list) -> list:
                 normalized_cluster[cluster_name] = resources
                 continue
             normalized_cluster[cluster_name] = _deduplicate_cluster_vm_resources(
-                cluster_name, resources, seen
+                cluster_name, resources, seen, endpoint_id
             )
         deduplicated.append(normalized_cluster)
     return deduplicated
@@ -2138,28 +2391,23 @@ async def create_virtual_machines(  # noqa: C901
     filtered_cluster_resources = _filter_cluster_resources_by_sync_modes(
         filtered_cluster_resources, sync_mode_vm, sync_mode_vm_template
     )
-    filtered_cluster_resources = _deduplicate_vm_resources_by_identity(filtered_cluster_resources)
+    ordered_endpoint_ids = [
+        _session_endpoint_id_at(pxs, index) for index in range(len(filtered_cluster_resources))
+    ]
+    filtered_cluster_resources = _deduplicate_vm_resources_by_identity(
+        filtered_cluster_resources,
+        ordered_endpoint_ids,
+    )
 
     # Build a mapping from cluster name to Proxmox base URL for populating proxmox_link,
     # and a parallel mapping to the ProxmoxEndpoint DB ID for typed ownership state.
-    proxmox_url_by_cluster: dict[str, str] = {}
-    endpoint_id_by_cluster = _endpoint_id_by_cluster_names(pxs, cluster_status)
-    px_by_cluster: dict[str, object] = {}
-    for px, cs in zip(pxs, cluster_status):
-        cluster_n = getattr(cs, "name", None) or getattr(px, "cluster_name", None)
-        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
-        px_port = getattr(px, "http_port", 8006)
-        if cluster_n and px_domain:
-            proxmox_url_by_cluster[str(cluster_n)] = f"https://{px_domain}:{px_port}"
-        for px_name in {
-            cluster_n,
-            getattr(px, "name", None),
-            getattr(px, "cluster_name", None),
-            getattr(px, "node_name", None),
-        }:
-            px_name_text = str(px_name or "").strip()
-            if px_name_text:
-                px_by_cluster[px_name_text] = px
+    (
+        px_list,
+        cluster_status_list,
+        endpoint_id_by_cluster,
+        proxmox_url_by_cluster,
+        px_by_cluster,
+    ) = _build_vm_endpoint_contexts(pxs, cluster_status)
 
     # Per-run guest-OS platform cache: an estate's VMs share a handful of operating
     # systems, so resolving one per VM would be pure request amplification.
@@ -2239,8 +2487,8 @@ async def create_virtual_machines(  # noqa: C901
 
     flattened_results = []
     storage_index: dict[tuple[str, str], dict] = {}
-    cluster_dependency_cache: dict[str, dict[str, object]] = {}
-    node_device_cache: dict[tuple[str, str], object] = {}
+    cluster_dependency_cache: dict[object, dict[str, object]] = {}
+    node_device_cache: dict[tuple[int | None, str, str], object] = {}
     vm_role_cache: dict[str, object] = {}
     vm_type_cache: dict[str, object] = {}
     vm_role_mapping: dict[str, dict[str, object]] = VM_ROLE_MAPPINGS
@@ -2284,10 +2532,19 @@ async def create_virtual_machines(  # noqa: C901
         manufacturer -> device type -> cluster type -> cluster/site -> node device -> VM role -> VM type.
         """
 
-        resources_by_cluster: dict[str, list[dict]] = {}
-        for cluster in filtered_cluster_resources:
+        endpoint_clusters: list[
+            tuple[int | None, str, list[dict], object | None, object | None]
+        ] = []
+        for cluster_index, cluster in enumerate(filtered_cluster_resources):
             if not isinstance(cluster, dict):
                 continue
+            endpoint_id = ordered_endpoint_ids[cluster_index]
+            cluster_state = (
+                cluster_status_list[cluster_index]
+                if cluster_index < len(cluster_status_list)
+                else None
+            )
+            px_source = px_list[cluster_index] if cluster_index < len(px_list) else None
             for candidate_cluster_name, resources in cluster.items():
                 if not isinstance(resources, list):
                     continue
@@ -2297,10 +2554,18 @@ async def create_virtual_machines(  # noqa: C901
                     if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc")
                 ]
                 if vm_resources:
-                    resources_by_cluster[str(candidate_cluster_name)] = vm_resources
+                    endpoint_clusters.append(
+                        (
+                            endpoint_id,
+                            str(candidate_cluster_name),
+                            vm_resources,
+                            cluster_state,
+                            px_source,
+                        )
+                    )
 
         # Nothing to precompute when no VM resources were discovered.
-        if not resources_by_cluster:
+        if not endpoint_clusters:
             return
 
         manufacturer = await _ensure_manufacturer(nb, tag_refs=tag_refs)
@@ -2313,11 +2578,13 @@ async def create_virtual_machines(  # noqa: C901
 
         vm_types: set[str] = set()
 
-        async def _precompute_single_cluster(cluster_name: str, vm_resources: list[dict]) -> None:
-            cluster_state = next(
-                (state for state in cluster_status if getattr(state, "name", None) == cluster_name),
-                None,
-            )
+        async def _precompute_single_cluster(
+            endpoint_id: int | None,
+            cluster_name: str,
+            vm_resources: list[dict],
+            cluster_state: object | None,
+            px_source: object | None,
+        ) -> None:
             cluster_mode = getattr(cluster_state, "mode", None) or "cluster"
             # cluster_type, site, and tenant are mutually independent — run them in parallel.
             cluster_type, site, tenant = await asyncio.gather(
@@ -2345,7 +2612,8 @@ async def create_virtual_machines(  # noqa: C901
                 fallback_site_id=getattr(site, "id", None),
             )
 
-            cluster_dependency_cache[cluster_name] = {
+            dependency_key = (endpoint_id, cluster_name)
+            cluster_dependency_cache[dependency_key] = {
                 "cluster": cluster,
                 "site": site,
                 "site_id": site_id,
@@ -2359,10 +2627,16 @@ async def create_virtual_machines(  # noqa: C901
                 for resource in vm_resources
                 if resource.get("node") is not None
             }
+            naming_kwargs = _endpoint_node_naming_kwargs(
+                cluster_state or px_source,
+                cluster_name,
+                endpoint_id,
+            )
             for node_name in sorted(node_names):
-                node_device_cache[(cluster_name, node_name)] = await _ensure_device(
+                node_device_cache[(endpoint_id, cluster_name, node_name)] = await _ensure_device(
                     nb,
                     device_name=node_name,
+                    **naming_kwargs,
                     cluster_id=getattr(cluster, "id", None),
                     device_type_id=getattr(device_type, "id", None),
                     role_id=getattr(device_role, "id", None),
@@ -2382,7 +2656,10 @@ async def create_virtual_machines(  # noqa: C901
 
         # All clusters are independent — precompute them in parallel.
         cluster_precompute_results = await asyncio.gather(
-            *[_precompute_single_cluster(cn, vrs) for cn, vrs in resources_by_cluster.items()],
+            *[
+                _precompute_single_cluster(*endpoint_cluster)
+                for endpoint_cluster in endpoint_clusters
+            ],
             return_exceptions=True,
         )
         # Re-raise the first cluster-level failure so the outer try/except can surface it.
@@ -2490,10 +2767,17 @@ async def create_virtual_machines(  # noqa: C901
         success.
         """
         batch_t0 = time.perf_counter()
-        operation_inputs: list[tuple[str, dict]] = []
-        for cluster in filtered_cluster_resources:
+        operation_inputs: list[tuple[int | None, str, dict, object | None, object | None]] = []
+        for cluster_index, cluster in enumerate(filtered_cluster_resources):
             if not isinstance(cluster, dict):
                 continue
+            endpoint_id = ordered_endpoint_ids[cluster_index]
+            px_source = px_list[cluster_index] if cluster_index < len(px_list) else None
+            cluster_source = (
+                cluster_status_list[cluster_index]
+                if cluster_index < len(cluster_status_list)
+                else None
+            )
             for cluster_name, resources in cluster.items():
                 if not isinstance(resources, list):
                     continue
@@ -2501,7 +2785,9 @@ async def create_virtual_machines(  # noqa: C901
                     # Sync-mode filtering already applied at the source via
                     # _filter_cluster_resources_by_sync_modes.
                     if isinstance(resource, dict) and resource.get("type") in ("qemu", "lxc"):
-                        operation_inputs.append((str(cluster_name), resource))
+                        operation_inputs.append(
+                            (endpoint_id, str(cluster_name), resource, px_source, cluster_source)
+                        )
 
         if not operation_inputs:
             return [], 0
@@ -2510,11 +2796,14 @@ async def create_virtual_machines(  # noqa: C901
         fetch_timeout_seconds = resolve_vm_config_fetch_timeout_seconds()
 
         async def _fetch_with_limit(
+            endpoint_id: int | None,
             cluster_name: str,
             resource: dict[str, object],
+            px_source: object | None,
+            _cluster_source: object | None,
         ) -> dict[str, object]:
             async with fetch_semaphore:
-                cluster_px = px_by_cluster.get(str(cluster_name))
+                cluster_px = px_source or px_by_cluster.get((endpoint_id, str(cluster_name)))
                 fetch_pxs = [cluster_px] if cluster_px is not None else pxs
                 return await asyncio.wait_for(
                     _fetch_vm_config_only(pxs=fetch_pxs, resource=resource),
@@ -2523,19 +2812,26 @@ async def create_virtual_machines(  # noqa: C901
 
         fetch_t0 = time.perf_counter()
         fetch_results = await asyncio.gather(
-            *[
-                _fetch_with_limit(cluster_name, resource)
-                for cluster_name, resource in operation_inputs
-            ],
+            *[_fetch_with_limit(*operation_input) for operation_input in operation_inputs],
             return_exceptions=True,
         )
         fetch_ms = (time.perf_counter() - fetch_t0) * 1000
 
-        fetched_vm_configs: list[tuple[str, dict[str, object], dict[str, object]]] = []
+        fetched_vm_configs: list[
+            tuple[
+                int | None,
+                str,
+                dict[str, object],
+                dict[str, object],
+                object | None,
+                object | None,
+            ]
+        ] = []
         prepared_vms: list[_PreparedVMState] = []
         failed_vms = 0
         fetch_failed = 0
-        for (cluster_name, resource), fetch_result in zip(operation_inputs, fetch_results):
+        for operation_input, fetch_result in zip(operation_inputs, fetch_results):
+            endpoint_id, cluster_name, resource, px_source, cluster_source = operation_input
             if isinstance(fetch_result, Exception):
                 logger.warning(
                     "VM config fetch failed: cluster=%s vmid=%s error=%s",
@@ -2546,10 +2842,19 @@ async def create_virtual_machines(  # noqa: C901
                 failed_vms += 1
                 fetch_failed += 1
                 continue
-            fetched_vm_configs.append((cluster_name, resource, fetch_result))
+            fetched_vm_configs.append(
+                (endpoint_id, cluster_name, resource, fetch_result, px_source, cluster_source)
+            )
 
         process_t0 = time.perf_counter()
-        for cluster_name, resource, vm_config in fetched_vm_configs:
+        for (
+            endpoint_id,
+            cluster_name,
+            resource,
+            vm_config,
+            px_source,
+            cluster_source,
+        ) in fetched_vm_configs:
             try:
                 prepared_vms.append(
                     await _prepare_vm_from_config(
@@ -2557,6 +2862,9 @@ async def create_virtual_machines(  # noqa: C901
                         resource,
                         vm_config,
                         prepare_context,
+                        endpoint_id=endpoint_id,
+                        cluster_source=cluster_source,
+                        px_source=px_source,
                     )
                 )
             except Exception as prepared_result:
@@ -2724,17 +3032,20 @@ async def create_virtual_machines(  # noqa: C901
     default_resolved_vm_names: dict[tuple[str, int, str], str] = {}
     name_prepass_vms: list[_PreparedVMState] = []
     name_prepass_now = datetime.now(timezone.utc)
-    for cluster in filtered_cluster_resources:
+    for cluster_index, cluster in enumerate(filtered_cluster_resources):
         if not isinstance(cluster, dict):
             continue
+        ordered_endpoint_id = ordered_endpoint_ids[cluster_index]
         for cluster_name, resources in cluster.items():
             if not isinstance(resources, list):
                 continue
             cluster_name_text = str(cluster_name)
-            cluster_dependencies = cluster_dependency_cache.get(cluster_name_text, {})
+            cluster_dependencies = cluster_dependency_cache.get(
+                (ordered_endpoint_id, cluster_name_text), {}
+            )
             cluster_obj = cluster_dependencies.get("cluster")
             cluster_id = _relation_id(cluster_obj) or _relation_id(getattr(cluster_obj, "id", None))
-            endpoint_id = endpoint_id_by_cluster.get(cluster_name_text)
+            endpoint_id = ordered_endpoint_id
             for resource in resources:
                 if not isinstance(resource, dict):
                     continue
@@ -2784,7 +3095,13 @@ async def create_virtual_machines(  # noqa: C901
             and resolved_name
         }
 
-    async def create_vm_task(cluster_name, resource):  # noqa: C901
+    async def create_vm_task(  # noqa: C901
+        cluster_name,
+        resource,
+        endpoint_id: int | None,
+        px_source: object | None,
+        cluster_source: object | None,
+    ):
         undefined_html = return_status_html("undefined", use_css)
 
         websocket_vm_json: dict = {
@@ -2806,7 +3123,7 @@ async def create_virtual_machines(  # noqa: C901
         if vm_type_key not in vm_role_mapping:
             vm_type_key = "undefined"
         vm_config_result = get_vm_config(
-            pxs=pxs,
+            pxs=[px_source] if px_source is not None else pxs,
             node=resource.get("node"),
             type=vm_type,
             vmid=resource.get("vmid"),
@@ -2860,7 +3177,8 @@ async def create_virtual_machines(  # noqa: C901
                     message=f"Resolving dependencies for VM '{vm_name}'",
                     item={"name": vm_name},
                 )
-            cluster_dependencies = cluster_dependency_cache.get(str(cluster_name), {})
+            dependency_key = (endpoint_id, str(cluster_name))
+            cluster_dependencies = cluster_dependency_cache.get(dependency_key, {})
             cluster = cluster_dependencies.get("cluster")
 
             if cluster is None:
@@ -2876,12 +3194,18 @@ async def create_virtual_machines(  # noqa: C901
 
             node_name = str(resource.get("node"))
             site_id = _cluster_dependency_site_id(cluster_dependencies)
-            device = node_device_cache.get((str(cluster_name), node_name))
+            device_key = (endpoint_id, str(cluster_name), node_name)
+            device = node_device_cache.get(device_key)
             if device is None:
                 # Fallback for edge cases where a node appears after preflight filtering.
                 device = await _ensure_device(
                     nb,
                     device_name=node_name,
+                    **_endpoint_node_naming_kwargs(
+                        cluster_source or px_source,
+                        str(cluster_name),
+                        endpoint_id,
+                    ),
                     cluster_id=getattr(cluster, "id", None),
                     device_type_id=getattr(cluster_dependencies.get("device_type"), "id", None),
                     role_id=getattr(cluster_dependencies.get("device_role"), "id", None),
@@ -2892,7 +3216,7 @@ async def create_virtual_machines(  # noqa: C901
                     overwrite_device_tags=overwrite_flags.overwrite_device_tags,
                     overwrite_flags=overwrite_flags,
                 )
-                node_device_cache[(str(cluster_name), node_name)] = device
+                node_device_cache[device_key] = device
 
             role = vm_role_cache.get(vm_type_key)
             if role is None:
@@ -2954,7 +3278,7 @@ async def create_virtual_machines(  # noqa: C901
         merged_tag_ids = sorted({proxbox_tag_id, *proxmox_tag_ids} - {0})
         platform_id = await _resolve_vm_platform_id(
             nb,
-            px_session=px_by_cluster.get(str(cluster_name)),
+            px_session=px_source,
             node=str(resource.get("node") or ""),
             vmid=int(resource.get("vmid") or 0),
             resource=resource,
@@ -3005,7 +3329,7 @@ async def create_virtual_machines(  # noqa: C901
         existing_resolution = await resolve_virtual_machine_by_sync_state(
             nb,
             proxmox_vm_id=resource.get("vmid"),
-            endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
+            endpoint_id=endpoint_id,
             cluster_id=int(getattr(cluster, "id", 0) or 0) or None,
             fail_on_ambiguous=True,
         )
@@ -3051,8 +3375,11 @@ async def create_virtual_machines(  # noqa: C901
             proxmox_config=vm_config,
             last_updated=now,
             cluster_name=str(cluster_name),
-            proxmox_url=proxmox_url_by_cluster.get(str(cluster_name)),
-            endpoint_id=endpoint_id_by_cluster.get(str(cluster_name)),
+            proxmox_url=(
+                proxmox_url_by_cluster.get((endpoint_id, str(cluster_name)))
+                or proxmox_url_by_cluster.get(str(cluster_name))
+            ),
+            endpoint_id=endpoint_id,
         )
         await persist_sync_state_with_role_compensation(
             nb,
@@ -3426,11 +3753,23 @@ async def create_virtual_machines(  # noqa: C901
     max_concurrency = resolve_vm_sync_concurrency()
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def _run_vm_task(cluster_name: str, resource: dict):
+    async def _run_vm_task(
+        cluster_name: str,
+        resource: dict,
+        endpoint_id: int | None,
+        px_source: object | None,
+        cluster_source: object | None,
+    ):
         async with semaphore:
-            return await create_vm_task(cluster_name, resource)
+            return await create_vm_task(
+                cluster_name,
+                resource,
+                endpoint_id,
+                px_source,
+                cluster_source,
+            )
 
-    async def _create_cluster_vms(cluster: dict) -> list:
+    async def _create_cluster_vms(cluster: dict, cluster_index: int) -> list:
         """
         Create virtual machines for a cluster.
 
@@ -3442,12 +3781,25 @@ async def create_virtual_machines(  # noqa: C901
         """
 
         tasks = []  # Collect coroutines
+        endpoint_id = ordered_endpoint_ids[cluster_index]
+        px_source = px_list[cluster_index] if cluster_index < len(px_list) else None
+        cluster_source = (
+            cluster_status_list[cluster_index] if cluster_index < len(cluster_status_list) else None
+        )
         for cluster_name, resources in cluster.items():
             for resource in resources:
                 # Sync-mode filtering already applied at the source via
                 # _filter_cluster_resources_by_sync_modes.
                 if resource.get("type") in ("qemu", "lxc"):
-                    tasks.append(_run_vm_task(cluster_name, resource))
+                    tasks.append(
+                        _run_vm_task(
+                            cluster_name,
+                            resource,
+                            endpoint_id,
+                            px_source,
+                            cluster_source,
+                        )
+                    )
 
         return await asyncio.gather(*tasks, return_exceptions=True)  # Gather coroutines
 
@@ -3462,7 +3814,10 @@ async def create_virtual_machines(  # noqa: C901
 
         # Return the created virtual machines.
         result_list = await asyncio.gather(
-            *[_create_cluster_vms(cluster) for cluster in filtered_cluster_resources],
+            *[
+                _create_cluster_vms(cluster, cluster_index)
+                for cluster_index, cluster in enumerate(filtered_cluster_resources)
+            ],
             return_exceptions=True,
         )
 
@@ -3649,6 +4004,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 px
                 for px, cs in zip(pxs, cluster_status)
                 if getattr(cs, "name", None) == cluster_name_str
+                and (endpoint_id is None or extract_proxmox_session_endpoint_id(px) == endpoint_id)
             ),
             None,
         )
@@ -3756,6 +4112,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         "bridge_name": bridge_name,
                         "vm_id": netbox_vm.get("id"),
                         "resource_node": resource_node,
+                        "cluster_name": cluster_name_str,
                         "resolved_name": resolved_name,
                         "config_dict": config_dict,
                         "guest_iface": guest_iface,
@@ -3763,6 +4120,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                         "vm_name": vm_name,
                         "site_id": _relation_id(netbox_vm.get("site")),
                         "tenant_id": _relation_id(netbox_vm.get("tenant")),
+                        "proxmox_endpoint_id": endpoint_id,
                     }
                     interface_payloads.append(payload)
                 except Exception as exc:
@@ -3802,7 +4160,7 @@ async def create_only_vm_interfaces(  # noqa: C901
         async with semaphore:
             return await _sync_vm_interfaces(cluster_name, cluster_id, endpoint_id, resource)
 
-    async def _create_cluster_tasks(cluster: dict) -> list:
+    async def _create_cluster_tasks(cluster: dict, endpoint_id_hint: int | None) -> list:
         tasks = []
         for cluster_name, resources in cluster.items():
             cluster_id = await resolve_netbox_cluster_id_by_name(
@@ -3810,7 +4168,7 @@ async def create_only_vm_interfaces(  # noqa: C901
                 str(cluster_name),
                 cache=cluster_id_cache,
             )
-            endpoint_id = endpoint_id_by_cluster.get(str(cluster_name))
+            endpoint_id = endpoint_id_hint or endpoint_id_by_cluster.get(str(cluster_name))
             for resource in resources:
                 if resource.get("type") in ("qemu", "lxc"):
                     tasks.append(_run_task(cluster_name, cluster_id, endpoint_id, resource))
@@ -3822,8 +4180,9 @@ async def create_only_vm_interfaces(  # noqa: C901
     all_vlan_tags: dict[tuple[int, int | None, int | None], list[dict]] = {}
 
     try:
-        for cluster in cluster_resources:
-            cluster_results = await _create_cluster_tasks(cluster)
+        for cluster_index, cluster in enumerate(cluster_resources):
+            endpoint_id_hint = _session_endpoint_id_at(pxs, cluster_index)
+            cluster_results = await _create_cluster_tasks(cluster, endpoint_id_hint)
             for cluster_result in cluster_results:
                 if isinstance(cluster_result, Exception):
                     continue
@@ -4079,38 +4438,34 @@ async def create_only_vm_interfaces(  # noqa: C901
         from proxbox_api.netbox_rest import rest_first_async
         from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
 
-        node_device_id_cache: dict[str, int | None] = {}
-
-        async def _resolve_device_id(node_name: str) -> int | None:
-            if node_name in node_device_id_cache:
-                return node_device_id_cache[node_name]
-            try:
-                device_record = await rest_first_async(
-                    nb,
-                    "/api/dcim/devices/",
-                    query={"name": node_name, "limit": 1},
-                )
-                did = (
-                    device_record.get("id")
-                    if isinstance(device_record, dict)
-                    else getattr(device_record, "id", None)
-                )
-            except Exception:
-                did = None
-            node_device_id_cache[node_name] = did
-            return did
+        node_device_id_cache: dict[tuple[int | None, str, str], int | None] = {}
 
         for key, info in all_interface_info.items():
             bridge_name = info.get("bridge_name")
             if not bridge_name:
                 continue
             vm_id_val = info.get("vm_id")
-            resource_node_val = info.get("resource_node", "")
+            (
+                resource_cluster_val,
+                resource_node_val,
+                resource_site_val,
+                resource_endpoint_val,
+            ) = _bridge_device_lookup_args(info)
             if not vm_id_val:
                 continue
             try:
                 device_id_val = (
-                    await _resolve_device_id(resource_node_val) if resource_node_val else None
+                    await _resolve_bridge_device_id(
+                        nb,
+                        node_device_id_cache,
+                        cluster_status,
+                        resource_cluster_val,
+                        resource_node_val,
+                        resource_site_val,
+                        resource_endpoint_val,
+                    )
+                    if resource_node_val
+                    else None
                 )
                 vm_bridge_id = await ensure_bridge_interfaces(
                     nb,

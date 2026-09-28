@@ -16,6 +16,7 @@ class ProxboxSettingsDict(TypedDict):
     blocked_ip_ranges: list[ipaddress.IPv4Network | ipaddress.IPv6Network]
     encryption_key: str
     use_guest_agent_interface_name: bool
+    node_device_name_template: NotRequired[str]
     proxbox_fetch_max_concurrency: int
     ignore_ipv6_link_local_addresses: bool
     primary_ip_preference: str
@@ -28,10 +29,13 @@ class ProxboxSettingsDict(TypedDict):
     netbox_get_cache_max_bytes: NotRequired[int]
     netbox_write_concurrency: NotRequired[int]
     proxmox_fetch_concurrency: NotRequired[int]
+    session_acquire_concurrency: NotRequired[int]
     backup_batch_size: NotRequired[int]
     backup_batch_delay_ms: NotRequired[int]
     bulk_batch_size: int
     bulk_batch_delay_ms: int
+    interface_batch_size: int
+    interface_batch_delay_ms: int
     vm_sync_max_concurrency: int
     reconciliation_engine: NotRequired[str]
     reconciliation_compare_strict: NotRequired[bool]

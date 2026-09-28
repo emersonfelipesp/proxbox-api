@@ -10,6 +10,8 @@ import pytest
 
 from proxbox_api import runtime_settings, settings_client
 from proxbox_api.ceph import timing as ceph_timing
+from proxbox_api.routes.virtualization.virtual_machines import helpers as vm_helpers
+from proxbox_api.services import proxmox_helpers
 
 
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on", " TRUE "])
@@ -32,6 +34,7 @@ def test_runtime_codegen_process_opt_in_defaults_off(monkeypatch, value):
 def test_get_default_settings_exposes_backend_log_file_path():
     settings = settings_client.get_default_settings()
     assert settings["backend_log_file_path"] == "/var/log/proxbox.log"
+    assert settings["node_device_name_template"] == "{node}"
     assert settings["primary_ip_preference"] == "ipv4"
     assert settings["encryption_key"] == ""
     assert settings["delete_orphans"] is False
@@ -49,6 +52,111 @@ def test_get_default_settings_exposes_backend_log_file_path():
     assert settings["ceph_task_timeout"] == 300.0
     assert settings["ceph_task_poll_interval"] == 1.0
     assert settings["ceph_run_lease_seconds"] == 360.0
+    assert settings["interface_batch_size"] == 5
+    assert settings["interface_batch_delay_ms"] == 100
+    assert "guest_agent_timeout" not in settings
+
+
+def test_normalize_settings_keeps_interface_batch_tunables():
+    settings = settings_client._normalize_settings_payload(
+        {
+            "interface_batch_size": 17,
+            "interface_batch_delay_ms": 275,
+        }
+    )
+
+    assert settings["interface_batch_size"] == 17
+    assert settings["interface_batch_delay_ms"] == 275
+
+
+def test_normalize_settings_drops_plugin_guest_agent_timeout():
+    """guest_agent_timeout is environment-only; a plugin payload value is ignored."""
+    settings = settings_client._normalize_settings_payload({"guest_agent_timeout": 99})
+
+    assert "guest_agent_timeout" not in settings
+
+
+def test_plugin_guest_agent_timeout_cannot_change_resolver(monkeypatch):
+    monkeypatch.delenv("PROXBOX_GUEST_AGENT_TIMEOUT", raising=False)
+    normalized = settings_client._normalize_settings_payload({"guest_agent_timeout": 99})
+    monkeypatch.setattr(runtime_settings, "_load_settings", lambda: normalized)
+
+    assert proxmox_helpers._resolve_guest_agent_timeout() == 15
+
+
+@pytest.mark.parametrize(
+    ("payload", "key", "default"),
+    [
+        ({"interface_batch_size": 0}, "interface_batch_size", 5),
+        ({"interface_batch_delay_ms": -1}, "interface_batch_delay_ms", 100),
+    ],
+)
+def test_normalize_settings_uses_defaults_for_invalid_tunables(payload, key, default):
+    assert settings_client._normalize_settings_payload(payload)[key] == default
+
+
+@pytest.mark.parametrize(
+    ("resolver", "settings_key", "env_name", "plugin_value", "env_value"),
+    [
+        (
+            vm_helpers.resolve_interface_batch_size,
+            "interface_batch_size",
+            "PROXBOX_INTERFACE_BATCH_SIZE",
+            11,
+            19,
+        ),
+        (
+            vm_helpers.resolve_interface_batch_delay_ms,
+            "interface_batch_delay_ms",
+            "PROXBOX_INTERFACE_BATCH_DELAY_MS",
+            225,
+            350,
+        ),
+    ],
+)
+def test_tunable_consumers_prefer_env_over_plugin_settings(
+    monkeypatch,
+    resolver,
+    settings_key,
+    env_name,
+    plugin_value,
+    env_value,
+):
+    monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setattr(runtime_settings, "_load_settings", lambda: {settings_key: plugin_value})
+    assert resolver() == plugin_value
+
+    monkeypatch.setenv(env_name, str(env_value))
+    assert resolver() == env_value
+
+
+def test_guest_agent_timeout_defaults_when_plugin_payload_omits_field(monkeypatch):
+    monkeypatch.delenv("PROXBOX_GUEST_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {
+            "netbox_timeout": 120,
+            "interface_batch_size": 5,
+            "interface_batch_delay_ms": 100,
+        },
+    )
+
+    assert proxmox_helpers._resolve_guest_agent_timeout() == 15
+
+
+def test_guest_agent_timeout_env_overrides_default(monkeypatch):
+    monkeypatch.setenv("PROXBOX_GUEST_AGENT_TIMEOUT", "39")
+    monkeypatch.setattr(
+        runtime_settings,
+        "_load_settings",
+        lambda: {
+            "netbox_timeout": 120,
+            "interface_batch_size": 5,
+        },
+    )
+
+    assert proxmox_helpers._resolve_guest_agent_timeout() == 39
 
 
 def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
@@ -90,6 +198,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
         "ceph_task_timeout": 420.5,
         "ceph_task_poll_interval": 2.5,
         "ceph_run_lease_seconds": 480.0,
+        "node_device_name_template": "{node}.{cluster_slug}.example.com",
     }
 
     mock_response = MagicMock()
@@ -122,6 +231,7 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
     assert settings["ceph_task_timeout"] == 420.5
     assert settings["ceph_task_poll_interval"] == 2.5
     assert settings["ceph_run_lease_seconds"] == 480.0
+    assert settings["node_device_name_template"] == "{node}.{cluster_slug}.example.com"
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):

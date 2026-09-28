@@ -254,6 +254,9 @@ Regras de validacao:
 - Informe `password`, ou ambos `token_name` e `token_value`.
 - `token_name` e `token_value` devem ser informados juntos.
 - Os nomes dos endpoints devem ser unicos.
+- `PUT` e idempotente: quando todos os campos informados, incluindo as credenciais,
+  ja correspondem ao endpoint persistido, ele retorna a representacao atual sem
+  repetir a validacao do host nem gravar no banco de dados.
 
 ### Sessao e descoberta
 

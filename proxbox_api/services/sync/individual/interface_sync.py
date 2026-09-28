@@ -25,6 +25,7 @@ from proxbox_api.services.sync.individual.helpers import (
     resolve_guest_interface,
 )
 from proxbox_api.services.sync.network import normalize_vm_interface_name
+from proxbox_api.services.sync.node_device_name import render_node_device_name
 from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
 from proxbox_api.services.sync.vm_helpers import (
     build_guest_mac_index,
@@ -33,6 +34,16 @@ from proxbox_api.services.sync.vm_helpers import (
     record_id,
 )
 from proxbox_api.utils.async_compat import maybe_await
+
+
+def _node_device_lookup_name(px: object, node: str) -> str:
+    cluster_name = str(getattr(px, "name", "") or "")
+    return render_node_device_name(
+        node,
+        cluster_name,
+        str(getattr(px, "endpoint_name", "") or cluster_name),
+        str(getattr(px, "node_device_name_template", "{node}") or "{node}"),
+    )
 
 
 async def _fetch_qemu_guest_interfaces(
@@ -264,10 +275,11 @@ async def sync_interface_individual(  # noqa: C901
             from proxbox_api.services.sync.bridge_interfaces import ensure_bridge_interfaces
 
             try:
+                device_name = _node_device_lookup_name(px, node)
                 device_record = await rest_first_async(
                     nb,
                     "/api/dcim/devices/",
-                    query={"name": node, "limit": 1},
+                    query={"name": device_name, "limit": 2},
                 )
                 device_id = (
                     (

@@ -43,6 +43,7 @@ from proxbox_api.routes.proxmox import (
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
 from proxbox_api.routes.proxmox.nodes import get_node_network
 from proxbox_api.routes.proxmox.replication import cluster_replication
+from proxbox_api.services.interactive_policy import InteractiveDenied
 from proxbox_api.services.proxmox.config import resolve_vm_config
 from proxbox_api.services.proxmox_helpers import (
     get_cluster_resources as get_typed_cluster_resources,
@@ -2358,6 +2359,227 @@ def test_proxmox_sessions_reads_database_endpoints(monkeypatch, db_engine):
     assert sessions[0].name == "lab-cluster"
 
 
+@pytest.mark.asyncio
+async def test_partial_session_acquisition_returns_healthy_sessions_and_safe_failures(
+    monkeypatch,
+):
+    schemas = [
+        SimpleNamespace(db_endpoint_id=11, name="healthy"),
+        SimpleNamespace(db_endpoint_id=12, name="unreachable"),
+    ]
+    healthy = SimpleNamespace(name="healthy")
+
+    async def create(schema):
+        if schema.name == "unreachable":
+            raise RuntimeError("credential=secret")
+        return healthy
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+    monkeypatch.setattr(proxmox_providers_module, "get_int", lambda **_kwargs: 8)
+
+    result = await proxmox_providers_module._create_partial_sessions(schemas)
+
+    assert result.sessions == [healthy]
+    assert result.failures == [
+        proxmox_providers_module.ProxmoxSessionAcquisitionFailure(
+            endpoint_id=12,
+            endpoint_name="unreachable",
+            error_type="RuntimeError",
+            message="Could not return Proxmox Sessions",
+        )
+    ]
+    assert "secret" not in repr(result.failures)
+
+
+@pytest.mark.asyncio
+async def test_partial_session_acquisition_propagates_interactive_denial(monkeypatch):
+    async def deny(_schema):
+        raise InteractiveDenied
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", deny)
+    monkeypatch.setattr(proxmox_providers_module, "get_int", lambda **_kwargs: 8)
+
+    with pytest.raises(InteractiveDenied):
+        await proxmox_providers_module._create_partial_sessions(
+            [SimpleNamespace(db_endpoint_id=1, name="denied")]
+        )
+
+
+@pytest.mark.asyncio
+async def test_partial_session_acquisition_raises_when_every_endpoint_fails(monkeypatch):
+    async def fail(_schema):
+        raise RuntimeError("credential=secret")
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", fail)
+    monkeypatch.setattr(proxmox_providers_module, "get_int", lambda **_kwargs: 8)
+
+    with pytest.raises(ProxboxException) as exc_info:
+        await proxmox_providers_module._create_partial_sessions(
+            [SimpleNamespace(db_endpoint_id=1, name="failed")]
+        )
+
+    assert exc_info.value.http_status_code == 502
+    assert exc_info.value.detail["reason"] == "proxmox_session_acquisition_failed"
+    assert "secret" not in exc_info.value.public_python_exception
+
+
+@pytest.mark.asyncio
+async def test_strict_session_acquisition_still_closes_successes_and_raises(monkeypatch):
+    closed = []
+
+    class Healthy:
+        async def aclose(self):
+            closed.append("healthy")
+
+    async def create(schema):
+        if schema.name == "failed":
+            raise RuntimeError("failed")
+        return Healthy()
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+
+    with pytest.raises(ProxboxException, match="Could not return Proxmox Sessions"):
+        await proxmox_providers_module._create_all_sessions(
+            [SimpleNamespace(name="healthy"), SimpleNamespace(name="failed")]
+        )
+
+    assert closed == ["healthy"]
+
+
+@pytest.mark.asyncio
+async def test_strict_session_acquisition_prefers_interactive_denial(monkeypatch):
+    async def create(schema):
+        if schema.name == "ordinary":
+            raise RuntimeError("ordinary failure")
+        raise InteractiveDenied
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+
+    with pytest.raises(InteractiveDenied):
+        await proxmox_providers_module._create_all_sessions(
+            [SimpleNamespace(name="ordinary"), SimpleNamespace(name="denied")]
+        )
+
+
+@pytest.mark.asyncio
+async def test_strict_session_cleanup_failure_does_not_mask_original_error(monkeypatch):
+    class CleanupFails:
+        async def aclose(self):
+            raise RuntimeError("cleanup failure")
+
+    async def create(schema):
+        if schema.name == "failed":
+            raise ValueError("original failure")
+        return CleanupFails()
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+
+    with pytest.raises(ProxboxException) as exc_info:
+        await proxmox_providers_module._create_all_sessions(
+            [SimpleNamespace(name="healthy"), SimpleNamespace(name="failed")]
+        )
+
+    assert exc_info.value.detail["error_type"] == "ValueError"
+
+
+@pytest.mark.asyncio
+async def test_partial_session_acquisition_respects_concurrency_bound(monkeypatch):
+    active = 0
+    peak = 0
+    release = asyncio.Event()
+    all_started = asyncio.Event()
+
+    async def create(schema):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 2:
+            all_started.set()
+        await release.wait()
+        active -= 1
+        return SimpleNamespace(name=schema.name)
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+    monkeypatch.setattr(proxmox_providers_module, "get_int", lambda **_kwargs: 2)
+    schemas = [SimpleNamespace(db_endpoint_id=index, name=str(index)) for index in range(5)]
+
+    task = asyncio.create_task(proxmox_providers_module._create_partial_sessions(schemas))
+    await asyncio.wait_for(all_started.wait(), 1)
+    await asyncio.sleep(0)
+    assert peak == 2
+    release.set()
+    result = await task
+
+    assert len(result.sessions) == 5
+    assert peak == 2
+
+
+@pytest.mark.asyncio
+async def test_partial_session_acquisition_cancellation_closes_completed_sessions(monkeypatch):
+    acquired = asyncio.Event()
+    blocked = asyncio.Event()
+    closed: list[str] = []
+
+    class Session:
+        async def aclose(self):
+            closed.append("completed")
+
+    async def create(schema):
+        if schema.name == "completed":
+            acquired.set()
+            return Session()
+        await blocked.wait()
+        raise AssertionError("blocked acquisition unexpectedly resumed")
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+    monkeypatch.setattr(proxmox_providers_module, "get_int", lambda **_kwargs: 2)
+    schemas = [
+        SimpleNamespace(db_endpoint_id=1, name="completed"),
+        SimpleNamespace(db_endpoint_id=2, name="blocked"),
+    ]
+
+    task = asyncio.create_task(proxmox_providers_module._create_partial_sessions(schemas))
+    await acquired.wait()
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert closed == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_strict_session_acquisition_cancellation_closes_completed_sessions(monkeypatch):
+    acquired = asyncio.Event()
+    blocked = asyncio.Event()
+    closed: list[str] = []
+
+    class Session:
+        async def aclose(self):
+            closed.append("completed")
+
+    async def create(schema):
+        if schema.name == "completed":
+            acquired.set()
+            return Session()
+        await blocked.wait()
+        raise AssertionError("blocked acquisition unexpectedly resumed")
+
+    monkeypatch.setattr(proxmox_providers_module, "_create_request_session", create)
+    schemas = [SimpleNamespace(name="completed"), SimpleNamespace(name="blocked")]
+
+    task = asyncio.create_task(proxmox_providers_module._create_all_sessions(schemas))
+    await acquired.wait()
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert closed == ["completed"]
+
+
 def test_database_proxmox_schemas_inherit_effective_transport_settings_once(
     monkeypatch,
     db_engine,
@@ -3925,3 +4147,21 @@ def test_cache_metrics_include_bytes():
     assert "current_bytes" in metrics
     assert "max_bytes" in metrics
     clear_rest_get_cache()
+
+
+def test_partial_session_concurrency_resolves_off_event_loop(monkeypatch):
+    import threading
+
+    from proxbox_api.session import proxmox_providers
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def fake_get_int(**_kwargs):
+        seen.append(threading.get_ident())
+        return 2
+
+    monkeypatch.setattr(proxmox_providers, "get_int", fake_get_int)
+    result = asyncio.run(proxmox_providers._create_partial_sessions([]))
+    assert seen and seen[0] != loop_thread
+    assert result is not None

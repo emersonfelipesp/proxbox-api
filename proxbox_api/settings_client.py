@@ -103,6 +103,7 @@ def get_default_settings() -> ProxboxSettingsDict:
         "blocked_ip_ranges": [],
         "encryption_key": "",  # Empty string means no key in settings, use env var
         "use_guest_agent_interface_name": True,
+        "node_device_name_template": "{node}",
         "proxbox_fetch_max_concurrency": 8,
         "ignore_ipv6_link_local_addresses": True,
         "primary_ip_preference": "ipv4",
@@ -115,10 +116,13 @@ def get_default_settings() -> ProxboxSettingsDict:
         "netbox_get_cache_max_bytes": 52_428_800,
         "netbox_write_concurrency": 8,
         "proxmox_fetch_concurrency": 8,
+        "session_acquire_concurrency": 8,
         "backup_batch_size": 5,
         "backup_batch_delay_ms": 200,
         "bulk_batch_size": 50,
         "bulk_batch_delay_ms": 500,
+        "interface_batch_size": 5,
+        "interface_batch_delay_ms": 100,
         "vm_sync_max_concurrency": 4,
         "reconciliation_engine": "python",
         "reconciliation_compare_strict": False,
@@ -280,6 +284,12 @@ def _int_allow_zero(value: object, default: int) -> int:
     return default if coerced is None else coerced
 
 
+def _int_at_least(value: object, default: int, minimum: int) -> int:
+    """Coerce an integer setting, falling back when it is below its model minimum."""
+    coerced = _coerce_int(value, default=default)
+    return coerced if coerced is not None and coerced >= minimum else default
+
+
 def _normalize_settings_payload(settings: dict[str, Any]) -> ProxboxSettingsDict:
     """Type every persisted plugin setting; unparseable values take their defaults."""
     return {
@@ -296,6 +306,9 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> ProxboxSettingsDict
         "use_guest_agent_interface_name": _coerce_bool(
             settings.get("use_guest_agent_interface_name"), default=True
         ),
+        "node_device_name_template": str(
+            settings.get("node_device_name_template", "{node}") or "{node}"
+        ).strip(),
         "proxbox_fetch_max_concurrency": _int_or(settings.get("proxbox_fetch_max_concurrency"), 8),
         "ignore_ipv6_link_local_addresses": _coerce_bool(
             settings.get("ignore_ipv6_link_local_addresses"), default=True
@@ -318,10 +331,13 @@ def _normalize_settings_payload(settings: dict[str, Any]) -> ProxboxSettingsDict
         ),
         "netbox_write_concurrency": _int_or(settings.get("netbox_write_concurrency"), 8),
         "proxmox_fetch_concurrency": _int_or(settings.get("proxmox_fetch_concurrency"), 8),
+        "session_acquire_concurrency": _int_or(settings.get("session_acquire_concurrency"), 8),
         "backup_batch_size": _int_or(settings.get("backup_batch_size"), 5),
         "backup_batch_delay_ms": _int_allow_zero(settings.get("backup_batch_delay_ms"), 200),
         "bulk_batch_size": _int_or(settings.get("bulk_batch_size"), 50),
         "bulk_batch_delay_ms": _int_allow_zero(settings.get("bulk_batch_delay_ms"), 500),
+        "interface_batch_size": _int_at_least(settings.get("interface_batch_size"), 5, 1),
+        "interface_batch_delay_ms": _int_at_least(settings.get("interface_batch_delay_ms"), 100, 0),
         "vm_sync_max_concurrency": _int_or(settings.get("vm_sync_max_concurrency"), 4),
         "reconciliation_engine": _normalize_reconciliation_engine(
             settings.get("reconciliation_engine")

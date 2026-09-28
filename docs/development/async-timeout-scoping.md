@@ -83,15 +83,13 @@ the outer call would run with the original narrow timeout.
 
 ## Guest-Agent Timeout Configuration
 
-The guest-agent timeout is configured through:
-
-- **Environment variable:** `PROXBOX_GUEST_AGENT_TIMEOUT` (seconds, float)
-- **Plugin settings key:** `guest_agent_timeout` (on the NetBox Proxbox plugin
-  settings page)
-- **Default:** 15 seconds
-- **Range:** 1–600 seconds
+The guest-agent timeout is configured only through the **`PROXBOX_GUEST_AGENT_TIMEOUT`**
+environment variable (seconds, default **15**, range **1–600**). The NetBox Proxbox
+plugin has no `guest_agent_timeout` field; `settings_client._normalize_settings_payload`
+drops that key from plugin payloads.
 
 ```python
+# settings_key matches the resolver API; plugin settings never supply this value.
 guest_agent_timeout = get_float(
     settings_key="guest_agent_timeout",
     env="PROXBOX_GUEST_AGENT_TIMEOUT",

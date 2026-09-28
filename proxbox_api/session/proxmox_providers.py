@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import threading
 from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass
 from json import JSONDecodeError
 from typing import Annotated
 
-from fastapi import Depends, Query
+from fastapi import Depends, Query, Response
 from proxmox_sdk.sdk.exceptions import ResourceException
 from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -18,6 +20,7 @@ from proxbox_api.database import ProxmoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
+from proxbox_api.runtime_settings import get_int
 from proxbox_api.schemas.proxmox import ProxmoxSessionSchema, ProxmoxTokenSchema
 from proxbox_api.services.interactive_policy import (
     InteractiveDenied,
@@ -32,9 +35,32 @@ from proxbox_api.settings_client import (
     override_settings_for_current_thread,
 )
 from proxbox_api.types import ProxboxSettingsDict
+from proxbox_api.utils.cancellation import await_task_through_repeated_cancellation
 
 _NETBOX_ENDPOINT_ID_CHUNK_SIZE = 100
 _DB_SETTINGS_REQUEST_TIMEOUT_SECONDS = 0.5
+_SESSION_ACQUIRE_CONCURRENCY_DEFAULT = 8
+_ENDPOINT_ERRORS_HEADER = "X-Proxbox-Endpoint-Errors"
+_ENDPOINT_ERRORS_HEADER_MAX_BYTES = 1024
+_ENDPOINT_ERRORS_HEADER_MAX_IDS = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ProxmoxSessionAcquisitionFailure:
+    """Secret-safe endpoint context for one failed session acquisition."""
+
+    endpoint_id: int | None
+    endpoint_name: str | None
+    error_type: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProxmoxPartialSessions:
+    """Healthy sessions and isolated endpoint failures from one acquisition."""
+
+    sessions: list[ProxmoxSession]
+    failures: list[ProxmoxSessionAcquisitionFailure]
 
 
 def _upstream_http_status(error: Exception) -> int:
@@ -126,21 +152,145 @@ async def _create_filtered_session(
 async def _create_all_sessions(
     proxmox_schemas: list[ProxmoxSessionSchema],
 ) -> list[ProxmoxSession]:
-    results = await asyncio.gather(
-        *[_create_request_session(schema) for schema in proxmox_schemas],
-        return_exceptions=True,
+    results = await _gather_session_acquisitions(
+        [asyncio.create_task(_create_request_session(schema)) for schema in proxmox_schemas]
     )
-    failures = [result for result in results if isinstance(result, BaseException)]
     sessions = [result for result in results if not isinstance(result, BaseException)]
-    if not failures:
+    failure = _strict_acquisition_failure(results)
+    if failure is None:
         return sessions
+    await _raise_strict_acquisition_failure(failure, sessions)
+    raise AssertionError("unreachable")
 
-    failure = failures[0]
+
+def _strict_acquisition_failure(
+    results: list[ProxmoxSession | BaseException],
+) -> BaseException | None:
+    failures = [result for result in results if isinstance(result, BaseException)]
+    return next(
+        (failure for failure in failures if isinstance(failure, InteractiveDenied)),
+        failures[0] if failures else None,
+    )
+
+
+async def _raise_strict_acquisition_failure(
+    failure: BaseException,
+    sessions: list[ProxmoxSession],
+) -> None:
     if current_interactive_runtime() is None:
         await _close_sessions_after_failed_acquisition(sessions)
+    if isinstance(failure, InteractiveDenied):
+        raise failure
     if not isinstance(failure, Exception):
         raise failure
     raise _session_acquisition_error(failure) from failure
+
+
+def _acquisition_failure(
+    schema: ProxmoxSessionSchema, error: Exception
+) -> ProxmoxSessionAcquisitionFailure:
+    sanitized = _session_acquisition_error(error)
+    detail = sanitized.detail if isinstance(sanitized.detail, dict) else {}
+    return ProxmoxSessionAcquisitionFailure(
+        endpoint_id=schema.db_endpoint_id,
+        endpoint_name=schema.name,
+        error_type=str(detail.get("error_type", type(error).__name__)),
+        message=sanitized.message,
+    )
+
+
+def _fatal_acquisition_result(
+    results: list[ProxmoxSession | BaseException],
+) -> BaseException | None:
+    for result in results:
+        if isinstance(result, InteractiveDenied):
+            return result
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            return result
+    return None
+
+
+def _partition_partial_results(
+    schemas: list[ProxmoxSessionSchema],
+    results: list[ProxmoxSession | BaseException],
+) -> tuple[list[ProxmoxSession], list[ProxmoxSessionAcquisitionFailure], Exception | None]:
+    sessions: list[ProxmoxSession] = []
+    failures: list[ProxmoxSessionAcquisitionFailure] = []
+    first_error: Exception | None = None
+    for schema, result in zip(schemas, results, strict=True):
+        if isinstance(result, Exception):
+            first_error = first_error or result
+            failures.append(_acquisition_failure(schema, result))
+        else:
+            sessions.append(result)
+    return sessions, failures, first_error
+
+
+def _session_acquire_concurrency() -> int:
+    return get_int(
+        settings_key="session_acquire_concurrency",
+        env="PROXBOX_SESSION_ACQUIRE_CONCURRENCY",
+        default=_SESSION_ACQUIRE_CONCURRENCY_DEFAULT,
+        minimum=1,
+    )
+
+
+async def _create_partial_sessions(
+    proxmox_schemas: list[ProxmoxSessionSchema],
+) -> ProxmoxPartialSessions:
+    # get_int may cold-load plugin settings over blocking HTTP; keep it off the loop.
+    concurrency = await asyncio.to_thread(_session_acquire_concurrency)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def acquire(schema: ProxmoxSessionSchema) -> ProxmoxSession:
+        async with semaphore:
+            return await _create_request_session(schema)
+
+    results = await _gather_session_acquisitions(
+        [asyncio.create_task(acquire(schema)) for schema in proxmox_schemas]
+    )
+    fatal = _fatal_acquisition_result(results)
+    if fatal is not None:
+        acquired = [result for result in results if not isinstance(result, BaseException)]
+        if current_interactive_runtime() is None:
+            await _close_sessions_after_failed_acquisition(acquired)
+        raise fatal
+
+    sessions, failures, first_error = _partition_partial_results(proxmox_schemas, results)
+    if first_error is not None and not sessions:
+        raise _session_acquisition_error(first_error) from first_error
+    return ProxmoxPartialSessions(sessions=sessions, failures=failures)
+
+
+async def _gather_session_acquisitions(
+    tasks: list[asyncio.Task[ProxmoxSession]],
+) -> list[ProxmoxSession | BaseException]:
+    interactive_owned = current_interactive_runtime() is not None
+    try:
+        return await asyncio.gather(*tasks, return_exceptions=True)
+    except BaseException:
+        cleanup = asyncio.create_task(
+            _settle_cancelled_acquisitions(tasks, close_sessions=not interactive_owned)
+        )
+        try:
+            await await_task_through_repeated_cancellation(cleanup)
+        except asyncio.CancelledError:
+            pass
+        raise
+
+
+async def _settle_cancelled_acquisitions(
+    tasks: list[asyncio.Task[ProxmoxSession]],
+    *,
+    close_sessions: bool,
+) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    if close_sessions:
+        sessions = [result for result in results if not isinstance(result, BaseException)]
+        await _close_sessions_after_failed_acquisition(sessions)
 
 
 async def _close_failed_acquisition_session(session: ProxmoxSession) -> None:
@@ -272,6 +422,80 @@ async def proxmox_sessions_dep(
             await close_proxmox_sessions(sessions)
 
 
+async def proxmox_sessions_partial(
+    response: Response,
+    database_session: AsyncSession = Depends(get_async_session),
+    source: str = "database",
+    name: str | None = None,
+    domain: str | None = None,
+    ip_address: str | None = None,
+    port: int = 8006,
+    endpoint_ids: str | None = None,
+    proxmox_endpoint_ids: str | None = None,
+) -> ProxmoxPartialSessions:
+    """Acquire all selected sessions while isolating ordinary endpoint failures."""
+    del port
+    if source not in {"database", "netbox"}:
+        raise ProxboxException(
+            message="Invalid source parameter",
+            detail="source must be 'database' or 'netbox'.",
+        )
+    endpoint_id_list = _parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
+    schemas = await _load_request_schemas(
+        database_session=database_session,
+        source=source,
+        endpoint_ids=endpoint_id_list,
+    )
+    for field, value in (("ip_address", ip_address), ("domain", domain), ("name", name)):
+        if value is not None:
+            sessions = await _create_filtered_session(schemas, field, value)
+            return ProxmoxPartialSessions(sessions=sessions, failures=[])
+
+    result = await _create_partial_sessions(schemas)
+    if result.failures:
+        log_payload = json.dumps(
+            [asdict(failure) for failure in result.failures], separators=(",", ":")
+        )
+        response.headers[_ENDPOINT_ERRORS_HEADER] = _endpoint_errors_header(result.failures)
+        logger.warning(
+            "Partial Proxmox session acquisition skipped %d endpoint(s): %s",
+            len(result.failures),
+            log_payload,
+        )
+    return result
+
+
+def _endpoint_errors_header(
+    failures: list[ProxmoxSessionAcquisitionFailure],
+) -> str:
+    endpoint_ids = [failure.endpoint_id for failure in failures if failure.endpoint_id is not None][
+        :_ENDPOINT_ERRORS_HEADER_MAX_IDS
+    ]
+    while True:
+        payload = json.dumps(
+            {
+                "failed": len(failures),
+                "ids": endpoint_ids,
+                "truncated": len(endpoint_ids) < len(failures),
+            },
+            separators=(",", ":"),
+        )
+        if len(payload.encode("utf-8")) <= _ENDPOINT_ERRORS_HEADER_MAX_BYTES:
+            return payload
+        endpoint_ids.pop()
+
+
+async def proxmox_sessions_partial_dep(
+    result: Annotated[ProxmoxPartialSessions, Depends(proxmox_sessions_partial)],
+):
+    owner = current_interactive_runtime()
+    try:
+        yield result.sessions
+    finally:
+        if owner is None:
+            await close_proxmox_sessions(result.sessions)
+
+
 async def _load_request_schemas(
     *, database_session: AsyncSession | Session, source: str, endpoint_ids: list[int] | None
 ) -> list[ProxmoxSessionSchema]:
@@ -334,6 +558,7 @@ async def close_proxmox_sessions(pxs: list[ProxmoxSession]) -> None:
 
 
 ProxmoxSessionsDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_dep)]
+ProxmoxSessionsPartialDep = Annotated[list[ProxmoxSession], Depends(proxmox_sessions_partial_dep)]
 
 
 def _netbox_field(endpoint: object, field: str, default: object = None) -> object:
@@ -382,8 +607,15 @@ def _parse_db_endpoint(
         raw_value=endpoint.token_value,
         decrypt=endpoint.get_decrypted_token_value,
     )
+    from proxbox_api.services.sync.node_device_name import resolve_node_device_name_template
+
     return ProxmoxSessionSchema(
         name=endpoint.name,
+        endpoint_name=endpoint.name,
+        node_device_name_template=resolve_node_device_name_template(
+            getattr(endpoint, "node_device_name_template", ""),
+            global_template=settings.get("node_device_name_template"),
+        ),
         ip_address=endpoint.ip_address,
         domain=endpoint.domain,
         http_port=endpoint.port,
@@ -571,8 +803,16 @@ def _parse_netbox_endpoint(
     raw_max_retries = _netbox_field(endpoint, "max_retries")
     raw_retry_backoff = _netbox_field(endpoint, "retry_backoff")
 
+    from proxbox_api.services.sync.node_device_name import resolve_node_device_name_template
+
+    endpoint_name = _netbox_field(endpoint, "name")
     return ProxmoxSessionSchema(
-        name=_netbox_field(endpoint, "name"),
+        name=endpoint_name,
+        endpoint_name=endpoint_name,
+        node_device_name_template=resolve_node_device_name_template(
+            _netbox_field(endpoint, "node_device_name_template"),
+            global_template=settings.get("node_device_name_template"),
+        ),
         ip_address=ip,
         domain=_netbox_field(endpoint, "domain"),
         http_port=_netbox_field(endpoint, "port"),

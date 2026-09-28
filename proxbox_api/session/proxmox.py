@@ -9,6 +9,7 @@ from proxmox_sdk import ProxmoxSDK
 from proxbox_api.session.proxmox_core import ProxmoxSession
 from proxbox_api.session.proxmox_providers import (
     ProxmoxSessionsDep,
+    ProxmoxSessionsPartialDep,
     close_proxmox_sessions,
     load_proxmox_session_schemas,
     proxmox_sessions,
@@ -65,6 +66,7 @@ __all__ = (
     "ProxmoxAPI",
     "ProxmoxSession",
     "ProxmoxSessionsDep",
+    "ProxmoxSessionsPartialDep",
     "close_proxmox_sessions",
     "load_proxmox_session_schemas",
     "proxmox_sessions",

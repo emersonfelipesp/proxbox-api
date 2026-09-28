@@ -128,6 +128,39 @@ database credentials use the same bounded lookup for the plugin encryption key;
 if no environment, plugin, or local key can decrypt them, endpoint loading fails
 with `503` and never forwards ciphertext as a Proxmox credential.
 
+### Node device name template
+
+`node_device_name_template` controls the NetBox Device name created for each
+Proxmox node. The global `ProxboxPluginSettings` value defaults to `{node}`;
+`PROXBOX_NODE_DEVICE_NAME_TEMPLATE` can override it, and a non-empty value on a
+Proxmox endpoint has highest precedence. Supported placeholders are `{node}`,
+`{cluster}`, `{cluster_slug}`, and `{endpoint}`. Templates must include `{node}`
+and may not use format specs, conversions, attribute access, or index access.
+The rendered name must be DNS-safe, each label must be at most 63 characters,
+and the complete NetBox Device name must be at most 64 characters.
+When a template contains `{endpoint}`, endpoint create and update validate the
+literal effective endpoint name; they reject the request instead of silently
+slugging or changing that identifier. A simultaneous endpoint-name and template
+update validates the new values together.
+
+For example, `{node}.{cluster}.example.com` separates clusters that reuse the
+same short node name. Proxbox keeps the short name for Proxmox API paths and
+typed sync identity. When a template changes, it renames a legacy short name or
+a name previously managed by Proxbox. An operator-assigned Device name is
+preserved. Device sync-state identity includes endpoint ID, cluster, and node,
+so endpoints that expose the same cluster and short node name remain distinct.
+If a backend-provided template fails syntax validation, Proxbox logs
+an error naming the endpoint and template, then safely falls back to `{node}`.
+If a valid template renders an invalid or over-64-character name for a specific
+node, Proxbox skips that node's Device create or rename, reports an actionable
+per-node sync error, and continues with the other nodes. VMs on the skipped
+node remain unattached and are reported by the existing missing-Device handling.
+Before applying any planned rename, Proxbox checks every rendered name in its
+effective site. A name owned by the same Device is safe; a different occupant
+causes only the conflicting node to be skipped, without partially applying an
+earlier rename before collision discovery.
+The NetBox plugin also validates templates against the synchronized inventory.
+
 ### `allow_writes` field
 
 `ProxmoxEndpoint.allow_writes` (boolean, default `false`) is the trust boundary
@@ -241,6 +274,7 @@ pveum acl modify / --users netbox@pam --roles NetBoxReadOnly --propagate 1
 - The NetBox endpoint `verify_ssl` value is reused by plugin-settings fetches, so self-signed NetBox certificates work consistently when verification is disabled.
 - Proxmox sessions default to local database endpoint records.
 - Legacy source mode (`source=netbox`) is still supported in Proxmox session dependency behavior.
+- `ProxmoxSessionsDep` uses strict all-endpoint acquisition. The firewall summary and datacenter CPU-model aggregate reads opt into partial acquisition: healthy endpoint data keeps the existing top-level list body, while `X-Proxbox-Endpoint-Errors` provides the bounded failure count and up to 20 endpoint IDs without names or messages. All-endpoint failure remains an HTTP error.
 
 ## Authentication
 
@@ -257,7 +291,7 @@ See [Authentication](./authentication.md) for complete documentation on:
 
 Most runtime tunables now resolve in the order **environment variable > `ProxboxPluginSettings` (NetBox plugin settings page) > built-in default**, via `proxbox_api/runtime_settings.py`. The settings cache TTL is 5 minutes, so changes made on the NetBox plugin settings page take effect on the next sync run without restarting the backend. Setting an environment variable still works as an override; leaving it unset means the plugin settings page is the authoritative source.
 
-A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, `PROXBOX_AUTH_MAX_ACTIVE_KEYS`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` / `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`, `PROXBOX_TRUSTED_PROXIES`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, `PROXBOX_RUNTIME_CODEGEN_ENABLED`, and `PROXBOX_CORS_EXTRA_ORIGINS`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
+A handful of variables stay process-level only because they are read before the NetBox connection exists or are operator-only infrastructure: `PROXBOX_BIND_HOST`, `UVICORN_WORKERS`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_ALLOW_FRESH_DATABASE_WITH_LEGACY`, `PROXBOX_RATE_LIMIT`, `PROXBOX_AUTH_LOCKOUT_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_SOURCE_THRESHOLD`, `PROXBOX_AUTH_LOCKOUT_WINDOW_SECONDS`, `PROXBOX_AUTH_LOCKOUT_MAX_BUCKETS`, `PROXBOX_AUTH_LOCKOUT_MAX_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_MAX_GLOBAL_IN_FLIGHT`, `PROXBOX_AUTH_LOCKOUT_VERIFICATION_MAX_SECONDS`, `PROXBOX_AUTH_MAX_ACTIVE_KEYS`, `PROXBOX_AUTH_LOCKOUT_HMAC_KEY` / `PROXBOX_AUTH_LOCKOUT_HMAC_KEY_FILE`, `PROXBOX_TRUSTED_PROXIES`, `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`, `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`, `PROXBOX_RUNTIME_CODEGEN_ENABLED`, `PROXBOX_CORS_EXTRA_ORIGINS`, and `PROXBOX_GUEST_AGENT_TIMEOUT`. The rest map 1:1 to `ProxboxPluginSettings` fields and can be edited from the NetBox plugin settings page.
 
 ## Environment Variables
 
@@ -272,13 +306,14 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_RETRY_DELAY` | `2.0` | Initial retry delay in seconds for NetBox retries. |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `1` | Maximum concurrent NetBox API requests. Keep low (1-2) to avoid exhausting NetBox's PostgreSQL connection pool. |
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `4` | Maximum number of concurrent Proxmox VM config fetches during VM and virtual-disk sync. |
-| `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Per-call timeout (seconds, range 1-600) for the QEMU guest-agent `network-get-interfaces` request. Interface-dense guests (many VRRP/alias interfaces) can be slow to enumerate; raise this if guest-agent interface fetches time out. Maps to the `ProxboxPluginSettings.guest_agent_timeout` plugin field. |
+| `PROXBOX_GUEST_AGENT_TIMEOUT` | `15` | Per-call timeout (seconds, range 1-600) for the QEMU guest-agent `network-get-interfaces` request. Interface-dense guests (many VRRP/alias interfaces) can be slow to enumerate; raise this if guest-agent interface fetches time out. Environment-only (no NetBox plugin setting); restart required after change. |
 | `PROXBOX_RECONCILIATION_ENGINE` | `python` | Optional env override for `ProxboxPluginSettings.reconciliation_engine`. Valid values are `python`, `compare`, and `rust`. |
 | `PROXBOX_CEPH_TASK_TIMEOUT` | `300` | Maximum total wait for a submitted Proxmox Ceph task (range 1-3600). Maps to `ProxboxPluginSettings.ceph_task_timeout`; one immutable value bounds every status call and sleep. |
 | `PROXBOX_CEPH_TASK_POLL_INTERVAL` | `1` | Delay between Ceph task-status checks (range 0.1-60). Maps to `ProxboxPluginSettings.ceph_task_poll_interval` and is normalized to at most the task timeout. |
 | `PROXBOX_CEPH_RUN_LEASE_SECONDS` | `360` | Renewable durable Ceph run lease (range 1-3600). Maps to `ProxboxPluginSettings.ceph_run_lease_seconds` and is persisted on each operation run so later settings changes cannot alter in-flight heartbeat or recovery behavior. Heartbeat cadence is independent of provider polling. |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `8` (VM sync, virtual disks) / `4` (snapshots) | Maximum number of concurrent NetBox write operations. Default varies by sync service. Task-history reconciliation uses bounded bulk requests instead of per-VM write dispatch. |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `8` (most paths) / `4` (task-history) | Maximum number of concurrent Proxmox read operations. Default varies by sync service. |
+| `PROXBOX_SESSION_ACQUIRE_CONCURRENCY` | `8` | Maximum concurrent Proxmox session opens for partial multi-endpoint acquisition. Maps to `ProxboxPluginSettings.session_acquire_concurrency` and is clamped to at least 1. |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `8` | Legacy fetch concurrency override used by some sync entrypoints. |
 | `PROXBOX_RATE_LIMIT` | `300` | Maximum API requests per minute per IP address. |
 | `PROXBOX_AUTH_LOCKOUT_THRESHOLD` | `5` | Failed attempts allowed per composite source/credential bucket. Valid range: 1-100; invalid values fail startup. |

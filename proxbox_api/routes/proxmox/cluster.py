@@ -58,6 +58,11 @@ def _cluster_item_defaults(
         "mode": mode,
     }
     if proxmox_object is not None:
+        payload["endpoint_name"] = getattr(proxmox_object, "endpoint_name", None)
+        payload["db_endpoint_id"] = getattr(proxmox_object, "db_endpoint_id", None)
+        payload["node_device_name_template"] = (
+            getattr(proxmox_object, "node_device_name_template", None) or "{node}"
+        )
         for field in (
             "site_id",
             "site_slug",

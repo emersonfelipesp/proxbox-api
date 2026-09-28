@@ -24,6 +24,8 @@ class ProxmoxTokenSchema(ProxboxBaseModel):
 
 class ProxmoxSessionSchema(ProxboxBaseModel):
     name: str | None = None
+    endpoint_name: str | None = None
+    node_device_name_template: str = "{node}"
     ip_address: str | None = None
     domain: str | None = None
     http_port: int | None = None
@@ -45,6 +47,8 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
 
     @field_validator(
         "name",
+        "endpoint_name",
+        "node_device_name_template",
         "ip_address",
         "domain",
         "user",
@@ -235,6 +239,9 @@ class ClusterStatusSchema(BaseClusterStatusSchema):
     quorate: bool
     version: int
     mode: str
+    endpoint_name: str | None = None
+    node_device_name_template: str = "{node}"
+    db_endpoint_id: int | None = None
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None

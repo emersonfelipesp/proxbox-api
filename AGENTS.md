@@ -105,6 +105,11 @@ Production must therefore keep runtime code generation disabled.
 ## Certified Stack Pairing
 
 Current sibling-source development pairing: `netbox-proxbox 0.0.27rc4 ... proxbox-api 0.0.23 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
+
+Proxmox node Device names use the effective endpoint/global
+`node_device_name_template`. Keep the Proxmox short node name in API paths and
+typed sync-state identity; use the rendered name only for NetBox Device writes
+and lookups.
 This source-only tuple is not a published or certified runtime pairing.
 `proxbox-api 0.0.21.post2` adds authenticated Proxmox console WebSocket handshakes,
 typed-sidecar-only inventory state, NetBox 4.6.6 certification, strict Python

@@ -43,11 +43,32 @@ efeito em até 5 minutos (ou imediatamente ao reiniciar).
 | `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` | — | 30 | 1 | Segundos maximos para um fetch de configuracao de VM no sync completo antes de isolar essa VM como falha |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | 1 | Máx de tarefas concorrentes de sync por VM com escrita intensa no NetBox (VMs e discos) |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 | 1 | Máx de leituras concorrentes da API Proxmox para interfaces |
+| `PROXBOX_SESSION_ACQUIRE_CONCURRENCY` | `session_acquire_concurrency` | 8 | 1 | Máx de aberturas de sessão concorrentes na aquisição parcial multi-endpoint |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 | 1 | VMs por lote de sincronização de interfaces (evita sobrecarga do NetBox) |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `interface_batch_delay_ms` | 100 | 0 | Milissegundos entre lotes de sincronização de interfaces |
-| `PROXBOX_GUEST_AGENT_TIMEOUT` | `guest_agent_timeout` | 15.0 | 1.0 | Segundos para chamada `network-get-interfaces` do agente guest |
+| `PROXBOX_GUEST_AGENT_TIMEOUT` | — | 15.0 | 1.0 | Segundos para chamada `network-get-interfaces` do agente guest (somente variável de ambiente; não existe na página de configurações do plugin NetBox) |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `netbox_max_concurrent` | 1 | 1 | Máx de requisições GET concorrentes ao NetBox (manter baixo para evitar esgotamento do pool PostgreSQL) |
-| `PROXBOX_NETBOX_TIMEOUT` | — | 120 | 1 | Timeout total da sessão HTTP do NetBox em segundos |
+| `PROXBOX_NETBOX_TIMEOUT` | `netbox_timeout` | 120 | 1 | Timeout total da sessão HTTP do NetBox em segundos |
+
+Para dimensionamento do ambiente, limites de entrada, topologia de workers e
+um perfil inicial para cerca de 30 clusters, consulte [Implantações Grandes com
+Vários Clusters](../operations/large-multi-cluster-deployments.md).
+
+`ProxmoxSessionsDep` permanece estrita: a falha de um endpoint interrompe a
+dependência e fecha as sessões já abertas para uma requisição comum de
+inventário. `ProxmoxSessionsPartialDep` é uma opção explícita para leituras
+agregadas multi-endpoint. Ela retorna dados dos endpoints saudáveis e informa
+falhas sem segredos no header de resposta JSON limitado
+`X-Proxbox-Endpoint-Errors`. O resumo tem o formato `{"failed": <quantidade>,
+"ids": [<até 20 IDs de endpoint>], "truncated": <booleano>}`, tem limite de
+1024 bytes e não inclui nomes de endpoint nem mensagens de erro. Se todos os
+endpoints selecionados falharem, a requisição ainda retorna um erro.
+
+Durante a sincronização, o plugin netbox-proxbox solicita os dados de firewall
+e datacenter para um endpoint por vez. Assim, uma falha é informada como falha
+daquele endpoint. Outros clientes multi-endpoint podem consultar o header de
+resumo limitado para identificar os IDs com falha e preservar os dados
+saudáveis.
 
 ## A Otimização de `netbox_version` Único (F3)
 

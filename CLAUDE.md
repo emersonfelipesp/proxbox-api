@@ -276,6 +276,10 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Transport access method** (`ProxmoxEndpoint.access_methods`, enum `proxbox_api/enum/proxmox.py::ProxmoxAccessMethod`): per-endpoint axis orthogonal to `allow_writes`. `api` (default, new endpoints) = Read+Write over API only; `api_ssh` = API + SSH. SSH-only is unrepresentable (two-value enum; create/update reject any other value with 422). Existing rows are backfilled to `api_ssh` on upgrade (non-breaking). Gates proxbox-api's own SQLite-id SSH paths (Cloud Image Build Pipeline, Azure VHD import) via `routes/proxmox/access_gate.py`. The value is pushed from the NetBox plugin and accepted on `POST/PUT /proxmox/endpoints`.
 - **Extras status** (`routes/extras/`, `/extras/*`): `GET /extras/bootstrap-status` exposes startup bootstrap warnings. The former custom-field creation and reconciliation routes have been removed; typed `Proxbox*SyncState` sidecars are the only Proxbox reflection-state store.
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
+  Proxmox node Device names use the effective endpoint/global
+  `node_device_name_template`, while Proxmox API paths and typed sync-state
+  identity retain the original short node name. The supported placeholders are
+  `{node}`, `{cluster}`, `{cluster_slug}`, and `{endpoint}`.
 - **Optional sidecars** (conditionally mounted): `/pbs/*`, `/ceph/*`, `/pdm/*` when the corresponding `proxmox-sdk` extras are installed and `PROXBOX_FEATURES` includes them.
 
 ## Error and data rules
@@ -328,7 +332,7 @@ connection exists or is **operator-only infrastructure** that has no business in
 `PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
 `PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
 `PROXBOX_RUNTIME_CODEGEN_ENABLED`,
-`PROXBOX_CORS_EXTRA_ORIGINS`, `PROXBOX_SSH_KEY_DIR`. Anything that controls sync behavior, batching,
+`PROXBOX_CORS_EXTRA_ORIGINS`, `PROXBOX_SSH_KEY_DIR`, `PROXBOX_GUEST_AGENT_TIMEOUT`. Anything that controls sync behavior, batching,
 concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.
 
 Do **not** invent shadow config layers (parallel JSON/YAML files, ad-hoc dotenv
@@ -353,6 +357,7 @@ the `netbox-proxbox` side, do all five — the existing fields in
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: explicit opt-in for plaintext credential storage. With no encryption key configured, credential **writes** (endpoint create/update that store a secret) are refused unless this is set to `1`/`true`/`yes`; reads and the rest of the service keep working. Use only in dev/tests.
 - `PROXBOX_SSH_KEY_DIR`: directory prefix for private keys accepted by Cloud Image Build Pipeline remote execution (`ssh_identity_file`). Defaults to `/etc/proxbox/ssh_keys`; request paths must resolve under this directory before `ssh -i` is constructed.
 - `PROXBOX_LOG_LEVEL`: console log verbosity (default `INFO`). Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` (case-insensitive). Controls only the console handler; the in-memory buffer always receives DEBUG+ and the rotating file handler always writes WARNING+. Setting `DEBUG` also enables full `netbox_sdk.client` per-request tracing which is suppressed at all other levels to prevent INFO-level flooding.
+- `PROXBOX_GUEST_AGENT_TIMEOUT`: per-call timeout in seconds (default `15`, range 1–600) for QEMU guest-agent `network-get-interfaces`. Environment-only; netbox-proxbox has no `guest_agent_timeout` field and plugin payloads drop that key. Restart required after change.
 ### Plugin-managed (env override optional, defaults shown)
 
 Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox plugin settings page.
@@ -366,6 +371,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_VM_SYNC_MAX_CONCURRENCY` | `vm_sync_max_concurrency` | 4 |
 | `PROXBOX_FETCH_MAX_CONCURRENCY` | `proxbox_fetch_max_concurrency` | 8 |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 (4 in task-history) |
+| `PROXBOX_SESSION_ACQUIRE_CONCURRENCY` | `session_acquire_concurrency` | 8 |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 (4 in task-history/snapshots) |
 | `PROXBOX_BACKUP_BATCH_SIZE` | `backup_batch_size` | 5 |
 | `PROXBOX_BACKUP_BATCH_DELAY_MS` | `backup_batch_delay_ms` | 200 ms |
@@ -373,7 +379,6 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_BULK_BATCH_DELAY_MS` | `bulk_batch_delay_ms` | 500 ms |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `interface_batch_delay_ms` | 100 ms |
-| `PROXBOX_GUEST_AGENT_TIMEOUT` | `guest_agent_timeout` | 15 s (dedicated timeout for guest-agent `network-get-interfaces`; interface-dense guests are slow to enumerate. The plugin-settings field may not exist yet on older netbox-proxbox releases — the resolver falls back to env/default.) |
 | `PROXBOX_NETBOX_GET_CACHE_TTL` | `netbox_get_cache_ttl` | 60 s (0 = disabled) |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_ENTRIES` | `netbox_get_cache_max_entries` | 4096 |
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `netbox_get_cache_max_bytes` | 52_428_800 (50 MB) |

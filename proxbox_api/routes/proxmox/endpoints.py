@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
@@ -17,6 +19,10 @@ from proxbox_api.schemas.cloud_image_security import (
     normalize_ssh_host,
     normalize_ssh_identity_file,
     normalize_ssh_user,
+)
+from proxbox_api.services.sync.node_device_name import (
+    render_node_device_name,
+    validate_node_device_name_template,
 )
 from proxbox_api.settings_client import get_settings
 from proxbox_api.ssrf import clear_endpoint_cache, pre_allow_endpoint_hosts, validate_endpoint_host
@@ -83,8 +89,16 @@ def _validate_access_methods(value: str | None) -> str | None:
     return value
 
 
+def _validate_template_for_endpoint_name(template: str, endpoint_name: str) -> None:
+    """Validate templates that interpolate the endpoint's actual persisted name."""
+    if not template:
+        return
+    render_node_device_name("node", "cluster", endpoint_name, template)
+
+
 class ProxmoxEndpointCreate(BaseModel):
     name: str = Field(max_length=255)
+    node_device_name_template: str = Field(default="", max_length=128)
     ip_address: str = Field(max_length=45)
     domain: str | None = Field(default=None, max_length=255)
     port: int = Field(ge=1, le=65535)
@@ -112,6 +126,12 @@ class ProxmoxEndpointCreate(BaseModel):
     timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
+
+    @field_validator("node_device_name_template")
+    @classmethod
+    def _check_node_device_name_template(cls, value: str) -> str:
+        cleaned = value.strip()
+        return validate_node_device_name_template(cleaned) if cleaned else ""
 
     @field_validator("access_methods")
     @classmethod
@@ -147,11 +167,13 @@ class ProxmoxEndpointCreate(BaseModel):
     @model_validator(mode="after")
     def _check_complete_ssh_binding(self) -> "ProxmoxEndpointCreate":
         _validate_complete_ssh_binding(self.model_dump())
+        _validate_template_for_endpoint_name(self.node_device_name_template, self.name)
         return self
 
 
 class ProxmoxEndpointUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
+    node_device_name_template: str | None = Field(default=None, max_length=128)
     ip_address: str | None = Field(default=None, max_length=45)
     domain: str | None = Field(default=None, max_length=255)
     port: int | None = Field(default=None, ge=1, le=65535)
@@ -179,6 +201,14 @@ class ProxmoxEndpointUpdate(BaseModel):
     timeout: int | None = Field(default=None, ge=1, le=3600)
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
+
+    @field_validator("node_device_name_template")
+    @classmethod
+    def _check_node_device_name_template(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return validate_node_device_name_template(cleaned) if cleaned else ""
 
     @field_validator("access_methods")
     @classmethod
@@ -225,6 +255,7 @@ class ProxmoxEndpointPublic(BaseModel):
 
     id: int | None = None
     name: str
+    node_device_name_template: str = ""
     ip_address: str
     domain: str | None = None
     port: int
@@ -277,6 +308,131 @@ def _to_public_endpoint(endpoint: ProxmoxEndpoint) -> ProxmoxEndpointPublic:
     return ProxmoxEndpointPublic.model_validate(endpoint)
 
 
+def _endpoint_update_changes(
+    endpoint: ProxmoxEndpoint,
+    update_data: dict[str, object],
+) -> bool:
+    """Return whether an update differs from the persisted endpoint values."""
+    for field, value in update_data.items():
+        if field == "password":
+            current_value = endpoint.get_decrypted_password()
+        elif field == "token_value":
+            current_value = endpoint.get_decrypted_token_value()
+        else:
+            current_value = getattr(endpoint, field)
+        if field in ("password", "token_value"):
+            if not _secrets_equal(value, current_value):
+                return True
+        elif value != current_value:
+            return True
+    return False
+
+
+def _secrets_equal(candidate: object, current: object) -> bool:
+    """Compare credential values without content-dependent short circuiting."""
+    if not isinstance(candidate, str) or not isinstance(current, str):
+        return candidate is current
+    return hmac.compare_digest(candidate, current)
+
+
+def _validate_update_ssh_binding(
+    endpoint: ProxmoxEndpoint,
+    update_data: dict[str, object],
+) -> None:
+    merged = {
+        field: update_data.get(field, getattr(endpoint, field))
+        for field in (*_SSH_BINDING_FIELDS, "ssh_port")
+    }
+    try:
+        _validate_complete_ssh_binding(merged)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validate_update_node_device_name(
+    endpoint: ProxmoxEndpoint,
+    update_data: dict[str, object],
+) -> None:
+    template = str(
+        update_data.get("node_device_name_template", endpoint.node_device_name_template) or ""
+    )
+    endpoint_name = str(update_data.get("name", endpoint.name) or "")
+    try:
+        _validate_template_for_endpoint_name(template, endpoint_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _validate_update_hosts(update_data: dict[str, object]) -> None:
+    pre_allow_endpoint_hosts(
+        update_data.get("ip_address", ""),
+        update_data.get("domain", "") or "",
+        source="Proxmox",
+    )
+    settings = await asyncio.to_thread(get_settings)
+    for field, label in (("ip_address", "IP address"), ("domain", "domain")):
+        host = update_data.get(field)
+        if not host:
+            continue
+        safe, reason = await asyncio.to_thread(validate_endpoint_host, host, settings)
+        if not safe:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid {label}: {reason}. Adjust SSRF settings in ProxboxPluginSettings."
+                ),
+            )
+
+
+async def _ensure_unique_endpoint_name(
+    endpoint_id: int,
+    update_data: dict[str, object],
+    session: SessionDep,
+) -> None:
+    if "name" not in update_data:
+        return
+    result = await _maybe_await(
+        session.exec(select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == update_data["name"]))
+    )
+    existing = result.first()
+    if existing and existing.id != endpoint_id:
+        raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
+
+
+def _apply_update_credentials(
+    endpoint: ProxmoxEndpoint,
+    update_data: dict[str, object],
+) -> None:
+    credential_fields = ("password", "token_name", "token_value")
+    if not any(field in update_data for field in credential_fields):
+        return
+    password = update_data.get("password")
+    token_name = update_data.get("token_name")
+    token_value = update_data.get("token_value")
+    _validate_auth_fields(password, token_name, token_value)
+    if "password" in update_data:
+        endpoint.set_encrypted_password(password)
+    if "token_value" in update_data:
+        endpoint.set_encrypted_token_value(token_value)
+
+
+def _apply_endpoint_update(
+    endpoint: ProxmoxEndpoint,
+    update_data: dict[str, object],
+) -> None:
+    _apply_update_credentials(endpoint, update_data)
+    for key, value in update_data.items():
+        if key not in ("password", "token_value"):
+            setattr(endpoint, key, value)
+
+
+async def _persist_endpoint_update(endpoint: ProxmoxEndpoint, session: SessionDep) -> None:
+    session.add(endpoint)
+    await _maybe_await(session.commit())
+    await _maybe_await(session.refresh(endpoint))
+    clear_endpoint_cache()
+
+
 @router.post("/endpoints")
 async def create_proxmox_endpoint(
     endpoint: ProxmoxEndpointCreate,
@@ -287,8 +443,10 @@ async def create_proxmox_endpoint(
     # Auto-allow the endpoint's own addresses so they pass SSRF validation below.
     pre_allow_endpoint_hosts(endpoint.ip_address, endpoint.domain or "", source="Proxmox")
 
-    settings = get_settings()
-    ip_safe, ip_reason = validate_endpoint_host(endpoint.ip_address, settings)
+    settings = await asyncio.to_thread(get_settings)
+    ip_safe, ip_reason = await asyncio.to_thread(
+        validate_endpoint_host, endpoint.ip_address, settings
+    )
     if not ip_safe:
         raise HTTPException(
             status_code=400,
@@ -296,7 +454,9 @@ async def create_proxmox_endpoint(
         )
 
     if endpoint.domain:
-        domain_safe, domain_reason = validate_endpoint_host(endpoint.domain, settings)
+        domain_safe, domain_reason = await asyncio.to_thread(
+            validate_endpoint_host, endpoint.domain, settings
+        )
         if not domain_safe:
             raise HTTPException(
                 status_code=400,
@@ -345,7 +505,7 @@ async def get_proxmox_endpoint(endpoint_id: int, session: SessionDep) -> Proxmox
 
 
 @router.put("/endpoints/{endpoint_id}")
-async def update_proxmox_endpoint(  # noqa: C901
+async def update_proxmox_endpoint(
     endpoint_id: int,
     endpoint: ProxmoxEndpointUpdate,
     session: SessionDep,
@@ -355,87 +515,15 @@ async def update_proxmox_endpoint(  # noqa: C901
         raise HTTPException(status_code=404, detail="Proxmox Endpoint not found")
 
     update_data = endpoint.model_dump(exclude_unset=True)
+    if not await asyncio.to_thread(_endpoint_update_changes, db_endpoint, update_data):
+        return _to_public_endpoint(db_endpoint)
 
-    merged_ssh_binding = {
-        field: update_data.get(field, getattr(db_endpoint, field))
-        for field in (*_SSH_BINDING_FIELDS, "ssh_port")
-    }
-    try:
-        _validate_complete_ssh_binding(merged_ssh_binding)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    # Auto-allow any new addresses so they pass SSRF validation below.
-    pre_allow_endpoint_hosts(
-        update_data.get("ip_address", ""),
-        update_data.get("domain", "") or "",
-        source="Proxmox",
-    )
-
-    settings = get_settings()
-    if "ip_address" in update_data:
-        ip_safe, ip_reason = validate_endpoint_host(update_data["ip_address"], settings)
-        if not ip_safe:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid IP address: {ip_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
-            )
-
-    if "domain" in update_data and update_data["domain"]:
-        domain_safe, domain_reason = validate_endpoint_host(update_data["domain"], settings)
-        if not domain_safe:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid domain: {domain_reason}. Adjust SSRF settings in ProxboxPluginSettings.",
-            )
-
-    if "name" in update_data:
-        existing_result = await _maybe_await(
-            session.exec(select(ProxmoxEndpoint).where(ProxmoxEndpoint.name == update_data["name"]))
-        )
-        existing = existing_result.first()
-        if existing and existing.id != endpoint_id:
-            raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
-
-    updating_password = "password" in update_data
-    updating_token_name = "token_name" in update_data
-    updating_token_value = "token_value" in update_data
-
-    if updating_password or updating_token_name or updating_token_value:
-        new_password = update_data.get("password")
-        new_token_name = update_data.get("token_name")
-        new_token_value = update_data.get("token_value")
-
-        has_password = bool(new_password)
-        has_token_name = bool(new_token_name)
-        has_token_value = bool(new_token_value)
-
-        if has_token_name ^ has_token_value:
-            raise HTTPException(
-                status_code=400,
-                detail="token_name and token_value must be provided together",
-            )
-
-        if not has_password and not (has_token_name and has_token_value):
-            raise HTTPException(
-                status_code=400,
-                detail="Provide password or both token_name/token_value",
-            )
-
-        if updating_password:
-            db_endpoint.set_encrypted_password(update_data["password"])
-        if updating_token_value:
-            db_endpoint.set_encrypted_token_value(update_data["token_value"])
-
-    for key, value in update_data.items():
-        if key not in ("password", "token_value"):
-            setattr(db_endpoint, key, value)
-
-    session.add(db_endpoint)
-    await _maybe_await(session.commit())
-    await _maybe_await(session.refresh(db_endpoint))
-
-    clear_endpoint_cache()
+    _validate_update_ssh_binding(db_endpoint, update_data)
+    _validate_update_node_device_name(db_endpoint, update_data)
+    await _validate_update_hosts(update_data)
+    await _ensure_unique_endpoint_name(endpoint_id, update_data, session)
+    _apply_endpoint_update(db_endpoint, update_data)
+    await _persist_endpoint_update(db_endpoint, session)
     return _to_public_endpoint(db_endpoint)
 
 

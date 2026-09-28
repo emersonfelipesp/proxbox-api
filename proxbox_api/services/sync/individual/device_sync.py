@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from proxbox_api.services.proxmox_helpers import get_node_status_individual
 from proxbox_api.services.sync.device_ensure import _effective_cluster_site_id
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
+from proxbox_api.services.sync.node_device_name import render_node_device_name
 
 
 async def sync_node_individual(
@@ -50,10 +51,16 @@ async def sync_node_individual(
     if dry_run:
         from proxbox_api.netbox_rest import rest_list_async
 
+        rendered_name = render_node_device_name(
+            node_name,
+            cluster_name,
+            str(getattr(px, "endpoint_name", "") or cluster_name),
+            str(getattr(px, "node_device_name_template", "{node}") or "{node}"),
+        )
         existing = await rest_list_async(
             nb,
             "/api/dcim/devices/",
-            query={"name": node_name},
+            query={"name": rendered_name, "limit": 2},
         )
         netbox_object = None
         if existing:

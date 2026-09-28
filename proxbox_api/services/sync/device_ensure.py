@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from proxbox_api.constants import DISCOVERY_TAG_CLUSTER, DISCOVERY_TAG_NODE, PROXBOX_TAG
@@ -30,11 +32,14 @@ from proxbox_api.services.sync.discovery_tags import (
     merge_tag_refs,
     resolve_discovery_tag_id,
 )
+from proxbox_api.services.sync.node_device_name import NodeDeviceNameError, render_node_device_name
 from proxbox_api.services.sync.sync_state_writer import (
     write_cluster_sync_state,
     write_device_sync_state,
 )
 from proxbox_api.types import NetBoxRecord
+
+logger = logging.getLogger(__name__)
 
 
 def _slugify(value: str) -> str:
@@ -432,7 +437,7 @@ def _compute_device_patchable_fields(
     (DCIM sync) and _ensure_device (per-VM parent-device materialization), so the
     flag enforcement stays identical across both write paths.
     """
-    fields: set[str] = {"cluster"}
+    fields: set[str] = {"name", "cluster"}
     if overwrite_flags is None or overwrite_flags.overwrite_device_status:
         fields.add("status")
     if overwrite_flags is None or overwrite_flags.overwrite_device_description:
@@ -446,44 +451,58 @@ def _compute_device_patchable_fields(
     return fields
 
 
-async def ensure_proxmox_devices_bulk(  # noqa: C901
-    nb: object,
-    *,
-    clusters_status: list[object] | None,
-    tag_refs: list[dict[str, object]],
-    overwrite_device_role: bool = True,
-    overwrite_device_type: bool = True,
-    overwrite_device_tags: bool = True,
-    overwrite_flags: SyncOverwriteFlags | None = None,
-) -> dict[str, NetBoxRecord]:
-    """Create/update Proxmox prerequisite NetBox objects in dependency order."""
-    if not clusters_status:
-        return {}
+@dataclass(slots=True)
+class _DeviceTarget:
+    cluster_name: str
+    node_name: str
+    desired_name: str
+    effective_name: str
+    desired_site_id: int | None
+    site_id: int | None
+    cluster_id: int | None
+    endpoint_id: int | None = None
+    existing: NetBoxRecord | None = None
+    preserve_manual_name: bool = False
+    name_conflict: bool = False
 
+
+def _collect_cluster_metadata(
+    clusters_status: list[object],
+) -> tuple[
+    dict[str, str],
+    dict[str, dict[str, object | None]],
+    list[str],
+]:
     cluster_modes: dict[str, str] = {}
     cluster_placements: dict[str, dict[str, object | None]] = {}
     node_names: list[str] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
-        cluster_mode = str(getattr(cluster_status, "mode", "") or "").strip().lower() or "cluster"
+        cluster_mode = str(getattr(cluster_status, "mode", "") or "").strip().lower()
         if cluster_name:
-            cluster_modes[cluster_name] = cluster_mode
+            cluster_modes[cluster_name] = cluster_mode or "cluster"
             cluster_placements[cluster_name] = placement_from_source(cluster_status)
-        for node in getattr(cluster_status, "node_list", None) or []:
-            node_name = str(getattr(node, "name", "") or "").strip()
-            if node_name:
-                node_names.append(node_name)
+        node_names.extend(
+            node_name
+            for node in (getattr(cluster_status, "node_list", None) or [])
+            if (node_name := str(getattr(node, "name", "") or "").strip())
+        )
+    return cluster_modes, cluster_placements, node_names
 
-    if not cluster_modes and not node_names:
-        return {}
 
+async def _reconcile_base_device_dependencies(
+    nb: object,
+    *,
+    cluster_modes: dict[str, str],
+    cluster_placements: dict[str, dict[str, object | None]],
+    tag_refs: list[dict[str, object]],
+) -> dict[str, object]:
     default_site_cluster_names = [
         cluster_name
         for cluster_name in sorted(cluster_modes)
         if not _has_configured_relation(cluster_placements.get(cluster_name, {}), "site")
     ]
-
-    phase_results = await rest_bulk_reconcile_phases_async(
+    return await rest_bulk_reconcile_phases_async(
         nb,
         [
             BulkReconcilePhase(
@@ -546,69 +565,69 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         ],
     )
 
-    cluster_type_by_slug = {
-        str(record.get("slug")): record for record in phase_results["cluster_types"].records
-    }
-    manufacturer = (
-        phase_results["manufacturers"].records[0]
-        if phase_results["manufacturers"].records
-        else None
-    )
-    role = (
-        phase_results["device_roles"].records[0] if phase_results["device_roles"].records else None
-    )
-    site_by_slug = {str(record.get("slug")): record for record in phase_results["sites"].records}
-    site_by_cluster_name: dict[str, NetBoxRecord] = {}
-    tenant_by_cluster_name: dict[str, NetBoxRecord] = {}
+
+async def _resolve_cluster_placement_records(
+    nb: object,
+    *,
+    cluster_modes: dict[str, str],
+    cluster_placements: dict[str, dict[str, object | None]],
+    phase_results: dict[str, object],
+    tag_refs: list[dict[str, object]],
+) -> tuple[dict[str, NetBoxRecord], dict[str, NetBoxRecord]]:
+    site_records = phase_results["sites"].records  # type: ignore[union-attr]
+    site_by_slug = {str(record.get("slug")): record for record in site_records}
+    sites: dict[str, NetBoxRecord] = {}
+    tenants: dict[str, NetBoxRecord] = {}
     for cluster_name in sorted(cluster_modes):
         placement = cluster_placements.get(cluster_name, {})
         site_slug = f"proxmox-default-site-{_slugify(cluster_name)}"
-        site_record = site_by_slug.get(site_slug)
-        if site_record is None:
-            site_record = await _ensure_site(
-                nb,
-                cluster_name=cluster_name,
-                tag_refs=tag_refs,
-                placement=placement,
-            )
-        site_by_cluster_name[cluster_name] = site_record
-
+        site_record = site_by_slug.get(site_slug) or await _ensure_site(
+            nb,
+            cluster_name=cluster_name,
+            tag_refs=tag_refs,
+            placement=placement,
+        )
+        sites[cluster_name] = site_record
         tenant_record = await _resolve_tenant(nb, placement=placement)
         if tenant_record is not None:
-            tenant_by_cluster_name[cluster_name] = tenant_record
+            tenants[cluster_name] = tenant_record
+    return sites, tenants
 
-    # Cluster reconcile honors per-field cluster overwrite flags. name/type are
-    # always patchable (they identify the cluster and its mode); description,
-    # and tags are gated by the corresponding flags. When no flags are supplied
-    # (None), all normal fields are patchable, preserving the
-    # historical always-overwrite behavior.
-    _cluster_patchable: set[str] = {"name", "type"}
-    _cluster_patchable.update({"scope_type", "scope_id", "tenant"})
+
+def _cluster_patchable_fields(overwrite_flags: SyncOverwriteFlags | None) -> set[str]:
+    fields = {"name", "type", "scope_type", "scope_id", "tenant"}
     if overwrite_flags is None or overwrite_flags.overwrite_cluster_description:
-        _cluster_patchable.add("description")
+        fields.add("description")
     if overwrite_flags is None or overwrite_flags.overwrite_cluster_tags:
-        _cluster_patchable.add("tags")
+        fields.add("tags")
+    return fields
 
+
+async def _reconcile_cluster_dependencies(
+    nb: object,
+    *,
+    cluster_modes: dict[str, str],
+    cluster_type_by_slug: dict[str, NetBoxRecord],
+    sites: dict[str, NetBoxRecord],
+    tenants: dict[str, NetBoxRecord],
+    manufacturer: NetBoxRecord | None,
+    tag_refs: list[dict[str, object]],
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     cluster_payloads = [
         _cluster_payload(
             cluster_name,
             cluster_type_id=_relation_id_or_none(
-                cluster_type_by_slug[cluster_modes[cluster_name]].get("id")
-                if cluster_modes[cluster_name] in cluster_type_by_slug
-                else None
+                cluster_type_by_slug.get(cluster_modes[cluster_name], {}).get("id")
             ),
             mode=cluster_modes[cluster_name],
             tag_refs=tag_refs,
-            site_id=_relation_id_or_none(
-                getattr(site_by_cluster_name.get(cluster_name), "id", None)
-            ),
-            tenant_id=_relation_id_or_none(
-                getattr(tenant_by_cluster_name.get(cluster_name), "id", None)
-            ),
+            site_id=_relation_id_or_none(getattr(sites.get(cluster_name), "id", None)),
+            tenant_id=_relation_id_or_none(getattr(tenants.get(cluster_name), "id", None)),
         )
         for cluster_name in sorted(cluster_modes)
     ]
-    dependency_phase_results = await rest_bulk_reconcile_phases_async(
+    results = await rest_bulk_reconcile_phases_async(
         nb,
         [
             BulkReconcilePhase(
@@ -617,7 +636,7 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
                 payloads=cluster_payloads,
                 lookup_fields=["name"],
                 schema=NetBoxClusterSyncState,
-                patchable_fields=frozenset(_cluster_patchable),
+                patchable_fields=frozenset(_cluster_patchable_fields(overwrite_flags)),
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "type": _relation_id_or_none(record.get("type")),
@@ -647,17 +666,23 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
             ),
         ],
     )
+    return results, cluster_payloads
 
-    cluster_by_name = {
-        str(record.get("name")): record for record in dependency_phase_results["clusters"].records
-    }
-    cluster_payload_by_name = {str(payload.get("name")): payload for payload in cluster_payloads}
+
+async def _write_cluster_sidecars(
+    nb: object,
+    *,
+    cluster_by_name: dict[str, NetBoxRecord],
+    cluster_payloads: list[dict[str, object]],
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> None:
+    payload_by_name = {str(payload.get("name")): payload for payload in cluster_payloads}
     for cluster_name in sorted(cluster_by_name):
-        cluster_payload = cluster_payload_by_name.get(cluster_name, {})
+        payload = payload_by_name.get(cluster_name, {})
         await write_cluster_sync_state(
             nb,
             cluster_id=cluster_by_name[cluster_name].get("id"),
-            proxmox_last_updated=_payload_last_updated(cluster_payload),
+            proxmox_last_updated=_payload_last_updated(payload),
             proxmox_cluster_name=cluster_name,
             overwrite_custom_fields=(
                 overwrite_flags is None or overwrite_flags.overwrite_cluster_custom_fields
@@ -665,77 +690,309 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
         )
         await sync_proxmox_cluster_netbox_link(nb, cluster_name=cluster_name)
 
-    device_type = (
-        dependency_phase_results["device_types"].records[0]
-        if dependency_phase_results["device_types"].records
-        else None
-    )
 
-    device_targets: list[tuple[str, int | None, int | None]] = []
-    device_payloads: list[dict[str, object]] = []
+def _build_device_targets(
+    clusters_status: list[object],
+    *,
+    cluster_by_name: dict[str, NetBoxRecord],
+    sites: dict[str, NetBoxRecord],
+) -> list[_DeviceTarget]:
+    targets: list[_DeviceTarget] = []
     for cluster_status in clusters_status:
         cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
         cluster_record = cluster_by_name.get(cluster_name)
-        site_record = site_by_cluster_name.get(cluster_name)
         desired_site_id = _effective_cluster_site_id(
             cluster_record,
-            fallback_site_id=getattr(site_record, "id", None),
+            fallback_site_id=getattr(sites.get(cluster_name), "id", None),
         )
         cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
+        template = str(getattr(cluster_status, "node_device_name_template", "{node}") or "{node}")
+        endpoint = str(getattr(cluster_status, "endpoint_name", "") or cluster_name)
+        endpoint_id = _relation_id_or_none(getattr(cluster_status, "db_endpoint_id", None))
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
-            if not node_name:
-                continue
-            device_targets.append((node_name, desired_site_id, cluster_id))
+            if node_name:
+                try:
+                    desired_name = render_node_device_name(
+                        node_name, cluster_name, endpoint, template
+                    )
+                except NodeDeviceNameError:
+                    continue
+                targets.append(
+                    _DeviceTarget(
+                        cluster_name=cluster_name,
+                        node_name=node_name,
+                        desired_name=desired_name,
+                        effective_name=desired_name,
+                        desired_site_id=desired_site_id,
+                        site_id=desired_site_id,
+                        cluster_id=cluster_id,
+                        endpoint_id=endpoint_id,
+                    )
+                )
+    return targets
 
-    existing_site_pins = await _resolve_existing_device_sites(nb, device_targets)
 
-    device_sidecar_specs: list[tuple[str, int | None, dict[str, object], str]] = []
-    for cluster_status in clusters_status:
-        cluster_name = str(getattr(cluster_status, "name", "") or "").strip()
-        cluster_record = cluster_by_name.get(cluster_name)
-        site_record = site_by_cluster_name.get(cluster_name)
-        desired_site_id = _effective_cluster_site_id(
-            cluster_record,
-            fallback_site_id=getattr(site_record, "id", None),
+async def _device_from_identity_sidecar(
+    nb: object,
+    target: _DeviceTarget,
+) -> NetBoxRecord | None:
+    if not target.cluster_name:
+        return None
+    query: dict[str, object] = {
+        "proxmox_cluster_name": target.cluster_name,
+        "proxmox_node_name": target.node_name,
+        "limit": 3,
+    }
+    if target.endpoint_id is not None:
+        query["proxmox_endpoint_raw_id"] = target.endpoint_id
+    try:
+        sidecars = await rest_list_async(
+            nb,
+            "/api/plugins/proxbox/sync-state/devices/",
+            query=query,
         )
-        cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
-        for node in getattr(cluster_status, "node_list", None) or []:
-            node_name = str(getattr(node, "name", "") or "").strip()
-            if not node_name:
-                continue
-            site_id = existing_site_pins.get(
-                (node_name, desired_site_id, cluster_id), desired_site_id
+    except Exception:
+        return None
+    matching_sidecars = sidecars
+    if target.endpoint_id is not None:
+        matching_sidecars = [
+            sidecar
+            for sidecar in sidecars
+            if (
+                _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) is None
+                or _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id"))
+                == target.endpoint_id
             )
-            device_payload = _device_payload(
-                node_name,
-                cluster_id=cluster_id,
-                device_type_id=_relation_id_or_none(getattr(device_type, "id", None)),
-                role_id=_relation_id_or_none(getattr(role, "id", None)),
-                site_id=site_id,
-                tag_refs=tag_refs,
+        ]
+    else:
+        claimed_endpoint_ids = {
+            endpoint_id
+            for sidecar in sidecars
+            if (endpoint_id := _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")))
+            is not None
+        }
+        if len(claimed_endpoint_ids) > 1:
+            raise ProxboxException(
+                message="Ambiguous Proxmox node device identity",
+                detail=(
+                    f"Multiple Proxmox endpoints claim node {target.node_name!r} in "
+                    f"cluster {target.cluster_name!r}."
+                ),
             )
-            device_payloads.append(device_payload)
-            device_sidecar_specs.append((node_name, site_id, device_payload, cluster_name))
-
-    _device_patchable = _compute_device_patchable_fields(
-        overwrite_flags,
-        overwrite_device_role,
-        overwrite_device_type,
-        overwrite_device_tags,
+    device_ids = {
+        device_id
+        for sidecar in matching_sidecars
+        if (device_id := _relation_id_or_none(sidecar.get("device"))) is not None
+    }
+    if len(device_ids) > 1:
+        raise ProxboxException(
+            message="Ambiguous Proxmox node device identity",
+            detail=(
+                f"Multiple NetBox devices claim node {target.node_name!r} in "
+                f"cluster {target.cluster_name!r}."
+            ),
+        )
+    if not device_ids:
+        return None
+    return await rest_first_async(
+        nb,
+        "/api/dcim/devices/",
+        query={"id": next(iter(device_ids)), "limit": 2},
     )
 
-    device_results = await rest_bulk_reconcile_phases_async(
+
+async def _resolve_existing_device_for_target(
+    nb: object,
+    target: _DeviceTarget,
+) -> NetBoxRecord | None:
+    sidecar_match = await _device_from_identity_sidecar(nb, target)
+    if sidecar_match is not None:
+        return sidecar_match
+    legacy_records = await rest_list_async(
+        nb,
+        "/api/dcim/devices/",
+        query={"name": target.node_name, "limit": 10},
+    )
+    legacy_match = _select_existing_device_for_target(
+        legacy_records,
+        desired_site_id=target.desired_site_id,
+        cluster_id=target.cluster_id,
+    )
+    if legacy_match is not None or target.desired_name == target.node_name:
+        return legacy_match
+    desired_records = await rest_list_async(
+        nb,
+        "/api/dcim/devices/",
+        query={"name": target.desired_name, "limit": 10},
+    )
+    return _select_existing_device_for_target(
+        desired_records,
+        desired_site_id=target.desired_site_id,
+        cluster_id=target.cluster_id,
+    )
+
+
+def _device_name_is_proxbox_managed(record: NetBoxRecord, node_name: str) -> bool:
+    current_name = str(record.get("name") or "")
+    if current_name == node_name:
+        return True
+    return (
+        _record_has_tag(record, PROXBOX_TAG)
+        and str(record.get("description") or "") == f"Proxmox Node {current_name}"
+    )
+
+
+def _mark_duplicate_target_destinations(targets: list[_DeviceTarget]) -> None:
+    targets_by_destination: dict[tuple[str, int | None], list[_DeviceTarget]] = {}
+    for target in targets:
+        if not target.preserve_manual_name:
+            targets_by_destination.setdefault((target.desired_name, target.site_id), []).append(
+                target
+            )
+    for (desired_name, site_id), destination_targets in targets_by_destination.items():
+        identities = {
+            (target.endpoint_id, target.cluster_name, target.node_name)
+            for target in destination_targets
+        }
+        if len(identities) < 2:
+            continue
+        for target in destination_targets:
+            target.name_conflict = True
+        logger.error(
+            "Skipping %d Proxmox nodes: rendered device name %r is duplicated "
+            "within site id=%r by identities=%r",
+            len(destination_targets),
+            desired_name,
+            site_id,
+            sorted(identities, key=repr),
+        )
+
+
+async def _persisted_name_conflict(nb: object, target: _DeviceTarget) -> NetBoxRecord | None:
+    occupants = await rest_list_async(
+        nb,
+        "/api/dcim/devices/",
+        query={"name": target.desired_name, "site_id": target.site_id, "limit": 2},
+    )
+    existing_id = (
+        _relation_id_or_none(target.existing.get("id")) if target.existing is not None else None
+    )
+    return next(
+        (
+            occupant
+            for occupant in occupants
+            if str(occupant.get("name") or "") == target.desired_name
+            and _relation_id_or_none(occupant.get("site")) == target.site_id
+            and _relation_id_or_none(occupant.get("id")) != existing_id
+        ),
+        None,
+    )
+
+
+async def _prepare_device_targets(
+    nb: object,
+    targets: list[_DeviceTarget],
+) -> None:
+    pending_renames: list[tuple[NetBoxRecord, str]] = []
+    for target in targets:
+        existing = await _resolve_existing_device_for_target(nb, target)
+        target.existing = existing
+        target.site_id = _existing_device_site_pin(existing, target.desired_site_id)
+        if existing is None:
+            continue
+        current_name = str(existing.get("name") or "")
+        if current_name == target.desired_name:
+            continue
+        if not _device_name_is_proxbox_managed(existing, target.node_name):
+            target.effective_name = current_name
+            target.preserve_manual_name = True
+            continue
+        pending_renames.append((existing, target.desired_name))
+
+    _mark_duplicate_target_destinations(targets)
+
+    for target in targets:
+        if target.preserve_manual_name or target.name_conflict:
+            continue
+        conflict = await _persisted_name_conflict(nb, target)
+        if conflict is None:
+            continue
+        target.name_conflict = True
+        logger.error(
+            "Skipping Proxmox node %r in cluster %r: rendered device name %r "
+            "is already used by NetBox device id=%r in site id=%r",
+            target.node_name,
+            target.cluster_name,
+            target.desired_name,
+            conflict.get("id"),
+            target.site_id,
+        )
+
+    conflicting_ids = {
+        id(target.existing) for target in targets if target.name_conflict and target.existing
+    }
+    for existing, desired_name in pending_renames:
+        if id(existing) in conflicting_ids:
+            continue
+        setattr(existing, "name", desired_name)
+        await existing.save()
+
+
+def _target_device_payload(
+    target: _DeviceTarget,
+    *,
+    device_type_id: int | None,
+    role_id: int | None,
+    tag_refs: list[dict[str, object]],
+) -> dict[str, object]:
+    payload = _device_payload(
+        target.effective_name,
+        cluster_id=target.cluster_id,
+        device_type_id=device_type_id,
+        role_id=role_id,
+        site_id=target.site_id,
+        tag_refs=tag_refs,
+    )
+    if target.preserve_manual_name and target.existing is not None:
+        payload["description"] = target.existing.get("description") or (
+            f"Proxmox node {target.node_name} (operator-managed name)"
+        )
+    return payload
+
+
+async def _reconcile_device_targets(
+    nb: object,
+    *,
+    targets: list[_DeviceTarget],
+    device_type_id: int | None,
+    role_id: int | None,
+    tag_refs: list[dict[str, object]],
+    patchable_fields: set[str],
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> dict[tuple[int | None, str, str], NetBoxRecord]:
+    payloads = [
+        _target_device_payload(
+            target,
+            device_type_id=device_type_id,
+            role_id=role_id,
+            tag_refs=tag_refs,
+        )
+        for target in targets
+        if not target.name_conflict
+    ]
+    active_targets = [target for target in targets if not target.name_conflict]
+    results = await rest_bulk_reconcile_phases_async(
         nb,
         [
             BulkReconcilePhase(
                 name="devices",
                 path="/api/dcim/devices/",
-                payloads=device_payloads,
+                payloads=payloads,
                 lookup_fields=["name", "site"],
                 lookup_query_field_map={"site": "site_id"},
                 schema=NetBoxDeviceSyncState,
-                patchable_fields=frozenset(_device_patchable),
+                patchable_fields=frozenset(patchable_fields),
                 current_normalizer=lambda record: {
                     "name": record.get("name"),
                     "status": record.get("status"),
@@ -750,30 +1007,110 @@ async def ensure_proxmox_devices_bulk(  # noqa: C901
             )
         ],
     )
-
-    devices = {str(record.get("name")): record for record in device_results["devices"].records}
-    device_sidecar_by_key = {
-        (name, site_id): (payload, cluster_name)
-        for name, site_id, payload, cluster_name in device_sidecar_specs
+    records_by_lookup = {
+        (str(record.get("name")), _relation_id_or_none(record.get("site"))): record
+        for record in results["devices"].records
     }
-    for record in device_results["devices"].records:
-        device_name = str(record.get("name") or "")
-        site_id = _relation_id_or_none(record.get("site"))
-        sidecar_spec = device_sidecar_by_key.get((device_name, site_id))
-        if sidecar_spec is None:
+    devices: dict[tuple[int | None, str, str], NetBoxRecord] = {}
+    for target, payload in zip(active_targets, payloads, strict=True):
+        record = records_by_lookup.get((target.effective_name, target.site_id))
+        if record is None:
             continue
-        device_payload, cluster_name = sidecar_spec
+        devices[(target.endpoint_id, target.cluster_name, target.node_name)] = record
         await write_device_sync_state(
             nb,
             device_id=record.get("id"),
-            proxmox_last_updated=_payload_last_updated(device_payload),
-            proxmox_node_name=device_name,
-            proxmox_cluster_name=cluster_name,
+            proxmox_last_updated=_payload_last_updated(payload),
+            proxmox_node_name=target.node_name,
+            proxmox_cluster_name=target.cluster_name,
+            proxmox_endpoint_raw_id=target.endpoint_id,
             overwrite_custom_fields=(
                 overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields
             ),
         )
     return devices
+
+
+async def ensure_proxmox_devices_bulk(
+    nb: object,
+    *,
+    clusters_status: list[object] | None,
+    tag_refs: list[dict[str, object]],
+    overwrite_device_role: bool = True,
+    overwrite_device_type: bool = True,
+    overwrite_device_tags: bool = True,
+    overwrite_flags: SyncOverwriteFlags | None = None,
+) -> dict[tuple[int | None, str, str], NetBoxRecord]:
+    """Create/update Proxmox prerequisite NetBox objects in dependency order."""
+    if not clusters_status:
+        return {}
+
+    cluster_modes, cluster_placements, node_names = _collect_cluster_metadata(clusters_status)
+    if not cluster_modes and not node_names:
+        return {}
+
+    base_results = await _reconcile_base_device_dependencies(
+        nb,
+        cluster_modes=cluster_modes,
+        cluster_placements=cluster_placements,
+        tag_refs=tag_refs,
+    )
+    cluster_type_by_slug = {
+        str(record.get("slug")): record for record in base_results["cluster_types"].records
+    }
+    manufacturer_records = base_results["manufacturers"].records
+    role_records = base_results["device_roles"].records
+    manufacturer = manufacturer_records[0] if manufacturer_records else None
+    role = role_records[0] if role_records else None
+    sites, tenants = await _resolve_cluster_placement_records(
+        nb,
+        cluster_modes=cluster_modes,
+        cluster_placements=cluster_placements,
+        phase_results=base_results,
+        tag_refs=tag_refs,
+    )
+    dependency_results, cluster_payloads = await _reconcile_cluster_dependencies(
+        nb,
+        cluster_modes=cluster_modes,
+        cluster_type_by_slug=cluster_type_by_slug,
+        sites=sites,
+        tenants=tenants,
+        manufacturer=manufacturer,
+        tag_refs=tag_refs,
+        overwrite_flags=overwrite_flags,
+    )
+    cluster_by_name = {
+        str(record.get("name")): record for record in dependency_results["clusters"].records
+    }
+    await _write_cluster_sidecars(
+        nb,
+        cluster_by_name=cluster_by_name,
+        cluster_payloads=cluster_payloads,
+        overwrite_flags=overwrite_flags,
+    )
+    device_type_records = dependency_results["device_types"].records
+    device_type = device_type_records[0] if device_type_records else None
+    targets = _build_device_targets(
+        clusters_status,
+        cluster_by_name=cluster_by_name,
+        sites=sites,
+    )
+    await _prepare_device_targets(nb, targets)
+    patchable_fields = _compute_device_patchable_fields(
+        overwrite_flags,
+        overwrite_device_role,
+        overwrite_device_type,
+        overwrite_device_tags,
+    )
+    return await _reconcile_device_targets(
+        nb,
+        targets=targets,
+        device_type_id=_relation_id_or_none(getattr(device_type, "id", None)),
+        role_id=_relation_id_or_none(getattr(role, "id", None)),
+        tag_refs=tag_refs,
+        patchable_fields=patchable_fields,
+        overwrite_flags=overwrite_flags,
+    )
 
 
 async def _ensure_cluster_type(
@@ -1000,28 +1337,40 @@ async def _ensure_device(
     role_id: int | None,
     site_id: int | None,
     tag_refs: list[dict[str, object]],
+    cluster_name: str = "",
+    endpoint_name: str = "",
+    node_device_name_template: str = "{node}",
+    endpoint_id: int | None = None,
     overwrite_device_role: bool = True,
     overwrite_device_type: bool = True,
     overwrite_device_tags: bool = True,
     overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> NetBoxRecord:
-    existing_devices = await rest_list_async(
-        nb,
-        "/api/dcim/devices/",
-        query={"name": device_name, "limit": 10},
+    desired_name = render_node_device_name(
+        device_name,
+        cluster_name,
+        endpoint_name or cluster_name,
+        node_device_name_template,
     )
-    existing_device = _select_existing_device_for_target(
-        existing_devices,
+    target = _DeviceTarget(
+        cluster_name=cluster_name,
+        node_name=device_name,
+        desired_name=desired_name,
+        effective_name=desired_name,
         desired_site_id=site_id,
+        site_id=site_id,
         cluster_id=cluster_id,
+        endpoint_id=endpoint_id,
     )
+    await _prepare_device_targets(nb, [target])
+    existing_device = target.existing
     # Save the cluster-authoritative site BEFORE the pin.  When the cluster is
     # being reassigned, the device's site must be updated to match the cluster's
     # scope_site — NetBox enforces device.site == cluster.scope_site on every
     # write.  Keeping the pinned (old) site in the payload while changing the
     # cluster produces "The assigned cluster belongs to a different site".
-    _desired_site_id = site_id
-    site_id = _existing_device_site_pin(existing_device, site_id)
+    _desired_site_id = target.desired_site_id
+    site_id = target.site_id
 
     # First-discovery audit tag (issue #362). Stamp the node-discovery slug
     # in the create payload only; on update, merge the desired tag refs with
@@ -1044,11 +1393,11 @@ async def _ensure_device(
         )
 
     payload = {
-        "name": device_name,
+        "name": target.effective_name,
         "tags": effective_tag_refs,
         "cluster": cluster_id,
         "status": "active",
-        "description": f"Proxmox Node {device_name}",
+        "description": f"Proxmox Node {target.effective_name}",
         "device_type": device_type_id,
         "role": role_id,
         "site": site_id,
@@ -1060,6 +1409,11 @@ async def _ensure_device(
         overwrite_device_type,
         overwrite_device_tags,
     )
+    if target.preserve_manual_name:
+        allowed.discard("name")
+        payload["description"] = existing_device.get("description") or (
+            f"Proxmox node {device_name} (operator-managed name)"
+        )
 
     if existing_device is not None:
         desired_model = NetBoxDeviceSyncState.model_validate(payload)
@@ -1103,6 +1457,8 @@ async def _ensure_device(
             ),
             proxmox_last_updated=_payload_last_updated(payload),
             proxmox_node_name=device_name,
+            proxmox_cluster_name=cluster_name,
+            proxmox_endpoint_raw_id=endpoint_id,
             overwrite_custom_fields=(
                 overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields
             ),
@@ -1112,7 +1468,7 @@ async def _ensure_device(
     device = await rest_reconcile_async(
         nb,
         "/api/dcim/devices/",
-        lookup={"name": device_name, "site_id": site_id},
+        lookup={"name": target.effective_name, "site_id": site_id},
         payload=payload,
         schema=NetBoxDeviceSyncState,
         patchable_fields=frozenset(allowed),
@@ -1132,6 +1488,8 @@ async def _ensure_device(
         device_id=device.get("id") if isinstance(device, dict) else getattr(device, "id", None),
         proxmox_last_updated=_payload_last_updated(payload),
         proxmox_node_name=device_name,
+        proxmox_cluster_name=cluster_name,
+        proxmox_endpoint_raw_id=endpoint_id,
         overwrite_custom_fields=(
             overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields
         ),

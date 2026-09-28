@@ -222,8 +222,8 @@ Main synchronization endpoints for virtual machines and related resources.
 
 - **Interface-dense guests (guest-agent payloads).** Guest-agent
   `network-get-interfaces` calls use a dedicated timeout
-  (`PROXBOX_GUEST_AGENT_TIMEOUT` / plugin key `guest_agent_timeout`, default
-  15 s) with one bounded retry on timeout, because enumerating 100+ interfaces
+  (`PROXBOX_GUEST_AGENT_TIMEOUT` only; default 15 s, range 1-600; not a NetBox
+  plugin setting) with one bounded retry on timeout, because enumerating 100+ interfaces
   (VRRP routers) is slow in-guest and the global Proxmox session timeout
   (5 s default) silently dropped guest data. The timeout override
   (`_scoped_proxmox_backend_timeout`) only ever **widens** the shared backend's

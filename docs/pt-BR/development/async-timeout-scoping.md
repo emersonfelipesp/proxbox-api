@@ -84,15 +84,13 @@ e a chamada externa executaria com o timeout original estreito.
 
 ## Configuração do Timeout do Agente Guest
 
-O timeout do agente guest é configurado através de:
-
-- **Variável de ambiente:** `PROXBOX_GUEST_AGENT_TIMEOUT` (segundos, float)
-- **Chave de configurações do plugin:** `guest_agent_timeout` (na página de
-  configurações do plugin Proxbox no NetBox)
-- **Padrão:** 15 segundos
-- **Intervalo:** 1–600 segundos
+O timeout do agente guest é configurado **somente** pela variável de ambiente
+**`PROXBOX_GUEST_AGENT_TIMEOUT`** (segundos, padrão **15**, intervalo **1–600**). O
+plugin Proxbox no NetBox não possui o campo `guest_agent_timeout`;
+`settings_client._normalize_settings_payload` remove essa chave dos payloads do plugin.
 
 ```python
+# settings_key segue a API do resolver; as configurações do plugin nunca fornecem este valor.
 guest_agent_timeout = get_float(
     settings_key="guest_agent_timeout",
     env="PROXBOX_GUEST_AGENT_TIMEOUT",

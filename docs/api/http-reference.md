@@ -428,6 +428,9 @@ Validation rules:
 - Provide `password`, or both `token_name` and `token_value`.
 - `token_name` and `token_value` must be set together.
 - Endpoint names must be unique.
+- `PUT` is idempotent: when every supplied field, including credentials, already
+  matches the persisted endpoint, it returns the current representation without
+  repeating host validation or writing to the database.
 
 ### Session and discovery
 

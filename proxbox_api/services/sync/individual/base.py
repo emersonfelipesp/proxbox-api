@@ -240,6 +240,14 @@ class BaseIndividualSyncService:
         return await _ensure_device(
             self.nb,
             device_name=device_name,
+            cluster_name=str(getattr(self.px, "name", "") or ""),
+            endpoint_name=str(
+                getattr(self.px, "endpoint_name", "") or getattr(self.px, "name", "") or ""
+            ),
+            node_device_name_template=str(
+                getattr(self.px, "node_device_name_template", "{node}") or "{node}"
+            ),
+            endpoint_id=getattr(self.px, "db_endpoint_id", None),
             cluster_id=cluster_id,
             device_type_id=device_type_id,
             role_id=role_id,

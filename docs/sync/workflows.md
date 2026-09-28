@@ -25,6 +25,13 @@ Current execution order:
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 
+Node Device reconciliation uses the effective node name template documented in
+[Configuration](../getting-started/configuration.md#node-device-name-template).
+Maps are keyed by the Proxmox cluster and short node name, while NetBox writes
+and lookups use the rendered name. Typed sync state always records the original
+short node and cluster names, so VMs and interfaces remain attached to the
+correct Device when clusters reuse a node name or a managed Device is renamed.
+
 The node-interface stage maps Proxmox interface kinds to NetBox REST choice
 values at the write boundary: `bridge`, `lag`, `virtual`, `loopback`, or
 `other`. Python enum names are internal implementation details and must never
@@ -482,7 +489,7 @@ addresses) need extra care:
   renames the core VMInterface from `net0` to the guest OS name. The backend
   logs a deprecation warning for this mode.
 - **Dedicated timeout with one retry** — the guest-agent call uses
-  `PROXBOX_GUEST_AGENT_TIMEOUT` (plugin key `guest_agent_timeout`, default 15s)
+  `PROXBOX_GUEST_AGENT_TIMEOUT` only (default 15 s, range 1–600; not a NetBox plugin setting)
   rather than the short session default, and retries once on timeout because a
   single slow enumeration is often transient. proxmox-sdk has no per-call
   timeout, so the backend temporarily widens the HTTPS backend timeout for the

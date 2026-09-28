@@ -43,11 +43,30 @@ the plugin settings page in NetBox and the new value will take effect within
 | `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` | — | 30 | 1 | Wall-clock seconds allowed for one full-sync VM config fetch before that VM is isolated as failed |
 | `PROXBOX_NETBOX_WRITE_CONCURRENCY` | `netbox_write_concurrency` | 8 | 1 | Max concurrent NetBox API write-heavy per-VM sync tasks (VMs and virtual disks) |
 | `PROXBOX_PROXMOX_FETCH_CONCURRENCY` | `proxmox_fetch_concurrency` | 8 | 1 | Max concurrent Proxmox API reads for interfaces |
+| `PROXBOX_SESSION_ACQUIRE_CONCURRENCY` | `session_acquire_concurrency` | 8 | 1 | Max concurrent session opens for partial multi-endpoint acquisition |
 | `PROXBOX_INTERFACE_BATCH_SIZE` | `interface_batch_size` | 5 | 1 | VMs per interface-sync batch (prevents NetBox overload) |
 | `PROXBOX_INTERFACE_BATCH_DELAY_MS` | `interface_batch_delay_ms` | 100 | 0 | Milliseconds between interface-sync batches |
-| `PROXBOX_GUEST_AGENT_TIMEOUT` | `guest_agent_timeout` | 15.0 | 1.0 | Seconds for guest-agent `network-get-interfaces` call |
+| `PROXBOX_GUEST_AGENT_TIMEOUT` | — | 15.0 | 1.0 | Seconds for guest-agent `network-get-interfaces` call (environment-only; not on the NetBox plugin settings page) |
 | `PROXBOX_NETBOX_MAX_CONCURRENT` | `netbox_max_concurrent` | 1 | 1 | Max concurrent NetBox GET requests (keep low to avoid PostgreSQL pool exhaustion) |
-| `PROXBOX_NETBOX_TIMEOUT` | — | 120 | 1 | NetBox HTTP session total timeout in seconds |
+| `PROXBOX_NETBOX_TIMEOUT` | `netbox_timeout` | 120 | 1 | NetBox HTTP session total timeout in seconds |
+
+For estate-wide sizing, ingress rate limits, worker topology, and a starting
+profile for about 30 clusters, see [Large Multi-Cluster Deployments](../operations/large-multi-cluster-deployments.md).
+
+`ProxmoxSessionsDep` remains strict: one failed endpoint fails the dependency
+and closes sessions already opened for an ordinary inventory request.
+`ProxmoxSessionsPartialDep` is an explicit opt-in for multi-endpoint aggregate
+reads. It returns data from healthy endpoints and reports secret-safe failures
+in the bounded JSON `X-Proxbox-Endpoint-Errors` response header. The summary has
+the shape `{"failed": <count>, "ids": [<up to 20 endpoint IDs>], "truncated":
+<boolean>}`, is capped at 1024 bytes, and contains no endpoint names or error
+messages. If every selected endpoint fails, the request still returns an error
+response.
+
+During synchronization, the netbox-proxbox plugin requests firewall and
+datacenter data one endpoint at a time, so an endpoint failure is reported as
+that endpoint's failure. Other multi-endpoint callers can use the bounded
+summary header to identify failed endpoint IDs while retaining healthy data.
 
 ## The Single `netbox_version` Optimization (F3)
 

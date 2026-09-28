@@ -485,16 +485,16 @@ _GUEST_AGENT_PERMISSION_HINT = (
 _GUEST_AGENT_TIMEOUT_HINT = (
     "Guest-agent network-get-interfaces timed out. Interface-dense guests "
     "(many VRRP/alias interfaces) can take long to enumerate; raise "
-    "PROXBOX_GUEST_AGENT_TIMEOUT (plugin key guest_agent_timeout) if this persists."
+    "PROXBOX_GUEST_AGENT_TIMEOUT (environment-only, default 15 s, range 1-600) if this persists."
 )
 
 
 def _resolve_guest_agent_timeout() -> int:
     """Dedicated timeout (seconds) for guest-agent network-get-interfaces calls.
 
-    Resolution: env PROXBOX_GUEST_AGENT_TIMEOUT > ProxboxPluginSettings
-    guest_agent_timeout > default 15. Falls back gracefully when the plugin
-    settings key does not exist yet.
+    Resolution: env PROXBOX_GUEST_AGENT_TIMEOUT only (default 15, range 1-600).
+    NetBox plugin settings do not supply guest_agent_timeout; plugin payloads
+    drop that key during normalization.
     """
     from proxbox_api import runtime_settings
 

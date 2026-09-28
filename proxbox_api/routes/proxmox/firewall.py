@@ -36,7 +36,11 @@ from proxbox_api.schemas.firewall import (
     FirewallVmType,
     FirewallWriteResponse,
 )
-from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
+from proxbox_api.session.proxmox import (
+    ProxmoxSession,
+    ProxmoxSessionsDep,
+    ProxmoxSessionsPartialDep,
+)
 from proxbox_api.session.proxmox_providers import _parse_db_endpoint
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
 
@@ -1416,7 +1420,7 @@ async def delete_vnet_firewall_rule(
 
 
 @router.get("/firewall/summary", response_model=list[FirewallSummarySchema])
-async def firewall_summary(pxs: ProxmoxSessionsDep):
+async def firewall_summary(pxs: ProxmoxSessionsPartialDep):
     """Aggregated firewall data for all endpoints — used by the sync stage.
 
     Returns datacenter rules, security groups (with rules), IP sets (with

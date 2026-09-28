@@ -92,6 +92,8 @@ class ProxmoxSession:
         self.node_name: str | None = None
         self.fingerprints: list[str] | None = None
         self.name: str | None = None
+        self.endpoint_name: str | None = None
+        self.node_device_name_template: str = "{node}"
         self.site_id: int | None = None
         self.site_slug: str | None = None
         self.site_name: str | None = None
@@ -222,6 +224,12 @@ class ProxmoxSession:
         """Set instance attributes from parsed config."""
         try:
             self.ip_address = config["ip_address"]
+            self.endpoint_name = (
+                str(config["endpoint_name"]) if config.get("endpoint_name") else None
+            )
+            self.node_device_name_template = str(
+                config.get("node_device_name_template") or "{node}"
+            )
             self.domain = config["domain"]
             self.http_port = config["http_port"]
             self.user = config["user"]

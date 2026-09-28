@@ -53,6 +53,18 @@ class _FakeExistingDevice:
         self.applied[key] = value
 
 
+def _target(*, desired_name: str = "pve01.cluster-a.example.com") -> device_ensure._DeviceTarget:
+    return device_ensure._DeviceTarget(
+        cluster_name="cluster-a",
+        node_name="pve01",
+        desired_name=desired_name,
+        effective_name=desired_name,
+        desired_site_id=41,
+        site_id=41,
+        cluster_id=11,
+    )
+
+
 class _FakePhaseRecord(_FakeExistingDevice):
     def __init__(self, current: dict[str, Any]) -> None:
         super().__init__(current)
@@ -79,6 +91,413 @@ def _existing_payload(*, device_type_id: int, role_id: int, tagged: bool = True)
         "description": "Proxmox Node pve01",
         "tags": tags,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True])
+async def test_ensure_device_writes_endpoint_identity_on_create_and_update(
+    monkeypatch: pytest.MonkeyPatch,
+    existing: bool,
+) -> None:
+    record = _FakeExistingDevice({"id": 101, **_existing_payload(device_type_id=42, role_id=10)})
+    writes: list[dict[str, object]] = []
+
+    async def _prepare(_nb: object, targets: list[device_ensure._DeviceTarget]) -> None:
+        if existing:
+            targets[0].existing = record
+
+    async def _no_tag(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def _reconcile(*_args: Any, **_kwargs: Any) -> dict[str, object]:
+        return {"id": 202}
+
+    async def _write(*_args: Any, **kwargs: Any) -> None:
+        writes.append(kwargs)
+
+    monkeypatch.setattr(device_ensure, "_prepare_device_targets", _prepare)
+    monkeypatch.setattr(device_ensure, "resolve_discovery_tag_id", _no_tag)
+    monkeypatch.setattr(device_ensure, "rest_reconcile_async", _reconcile)
+    monkeypatch.setattr(device_ensure, "write_device_sync_state", _write)
+
+    await device_ensure._ensure_device(
+        object(),
+        device_name="pve01",
+        cluster_name="cluster-a",
+        endpoint_id=501,
+        cluster_id=11,
+        device_type_id=42,
+        role_id=10,
+        site_id=41,
+        tag_refs=[],
+    )
+
+    assert len(writes) == 1
+    assert writes[0]["proxmox_endpoint_raw_id"] == 501
+
+
+def test_device_targets_keep_same_short_node_distinct_by_cluster() -> None:
+    clusters = [
+        SimpleNamespace(
+            name=cluster,
+            endpoint_name="endpoint-a",
+            node_device_name_template="{node}.{cluster_slug}.example.com",
+            node_list=[SimpleNamespace(name="pve01")],
+        )
+        for cluster in ("cluster-a", "cluster-b")
+    ]
+    records = {
+        name: _FakePhaseRecord({"id": index, "name": name, "scope_id": 41})
+        for index, name in enumerate(("cluster-a", "cluster-b"), start=11)
+    }
+
+    targets = device_ensure._build_device_targets(
+        clusters,
+        cluster_by_name=records,
+        sites={name: _FakePhaseRecord({"id": 41}) for name in records},
+    )
+
+    assert [(target.cluster_name, target.node_name) for target in targets] == [
+        ("cluster-a", "pve01"),
+        ("cluster-b", "pve01"),
+    ]
+    assert [target.desired_name for target in targets] == [
+        "pve01.cluster-a.example.com",
+        "pve01.cluster-b.example.com",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_identity_distinguishes_duplicate_endpoint_cluster_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    targets = [
+        device_ensure._DeviceTarget(
+            cluster_name="cluster-a",
+            node_name="pve01",
+            desired_name=f"pve01.endpoint-{endpoint_id}",
+            effective_name=f"pve01.endpoint-{endpoint_id}",
+            desired_site_id=41,
+            site_id=41,
+            cluster_id=11,
+            endpoint_id=endpoint_id,
+        )
+        for endpoint_id in (501, 502)
+    ]
+    queries: list[dict[str, object]] = []
+
+    async def _sidecars(
+        _nb: object, _path: str, *, query: dict[str, object]
+    ) -> list[dict[str, object]]:
+        queries.append(query)
+        endpoint_id = int(query["proxmox_endpoint_raw_id"])
+        return [{"device": endpoint_id + 1000}]
+
+    async def _device(_nb: object, _path: str, *, query: dict[str, object]) -> _FakeExistingDevice:
+        return _FakeExistingDevice({"id": query["id"]})
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _sidecars)
+    monkeypatch.setattr(device_ensure, "rest_first_async", _device)
+
+    resolved = [
+        await device_ensure._device_from_identity_sidecar(object(), target) for target in targets
+    ]
+
+    assert [record.get("id") for record in resolved if record is not None] == [1501, 1502]
+    assert [query["proxmox_endpoint_raw_id"] for query in queries] == [501, 502]
+
+
+def test_device_targets_skip_only_node_with_unusable_rendered_name() -> None:
+    clusters = [
+        SimpleNamespace(
+            name="a" * 63,
+            endpoint_name="endpoint-a",
+            node_device_name_template="{node}.{cluster}",
+            node_list=[SimpleNamespace(name="pve01")],
+        ),
+        SimpleNamespace(
+            name="lab",
+            endpoint_name="endpoint-a",
+            node_device_name_template="{node}.{cluster}",
+            node_list=[SimpleNamespace(name="pve02")],
+        ),
+    ]
+    records = {
+        cluster.name: _FakePhaseRecord({"id": index, "name": cluster.name, "scope_id": 41})
+        for index, cluster in enumerate(clusters, start=11)
+    }
+
+    targets = device_ensure._build_device_targets(
+        clusters,
+        cluster_by_name=records,
+        sites={name: _FakePhaseRecord({"id": 41}) for name in records},
+    )
+
+    assert [(target.cluster_name, target.node_name, target.desired_name) for target in targets] == [
+        ("lab", "pve02", "pve02.lab")
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_name", "description", "desired_name", "expected_name", "preserved"),
+    (
+        (
+            "pve01",
+            "Proxmox Node pve01",
+            "pve01.cluster-a.example.com",
+            "pve01.cluster-a.example.com",
+            False,
+        ),
+        (
+            "pve01.cluster-a.example.com",
+            "Proxmox Node pve01.cluster-a.example.com",
+            "pve01",
+            "pve01",
+            False,
+        ),
+        ("hypervisor-east", "Operator managed", "pve01.cluster-a.example.com", None, True),
+    ),
+)
+async def test_prepare_device_target_renames_only_proxbox_managed_names(
+    monkeypatch: pytest.MonkeyPatch,
+    current_name: str,
+    description: str,
+    desired_name: str,
+    expected_name: str | None,
+    preserved: bool,
+) -> None:
+    existing = _FakeExistingDevice(
+        {
+            "name": current_name,
+            "description": description,
+            "site": 41,
+            "cluster": 11,
+            "tags": [{"slug": "proxbox"}],
+        }
+    )
+
+    async def _resolve(*_args: Any, **_kwargs: Any) -> _FakeExistingDevice:
+        return existing
+
+    monkeypatch.setattr(device_ensure, "_resolve_existing_device_for_target", _resolve)
+
+    async def _no_occupants(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _no_occupants)
+    target = _target(desired_name=desired_name)
+
+    await device_ensure._prepare_device_targets(object(), [target])
+
+    assert existing.applied.get("name") == expected_name
+    assert target.preserve_manual_name is preserved
+    assert target.effective_name == (current_name if preserved else desired_name)
+
+
+@pytest.mark.asyncio
+async def test_prepare_device_targets_skips_only_conflicting_rendered_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _FakeExistingDevice(
+        {
+            "id": 101,
+            "name": "pve01",
+            "description": "Proxmox Node pve01",
+            "site": 41,
+            "cluster": 11,
+            "tags": [{"slug": "proxbox"}],
+        }
+    )
+    second = _FakeExistingDevice(
+        {
+            "id": 102,
+            "name": "pve02",
+            "description": "Proxmox Node pve02",
+            "site": 41,
+            "cluster": 11,
+            "tags": [{"slug": "proxbox"}],
+        }
+    )
+    occupant = _FakeExistingDevice({"id": 999, "name": "pve02.cluster-a.example.com", "site": 41})
+    targets = [
+        _target(desired_name="pve01.cluster-a.example.com"),
+        device_ensure._DeviceTarget(
+            cluster_name="cluster-a",
+            node_name="pve02",
+            desired_name="pve02.cluster-a.example.com",
+            effective_name="pve02.cluster-a.example.com",
+            desired_site_id=41,
+            site_id=41,
+            cluster_id=11,
+        ),
+    ]
+
+    async def _resolve(_nb: object, target: device_ensure._DeviceTarget) -> _FakeExistingDevice:
+        return first if target.node_name == "pve01" else second
+
+    async def _occupants(
+        _nb: object, _path: str, *, query: dict[str, object]
+    ) -> list[_FakeExistingDevice]:
+        if query["name"] == "pve02.cluster-a.example.com":
+            return [occupant]
+        return []
+
+    monkeypatch.setattr(device_ensure, "_resolve_existing_device_for_target", _resolve)
+    monkeypatch.setattr(device_ensure, "rest_list_async", _occupants)
+
+    await device_ensure._prepare_device_targets(object(), targets)
+
+    assert first.applied["name"] == "pve01.cluster-a.example.com"
+    assert first.saved is True
+    assert second.applied == {}
+    assert second.saved is False
+    assert targets[0].name_conflict is False
+    assert targets[1].name_conflict is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_device_targets_preflights_all_names_before_first_rename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _FakeExistingDevice(
+        {
+            "id": 101,
+            "name": "pve01",
+            "description": "Proxmox Node pve01",
+            "site": 41,
+            "tags": [{"slug": "proxbox"}],
+        }
+    )
+    second = _FakeExistingDevice(
+        {
+            "id": 102,
+            "name": "pve02",
+            "description": "Proxmox Node pve02",
+            "site": 41,
+            "tags": [{"slug": "proxbox"}],
+        }
+    )
+    targets = [
+        _target(desired_name="pve01.cluster-a.example.com"),
+        device_ensure._DeviceTarget(
+            cluster_name="cluster-a",
+            node_name="pve02",
+            desired_name="pve02.cluster-a.example.com",
+            effective_name="pve02.cluster-a.example.com",
+            desired_site_id=41,
+            site_id=41,
+            cluster_id=11,
+        ),
+    ]
+
+    async def _resolve(_nb: object, target: device_ensure._DeviceTarget) -> _FakeExistingDevice:
+        return first if target.node_name == "pve01" else second
+
+    calls = 0
+
+    async def _preflight(
+        _nb: object, _path: str, *, query: dict[str, object]
+    ) -> list[_FakeExistingDevice]:
+        nonlocal calls
+        calls += 1
+        assert first.saved is False
+        assert second.saved is False
+        return []
+
+    monkeypatch.setattr(device_ensure, "_resolve_existing_device_for_target", _resolve)
+    monkeypatch.setattr(device_ensure, "rest_list_async", _preflight)
+
+    await device_ensure._prepare_device_targets(object(), targets)
+
+    assert calls == 2
+    assert first.saved is True
+    assert second.saved is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_device_targets_rejects_duplicate_batch_destination_before_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = {
+        "pve01": _FakeExistingDevice(
+            {
+                "id": 101,
+                "name": "pve01",
+                "description": "Proxmox Node pve01",
+                "site": 41,
+                "tags": [{"slug": "proxbox"}],
+            }
+        ),
+        "pve02": _FakeExistingDevice(
+            {
+                "id": 102,
+                "name": "pve02",
+                "description": "Proxmox Node pve02",
+                "site": 41,
+                "tags": [{"slug": "proxbox"}],
+            }
+        ),
+    }
+    targets = [
+        device_ensure._DeviceTarget(
+            cluster_name=f"cluster-{index}",
+            node_name=node_name,
+            desired_name="shared.example.com",
+            effective_name="shared.example.com",
+            desired_site_id=41,
+            site_id=41,
+            cluster_id=10 + index,
+            endpoint_id=500 + index,
+        )
+        for index, node_name in enumerate(records, start=1)
+    ]
+
+    async def _resolve(_nb: object, target: device_ensure._DeviceTarget):
+        return records[target.node_name]
+
+    async def _no_occupants(*_args: Any, **_kwargs: Any):
+        return []
+
+    monkeypatch.setattr(device_ensure, "_resolve_existing_device_for_target", _resolve)
+    monkeypatch.setattr(device_ensure, "rest_list_async", _no_occupants)
+
+    await device_ensure._prepare_device_targets(object(), targets)
+
+    assert [target.name_conflict for target in targets] == [True, True]
+    assert all(record.saved is False for record in records.values())
+    assert all(record.applied == {} for record in records.values())
+
+
+@pytest.mark.asyncio
+async def test_prepare_device_targets_accepts_desired_name_owned_by_same_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = _FakeExistingDevice(
+        {
+            "id": 101,
+            "name": "pve01",
+            "description": "Proxmox Node pve01",
+            "site": 41,
+            "tags": [{"slug": "proxbox"}],
+        }
+    )
+    target = _target()
+
+    async def _resolve(*_args: Any, **_kwargs: Any) -> _FakeExistingDevice:
+        return existing
+
+    async def _same_device(*_args: Any, **_kwargs: Any) -> list[_FakeExistingDevice]:
+        return [_FakeExistingDevice({"id": 101, "name": "pve01.cluster-a.example.com", "site": 41})]
+
+    monkeypatch.setattr(device_ensure, "_resolve_existing_device_for_target", _resolve)
+    monkeypatch.setattr(device_ensure, "rest_list_async", _same_device)
+
+    await device_ensure._prepare_device_targets(object(), [target])
+
+    assert target.name_conflict is False
+    assert existing.applied["name"] == target.desired_name
+    assert existing.saved is True
 
 
 @pytest.fixture
@@ -689,5 +1108,5 @@ async def test_bulk_device_reconcile_omits_reported_fields_when_flags_disabled()
         },
     )
 
-    assert patchable == {"cluster"}
+    assert patchable == {"name", "cluster"}
     assert nb.client.patch_payloads == [[{"id": 1, "cluster": 11}]]

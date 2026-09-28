@@ -266,6 +266,7 @@ def test_device_patchable_defaults_include_all_overwriteable_keys() -> None:
     )
 
     assert fields == {
+        "name",
         "cluster",
         "status",
         "description",
@@ -286,7 +287,7 @@ def test_device_patchable_none_flags_keeps_status_and_description() -> None:
         overwrite_device_tags=True,
     )
 
-    assert {"cluster", "status", "description"}.issubset(fields)
+    assert {"name", "cluster", "status", "description"}.issubset(fields)
     assert {"role", "device_type", "tags"}.issubset(fields)
 
 

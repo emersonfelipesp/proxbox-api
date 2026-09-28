@@ -25,6 +25,14 @@ Ordem atual de execucao:
 
 A variacao em `GET /full-update/stream` emite os mesmos estagios via Server-Sent Events.
 
+A reconciliacao de Devices de node usa o template efetivo documentado em
+[Configuracao](../getting-started/configuration.md#template-de-nome-do-device-de-node).
+Os mapas usam o cluster Proxmox e o nome curto do node como chave, enquanto as
+escritas e buscas no NetBox usam o nome renderizado. O estado tipado de sync
+sempre registra os nomes curtos originais do node e do cluster, mantendo VMs e
+interfaces ligadas ao Device correto quando clusters reutilizam um nome ou um
+Device gerenciado e renomeado.
+
 ## Fluxo de Sync de VM
 
 Endpoint principal:
@@ -325,8 +333,8 @@ enderecos alias) exigem cuidado extra:
   renomeia a VMInterface core de `net0` para o nome do sistema operacional
   guest. O backend registra um aviso de depreciacao para esse modo.
 - **Timeout dedicado com um retry** — a chamada ao guest-agent usa
-  `PROXBOX_GUEST_AGENT_TIMEOUT` (campo de plugin `guest_agent_timeout`, padrao
-  15s) em vez do timeout curto de sessao, e tenta novamente uma vez em caso de
+  `PROXBOX_GUEST_AGENT_TIMEOUT` somente (padrao 15 s, intervalo 1-600; nao e
+  configuracao do plugin NetBox) em vez do timeout curto de sessao, e tenta novamente uma vez em caso de
   timeout, ja que uma unica enumeracao lenta costuma ser transiente. O
   proxmox-sdk nao tem timeout por chamada, entao o backend amplia
   temporariamente o timeout do backend HTTPS durante a chamada e o restaura

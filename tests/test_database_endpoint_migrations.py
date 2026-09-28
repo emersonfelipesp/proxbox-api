@@ -213,10 +213,14 @@ def test_proxmox_endpoint_migration_backfills_existing_rows_to_api_ssh(tmp_path,
         "ssh_port",
         "ssh_identity_file",
         "ssh_known_host_fingerprint",
+        "node_device_name_template",
     } <= _columns(engine, table)
     with engine.begin() as conn:
-        value, allow_packer_template_builds, ssh_port = conn.execute(
-            text(f"SELECT access_methods, allow_packer_template_builds, ssh_port FROM {table}")
+        value, allow_packer_template_builds, ssh_port, node_template = conn.execute(
+            text(
+                f"SELECT access_methods, allow_packer_template_builds, ssh_port, "
+                f"node_device_name_template FROM {table}"
+            )
         ).one()
     # NON-BREAKING backfill: pre-existing rows keep the SSH transport.
     assert value == "api_ssh"
@@ -229,6 +233,7 @@ def test_proxmox_endpoint_migration_backfills_existing_rows_to_api_ssh(tmp_path,
     assert column["nullable"] is False
     assert str(column["default"]).strip("()'\"") == "0"
     assert ssh_port == 22
+    assert node_template == ""
     engine.dispose()
 
 

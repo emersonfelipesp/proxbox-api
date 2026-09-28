@@ -128,6 +128,12 @@ async def ensure_vm_dependencies(
         device = await _ensure_device(
             netbox_session,
             device_name=node_name or cluster_name,
+            cluster_name=cluster_name,
+            endpoint_name=str(getattr(cluster_state, "endpoint_name", "") or cluster_name),
+            node_device_name_template=str(
+                getattr(cluster_state, "node_device_name_template", "{node}") or "{node}"
+            ),
+            endpoint_id=normalize_positive_int(getattr(cluster_state, "db_endpoint_id", None)),
             cluster_id=getattr(cluster, "id", None),
             device_type_id=getattr(device_type, "id", None),
             role_id=getattr(device_role, "id", None),

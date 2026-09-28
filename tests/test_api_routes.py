@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
@@ -39,6 +39,7 @@ from proxbox_api.routes.netbox import (
     update_netbox_endpoint,
 )
 from proxbox_api.routes.proxmox.cluster import cluster_resources, cluster_status
+from proxbox_api.routes.proxmox.datacenter import router as datacenter_router
 from proxbox_api.routes.proxmox.endpoints import (
     ProxmoxEndpointCreate,
     ProxmoxEndpointUpdate,
@@ -48,6 +49,7 @@ from proxbox_api.routes.proxmox.endpoints import (
     get_proxmox_endpoints,
     update_proxmox_endpoint,
 )
+from proxbox_api.routes.proxmox.firewall import router as firewall_router
 from proxbox_api.routes.proxmox.sdn import create_sdn_stream
 from proxbox_api.routes.virtualization.virtual_machines import (
     create_netbox_backups,
@@ -60,14 +62,97 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
 )
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 from proxbox_api.services.sync.devices import create_proxmox_devices
+from proxbox_api.session import proxmox_providers as proxmox_providers_module
 from proxbox_api.session.netbox import get_netbox_session
-from proxbox_api.session.proxmox_providers import proxmox_sessions_dep
+from proxbox_api.session.proxmox_providers import (
+    ProxmoxPartialSessions,
+    ProxmoxSessionAcquisitionFailure,
+    proxmox_sessions_dep,
+    proxmox_sessions_partial,
+)
 
 
 def test_root_route_returns_service_metadata():
     body = asyncio.run(standalone_info())
     assert body["message"] == "Proxbox Backend made in FastAPI framework"
     assert body["proxbox"]["github"].endswith("netbox-proxbox")
+
+
+def _maximum_name_acquisition_failures(count: int):
+    return [
+        ProxmoxSessionAcquisitionFailure(
+            endpoint_id=index,
+            endpoint_name=(f"endpoint-{index}-" + "x" * 255)[:255],
+            error_type="RuntimeError",
+            message="Could not return Proxmox Sessions",
+        )
+        for index in range(1, count + 1)
+    ]
+
+
+def _assert_healthy_aggregate_body(path: str, body: list[dict]):
+    if "cpu-models" in path:
+        assert body == []
+        return
+    assert len(body) == 1
+    assert body[0]["cluster_name"] == "healthy"
+    assert body[0]["status"] == "ok"
+
+
+@pytest.mark.parametrize(
+    "router,path",
+    [
+        (firewall_router, "/proxmox/firewall/summary"),
+        (datacenter_router, "/proxmox/datacenter/cpu-models"),
+    ],
+)
+def test_multi_endpoint_read_routes_bound_failure_header_and_return_healthy_data(
+    monkeypatch, router, path
+):
+    class Resource:
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *_args, **_kwargs):
+            return self
+
+        async def get(self):
+            return []
+
+    healthy = SimpleNamespace(name="healthy", session=Resource())
+    failures = _maximum_name_acquisition_failures(200)
+
+    async def load_schemas(**_kwargs):
+        return []
+
+    async def create_partial(_schemas):
+        return ProxmoxPartialSessions(sessions=[healthy], failures=failures)
+
+    monkeypatch.setattr(proxmox_providers_module, "_load_request_schemas", load_schemas)
+    monkeypatch.setattr(proxmox_providers_module, "_create_partial_sessions", create_partial)
+
+    async def partial_override(response: Response):
+        return await proxmox_sessions_partial(response, database_session=SimpleNamespace())
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/proxmox")
+    test_app.dependency_overrides[proxmox_sessions_partial] = partial_override
+
+    with TestClient(test_app) as client:
+        response = client.get(path)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_healthy_aggregate_body(path, body)
+    endpoint_errors = response.headers["X-Proxbox-Endpoint-Errors"]
+    assert len(endpoint_errors.encode("utf-8")) <= 1024
+    assert json.loads(endpoint_errors) == {
+        "failed": 200,
+        "ids": list(range(1, 21)),
+        "truncated": True,
+    }
+    assert "endpoint-" not in endpoint_errors
+    assert "Could not return" not in endpoint_errors
 
 
 def test_sync_entrypoints_share_proxbox_tag_dependency():
@@ -290,7 +375,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             "count": 0,
             "results": [],
         },
-        ("GET", "/api/dcim/devices/", (("limit", 2), ("name", "pve01"))): {
+        ("GET", "/api/dcim/devices/", (("limit", 10), ("name", "pve01"))): {
             "count": 0,
             "results": [],
         },
@@ -306,7 +391,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
         ("POST", "/api/dcim/device-types/"): {"id": 14, "model": "Proxmox Generic Device"},
         ("POST", "/api/dcim/device-roles/"): {"id": 15, "name": "Proxmox Node"},
         ("POST", "/api/dcim/sites/"): {"id": 16, "name": "Proxmox Default Site - lab"},
-        ("POST", "/api/dcim/devices/"): {"id": 17, "name": "pve01"},
+        ("POST", "/api/dcim/devices/"): {"id": 17, "name": "pve01", "site": 16},
     }
 
     fake_session = SimpleNamespace(
@@ -330,7 +415,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
         )
     )
 
-    assert result == [{"id": 17, "name": "pve01"}]
+    assert result == [{"id": 17, "name": "pve01", "site": 16}]
     device_create = next(
         payload
         for method, path, _query, payload, _expect_json in fake_session.client.calls
@@ -425,6 +510,7 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         "enabled": True,
         "allow_writes": False,
         "allow_packer_template_builds": False,
+        "node_device_name_template": "",
         "access_methods": "api",
         "timeout": 30,
         "max_retries": 2,
@@ -476,6 +562,7 @@ def test_proxmox_endpoint_crud_lifecycle(db_session):
         "enabled": True,
         "allow_writes": False,
         "allow_packer_template_builds": False,
+        "node_device_name_template": "",
         "access_methods": "api",
         "timeout": 45,
         "max_retries": 4,

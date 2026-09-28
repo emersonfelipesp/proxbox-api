@@ -493,7 +493,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     assert prepared.sync_state_fields["proxmox_endpoint_id"] == 1
     assert ensure_device_calls
     assert role_reconcile_calls
-    assert context.node_device_cache[("cluster-a", "pve01")].id == 22
+    assert context.node_device_cache[(1, "cluster-a", "pve01")].id == 22
     assert context.vm_role_cache["qemu"].id == 33
     assert resolved_vm_types == ["qemu"]
     assert resolved_tag_inputs == [("cluster-a", vm_config)]
@@ -921,6 +921,64 @@ def test_full_update_precomputes_both_clusters_when_two_clusters_present(monkeyp
     assert sorted(r["id"] for r in result) == [101, 201]
     # _ensure_device called for both clusters' node "pve01" (from PROXMOX_VM_RESOURCE).
     assert len(ensure_device_calls) == 2
+
+
+def test_full_update_keeps_same_cluster_name_scoped_to_ordered_endpoints(monkeypatch):
+    ensure_device_calls: list[dict[str, object]] = []
+    config_endpoint_ids: list[int] = []
+
+    _install_full_update_stubs(monkeypatch)
+
+    async def _tracking_ensure_device(*_args, **kwargs):
+        ensure_device_calls.append(kwargs)
+        return SimpleNamespace(id=1000 + int(kwargs["endpoint_id"]))
+
+    async def _fake_get_vm_config(**kwargs):
+        config_endpoint_ids.append(int(kwargs["pxs"][0].db_endpoint_id))
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "_ensure_device", _tracking_ensure_device)
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[
+                SimpleNamespace(db_endpoint_id=501, endpoint_name="endpoint-501"),
+                SimpleNamespace(db_endpoint_id=502, endpoint_name="endpoint-502"),
+            ],
+            cluster_status=[
+                SimpleNamespace(
+                    name="shared",
+                    mode="cluster",
+                    db_endpoint_id=501,
+                    endpoint_name="endpoint-501",
+                    node_device_name_template="{node}.{endpoint}",
+                ),
+                SimpleNamespace(
+                    name="shared",
+                    mode="cluster",
+                    db_endpoint_id=502,
+                    endpoint_name="endpoint-502",
+                    node_device_name_template="{node}.{endpoint}",
+                ),
+            ],
+            cluster_resources=[
+                {"shared": [_resource(101)]},
+                {"shared": [_resource(202)]},
+            ],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert sorted(record["id"] for record in result) == [101, 202]
+    assert config_endpoint_ids == [501, 502]
+    assert [call["endpoint_id"] for call in ensure_device_calls] == [501, 502]
+    assert [call["endpoint_name"] for call in ensure_device_calls] == [
+        "endpoint-501",
+        "endpoint-502",
+    ]
 
 
 def test_full_update_uses_reconciled_cluster_site_scope(monkeypatch):
