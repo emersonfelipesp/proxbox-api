@@ -81,6 +81,8 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_patchable_fields.py` | NetBox PATCH field allowlists and merge semantics |
 | `test_plugin_integration.py` | NetBox plugin integration handshake and config |
 | `test_public_boundary.py` | Complete proposed-tree scanning, bounded encoding/archive reconstruction, hostile mutation coverage, Git index/worktree overlays, and fail-closed path handling. |
+| `test_deploy_ci_gate.py` | Exact-SHA Gitea CI status gate parsing, polling, timeout, and fail-closed transport behavior for staging and production deployment. |
+| `test_deploy_workflow.py` | Staging/production isolation, package-first defaults, exact authorization and artifact binding, single-use claim ordering, host failure propagation, proof cleanup, and signed receipt validation. |
 | `test_role_resolution.py` | VM default-role hierarchy, durable role-snapshot truth table, and verified compensation retries |
 | `test_proxmox_auth_pve9.py` | PVE 9 authentication/session fallback plus an effective logger-handler canary proving raw SDK exception secrets are not rendered |
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
@@ -171,8 +173,8 @@ uv run pytest tests/e2e -m mock_http
 
 # VM reconciliation contract and optional Rust parity tests
 uv run pytest tests/reconciliation -q
-PROXBOX_RECONCILIATION_ENGINE=compare \
-  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+  PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
   uv run pytest tests/reconciliation -q
 ```
 

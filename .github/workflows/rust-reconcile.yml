@@ -47,8 +47,8 @@ jobs:
       - name: Strict Rust/Python parity tests
         run: uv run pytest tests/reconciliation -q
         env:
-          PROXBOX_RECONCILIATION_ENGINE: compare
-          PROXBOX_RECONCILIATION_COMPARE_STRICT: "true"
+          PROXBOX_TEST_RECONCILIATION_ENGINE: compare
+          PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT: "true"
           XDG_DATA_HOME: ${{ runner.temp }}/xdg-data
 
   build-wheels:

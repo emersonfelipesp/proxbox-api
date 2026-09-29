@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
-from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxVirtualMachineCreateBody,
+    ProxmoxVmConfigInput,
+)
 
 
 @dataclass(slots=True)
@@ -22,6 +25,7 @@ class PreparedVMState:
     now: datetime
     vm_type: str
     sync_state_fields: dict[str, object] = field(default_factory=dict)
+    desired_state: NetBoxVirtualMachineCreateBody | None = None
 
 
 @dataclass(slots=True)

@@ -87,8 +87,9 @@ Main synchronization endpoints for virtual machines and related resources.
   into the stage summary so multi-endpoint mis-scoping can never masquerade as
   an empty-but-successful run.
 - **Full-update VM config fetch is a separate phase.** `_run_full_update_vm_batch`
-  first fetches all Proxmox VM configs under the VM fetch semaphore, and that
-  semaphore covers only `get_vm_config`. After every config fetch has completed,
+  fetches Proxmox VM configs through `_map_bounded_ordered`: a fixed worker set
+  plus a pending queue capped at twice the worker count. Workers cover only
+  `get_vm_config`. After every config fetch has completed,
   the batch processes successful configs into `_PreparedVMState` objects. Keep
   CPU validation/payload building and NetBox dependency calls out of the fetch
   semaphore so pending Proxmox HTTP responses are drained promptly and aiohttp
@@ -96,6 +97,14 @@ Main synchronization endpoints for virtual machines and related resources.
   Each config request also has an independent wall-clock deadline from
   `PROXBOX_VM_CONFIG_FETCH_TIMEOUT_SECONDS` (default 30 seconds). A timed-out VM
   is counted as failed while the remaining batch reaches a terminal summary.
+- **Prepared VM models are reused.** `_prepare_vm_from_config` validates the raw
+  resource and config once, then passes those `ProxmoxVmResourceInput` and
+  `ProxmoxVmConfigInput` instances to payload and sidecar builders. After name
+  resolution, `_finalize_desired_vm_states` validates final payloads off the
+  event loop and stores the canonical model in `PreparedVMState.desired_state`;
+  the Python planner reuses it. Never populate this field before a mutation that
+  can change the desired payload, and never dispatch a result from cancelled
+  executor work.
 - **VM lookups are scoped by `(proxmox_endpoint_id, vmid)` first (issue #255).**
   Proxmox `vmid` values can repeat across standalone endpoints, even when those
   endpoints have no shared NetBox cluster identity. The VM snapshot index is

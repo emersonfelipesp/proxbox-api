@@ -59,6 +59,11 @@ Rode os contratos Python das fixtures; a paridade Rust sera pulada se o pacote n
 uv run pytest tests/reconciliation
 ```
 
+As variáveis `PROXBOX_TEST_*` são consumidas somente pela fixture dos testes de
+reconciliação e traduzidas para valores das configurações do plugin. O runtime
+de produção continua aceitando seleção de engine somente pelas configurações do
+plugin NetBox.
+
 Rode testes unitarios Rust sem o modo de link `extension-module` do PyO3:
 
 ```bash
@@ -75,15 +80,15 @@ uv pip install -e proxbox-reconcile-rs
 Rode paridade estrita em compare mode:
 
 ```bash
-PROXBOX_RECONCILIATION_ENGINE=compare \
-PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
 uv run pytest tests/reconciliation
 ```
 
 Rode testes usando explicitamente o engine Rust:
 
 ```bash
-PROXBOX_RECONCILIATION_ENGINE=rust uv run pytest tests/reconciliation
+PROXBOX_TEST_RECONCILIATION_ENGINE=rust uv run pytest tests/reconciliation
 ```
 
 Rode o benchmark sintetico:
@@ -93,8 +98,18 @@ uv run python benchmarks/reconciliation/bench_vm_queue.py --sizes 100 1000 10000
 uv run python benchmarks/reconciliation/bench_vm_queue.py --sizes 10000 --pathological
 ```
 
-Se o compare mode reportar divergencias, mantenha `PROXBOX_RECONCILIATION_ENGINE=python` em
-producao e inspecione `proxbox_reconcile_mismatch_total` em `/cache/metrics` ou
+O harness preserva `sync_state_fields` das fixtures, então a identidade por
+endpoint segue o mesmo caminho dos testes de paridade. A saída registra o
+commit exato (incluindo marcador de árvore suja), versões do Python, plataforma
+e pacotes, caminhos medidos, repetições, wall time, tempo de CPU do processo e
+pico de memória Python rastreada. Essas são medições sintéticas do planner, não
+afirmações sobre o sync de produção. Meça o sync completo no staging com o log
+detalhado do lote, contagem/latência de requisições SDK, responsividade do event
+loop e evidências de retry, falha e recuperação antes de mudar cache, executor
+ou política de concorrência.
+
+Se o compare mode reportar divergencias, mantenha `reconciliation_engine=python`
+nas configurações do plugin NetBox e inspecione `proxbox_reconcile_mismatch_total` em `/cache/metrics` ou
 `/cache/metrics/prometheus`.
 
 Para os modulos novos da v0.0.11 (HA, verbos operacionais, sync-active, parsing de metadata e resolucao de colisao de nomes):

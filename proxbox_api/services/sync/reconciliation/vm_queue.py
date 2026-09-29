@@ -193,15 +193,34 @@ def prepared_vm_result_key(prepared: PreparedVMState) -> tuple[str, int, str]:
     return (prepared.cluster_name, vmid, vm_type)
 
 
+def desired_vm_state(prepared: PreparedVMState) -> NetBoxVirtualMachineCreateBody:
+    """Return the finalized desired model or validate legacy caller input."""
+
+    if prepared.desired_state is not None:
+        return prepared.desired_state
+    return NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
+
+
 def validate_vm_platform_relations(
     prepared_vms: list[PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
 ) -> None:
     """Validate creation-only platform relations before selecting an engine."""
 
-    payloads = [prepared.desired_payload for prepared in prepared_vms]
-    payloads.extend(netbox_snapshot)
-    for payload in payloads:
+    for prepared in prepared_vms:
+        if prepared.desired_state is not None:
+            continue
+        payload = prepared.desired_payload
+        if "platform" not in payload:
+            continue
+        NetBoxVirtualMachineCreateBody.model_validate(
+            {
+                "name": "platform-relation-validation",
+                "status": "active",
+                "platform": payload["platform"],
+            }
+        )
+    for payload in netbox_snapshot:
         if "platform" not in payload:
             continue
         NetBoxVirtualMachineCreateBody.model_validate(
@@ -267,7 +286,7 @@ def build_vm_operation_queue_python(  # noqa: C901
             operation_queue.append(NetBoxVMOperation(method="CREATE", prepared=prepared))
             continue
 
-        desired_state = NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
+        desired_state = desired_vm_state(prepared)
         desired_payload = desired_state.model_dump(exclude_none=True, by_alias=True)
         # Platform is creation-only in `_compute_vm_patchable_fields`. Validate it so
         # nested current NetBox relations cannot abort reconciliation, but keep it out

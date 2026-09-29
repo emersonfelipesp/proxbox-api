@@ -18,6 +18,7 @@ Utility and maintenance scripts for the `proxbox-api` project. These are one-off
 | File | Role |
 |------|------|
 | `check_public_boundary.py` | Fail-closed public-tree scanner for protected integration identities, bounded encoded forms, and nested archive members. Run with `--mutation-test` to prove the hostile corpus before publication. |
+| `release_artifacts.py` | Creates and verifies immutable package manifests, downloads the exact source-bound Gitea artifacts selected for deployment, validates the pinned Ed25519 host receipt, and publishes only independently re-read completion evidence. |
 | `mounted_operation_inventory.py` | Explicit isolated `generate`, `verify`, and `readiness` commands for the maintained mounted-operation contracts. The child denies sockets, database access and external writes before importing the application; it never runs lifespan or handlers. |
 | `check_promotion_ancestor_blobs.py` | Base-owned promotion guard that exhaustively traverses merge history and rejects a changed path when its proposed blob matches a strictly older state superseded on the exact base branch. |
 | `operation_inventory_docs.py` | Standard-library-only MkDocs pre-build integrity and source check. It does not import the application and fails on missing, stale or symlinked inventory evidence before restricted snippets render. |

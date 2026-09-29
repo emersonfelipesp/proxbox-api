@@ -64,6 +64,11 @@ plugin-settings only; backend environment variables must not override it.
   IDs even though platform is omitted from existing-record diff payloads.
 - If NetBox lacks the `virtual_machine_type` field, do not generate a patch for
   that field.
+- `PreparedVMState.desired_state` is the optional canonical Pydantic model
+  finalized after name resolution. The Python planner must reuse it when
+  present and preserve validation fallback for other callers. Benchmark fixture
+  adapters must carry `sync_state_fields`; dropping them silently benchmarks
+  cluster fallback instead of endpoint-first identity.
 
 ## Checks
 

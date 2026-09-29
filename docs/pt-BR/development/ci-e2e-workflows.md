@@ -167,10 +167,10 @@ exige retomada com bytes identicos ou uma nova versao fix-forward.
 
 ### Entrega para implantacao externa
 
-A publicacao do pacote e a ultima responsabilidade relacionada a implantacao
-deste repositorio. Um sistema externo de implantacao somente pode consumir uma
-release publicada depois de vincular, de forma independente, todos os valores
-abaixo a uma unica decisao imutavel:
+A publicacao do pacote produz o artefato publico terminal para implantacao
+deste repositorio. O workflow de implantacao versionado no Gitea somente pode
+consumir uma release publicada depois que o plano de controle externo vincular,
+de forma independente, todos os valores abaixo a uma unica decisao imutavel:
 
 - o repositorio e a tag imutavel da origem;
 - o commit de origem registrado no manifesto canonico da release;
@@ -179,9 +179,11 @@ abaixo a uma unica decisao imutavel:
   fonte; e
 - o resultado exato de CI exigido pela politica desse sistema de implantacao.
 
-O sistema externo controla autorizacao, selecao de ambiente, rollout,
-verificacao de saude, rollback, retencao de auditoria e prevencao de replay.
-Esses controles devem falhar de forma fechada quando qualquer identidade ou
-digest divergir. Eles nao sao implementados, configurados nem confiados a
-arquivos deste repositorio publico. O CI publico nao exige acesso a credenciais
-de implantacao nem a ambientes de runtime.
+O plano de controle externo controla autorizacao, selecao de ambiente, rollout,
+verificacao de saude, rollback, retencao de auditoria e prevencao de replay. O
+workflow versionado valida a autorizacao de uso unico e as identidades dos
+artefatos antes de invocar pontos de entrada fixos do host. Esses controles
+falham de forma fechada quando qualquer identidade ou digest divergir, enquanto
+credenciais, topologia privada e a implementacao do rollout no host permanecem
+fora do repositorio publico. O CI publico nao exige acesso a credenciais de
+implantacao nem a ambientes de runtime.

@@ -5,6 +5,7 @@ pynetbox_api/
 pynetbox_api
 # Ignore pem files
 *.pem
+!.gitea/deploy-receipt-public.pem
 
 # Ignore database file
 proxbox_api/database.db

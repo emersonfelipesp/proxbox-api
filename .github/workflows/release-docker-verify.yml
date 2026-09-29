@@ -186,7 +186,7 @@ jobs:
             docker run --rm \
               -e PROXBOX_ENCRYPTION_KEY \
               "$image_ref" \
-              python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
+              python -c "from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert rust_available()"
 
             docker rm -f "$name" 2>/dev/null || true
             docker run -d --name "$name" \

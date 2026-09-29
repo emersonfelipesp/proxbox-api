@@ -22,6 +22,12 @@ def test_repository_public_boundary() -> None:
     assert boundary.find_violations(boundary.repository_files()) == []
 
 
+def test_authorized_deployment_control_and_receipt_key_cross_the_boundary() -> None:
+    names = {name for name, _content in boundary.repository_files()}
+    assert ".gitea/workflows/deploy-production.yml" in names
+    assert ".gitea/deploy-receipt-public.pem" in names
+
+
 def test_mutation_corpus() -> None:
     boundary.run_mutations()
 

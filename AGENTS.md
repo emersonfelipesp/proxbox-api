@@ -128,7 +128,24 @@ Treat that verified manifest as the terminal public handoff. External systems
 must independently bind the immutable repository, tag, source commit, package
 version, artifact sizes and digests, and required CI result before deployment;
 authorization, rollout, health, rollback, audit, and replay prevention remain
-outside this repository.
+under the external control plane's authority. The checked deployment workflow
+validates those identities and consumes a single-use authorization, but it does
+not own credentials, choose policy, or implement the host rollout machinery.
+
+## Staging and Production Deployment
+
+`.gitea/workflows/deploy-production.yml` deploys `develop` to staging and
+accepts production dispatches only from canonical `main`. Production defaults
+to an exact immutable Gitea package; deploying the canonical `main` commit is
+an explicit override. Preserve the exact authorization, source, package,
+manifest, artifact, green-CI, and run bindings. The single-use authorization
+must be claimed only after every non-mutating preflight passes, the host-issued
+completion receipt must be signature-validated before publication, and claimed
+proof material must be removed on every exit path. A manual dispatch against
+`develop` is not a staging shortcut and must fail before sending authorization
+material or invoking a host deploy command. The signed authorization has no CI
+bypass field, so the workflow exposes no emergency `skip_ci_gate` input and
+every production source must already have green CI.
 
 ## VM Interface Sync Strategy
 
@@ -203,10 +220,20 @@ or `.github/workflows/rust-reconcile.yml`), also run:
 ```bash
 cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
 uv pip install -e proxbox-reconcile-rs
-PROXBOX_RECONCILIATION_ENGINE=compare \
-  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+  PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
   uv run pytest tests/reconciliation -q
 ```
+
+Keep Python as the production reconciliation engine. VM preparation reuses one
+validated resource/config model pair, finalizes canonical desired state only
+after name resolution, and feeds that model to the indexed Python planner.
+Config fetch uses fixed workers and a pending queue bounded at twice
+`PROXBOX_VM_SYNC_MAX_CONCURRENCY`; preserve ordering, full phase barriers,
+per-item failures, cancellation, write authority, recovery, and persistence.
+Benchmark fixtures must retain `sync_state_fields` so endpoint-first identity is
+actually exercised. Treat synthetic timings as planner evidence only; cache,
+executor, and concurrency changes require complete staging measurements.
 
 If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.15`); there is no local `proxmox-sdk/` subdirectory in this repo.
 
@@ -309,11 +336,11 @@ default in only one repository.
 ## Public Repository Boundary
 
 Keep public documentation limited to contracts a public contributor can inspect and
-run from this repository: `.github/workflows/` publication, the bounded untrusted
-workflow under `.gitea/workflows/`, package/runtime configuration, and public API
-behavior. Do not reintroduce private runner inventories, deployment receipts,
-package-registry credentials, internal promotion topology, or removed release
-orchestration scripts into README, MkDocs, or LLM guidance.
+run from this repository: `.github/workflows/` publication, the checked Gitea
+publication and deployment controls, package/runtime configuration, and public API
+behavior. The deployment workflow may encode the audited validation protocol needed
+to fail closed, but documentation must not reproduce private runner inventories,
+credentials, concrete control-plane addresses, or secret values.
 
 ## VM Description and Comments
 

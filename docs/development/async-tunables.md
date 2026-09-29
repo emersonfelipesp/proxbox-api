@@ -106,8 +106,19 @@ VM full-update phase timing: fetch_ms=8234.12 process_ms=432.10 fetched_ok=480 f
 |---|---|---|
 | `fetch_ms` very high, `fetched_ok` low | Proxmox API is slow or `PROXBOX_VM_SYNC_MAX_CONCURRENCY` too low | Raise concurrency (check Proxmox rate limits first) |
 | `fetch_ms` high + many `fetch_failed` | Proxmox API is overloaded | Lower concurrency or add rate limiting |
-| `process_ms` high | CPU bound — many VMs with complex configs | `asyncio.to_thread` already applied; profile `_build_netbox_virtual_machine_payload` |
+| `process_ms` high | Preparation is slow; it includes dependency resolution and local model work | Separate upstream waits from CPU profiles before tuning; profile `build_netbox_virtual_machine_payload` only when CPU evidence points there |
 | NetBox write timeouts in dispatch | PostgreSQL pool exhaustion | Lower `PROXBOX_NETBOX_WRITE_CONCURRENCY` |
+
+The detailed batch timing log adds `process_cpu_ms`, `snapshot_ms`,
+`hydration_ms`, `name_resolution_ms`, `canonicalization_ms`, `dispatch_ms`, and
+`persistence_ms`. Compare `total_ms` with process CPU time before calling a
+stage CPU-bound. `process_cpu_ms` is process-wide and is attributable to this
+sync only during an isolated run. The same log records config request count,
+total/max config latency, effective worker/queue limits, and process peak RSS.
+The config-fetch worker set has a pending queue capacity of
+twice `PROXBOX_VM_SYNC_MAX_CONCURRENCY`; increasing the setting raises both
+active upstream requests and bounded pending work. Tune it only after request
+counts, pool waits, timeout rates, and upstream pressure are measured.
 
 ### Check for Guest-Agent Stalls
 

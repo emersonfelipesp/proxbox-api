@@ -97,16 +97,15 @@ continuam no Python. Quando o pacote nativo esta instalado, a ponte Python seria
 Pydantic v2, chama a extensao PyO3 com o GIL liberado, decodifica o resultado e adapta as operacoes
 de volta para as dataclasses usadas pelo dispatch.
 
-Selecao de engine usa runtime settings. A configuracao normal para operadores e
-`ProxboxPluginSettings.reconciliation_engine` no plugin NetBox; `PROXBOX_RECONCILIATION_ENGINE`
-continua sendo o override por variavel de ambiente.
+Seleção de engine usa exclusivamente as configurações do plugin NetBox. Variáveis
+de ambiente do backend não substituem esse controle.
 
-| Variavel | Valor | Comportamento |
+| Configuração | Valor | Comportamento |
 |----------|-------|----------------|
-| `PROXBOX_RECONCILIATION_ENGINE` | `python` | Padrao. Usa apenas a saida Python. |
-| `PROXBOX_RECONCILIATION_ENGINE` | `compare` | Roda Python e Rust quando Rust esta instalado, loga divergencias e retorna Python. |
-| `PROXBOX_RECONCILIATION_ENGINE` | `rust` | Retorna a saida Rust adaptada. |
-| `PROXBOX_RECONCILIATION_COMPARE_STRICT` | `true` | Falha em divergencia no compare mode. Uso previsto para CI. |
+| `reconciliation_engine` | `python` | Padrão. Usa apenas a saída Python. |
+| `reconciliation_engine` | `compare` | Roda Python e Rust quando Rust está instalado, registra divergências e retorna Python. |
+| `reconciliation_engine` | `rust` | Retorna a saída Rust adaptada. |
+| `reconciliation_compare_strict` | `true` | Falha em divergência no compare mode. Uso previsto para validação. |
 
 Se o pacote Rust nao estiver instalado, o modo `python` funciona normalmente e o modo `compare`
 retorna a saida Python. O modo `rust` requer o pacote nativo e falha claramente quando ele nao esta
@@ -218,8 +217,8 @@ sequenceDiagram
 
 - `PROXBOX_VM_SYNC_MAX_CONCURRENCY`: controla concorrencia de preparacao/fetch de VMs no Proxmox.
 - `PROXBOX_NETBOX_WRITE_CONCURRENCY`: define tamanho da janela de batch no dispatch.
-- `reconciliation_engine` / `PROXBOX_RECONCILIATION_ENGINE`: seleciona `python`, `compare` ou `rust`.
-- `PROXBOX_RECONCILIATION_COMPARE_STRICT`: falha em drift no compare mode quando `true`.
+- `reconciliation_engine`: seleciona `python`, `compare` ou `rust` nas configurações do plugin NetBox.
+- `reconciliation_compare_strict`: falha em drift no compare mode quando `true`.
 
 Observacao: tamanho de batch nao implica escrita paralela; as escritas continuam sequenciais para proteger o NetBox em ambiente de instancia unica.
 
@@ -232,11 +231,20 @@ Rust nao e o engine padrao. O rollout e conservador:
 3. Manter `reconciliation_engine=python` como padrao no `proxbox-api`.
 4. Rodar `reconciliation_engine=compare` em staging por pelo menos duas semanas.
 5. Monitorar `proxbox_reconcile_mismatch_total` e logs de mismatch.
-6. Recomendar `PROXBOX_RECONCILIATION_ENGINE=rust` apenas depois de zero divergencias em syncs reais diversos.
+6. Recomendar `reconciliation_engine=rust` apenas depois de zero divergências em syncs reais diversos.
 7. Considerar trocar o padrao apenas em uma release minor futura e somente se benchmarks de wall time do sync completo provarem ganho real.
 
-Rollback e imediato: volte `reconciliation_engine` para `python` no NetBox ou remova `PROXBOX_RECONCILIATION_ENGINE` se um override de ambiente foi usado.
+Rollback é imediato: volte `reconciliation_engine` para `python` nas configurações do plugin NetBox.
 
 A evidencia atual de benchmark nao justifica tornar Rust o padrao. O caminho Rust completo ficou
 mais lento que Python no benchmark sintetico, e a medicao real mostrou que reconciliacao nao era o
 custo dominante do sync.
+
+A expansão do Rust customizado está pausada. A direção de produção é reutilizar
+entradas Pydantic já validadas e o modelo desejado canônico criado depois da
+resolução de nomes, manter o algoritmo Python de identidade indexada e limitar
+o agendamento de fetch. Reavalie trabalho nativo somente se medições da operação
+completa deixarem um gargalo de CPU substancial após essas mudanças Python.
+Nunca troque escopo de validação, identidade de endpoint/tipo, propriedade do
+operador, completude do snapshot, autoridade de escrita, recuperação ou
+persistência obrigatória por velocidade de benchmark.

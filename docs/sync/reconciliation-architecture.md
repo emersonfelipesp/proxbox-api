@@ -245,6 +245,14 @@ Current benchmark evidence does not justify making Rust the default. The full Ru
 than Python in the synthetic benchmark harness, and live measurement showed reconciliation was not
 the dominant sync cost.
 
+Custom Rust expansion is paused. The production direction is to reuse validated
+Pydantic inputs and the post-name-resolution canonical desired model, retain the
+indexed Python identity algorithm, and bound fetch scheduling. Revisit native
+work only if complete-operation measurements leave a substantial CPU bottleneck
+after these Python changes. Never trade validation scope, endpoint/type
+identity, operator ownership, snapshot completeness, write authority, recovery,
+or required persistence for benchmark speed.
+
 ## Benefits
 
 - Predictable NetBox write load.

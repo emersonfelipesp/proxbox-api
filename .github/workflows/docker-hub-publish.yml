@@ -565,7 +565,7 @@ jobs:
           docker run --rm \
             -e PROXBOX_ENCRYPTION_KEY \
             emersonfelipesp/proxbox-api:${{ env.IMAGE_TAG }}${{ matrix.version_suffix }}-pre \
-            python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
+            python -c "from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert rust_available()"
 
       - name: Smoke-test ${{ matrix.variant }} PyO3/Rust image before push
         run: |
@@ -616,7 +616,7 @@ jobs:
             docker run --rm \
               -e PROXBOX_ENCRYPTION_KEY \
               emersonfelipesp/proxbox-api:"$TAG" \
-              python -c "import os; from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert os.environ.get('PROXBOX_RECONCILIATION_ENGINE') == 'rust'; assert rust_available()"
+              python -c "from proxbox_api.services.sync.reconciliation.rust_bridge import rust_available; assert rust_available()"
             docker run -d --name "$NAME" \
               -p 127.0.0.1:${{ matrix.smoke_port }}:8000 \
               -e PROXBOX_SKIP_NETBOX_BOOTSTRAP=1 \

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.sync import sync_state_reader, sync_state_writer
@@ -59,6 +60,109 @@ def _resource(vmid: int) -> dict[str, object]:
         "maxmem": 2_147_483_648,
         "maxdisk": 10_737_418_240,
     }
+
+
+def test_bounded_async_map_limits_active_work_and_preserves_order() -> None:
+    active = 0
+    peak_active = 0
+
+    async def _callback(value: int) -> int:
+        nonlocal active, peak_active
+        active += 1
+        peak_active = max(peak_active, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return value * 2
+
+    result = asyncio.run(sync_vm._map_bounded_ordered(list(range(50)), _callback, worker_count=4))
+
+    assert result == [value * 2 for value in range(50)]
+    assert peak_active == 4
+
+
+def test_bounded_async_map_isolates_item_failures() -> None:
+    async def _callback(value: int) -> int:
+        if value == 2:
+            raise ValueError("failed item")
+        return value
+
+    result = asyncio.run(sync_vm._map_bounded_ordered(list(range(5)), _callback, worker_count=2))
+
+    assert result[:2] == [0, 1]
+    assert isinstance(result[2], ValueError)
+    assert result[3:] == [3, 4]
+
+
+def test_bounded_async_map_propagates_cancellation() -> None:
+    callback_started = asyncio.Event()
+
+    async def _callback(_value: int) -> int:
+        callback_started.set()
+        await asyncio.Event().wait()
+        return 0
+
+    async def _run() -> None:
+        task = asyncio.create_task(
+            sync_vm._map_bounded_ordered(list(range(20)), _callback, worker_count=2)
+        )
+        await callback_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+
+
+def test_bounded_async_map_propagates_callback_cancellation_without_deadlock() -> None:
+    async def _callback(value: int) -> int:
+        if value == 0:
+            raise asyncio.CancelledError("callback cancelled")
+        await asyncio.sleep(0)
+        return value
+
+    async def _run() -> None:
+        with pytest.raises(asyncio.CancelledError, match="callback cancelled"):
+            async with asyncio.timeout(1):
+                await sync_vm._map_bounded_ordered(list(range(20)), _callback, worker_count=1)
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    ("input_count", "configured_workers", "expected"),
+    [(0, 8, (0, 0)), (1, 8, (1, 2)), (20, 4, (4, 8))],
+)
+def test_bounded_map_capacity_reports_effective_limits(
+    input_count: int,
+    configured_workers: int,
+    expected: tuple[int, int],
+) -> None:
+    assert sync_vm._bounded_map_capacity(input_count, configured_workers) == expected
+
+
+def test_finalized_desired_state_uses_post_resolution_payload() -> None:
+    prepared = sync_vm._PreparedVMState(
+        cluster_name="cluster-a",
+        resource=_resource(101),
+        vm_config={},
+        vm_config_obj=ProxmoxVmConfigInput.model_validate({}),
+        desired_payload={
+            "name": "resolved-name",
+            "status": "active",
+            "cluster": 1,
+            "vcpus": 2,
+            "memory": 2048,
+            "disk": 10,
+        },
+        lookup={"id": 0},
+        now=sync_vm.datetime.now(sync_vm.timezone.utc),
+        vm_type="qemu",
+    )
+
+    states = sync_vm._finalize_desired_vm_states([prepared])
+
+    assert states[0].name == "resolved-name"
+    assert prepared.desired_state is None
 
 
 def _existing_vm_snapshot(*, name: str, vmid: int = 101, record_id: int = 55) -> dict[str, object]:
@@ -129,7 +233,8 @@ class _MixedBatchHarness:
 
     def capture_prepared(self, kwargs: dict[str, object]) -> None:
         resource = kwargs["proxmox_resource"]
-        self.prepared.append((str(resource["name"]), int(resource["vmid"]), str(resource["node"])))
+        assert isinstance(resource, ProxmoxVmResourceInput)
+        self.prepared.append((str(resource.name), resource.vmid, str(resource.node)))
 
     def capture_sync_state(self, **kwargs) -> dict[str, object]:
         state = self.sync_state_builder(**kwargs)
@@ -257,9 +362,10 @@ def _install_full_update_stubs(
         if payload_side_effect is not None:
             payload_side_effect(kwargs)
         resource = kwargs["proxmox_resource"]
-        vmid = int(resource["vmid"])
+        assert isinstance(resource, ProxmoxVmResourceInput)
+        vmid = resource.vmid
         return {
-            "name": str(resource.get("name") or f"vm-{vmid}"),
+            "name": str(resource.name or f"vm-{vmid}"),
             "status": "active",
             "cluster": kwargs["cluster_id"],
             "device": kwargs["device_id"],
@@ -268,7 +374,7 @@ def _install_full_update_stubs(
             "memory": 1024,
             "disk": 0,
             "tags": kwargs["tag_ids"],
-            "description": f"Synced from Proxmox node {resource.get('node')}",
+            "description": f"Synced from Proxmox node {resource.node}",
         }
 
     async def _fake_rest_create(_nb, _path, payload, *, lookup=None):
@@ -401,6 +507,34 @@ def _run_full_update_name_case(
     return result, patch_payloads
 
 
+def _assert_prepared_vm_state(
+    prepared,
+    *,
+    resource,
+    vm_config,
+    captured_payload_kwargs,
+) -> None:
+    assert prepared.cluster_name == "cluster-a"
+    assert prepared.resource is resource
+    assert prepared.vm_config is vm_config
+    assert prepared.vm_config_obj.qemu_agent_enabled is True
+    assert prepared.lookup == {"id": 0}
+    assert prepared.sync_state_fields["proxmox_vm_id"] == 101
+    assert prepared.sync_state_fields["proxmox_vm_type"] == "qemu"
+    assert isinstance(captured_payload_kwargs["proxmox_resource"], ProxmoxVmResourceInput)
+    assert captured_payload_kwargs["proxmox_resource"].vmid == resource["vmid"]
+    assert isinstance(captured_payload_kwargs["proxmox_config"], ProxmoxVmConfigInput)
+    assert captured_payload_kwargs["proxmox_config"] is prepared.vm_config_obj
+    assert captured_payload_kwargs["cluster_id"] == 11
+    assert captured_payload_kwargs["device_id"] == 22
+    assert captured_payload_kwargs["role_id"] == 33
+    assert captured_payload_kwargs["site_id"] == 44
+    assert captured_payload_kwargs["tenant_id"] == 55
+    assert captured_payload_kwargs["tag_ids"] == [5, 7]
+    assert prepared.sync_state_fields["proxmox_link"] == "https://pve.example:8006/#v1:0:=qemu/101"
+    assert prepared.sync_state_fields["proxmox_endpoint_id"] == 1
+
+
 def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkeypatch):
     captured_payload_kwargs: dict[str, object] = {}
     ensure_device_calls: list[dict[str, object]] = []
@@ -474,29 +608,33 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
         sync_vm._prepare_vm_from_config("cluster-a", resource, vm_config, context)
     )
 
-    assert prepared.cluster_name == "cluster-a"
-    assert prepared.resource is resource
-    assert prepared.vm_config is vm_config
-    assert prepared.vm_config_obj.qemu_agent_enabled is True
-    assert prepared.lookup == {"id": 0}
-    assert prepared.sync_state_fields["proxmox_vm_id"] == 101
-    assert prepared.sync_state_fields["proxmox_vm_type"] == "qemu"
-    assert captured_payload_kwargs["proxmox_resource"] is resource
-    assert captured_payload_kwargs["proxmox_config"] is vm_config
-    assert captured_payload_kwargs["cluster_id"] == 11
-    assert captured_payload_kwargs["device_id"] == 22
-    assert captured_payload_kwargs["role_id"] == 33
-    assert captured_payload_kwargs["site_id"] == 44
-    assert captured_payload_kwargs["tenant_id"] == 55
-    assert captured_payload_kwargs["tag_ids"] == [5, 7]
-    assert prepared.sync_state_fields["proxmox_link"] == "https://pve.example:8006/#v1:0:=qemu/101"
-    assert prepared.sync_state_fields["proxmox_endpoint_id"] == 1
+    _assert_prepared_vm_state(
+        prepared,
+        resource=resource,
+        vm_config=vm_config,
+        captured_payload_kwargs=captured_payload_kwargs,
+    )
     assert ensure_device_calls
     assert role_reconcile_calls
     assert context.node_device_cache[(1, "cluster-a", "pve01")].id == 22
     assert context.vm_role_cache["qemu"].id == 33
     assert resolved_vm_types == ["qemu"]
     assert resolved_tag_inputs == [("cluster-a", vm_config)]
+
+
+def test_validate_vm_inputs_reports_config_error_before_resource_error() -> None:
+    with pytest.raises(ValueError, match="valid dictionary"):
+        sync_vm._validate_vm_inputs([], {})  # type: ignore[arg-type]
+
+
+def test_validate_vm_inputs_reuses_equivalent_models() -> None:
+    config, resource = sync_vm._validate_vm_inputs(
+        dict(PROXMOX_VM_CONFIG),
+        dict(PROXMOX_VM_RESOURCE),
+    )
+
+    assert config == ProxmoxVmConfigInput.model_validate(PROXMOX_VM_CONFIG)
+    assert resource == ProxmoxVmResourceInput.model_validate(PROXMOX_VM_RESOURCE)
 
 
 def test_full_update_batch_applies_proxmox_rename_when_sidecar_matches_stored_name(
@@ -571,6 +709,7 @@ def test_full_update_batch_preserves_netbox_name_when_sidecar_name_is_blank(
 
 def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
     fetch_calls = _install_full_update_stubs(monkeypatch)
+    log_calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def _fake_get_vm_config(**kwargs):
         vmid = int(kwargs["vmid"])
@@ -580,6 +719,11 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
         return dict(PROXMOX_VM_CONFIG)
 
     monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(
+        sync_vm.logger,
+        "info",
+        lambda message, *args: log_calls.append((message, args)),
+    )
     bridge = _CapturingBridge()
 
     result = asyncio.run(
@@ -600,6 +744,51 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
     assert sorted(fetch_calls) == [101, 102]
     assert bridge.phase_summaries[-1]["created"] == 1
     assert bridge.phase_summaries[-1]["failed"] == 1
+    terminal_args = next(
+        args for message, args in log_calls if message.startswith("VM full-update terminal timing:")
+    )
+    assert terminal_args[0] == "partial_failure"
+    assert terminal_args[9] == 2
+    assert terminal_args[10] >= terminal_args[11] >= 0
+    assert terminal_args[-3:-1] == (2, 4)
+    assert terminal_args[-1] > 0
+
+
+def test_full_update_logs_effective_fetch_capacity_for_small_batch(monkeypatch):
+    _install_full_update_stubs(monkeypatch)
+    log_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    def _capture_info(message: str, *args: object) -> None:
+        log_calls.append((message, args))
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 8)
+    monkeypatch.setattr(sync_vm.logger, "info", _capture_info)
+
+    asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(101)]}],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            websocket=_CapturingBridge(),
+            sync_vm_network=False,
+        )
+    )
+
+    detailed_args = next(
+        args for message, args in log_calls if message.startswith("VM full-update terminal timing:")
+    )
+    assert detailed_args[0] == "success"
+    assert detailed_args[2] >= 0
+    assert detailed_args[9] == 1
+    assert detailed_args[10] >= detailed_args[11] >= 0
+    assert detailed_args[-3:-1] == (1, 2)
+    assert detailed_args[-1] > 0
 
 
 def test_mixed_endpoint_batch_preserves_identity_live_node_and_failure_isolation(monkeypatch):
@@ -647,6 +836,7 @@ def test_mixed_endpoint_batch_preserves_identity_live_node_and_failure_isolation
 
 def test_full_update_fetch_timeout_isolated_and_stage_completes(monkeypatch):
     fetch_calls = _install_full_update_stubs(monkeypatch)
+    log_calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def _fake_get_vm_config(**kwargs):
         vmid = int(kwargs["vmid"])
@@ -656,6 +846,11 @@ def test_full_update_fetch_timeout_isolated_and_stage_completes(monkeypatch):
 
     monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
     monkeypatch.setattr(sync_vm, "resolve_vm_config_fetch_timeout_seconds", lambda: 0.01)
+    monkeypatch.setattr(
+        sync_vm.logger,
+        "info",
+        lambda message, *args: log_calls.append((message, args)),
+    )
     bridge = _CapturingBridge()
 
     result = asyncio.run(
@@ -674,6 +869,13 @@ def test_full_update_fetch_timeout_isolated_and_stage_completes(monkeypatch):
     assert fetch_calls == [102]
     assert bridge.phase_summaries[-1]["created"] == 0
     assert bridge.phase_summaries[-1]["failed"] == 1
+    terminal_args = next(
+        args for message, args in log_calls if message.startswith("VM full-update terminal timing:")
+    )
+    assert terminal_args[0] == "total_failure"
+    assert terminal_args[9] == 1
+    assert terminal_args[-3:-1] == (1, 2)
+    assert terminal_args[-1] > 0
 
 
 def test_batch_vm_sync_runs_one_scoped_task_history_aggregate(monkeypatch):
@@ -718,7 +920,9 @@ def test_selected_full_update_vm_batch_keeps_exact_owner_and_task_history_id(mon
         return func(*args, **kwargs)
 
     def _capture_owner(kwargs):
-        processed_nodes.append(str(kwargs["proxmox_resource"]["node"]))
+        resource = kwargs["proxmox_resource"]
+        assert isinstance(resource, ProxmoxVmResourceInput)
+        processed_nodes.append(str(resource.node))
 
     monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
     _install_full_update_stubs(monkeypatch, payload_side_effect=_capture_owner)
@@ -836,11 +1040,106 @@ def test_rest_vm_sync_without_network_raises_502_for_degraded_task_history(monke
     assert exc_info.value.detail == {"errors": 1, "reconciled": 3, "skipped": 2}
 
 
+def test_cancellation_during_canonicalization_never_dispatches(monkeypatch) -> None:
+    _install_full_update_stubs(monkeypatch)
+    dispatched = False
+    log_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _cancel_finalization(func, /, *args, **kwargs):
+        if func is sync_vm._finalize_desired_vm_states:
+            raise asyncio.CancelledError("canonicalization cancelled")
+        return func(*args, **kwargs)
+
+    async def _unexpected_dispatch(*_args, **_kwargs):
+        nonlocal dispatched
+        dispatched = True
+        return {}, set()
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(asyncio, "to_thread", _cancel_finalization)
+    monkeypatch.setattr(sync_vm, "_dispatch_vm_operation_queue", _unexpected_dispatch)
+    monkeypatch.setattr(
+        sync_vm.logger,
+        "info",
+        lambda message, *args: log_calls.append((message, args)),
+    )
+
+    with pytest.raises(asyncio.CancelledError, match="canonicalization cancelled"):
+        asyncio.run(
+            sync_vm.create_virtual_machines(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+                cluster_resources=[{"cluster-a": [_resource(101)]}],
+                tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+                sync_vm_network=False,
+            )
+        )
+
+    assert dispatched is False
+    terminal_args = next(
+        args for message, args in log_calls if message.startswith("VM full-update terminal timing:")
+    )
+    assert terminal_args[0] == "cancelled"
+    assert terminal_args[2] >= 0
+    assert terminal_args[9] == 1
+    assert terminal_args[10] >= terminal_args[11] >= 0
+    assert terminal_args[-3:-1] == (1, 2)
+    assert terminal_args[-1] > 0
+
+
+def test_full_update_fetches_once_per_vm_and_keeps_event_loop_responsive(monkeypatch) -> None:
+    _install_full_update_stubs(monkeypatch)
+    fetch_calls: list[int] = []
+    heartbeat_count = 0
+
+    async def _fake_get_vm_config(**kwargs):
+        fetch_calls.append(int(kwargs["vmid"]))
+        await asyncio.sleep(0.01)
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _run() -> list[dict[str, object]]:
+        nonlocal heartbeat_count
+        done = asyncio.Event()
+
+        async def _heartbeat() -> None:
+            nonlocal heartbeat_count
+            while not done.is_set():
+                heartbeat_count += 1
+                await asyncio.sleep(0)
+
+        heartbeat = asyncio.create_task(_heartbeat())
+        try:
+            return await sync_vm.create_virtual_machines(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+                cluster_resources=[{"cluster-a": [_resource(101), _resource(102), _resource(103)]}],
+                tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+                sync_vm_network=False,
+            )
+        finally:
+            done.set()
+            await heartbeat
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    result = asyncio.run(_run())
+
+    assert [record["id"] for record in result] == [101, 102, 103]
+    assert fetch_calls == [101, 102, 103]
+    assert heartbeat_count > 1
+
+
 def test_full_update_finishes_all_config_fetches_before_processing(monkeypatch):
     events: list[str] = []
 
     def _record_process(kwargs):
-        vmid = int(kwargs["proxmox_resource"]["vmid"])
+        resource = kwargs["proxmox_resource"]
+        assert isinstance(resource, ProxmoxVmResourceInput)
+        vmid = resource.vmid
         events.append(f"process-{vmid}")
 
     fetch_calls = _install_full_update_stubs(

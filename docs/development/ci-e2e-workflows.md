@@ -165,10 +165,10 @@ version.
 
 ### External deployment handoff
 
-Package publication is this repository's final deployment-related
-responsibility. An external deployment system may consume a published release
-only after independently binding all of the following values to one immutable
-decision:
+Package publication produces this repository's terminal public deployment
+artifact. The checked Gitea deployment workflow may consume a published
+release only after the external deployment control plane independently binds
+all of the following values to one immutable decision:
 
 - the repository and immutable source tag;
 - the source commit recorded by the canonical release manifest;
@@ -176,8 +176,10 @@ decision:
 - the wheel and source-distribution filenames, sizes, and SHA-256 digests; and
 - the exact CI result required by that deployment system's policy.
 
-The external system owns authorization, environment selection, rollout,
-health verification, rollback, audit retention, and replay prevention. Those
-controls must fail closed when any identity or digest differs. They are not
-implemented by, configured in, or trusted to files in this public repository.
-Public CI requires no access to deployment credentials or runtime environments.
+The external control plane owns authorization, environment selection, rollout,
+health verification, rollback, audit retention, and replay prevention. The
+checked workflow validates its single-use authorization and the bound artifact
+identities before invoking fixed host entry points. Those controls fail closed
+when any identity or digest differs, while credentials, private topology, and
+host rollout implementation stay outside the public repository. Public CI
+requires no access to deployment credentials or runtime environments.

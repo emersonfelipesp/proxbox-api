@@ -16,7 +16,7 @@ Read `CLAUDE.md` first for the full architecture and rollout rules.
 ```bash
 cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
 uv pip install -e proxbox-reconcile-rs
-PROXBOX_RECONCILIATION_ENGINE=compare \
-  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+  PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
   uv run pytest tests/reconciliation -q
 ```

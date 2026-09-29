@@ -237,9 +237,9 @@ All images are **Alpine-based** (smaller footprint), built from this repository 
 | **Raw** (default) | `latest`, `<version>` | Pure uvicorn, HTTP only. Smallest image. |
 | **Nginx** | `latest-nginx`, `<version>-nginx` | nginx terminates HTTPS via mkcert; proxies to uvicorn. |
 | **Granian** | `latest-granian`, `<version>-granian` | [Granian](https://github.com/emmett-framework/granian) (Rust ASGI server) with native TLS via mkcert. No nginx. |
-| **Raw PyO3/Rust** (experimental) | `experimental`, `pyo3-rust`, `<version>-pyo3-rust` | Raw image with the optional PyO3 reconciliation engine installed and enabled. |
-| **Nginx PyO3/Rust** (experimental) | `experimental-nginx`, `pyo3-rust-nginx`, `<version>-pyo3-rust-nginx` | nginx image with the optional PyO3 reconciliation engine installed and enabled. |
-| **Granian PyO3/Rust** (experimental) | `experimental-granian`, `pyo3-rust-granian`, `<version>-pyo3-rust-granian` | granian image with the optional PyO3 reconciliation engine installed and enabled. |
+| **Raw PyO3/Rust** (experimental) | `experimental`, `pyo3-rust`, `<version>-pyo3-rust` | Raw image with the optional PyO3 reconciliation engine installed; select it through NetBox plugin settings. |
+| **Nginx PyO3/Rust** (experimental) | `experimental-nginx`, `pyo3-rust-nginx`, `<version>-pyo3-rust-nginx` | nginx image with the optional PyO3 reconciliation engine installed; select it through NetBox plugin settings. |
+| **Granian PyO3/Rust** (experimental) | `experimental-granian`, `pyo3-rust-granian`, `<version>-pyo3-rust-granian` | granian image with the optional PyO3 reconciliation engine installed; select it through NetBox plugin settings. |
 
 > **Upgrade note:** before v0.0.7, `latest` was the nginx+HTTP image. It is now the raw uvicorn image. Pull `latest-nginx` for the previous behavior.
 
@@ -318,9 +318,10 @@ docker run -d -p 8000:8000 --name proxbox-api-rust \
 ```
 
 Equivalent HTTPS variants are available as `pyo3-rust-nginx` and
-`pyo3-rust-granian`. These images set
-`PROXBOX_RECONCILIATION_ENGINE=rust` and include the local
-`proxbox-reconcile-rs` native extension. Use the standard Python-only tags to
+`pyo3-rust-granian`. These images include the local `proxbox-reconcile-rs`
+native extension. Select `compare` or `rust` with the DB-backed
+`reconciliation_engine` NetBox plugin setting; environment variables do not
+override this production setting. Set the plugin value back to `python` to
 roll back immediately.
 
 ### Docker runtime environment variables

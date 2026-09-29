@@ -3,8 +3,9 @@
 Optional native reconciliation engine for `proxbox-api`.
 
 This package is intentionally independent from the Python API package. The
-Python backend can use it through `PROXBOX_RECONCILIATION_ENGINE=compare` or
-`PROXBOX_RECONCILIATION_ENGINE=rust`, but Python remains the default engine.
+Python backend selects `compare` or `rust` through the DB-backed
+`reconciliation_engine` NetBox plugin setting; environment variables do not
+override that production setting. Python remains the default engine.
 
 ## Local Development
 

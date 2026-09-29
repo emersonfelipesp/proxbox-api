@@ -9,11 +9,11 @@ buscaria cada configuração e a processaria imediatamente:
 # INGÊNUO — mistura I/O e CPU no mesmo loop
 for cluster_name, resource in operation_inputs:
     vm_config = await _fetch_vm_config_only(pxs, resource)
-    prepared = _build_netbox_virtual_machine_payload(vm_config)  # CPU
+    prepared = build_netbox_virtual_machine_payload(vm_config)  # CPU
     prepared_vms.append(prepared)
 ```
 
-Isso funciona para poucas VMs, mas falha em escala. `_build_netbox_virtual_machine_payload`
+Isso funciona para poucas VMs, mas falha em escala. `build_netbox_virtual_machine_payload`
 executa `model_validate` do Pydantic e várias etapas de transformação — trabalho
 puro de CPU sem pontos `await`. Em um cluster com 500 VMs, o event loop fica
 retido por centenas de milissegundos de tempo de CPU entre cada
@@ -44,20 +44,16 @@ sequenciais:
 
 ### Fase 1 — Buscar Todas as Configurações (I/O-Bound)
 
-Todas as requisições de configuração de VM do Proxmox disparam concorrentemente
-sob o semáforo de fetch. O event loop fica livre para processar callbacks do
-aiohttp entre as requisições.
+As requisições de configuração de VM do Proxmox passam por um conjunto fixo de
+workers e uma fila de entrada limitada. Isso limita as requisições ativas e o
+trabalho pendente; o event loop fica livre para processar callbacks do aiohttp
+entre as requisições.
 
 ```python
-fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
-
-async def _fetch_with_limit(resource):
-    async with fetch_semaphore:
-        return await _fetch_vm_config_only(pxs=pxs, resource=resource)
-
-fetch_results = await asyncio.gather(
-    *[_fetch_with_limit(resource) for _, resource in operation_inputs],
-    return_exceptions=True,
+fetch_results = await _map_bounded_ordered(
+    operation_inputs,
+    _fetch_one,
+    worker_count=resolve_vm_sync_concurrency(),
 )
 ```
 
@@ -66,20 +62,55 @@ falhado.
 
 ### Fase 2 — Processar Configurações (CPU-Bound via `asyncio.to_thread`)
 
-Configurações bem-sucedidas são processadas sequencialmente. Cada chamada a
-`_prepare_vm_from_config` descarrega a validação Pydantic e construção de
-payload intensivas em CPU para o thread pool via `asyncio.to_thread`.
+Configurações bem-sucedidas são processadas sequencialmente. O trecho abaixo é
+pseudocódigo; cada item preserva sua sessão específica de endpoint e as
+configurações do cluster. Cada chamada a `_prepare_vm_from_config` descarrega a
+validação Pydantic e construção de payload intensivas em CPU para o thread pool
+via `asyncio.to_thread`.
 
 ```python
-for cluster_name, resource, vm_config in fetched_vm_configs:
+for endpoint_id, cluster_name, resource, vm_config, px_source, cluster_source in fetched_vm_configs:
     try:
         prepared_vms.append(
             await _prepare_vm_from_config(
                 cluster_name, resource, vm_config, prepare_context,
+                endpoint_id=endpoint_id,
+                px_source=px_source,
+                cluster_source=cluster_source,
             )
         )
     except Exception as prepared_result:
         failed_vms += 1
+```
+
+Dentro de `_prepare_vm_from_config`, o fluxo relevante equivale ao pseudocódigo
+abaixo; o helper de produção também resolve dependências e fornece todos os
+campos obrigatórios de `_PreparedVMState`:
+
+```python
+async def _prepare_vm_from_config(cluster_name, resource, vm_config, context):
+    config_model, resource_model = await asyncio.to_thread(
+        _validate_vm_inputs, vm_config, resource
+    )
+    desired_payload = await asyncio.to_thread(
+        build_netbox_virtual_machine_payload,
+        proxmox_resource=resource_model,
+        proxmox_config=config_model,
+        # IDs resolvidos de cluster, device, role, tag, site, tenant, tipo e platform
+    )
+    sync_state_fields = build_virtual_machine_sync_state_fields(
+        proxmox_resource=resource_model,
+        proxmox_config=config_model,
+        # timestamp da execução e identidade limitada ao endpoint
+    )
+    return build_complete_prepared_state(
+        resource=resource,
+        vm_config=vm_config,
+        vm_config_obj=config_model,
+        desired_payload=desired_payload,
+        sync_state_fields=sync_state_fields,
+        # lookup, timestamp, tipo de VM e campos de política resolvidos
+    )
 ```
 
 ```mermaid
@@ -88,7 +119,7 @@ gantt
     dateFormat X
     axisFormat %Lms
 
-    section Fase 1 — Fetch (concorrente, largura semáforo=4)
+    section Fase 1 — Fetch (quatro workers fixos, fila limitada)
     Lote 1 (4 VMs) : 0, 50
     Lote 2 (4 VMs) : 50, 100
     Lote N         : 100, 150
@@ -143,3 +174,19 @@ Use `fetch_ms` para diagnosticar latência da API Proxmox. Use `process_ms` para
 diagnosticar overhead de CPU. Veja [Tunáveis de Concorrência em Runtime](async-tunables.md)
 para como ajustar `PROXBOX_VM_SYNC_MAX_CONCURRENCY` para otimizar o throughput
 de fetch.
+
+O lote completo também registra `process_cpu_ms` e as durações de carregamento
+do snapshot, hidratação do sidecar, resolução de nomes, canonicalização,
+reconciliação, despacho e persistência. Wall time e tempo de CPU do processo
+respondem perguntas diferentes; não some durações de requisições sobrepostas e
+apresente o resultado como duração end-to-end. O log inclui a quantidade de
+workers e a capacidade da fila limitada. `process_cpu_ms` mede todo o processo e
+só pode ser atribuído a este sync durante uma execução isolada. Contagens e latências de requisições
+upstream devem vir das métricas do transporte SDK em execuções controladas no
+staging.
+
+Depois da resolução de nomes, os payloads desejados finais são validados uma
+vez fora do event loop e mantidos em `_PreparedVMState.desired_state`. O planner
+Python reutiliza esse modelo canônico. Se houver cancelamento antes do retorno
+desse offload, o resultado não alcança o despacho; escritas já emitidas mantêm
+o tratamento de resultado existente.

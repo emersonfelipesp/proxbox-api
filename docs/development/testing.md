@@ -98,15 +98,19 @@ uv pip install -e proxbox-reconcile-rs
 Run strict compare-mode parity:
 
 ```bash
-PROXBOX_RECONCILIATION_ENGINE=compare \
-PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
 uv run pytest tests/reconciliation
 ```
+
+The `PROXBOX_TEST_*` variables are consumed only by the reconciliation test
+fixture and are translated into plugin-setting values. Production runtime
+continues to accept engine selection only from NetBox plugin settings.
 
 Run explicit Rust-engine tests:
 
 ```bash
-PROXBOX_RECONCILIATION_ENGINE=rust uv run pytest tests/reconciliation
+PROXBOX_TEST_RECONCILIATION_ENGINE=rust uv run pytest tests/reconciliation
 ```
 
 Run the synthetic benchmark harness:
@@ -116,8 +120,17 @@ uv run python benchmarks/reconciliation/bench_vm_queue.py --sizes 100 1000 10000
 uv run python benchmarks/reconciliation/bench_vm_queue.py --sizes 10000 --pathological
 ```
 
-If compare mode reports mismatches, keep `PROXBOX_RECONCILIATION_ENGINE=python` in production
-and inspect `proxbox_reconcile_mismatch_total` through `/cache/metrics` or
+The harness preserves fixture `sync_state_fields`, so endpoint-first identity
+matches the parity-test path. Output records the exact commit (including a dirty
+marker), Python/platform and package versions, measured paths, repeat count,
+wall time, process CPU time, and traced Python peak memory. These are synthetic
+planner measurements, not production sync claims. Measure the complete sync in
+staging with the detailed batch timing log plus SDK request-count/latency,
+event-loop responsiveness, retry/failure, and recovery evidence before changing
+cache, executor, or concurrency policy.
+
+If compare mode reports mismatches, keep `reconciliation_engine=python` in the
+NetBox plugin settings and inspect `proxbox_reconcile_mismatch_total` through `/cache/metrics` or
 `/cache/metrics/prometheus`.
 
 For the v0.0.11 surface specifically (HA routes, operational verbs, the

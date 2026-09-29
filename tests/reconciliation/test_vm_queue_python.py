@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
+from proxbox_api.proxmox_to_netbox.models import (
+    NetBoxVirtualMachineCreateBody,
+    ProxmoxVmConfigInput,
+)
 from proxbox_api.services.sync.reconciliation.types import NetBoxVMOperation, PreparedVMState
 from proxbox_api.services.sync.reconciliation.vm_queue import build_vm_operation_queue_python
 
@@ -113,6 +116,18 @@ def test_missing_cluster_in_desired_payload_matches_by_endpoint() -> None:
     queue = _queue(prepared, [_snapshot_vm()])
 
     assert [op.method for op in queue] == ["GET"]
+
+
+def test_planner_reuses_finalized_desired_state() -> None:
+    prepared = _prepared_vm(name="stale-name")
+    finalized_payload = {**prepared.desired_payload, "name": "final-name"}
+    prepared.desired_state = NetBoxVirtualMachineCreateBody.model_validate(finalized_payload)
+    prepared.desired_payload = {"invalid": "must not be revalidated"}
+
+    queue = _queue(prepared=[prepared], snapshot=[_snapshot_vm(name="final-name")])
+
+    assert [operation.method for operation in queue] == ["GET"]
+    assert "name" not in queue[0].patch_payload
 
 
 def test_missing_proxmox_vmid_in_netbox_record_creates() -> None:

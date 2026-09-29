@@ -126,9 +126,9 @@ docker run -d -p 8000:8000 --name proxbox-api-rust \
 ```
 
 As variantes HTTPS sao publicadas como `pyo3-rust-nginx` e
-`pyo3-rust-granian`. Essas imagens definem
-`PROXBOX_RECONCILIATION_ENGINE=rust` e incluem a extensao PyO3
-`proxbox-reconcile-rs`. Volte para `latest`, `latest-nginx` ou
+`pyo3-rust-granian`. Essas imagens incluem a extensão PyO3
+`proxbox-reconcile-rs`. Selecione `rust` ou `compare` nas configurações do
+plugin NetBox; variáveis de ambiente do backend não substituem o engine. Volte para `latest`, `latest-nginx` ou
 `latest-granian` para retornar a implementacao Python-only.
 
 ### Variaveis de ambiente Docker em tempo de execucao
@@ -278,16 +278,12 @@ uv sync --extra test --group dev
 uv pip install -e proxbox-reconcile-rs
 ```
 
-Habilite primeiro o compare mode pela pagina `/plugins/proxbox/settings/` do
-NetBox ou use a variavel de ambiente para um processo avulso:
+Habilite primeiro o compare mode pela página `/plugins/proxbox/settings/` do
+NetBox. O backend não aceita override de ambiente para selecionar o engine de
+reconciliação.
 
-```bash
-PROXBOX_RECONCILIATION_ENGINE=compare uv run fastapi run proxbox_api.main:app --no-proxy-headers
-```
-
-O padrao de producao continua sendo Python. Para rollback imediato, volte
-`reconciliation_engine` para `python` no NetBox ou remova `PROXBOX_RECONCILIATION_ENGINE`
-se um override de ambiente foi usado.
+O padrão de produção continua sendo Python. Para rollback imediato, volte
+`reconciliation_engine` para `python` no NetBox.
 
 Inicie o servidor apos instalar:
 

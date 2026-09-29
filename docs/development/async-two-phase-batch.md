@@ -9,11 +9,11 @@ config, and immediately process it:
 # NAIVE — mixes I/O and CPU in the same loop
 for cluster_name, resource in operation_inputs:
     vm_config = await _fetch_vm_config_only(pxs, resource)
-    prepared = _build_netbox_virtual_machine_payload(vm_config)  # CPU
+    prepared = build_netbox_virtual_machine_payload(vm_config)  # CPU
     prepared_vms.append(prepared)
 ```
 
-This works for a handful of VMs, but breaks at scale. `_build_netbox_virtual_machine_payload`
+This works for a handful of VMs, but breaks at scale. `build_netbox_virtual_machine_payload`
 runs Pydantic `model_validate` and several transformation steps — pure CPU work
 with no `await` points. On a cluster of 500 VMs, the event loop is held for
 hundreds of milliseconds of CPU time between each `await _fetch_vm_config_only`,
@@ -43,19 +43,15 @@ phases:
 
 ### Phase 1 — Fetch All Configs (I/O-Bound)
 
-All Proxmox VM config requests fire concurrently under the fetch semaphore.
-The event loop is kept free to process aiohttp callbacks between requests.
+Proxmox VM config requests run through a fixed worker set and a bounded input
+queue. This limits active requests and pending work; the event loop remains free
+to process aiohttp callbacks between requests.
 
 ```python
-fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
-
-async def _fetch_with_limit(resource):
-    async with fetch_semaphore:
-        return await _fetch_vm_config_only(pxs=pxs, resource=resource)
-
-fetch_results = await asyncio.gather(
-    *[_fetch_with_limit(resource) for _, resource in operation_inputs],
-    return_exceptions=True,
+fetch_results = await _map_bounded_ordered(
+    operation_inputs,
+    _fetch_one,
+    worker_count=resolve_vm_sync_concurrency(),
 )
 ```
 
@@ -63,30 +59,54 @@ Phase 1 ends only after **every** config fetch has completed or failed.
 
 ### Phase 2 — Process Configs (CPU-Bound via `asyncio.to_thread`)
 
-Successful configs are processed sequentially. Each `_prepare_vm_from_config`
-call offloads the CPU-intensive Pydantic validation and payload building to the
-thread pool via `asyncio.to_thread`.
+Successful configs are processed sequentially. The following is pseudocode;
+each item retains its endpoint-specific session and cluster settings. Each
+`_prepare_vm_from_config` call offloads the CPU-intensive Pydantic validation
+and payload building to the thread pool via `asyncio.to_thread`.
 
 ```python
-for cluster_name, resource, vm_config in fetched_vm_configs:
+for endpoint_id, cluster_name, resource, vm_config, px_source, cluster_source in fetched_vm_configs:
     try:
         prepared_vms.append(
             await _prepare_vm_from_config(
                 cluster_name, resource, vm_config, prepare_context,
+                endpoint_id=endpoint_id,
+                px_source=px_source,
+                cluster_source=cluster_source,
             )
         )
     except Exception as prepared_result:
         failed_vms += 1
 ```
 
-Inside `_prepare_vm_from_config`, the heavy work is wrapped:
+Inside `_prepare_vm_from_config`, the relevant flow is equivalent to this
+pseudocode; the production helper also resolves dependencies and supplies every
+required `_PreparedVMState` field:
 
 ```python
-async def _prepare_vm_from_config(cluster_name, resource, vm_config, ctx):
-    state = await asyncio.to_thread(
-        _build_netbox_virtual_machine_payload, vm_config, ctx
+async def _prepare_vm_from_config(cluster_name, resource, vm_config, context):
+    config_model, resource_model = await asyncio.to_thread(
+        _validate_vm_inputs, vm_config, resource
     )
-    return _PreparedVMState(cluster_name=cluster_name, resource=resource, state=state)
+    desired_payload = await asyncio.to_thread(
+        build_netbox_virtual_machine_payload,
+        proxmox_resource=resource_model,
+        proxmox_config=config_model,
+        # resolved cluster, device, role, tag, site, tenant, type, and platform IDs
+    )
+    sync_state_fields = build_virtual_machine_sync_state_fields(
+        proxmox_resource=resource_model,
+        proxmox_config=config_model,
+        # run timestamp and endpoint-scoped identity
+    )
+    return build_complete_prepared_state(
+        resource=resource,
+        vm_config=vm_config,
+        vm_config_obj=config_model,
+        desired_payload=desired_payload,
+        sync_state_fields=sync_state_fields,
+        # lookup, timestamp, VM type, and resolved policy fields
+    )
 ```
 
 ```mermaid
@@ -95,7 +115,7 @@ gantt
     dateFormat X
     axisFormat %Lms
 
-    section Phase 1 — Fetch (concurrent, semaphore width=4)
+    section Phase 1 — Fetch (four fixed workers, bounded queue)
     Batch 1 (4 VMs) : 0, 50
     Batch 2 (4 VMs) : 50, 100
     Batch N         : 100, 150
@@ -150,3 +170,18 @@ VM full-update phase timing: fetch_ms=1234.56 process_ms=567.89 fetched_ok=480 f
 Use `fetch_ms` to diagnose Proxmox API latency. Use `process_ms` to diagnose
 CPU overhead. See [Runtime Concurrency Tunables](async-tunables.md) for how
 to tune `PROXBOX_VM_SYNC_MAX_CONCURRENCY` to optimize fetch throughput.
+
+The complete batch also logs `process_cpu_ms`, snapshot loading, sidecar
+hydration, name resolution, canonicalization, reconciliation, dispatch, and
+persistence durations. Wall time and process CPU time answer different
+questions; do not add overlapping request durations and report the sum as
+end-to-end duration. The log includes the worker count and bounded queue
+capacity. `process_cpu_ms` is process-wide and is attributable to this sync only
+during an isolated run. Request counts and upstream latency must be collected from the SDK
+transport metrics during controlled staging runs.
+
+After name resolution, final desired payloads are validated once off the event
+loop and retained in `_PreparedVMState.desired_state`. The Python planner reuses
+that canonical model instead of reconstructing it. Cancellation before this
+offload returns prevents its result from reaching dispatch; already-issued
+writes retain their existing outcome handling.

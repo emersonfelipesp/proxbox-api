@@ -12,17 +12,19 @@ Submodule layout and cross-repo links: `/root/personal-context/claude-reference/
 ## Purpose
 
 Public GitHub Actions CI, documentation, package publication, and container
-publication workflows for `proxbox-api`. The only documented Gitea workflow is
-the bounded untrusted compatibility probe under `.gitea/workflows/`; private
-runner inventories, deployment receipts, package-registry wiring, and promotion
-orchestration are outside the public repository boundary and must not be
-reintroduced here.
+publication workflows for `proxbox-api`, plus the explicitly authorized Gitea
+package and deployment controls. The checked deployment contract may include
+source/package binding, signed receipt verification, and fail-closed cleanup;
+documentation must still omit credentials, concrete control-plane addresses,
+secret values, and private runner inventories.
 
 ## Workflow Index
 
 | File | Trigger | What it does |
 |------|---------|--------------|
 | `.gitea/workflows/artifact-v3-compatibility.yml` | Gitea: pull request / manual dispatch | Runs a bounded, disposable upload/download checksum probe for the Gitea-compatible artifact v3 actions on `ci-untrusted-python312`. |
+| `.gitea/workflows/publish-gitea.yml` | Gitea: authorized manual dispatch from `main` | Publishes an exact tagged package and repository-linked immutable manifest without deploying it. |
+| `.gitea/workflows/deploy-production.yml` | Gitea: `develop` push / authorized manual dispatch from `main` | Deploys reviewed `develop` to staging; production requires exact package/source/artifact binding, green CI with no unsigned bypass, a single-use authorization, signed completion evidence, and unconditional proof cleanup. |
 | `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |

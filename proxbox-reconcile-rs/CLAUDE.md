@@ -40,7 +40,8 @@ wrapper and Python fallback live in
 
 ## Runtime Rules
 
-- Python remains the default engine: `PROXBOX_RECONCILIATION_ENGINE=python`.
+- Python remains the default engine. Production selection uses the DB-backed
+  `reconciliation_engine` NetBox plugin setting, never an environment override.
 - `compare` mode runs Python and Rust, returns Python, and records mismatches.
 - `rust` mode requires this package to be installed and should only be enabled
   after compare mode is clean in the target environment.
@@ -71,8 +72,8 @@ Run these when changing this package or its Python bridge:
 ```bash
 cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
 uv pip install -e proxbox-reconcile-rs
-PROXBOX_RECONCILIATION_ENGINE=compare \
-  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+  PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
   uv run pytest tests/reconciliation -q
 ```
 

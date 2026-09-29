@@ -109,8 +109,20 @@ VM full-update phase timing: fetch_ms=8234.12 process_ms=432.10 fetched_ok=480 f
 |---|---|---|
 | `fetch_ms` muito alto, `fetched_ok` baixo | API Proxmox está lenta ou `PROXBOX_VM_SYNC_MAX_CONCURRENCY` muito baixo | Aumentar concorrência (verificar rate limits Proxmox primeiro) |
 | `fetch_ms` alto + muitos `fetch_failed` | API Proxmox está sobrecarregada | Reduzir concorrência ou adicionar rate limiting |
-| `process_ms` alto | CPU-bound — muitas VMs com configurações complexas | `asyncio.to_thread` já aplicado; perfilar `_build_netbox_virtual_machine_payload` |
+| `process_ms` alto | Preparação lenta; inclui resolução de dependências e trabalho local de modelos | Separar esperas upstream de perfis de CPU antes de ajustar; perfilar `build_netbox_virtual_machine_payload` somente quando a evidência de CPU apontar para ele |
 | Timeouts de escrita NetBox no despacho | Esgotamento do pool PostgreSQL | Reduzir `PROXBOX_NETBOX_WRITE_CONCURRENCY` |
+
+O log detalhado do lote acrescenta `process_cpu_ms`, `snapshot_ms`,
+`hydration_ms`, `name_resolution_ms`, `canonicalization_ms`, `dispatch_ms` e
+`persistence_ms`. Compare `total_ms` com o tempo de CPU do processo antes de
+classificar uma fase como CPU-bound. `process_cpu_ms` mede o processo inteiro e
+só pode ser atribuído ao sync durante uma execução isolada. O mesmo log registra
+a quantidade de requests de configuração, latência total/máxima, limites
+efetivos de workers/fila e pico de RSS do processo. A fila pendente dos workers de configuração
+tem capacidade igual ao dobro de `PROXBOX_VM_SYNC_MAX_CONCURRENCY`; aumentar a
+configuração eleva tanto as requisições upstream ativas quanto o trabalho
+pendente limitado. Ajuste somente depois de medir contagens de requisições,
+esperas do pool, timeouts e pressão upstream.
 
 ### Verificar Travamentos do Agente Guest
 

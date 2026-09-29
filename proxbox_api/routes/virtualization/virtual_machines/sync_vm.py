@@ -3,12 +3,13 @@
 # FastAPI Imports
 import asyncio
 import inspect
+import resource as process_resource
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Literal, cast
+from typing import Literal, TypeVar, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -41,6 +42,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
     ProxmoxVmConfigInput,
+    ProxmoxVmResourceInput,
     _parse_proxmox_kv_flag,
 )
 from proxbox_api.routes.proxmox import get_vm_config
@@ -182,6 +184,208 @@ from proxbox_api.services.sync.vmid_helpers import (
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
+
+_BoundedInput = TypeVar("_BoundedInput")
+_BoundedResult = TypeVar("_BoundedResult")
+_UNSET_RESULT = object()
+
+
+def _bounded_map_capacity(input_count: int, worker_count: int) -> tuple[int, int]:
+    """Return effective worker and pending-queue limits for one bounded map."""
+
+    workers = min(max(1, worker_count), input_count) if input_count else 0
+    return workers, workers * 2
+
+
+def _log_vm_full_update_terminal(
+    *,
+    outcome: str,
+    total_ms: float,
+    process_cpu_ms: float,
+    snapshot_ms: float = 0.0,
+    hydration_ms: float = 0.0,
+    name_resolution_ms: float = 0.0,
+    canonicalization_ms: float = 0.0,
+    dispatch_ms: float = 0.0,
+    persistence_ms: float = 0.0,
+    fetch_requests: int = 0,
+    fetch_latency_total_ms: float = 0.0,
+    fetch_latency_max_ms: float = 0.0,
+    fetch_workers: int = 0,
+    fetch_queue_capacity: int = 0,
+    peak_rss_kib: int | None = None,
+) -> None:
+    """Emit one terminal record for every full-update batch outcome."""
+
+    effective_peak_rss_kib = (
+        process_resource.getrusage(process_resource.RUSAGE_SELF).ru_maxrss
+        if peak_rss_kib is None
+        else peak_rss_kib
+    )
+    logger.info(
+        "VM full-update terminal timing: outcome=%s total_ms=%.2f process_cpu_ms=%.2f "
+        "snapshot_ms=%.2f hydration_ms=%.2f name_resolution_ms=%.2f "
+        "canonicalization_ms=%.2f dispatch_ms=%.2f persistence_ms=%.2f "
+        "fetch_requests=%d fetch_latency_total_ms=%.2f fetch_latency_max_ms=%.2f "
+        "fetch_workers=%d fetch_queue_capacity=%d peak_rss_kib=%d",
+        outcome,
+        total_ms,
+        process_cpu_ms,
+        snapshot_ms,
+        hydration_ms,
+        name_resolution_ms,
+        canonicalization_ms,
+        dispatch_ms,
+        persistence_ms,
+        fetch_requests,
+        fetch_latency_total_ms,
+        fetch_latency_max_ms,
+        fetch_workers,
+        fetch_queue_capacity,
+        effective_peak_rss_kib,
+    )
+
+
+def _vm_full_update_outcome(*, failed_count: int, prepared_count: int) -> str:
+    """Classify the terminal batch outcome without inflating the orchestrator."""
+
+    if prepared_count == 0:
+        return "total_failure" if failed_count else "empty"
+    return "partial_failure" if failed_count else "success"
+
+
+@dataclass
+class _VMFullUpdateTelemetry:
+    """Mutable run-scoped measurements retained through cancellation."""
+
+    started_at: float = field(default_factory=time.perf_counter)
+    cpu_started_at: float = field(default_factory=time.process_time)
+    fetch_latencies_ms: list[float] = field(default_factory=list)
+    fetch_workers: int = 0
+    fetch_queue_capacity: int = 0
+    snapshot_ms: float = 0.0
+    hydration_ms: float = 0.0
+    name_resolution_ms: float = 0.0
+    canonicalization_ms: float = 0.0
+    dispatch_ms: float = 0.0
+    persistence_ms: float = 0.0
+
+    def emit(self, outcome: str) -> None:
+        _log_vm_full_update_terminal(
+            outcome=outcome,
+            total_ms=(time.perf_counter() - self.started_at) * 1000,
+            process_cpu_ms=(time.process_time() - self.cpu_started_at) * 1000,
+            snapshot_ms=self.snapshot_ms,
+            hydration_ms=self.hydration_ms,
+            name_resolution_ms=self.name_resolution_ms,
+            canonicalization_ms=self.canonicalization_ms,
+            dispatch_ms=self.dispatch_ms,
+            persistence_ms=self.persistence_ms,
+            fetch_requests=len(self.fetch_latencies_ms),
+            fetch_latency_total_ms=sum(self.fetch_latencies_ms),
+            fetch_latency_max_ms=max(self.fetch_latencies_ms, default=0.0),
+            fetch_workers=self.fetch_workers,
+            fetch_queue_capacity=self.fetch_queue_capacity,
+        )
+
+
+async def _run_vm_full_update_with_cancellation_telemetry(
+    callback: Callable[[], Awaitable[tuple[list[dict[str, object]], int]]],
+    telemetry: _VMFullUpdateTelemetry,
+) -> tuple[list[dict[str, object]], int]:
+    """Run a full-update batch and emit its terminal cancellation outcome."""
+
+    try:
+        return await callback()
+    except asyncio.CancelledError:
+        telemetry.emit("cancelled")
+        raise
+
+
+async def _map_bounded_ordered(
+    inputs: list[_BoundedInput],
+    callback: Callable[[_BoundedInput], Awaitable[_BoundedResult]],
+    *,
+    worker_count: int,
+) -> list[_BoundedResult | Exception]:
+    """Map async work with fixed workers while retaining input order.
+
+    The bounded queue limits pending inputs in addition to limiting active
+    callbacks. Ordinary item failures are returned in their input positions;
+    cancellation and other base exceptions propagate through the task group.
+    """
+
+    if not inputs:
+        return []
+
+    workers, queue_capacity = _bounded_map_capacity(len(inputs), worker_count)
+    sentinel = object()
+    queue: asyncio.Queue[tuple[int, _BoundedInput] | object] = asyncio.Queue(maxsize=queue_capacity)
+    results: list[_BoundedResult | Exception | object] = [_UNSET_RESULT] * len(inputs)
+    owner_task = asyncio.current_task()
+    callback_cancellation: asyncio.CancelledError | None = None
+
+    async def _worker() -> None:
+        nonlocal callback_cancellation
+        while True:
+            item = await queue.get()
+            try:
+                if item is sentinel:
+                    return
+                index, value = cast("tuple[int, _BoundedInput]", item)
+                try:
+                    results[index] = await callback(value)
+                except asyncio.CancelledError as exc:
+                    if owner_task is not None and not owner_task.cancelling():
+                        callback_cancellation = exc
+                        owner_task.cancel()
+                    raise
+                except Exception as exc:
+                    results[index] = exc
+            finally:
+                queue.task_done()
+
+    try:
+        async with asyncio.TaskGroup() as task_group:
+            for _ in range(workers):
+                task_group.create_task(_worker())
+            for index, value in enumerate(inputs):
+                await queue.put((index, value))
+            for _ in range(workers):
+                await queue.put(sentinel)
+            await queue.join()
+    except asyncio.CancelledError:
+        if callback_cancellation is not None:
+            raise callback_cancellation
+        raise
+
+    if any(result is _UNSET_RESULT for result in results):
+        raise RuntimeError("Bounded async map completed without a result for every input")
+    return cast("list[_BoundedResult | Exception]", results)
+
+
+def _finalize_desired_vm_states(
+    prepared_vms: list[_PreparedVMState],
+) -> list[NetBoxVirtualMachineCreateBody]:
+    """Validate final desired payloads after all in-run name mutations."""
+
+    return [
+        NetBoxVirtualMachineCreateBody.model_validate(prepared.desired_payload)
+        for prepared in prepared_vms
+    ]
+
+
+def _validate_vm_inputs(
+    vm_config: dict[str, object],
+    resource: dict[str, object],
+) -> tuple[ProxmoxVmConfigInput, ProxmoxVmResourceInput]:
+    """Validate config then resource deterministically in one worker call."""
+
+    return (
+        ProxmoxVmConfigInput.model_validate(vm_config),
+        ProxmoxVmResourceInput.model_validate(resource),
+    )
+
 
 router = APIRouter()
 
@@ -588,7 +792,11 @@ async def _prepare_vm_from_config(  # noqa: C901
     if vm_type_key not in context.vm_role_mapping:
         vm_type_key = "undefined"
 
-    vm_config_obj = await asyncio.to_thread(ProxmoxVmConfigInput.model_validate, vm_config)
+    vm_config_obj, resource_obj = await asyncio.to_thread(
+        _validate_vm_inputs,
+        vm_config,
+        resource,
+    )
 
     dependency_key = (endpoint_id, str(cluster_name))
     cluster_dependencies = context.cluster_dependency_cache.get(
@@ -674,8 +882,8 @@ async def _prepare_vm_from_config(  # noqa: C901
 
     desired_payload = await asyncio.to_thread(
         build_netbox_virtual_machine_payload,
-        proxmox_resource=resource,
-        proxmox_config=vm_config,
+        proxmox_resource=resource_obj,
+        proxmox_config=vm_config_obj,
         cluster_id=int(getattr(cluster, "id", 0) or 0),
         device_id=int(getattr(device, "id", 0) or 0),
         role_id=None if vm_type_id else int(getattr(role, "id", 0) or 0),
@@ -689,8 +897,8 @@ async def _prepare_vm_from_config(  # noqa: C901
     )
     lookup = _missing_vm_lookup()
     sync_state_fields = build_virtual_machine_sync_state_fields(
-        proxmox_resource=resource,
-        proxmox_config=vm_config,
+        proxmox_resource=resource_obj,
+        proxmox_config=vm_config_obj,
         last_updated=now,
         cluster_name=str(cluster_name),
         proxmox_url=(
@@ -2755,6 +2963,7 @@ async def create_virtual_machines(  # noqa: C901
         resolve_vm_type=_get_vm_type,
         resolve_vm_proxmox_tag_ids=_resolve_vm_proxmox_tag_ids,
     )
+    full_update_telemetry = _VMFullUpdateTelemetry()
 
     async def _run_full_update_vm_batch() -> tuple[list[dict[str, object]], int]:  # noqa: C901
         """Run the batched full-update VM sync.
@@ -2767,6 +2976,7 @@ async def create_virtual_machines(  # noqa: C901
         success.
         """
         batch_t0 = time.perf_counter()
+        batch_cpu_t0 = time.process_time()
         operation_inputs: list[tuple[int | None, str, dict, object | None, object | None]] = []
         for cluster_index, cluster in enumerate(filtered_cluster_resources):
             if not isinstance(cluster, dict):
@@ -2792,28 +3002,35 @@ async def create_virtual_machines(  # noqa: C901
         if not operation_inputs:
             return [], 0
 
-        fetch_semaphore = asyncio.Semaphore(max(1, resolve_vm_sync_concurrency()))
+        configured_fetch_workers = max(1, resolve_vm_sync_concurrency())
+        fetch_worker_count, fetch_queue_capacity = _bounded_map_capacity(
+            len(operation_inputs), configured_fetch_workers
+        )
+        full_update_telemetry.fetch_workers = fetch_worker_count
+        full_update_telemetry.fetch_queue_capacity = fetch_queue_capacity
         fetch_timeout_seconds = resolve_vm_config_fetch_timeout_seconds()
+        fetch_latencies_ms = full_update_telemetry.fetch_latencies_ms
 
-        async def _fetch_with_limit(
-            endpoint_id: int | None,
-            cluster_name: str,
-            resource: dict[str, object],
-            px_source: object | None,
-            _cluster_source: object | None,
+        async def _fetch_one(
+            operation_input: tuple[int | None, str, dict, object | None, object | None],
         ) -> dict[str, object]:
-            async with fetch_semaphore:
-                cluster_px = px_source or px_by_cluster.get((endpoint_id, str(cluster_name)))
-                fetch_pxs = [cluster_px] if cluster_px is not None else pxs
+            endpoint_id, cluster_name, resource, px_source, _cluster_source = operation_input
+            cluster_px = px_source or px_by_cluster.get((endpoint_id, str(cluster_name)))
+            fetch_pxs = [cluster_px] if cluster_px is not None else pxs
+            request_t0 = time.perf_counter()
+            try:
                 return await asyncio.wait_for(
                     _fetch_vm_config_only(pxs=fetch_pxs, resource=resource),
                     timeout=fetch_timeout_seconds,
                 )
+            finally:
+                fetch_latencies_ms.append((time.perf_counter() - request_t0) * 1000)
 
         fetch_t0 = time.perf_counter()
-        fetch_results = await asyncio.gather(
-            *[_fetch_with_limit(*operation_input) for operation_input in operation_inputs],
-            return_exceptions=True,
+        fetch_results = await _map_bounded_ordered(
+            operation_inputs,
+            _fetch_one,
+            worker_count=fetch_worker_count,
         )
         fetch_ms = (time.perf_counter() - fetch_t0) * 1000
 
@@ -2887,15 +3104,43 @@ async def create_virtual_machines(  # noqa: C901
         )
 
         if not prepared_vms:
+            _log_vm_full_update_terminal(
+                outcome=_vm_full_update_outcome(
+                    failed_count=failed_vms,
+                    prepared_count=0,
+                ),
+                total_ms=(time.perf_counter() - batch_t0) * 1000,
+                process_cpu_ms=(time.process_time() - batch_cpu_t0) * 1000,
+                fetch_requests=len(fetch_latencies_ms),
+                fetch_latency_total_ms=sum(fetch_latencies_ms),
+                fetch_latency_max_ms=max(fetch_latencies_ms, default=0.0),
+                fetch_workers=fetch_worker_count,
+                fetch_queue_capacity=fetch_queue_capacity,
+            )
             return [], failed_vms
 
+        snapshot_t0 = time.perf_counter()
         netbox_snapshot = await _load_netbox_virtual_machine_snapshot(nb, fresh=True)
+        snapshot_ms = (time.perf_counter() - snapshot_t0) * 1000
+        full_update_telemetry.snapshot_ms = snapshot_ms
+        hydration_t0 = time.perf_counter()
         await _hydrate_vm_snapshot_with_sidecar_identity(
             nb,
             prepared_vms=prepared_vms,
             netbox_snapshot=netbox_snapshot,
         )
+        hydration_ms = (time.perf_counter() - hydration_t0) * 1000
+        full_update_telemetry.hydration_ms = hydration_ms
+        name_resolution_t0 = time.perf_counter()
         await _resolve_vm_names_pre_pass(prepared_vms, netbox_snapshot, bridge, nb)
+        name_resolution_ms = (time.perf_counter() - name_resolution_t0) * 1000
+        full_update_telemetry.name_resolution_ms = name_resolution_ms
+        canonicalization_t0 = time.perf_counter()
+        desired_states = await asyncio.to_thread(_finalize_desired_vm_states, prepared_vms)
+        for prepared, desired_state in zip(prepared_vms, desired_states):
+            prepared.desired_state = desired_state
+        canonicalization_ms = (time.perf_counter() - canonicalization_t0) * 1000
+        full_update_telemetry.canonicalization_ms = canonicalization_ms
         reconciliation_t0 = time.perf_counter()
         operation_queue = _build_vm_operation_queue(
             prepared_vms,
@@ -2916,13 +3161,17 @@ async def create_virtual_machines(  # noqa: C901
             supports_virtual_machine_type_field=supports_vm_type,
         )
 
+        dispatch_t0 = time.perf_counter()
         resolved_records, failed_operation_keys = await _dispatch_vm_operation_queue(
             nb,
             operation_queue,
             overwrite_vm_role=overwrite_vm_role,
             overwrite_vm_custom_fields=overwrite_vm_custom_fields,
         )
+        dispatch_ms = (time.perf_counter() - dispatch_t0) * 1000
+        full_update_telemetry.dispatch_ms = dispatch_ms
 
+        persistence_t0 = time.perf_counter()
         results: list[dict[str, object]] = []
         for operation in operation_queue:
             vmid = int(operation.prepared.resource.get("vmid", 0) or 0)
@@ -2977,8 +3226,14 @@ async def create_virtual_machines(  # noqa: C901
                 continue
             await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
             results.append(vm_record)
+        persistence_ms = (time.perf_counter() - persistence_t0) * 1000
+        full_update_telemetry.persistence_ms = persistence_ms
 
         batch_ms = (time.perf_counter() - batch_t0) * 1000
+        batch_cpu_ms = (time.process_time() - batch_cpu_t0) * 1000
+        peak_rss_kib = process_resource.getrusage(process_resource.RUSAGE_SELF).ru_maxrss
+        fetch_latency_total_ms = sum(fetch_latencies_ms)
+        fetch_latency_max_ms = max(fetch_latencies_ms, default=0.0)
         reconciliation_share_pct = (reconciliation_ms / batch_ms) * 100 if batch_ms > 0 else 0.0
         logger.info(
             "VM full-update batch timing: total_ms=%.2f reconciliation_ms=%.2f "
@@ -2992,11 +3247,34 @@ async def create_virtual_machines(  # noqa: C901
             len(prepared_vms),
             len(netbox_snapshot),
         )
+        _log_vm_full_update_terminal(
+            outcome=_vm_full_update_outcome(
+                failed_count=failed_vms,
+                prepared_count=len(prepared_vms),
+            ),
+            total_ms=batch_ms,
+            process_cpu_ms=batch_cpu_ms,
+            snapshot_ms=snapshot_ms,
+            hydration_ms=hydration_ms,
+            name_resolution_ms=name_resolution_ms,
+            canonicalization_ms=canonicalization_ms,
+            dispatch_ms=dispatch_ms,
+            persistence_ms=persistence_ms,
+            fetch_requests=len(fetch_latencies_ms),
+            fetch_latency_total_ms=fetch_latency_total_ms,
+            fetch_latency_max_ms=fetch_latency_max_ms,
+            fetch_workers=fetch_worker_count,
+            fetch_queue_capacity=fetch_queue_capacity,
+            peak_rss_kib=peak_rss_kib,
+        )
 
         return results, failed_vms
 
     if not sync_vm_network:
-        flattened_results, failed_vms = await _run_full_update_vm_batch()
+        flattened_results, failed_vms = await _run_vm_full_update_with_cancellation_telemetry(
+            _run_full_update_vm_batch,
+            full_update_telemetry,
+        )
         await _sync_scoped_task_history(flattened_results)
         successful_vms = len(flattened_results)
         total_vms = successful_vms + failed_vms

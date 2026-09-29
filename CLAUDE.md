@@ -460,8 +460,8 @@ also run the focused Rust/parity checks:
 ```bash
 cargo test --no-default-features --manifest-path proxbox-reconcile-rs/Cargo.toml
 uv pip install -e proxbox-reconcile-rs
-PROXBOX_RECONCILIATION_ENGINE=compare \
-  PROXBOX_RECONCILIATION_COMPARE_STRICT=true \
+PROXBOX_TEST_RECONCILIATION_ENGINE=compare \
+  PROXBOX_TEST_RECONCILIATION_COMPARE_STRICT=true \
   uv run pytest tests/reconciliation -q
 ```
 
@@ -571,6 +571,26 @@ Current Rust package:
 - `.github/workflows/rust-reconcile.yml`: Rust unit tests, strict parity matrix,
   and wheel build matrix.
 
+### Python synchronization performance direction
+
+Keep Python as the production engine and pause expansion of the custom Rust
+engine unless complete-operation measurements retain a substantial CPU
+bottleneck after Python optimization. VM preparation validates Proxmox resource
+and config inputs once and reuses the typed models. Name resolution completes
+before final desired payloads are validated off the event loop and retained in
+`PreparedVMState.desired_state`. The Python planner reuses that canonical model
+and keeps the indexed endpoint/type identity algorithm.
+
+Full-update config fetches use a fixed worker set with a pending queue capped at
+twice `PROXBOX_VM_SYNC_MAX_CONCURRENCY`; do not replace it with one coroutine per
+inventory row. Keep the full fetch/snapshot/name-resolution barriers, ordered
+results, per-item failure accounting, and cancellation propagation. Detailed
+batch logs separate wall time, process CPU, snapshot/hydration/name resolution,
+canonicalization, reconciliation, dispatch, and persistence. Synthetic planner
+benchmarks record commit/runtime metadata, CPU, and traced peak memory, but do
+not substitute for staging request-count, upstream-latency, responsiveness,
+retry, failure, and recovery evidence.
+
 Candidate hotpaths for future Rust acceleration:
 - `proxbox_api/proxmox_to_netbox/` — object mapping and field transformation
 - `proxbox_api/proxmox_codegen/` — OpenAPI schema crawling and code generation
@@ -643,8 +663,9 @@ ratchet; 85% remains the long-term target rather than the current gate.
 - Local: `uv run pytest tests/ -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --cov=proxbox_api --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml`
 - CI: the public GitHub `test` job enforces the threshold on protected branches,
   reports missing lines, and retains `coverage.xml`; a regression blocks merge.
-  The checked-in Gitea workflow is limited to untrusted validation and does not
-  encode private runner, deployment, package-registry, or promotion contracts.
+  The checked-in Gitea workflows include untrusted validation plus audited
+  package publication and deployment controls. Documentation must not expose
+  private runner inventory, credentials, control-plane addresses, or secret values.
 - Release validation: the TestPyPI and PyPI candidate jobs use two xdist
   workers with `--dist loadgroup` and retain `--durations=20`. Python 3.13
   remains the branch-coverage leg and uploads `coverage.xml` for 14 days
@@ -780,7 +801,19 @@ The verified manifest is the terminal public deployment handoff. An external
 system must independently bind the immutable repository, tag, source commit,
 package version, artifact sizes and digests, and required CI result before it
 deploys. Authorization, environment selection, rollout, health, rollback,
-audit retention, and replay prevention remain external responsibilities and
-must not be encoded in this repository.
+audit retention, and replay prevention remain under the external control
+plane's authority. The checked deployment workflow validates the authorized
+identities and invokes fixed host entry points; it does not own credentials,
+choose deployment policy, or implement host rollout machinery.
+
+Production deployment is a separate authorized control in
+`.gitea/workflows/deploy-production.yml`. A `develop` push deploys only staging.
+A production dispatch must run from canonical `main`, defaults to the selected
+immutable Gitea package, and permits `main_branch` only as an explicit override.
+Preserve exact source, package, manifest, artifact, CI-status, authorization,
+and run binding; claim the single-use authorization only after non-mutating
+preflight; validate the signed host receipt before publishing completion
+evidence; and remove claimed proof material on every exit path. The signed
+authorization has no CI-bypass field, so production exposes no unsigned bypass.
 
 | Trigger | Use for | Publishes to |
