@@ -84,6 +84,9 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
+- Public release documentation ends at the verified package-manifest handoff.
+  Keep external deployment authorization, topology, rollout, health, rollback,
+  audit, and replay-prevention implementation outside this repository.
 - Keep NetBox endpoint probe, cached-client lifecycle, transport-failure status,
   VM platform overwrite, and free-threaded CI guidance aligned in both languages
   with their source modules and workflows.

@@ -776,5 +776,11 @@ verified against a canonical source-bound manifest before that repository-
 linked manifest is published. Existing versions require explicit
 `resume_existing=true` and exact byte equality; otherwise publish a new
 fixed-forward version.
+The verified manifest is the terminal public deployment handoff. An external
+system must independently bind the immutable repository, tag, source commit,
+package version, artifact sizes and digests, and required CI result before it
+deploys. Authorization, environment selection, rollout, health, rollback,
+audit retention, and replay prevention remain external responsibilities and
+must not be encoded in this repository.
 
 | Trigger | Use for | Publishes to |

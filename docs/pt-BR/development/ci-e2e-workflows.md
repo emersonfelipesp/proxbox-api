@@ -164,3 +164,24 @@ O workflow usa o grupo de dependencias `publish` bloqueado pelo repositorio e o
 secret existente `PKG_TOKEN`. Credenciais ficam limitadas aos passos que leem ou
 escrevem no registro. Uma versao incompleta nunca e sobrescrita: a recuperacao
 exige retomada com bytes identicos ou uma nova versao fix-forward.
+
+### Entrega para implantacao externa
+
+A publicacao do pacote e a ultima responsabilidade relacionada a implantacao
+deste repositorio. Um sistema externo de implantacao somente pode consumir uma
+release publicada depois de vincular, de forma independente, todos os valores
+abaixo a uma unica decisao imutavel:
+
+- o repositorio e a tag imutavel da origem;
+- o commit de origem registrado no manifesto canonico da release;
+- o nome e a versao do pacote;
+- os nomes, tamanhos e digests SHA-256 do wheel e da distribuicao de codigo-
+  fonte; e
+- o resultado exato de CI exigido pela politica desse sistema de implantacao.
+
+O sistema externo controla autorizacao, selecao de ambiente, rollout,
+verificacao de saude, rollback, retencao de auditoria e prevencao de replay.
+Esses controles devem falhar de forma fechada quando qualquer identidade ou
+digest divergir. Eles nao sao implementados, configurados nem confiados a
+arquivos deste repositorio publico. O CI publico nao exige acesso a credenciais
+de implantacao nem a ambientes de runtime.

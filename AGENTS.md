@@ -124,6 +124,11 @@ Registry artifacts are verified against a canonical source-bound manifest
 before the repository-linked manifest is published. Existing versions require
 explicit `resume_existing=true` and exact byte equality; otherwise use a new
 fixed-forward version.
+Treat that verified manifest as the terminal public handoff. External systems
+must independently bind the immutable repository, tag, source commit, package
+version, artifact sizes and digests, and required CI result before deployment;
+authorization, rollout, health, rollback, audit, and replay prevention remain
+outside this repository.
 
 ## VM Interface Sync Strategy
 

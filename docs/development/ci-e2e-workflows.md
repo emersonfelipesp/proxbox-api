@@ -162,3 +162,22 @@ existing `PKG_TOKEN` secret. Credentials are scoped only to the steps that read
 or write the package registry. A failed or partially published version is never
 overwritten; recovery requires an exact-byte resume or a new fixed-forward
 version.
+
+### External deployment handoff
+
+Package publication is this repository's final deployment-related
+responsibility. An external deployment system may consume a published release
+only after independently binding all of the following values to one immutable
+decision:
+
+- the repository and immutable source tag;
+- the source commit recorded by the canonical release manifest;
+- the package name and version;
+- the wheel and source-distribution filenames, sizes, and SHA-256 digests; and
+- the exact CI result required by that deployment system's policy.
+
+The external system owns authorization, environment selection, rollout,
+health verification, rollback, audit retention, and replay prevention. Those
+controls must fail closed when any identity or digest differs. They are not
+implemented by, configured in, or trusted to files in this public repository.
+Public CI requires no access to deployment credentials or runtime environments.
