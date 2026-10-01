@@ -897,6 +897,25 @@ dependency and extending `tests/test_stage_route_bootstrap.py`.
   cached optional-sidecar unavailability. Internally, selected IDs are sent to
   NetBox as repeated values in deduplicated groups of at most 100; any failed
   group aborts the explicit selection.
+- `GET /virtualization/virtual-machines/orphans/sweep`
+- `GET /virtualization/virtual-machines/orphans/sweep/stream` - Standalone
+  end-of-run orphan VM sweep for callers that drive each stage separately. The
+  required `run_id` (non-empty; a missing or empty value is HTTP 422) is the run
+  ID passed to the VM stage. Optional `dry_run`, `vm_stage_failed`, and
+  comma-separated `endpoint_ids` / `proxmox_endpoint_ids` (the alias takes
+  precedence; a malformed value is rejected before the sweep starts) scope and
+  gate the run. A live (non-`dry_run`) sweep without an endpoint scope is
+  rejected with HTTP 422, because `run_id` and `vm_stage_failed` are caller
+  claims; only `dry_run=true` may be unscoped. The `delete_orphans` setting decides whether it acts. Orphans
+  are soft-deleted only (`status=decommissioning` plus the
+  `proxbox-soft-deleted` tag). The result, or the SSE `complete` result, always
+  includes `skipped_reason` (`null`, `disabled`, `vm_stage_failed`,
+  `sidecar_unavailable`, `sidecar_read_failed`, `run_not_found`, or
+  `live_inventory_unavailable`). A live sweep also fetches the live Proxmox guest
+  inventory of the scoped endpoints and only marks VMs confirmed absent from it,
+  failing closed when that inventory cannot be fetched. Each request resets and
+  re-probes cached optional-sidecar unavailability. See
+  [Orphan VM handling](../sync/workflows.md#orphan-vm-handling).
 
 ### VM stream overwrite query parameters
 
@@ -923,6 +942,44 @@ See [Overwrite Flags](../sync/overwrite-flags.md) for the full matrix and defaul
 
 The three virtual-disk endpoints also accept an optional `fetch_max_concurrency`
 query parameter to override the Proxmox VM-config fetch width for that request.
+
+### Degraded staged results
+
+The VM-scoped stage routes (`virtual-machines`, `virtual-disks`, `backups`,
+`snapshots`, `interfaces`, and `interfaces/ip-address`) choose a selection mode
+by how they address VMs, as described in
+[Staged-run selection](../sync/workflows.md#staged-run-selection-strict-versus-lenient-ownership).
+Routes that address one VM by path (`/{netbox_vm_id}/...`) fail closed on a VM
+whose Proxmox ownership cannot be resolved. List and estate routes (a
+`netbox_vm_ids` selection, `/all/create`, and the estate interface stages) drop
+that VM with a warning, process the rest, and report the drop instead of
+returning HTTP 502:
+
+- `snapshots/all/create` and `virtual-disks/create` (and their `/stream`
+  variants) return their result object with two extra keys when a VM was
+  dropped: `degraded: true` and `warnings: [{"netbox_vm_id": <int>, "reason":
+  "<text>"}]`. Both keys are absent on a clean run.
+- `backups/all/create`, `interfaces/create`, and `interfaces/ip-address/create`
+  keep returning a bare list on a clean run. When degraded they return
+  `{"<stage>": [...], "count": <int>, "warnings": [...], "degraded": true}`
+  where `<stage>` is `backups`, `vm_interfaces`, or `vm_ip_addresses`. The
+  `interfaces/create` response already used this shape for partial interface
+  failures; it now also carries `degraded: true`.
+- The `/stream` variants put the same `warnings` and `degraded` keys in the
+  `result` of the stage `step` and the final `complete` events next to `count`.
+  `virtual-machines/create/stream` does the same for a dropped selected VM;
+  `virtual-machines/create` keeps returning a bare list when clean and returns
+  `{"virtual_machines": [...], "count": <int>, "warnings": [...], "degraded":
+  true}` when a selected VM was dropped. The by-id `/{netbox_vm_id}/create`
+  routes stay strict.
+- `GET /full-update` and `GET /full-update/stream` aggregate every stage's
+  warnings, each tagged with its `phase`, into the top-level `warnings` key and
+  set `degraded: true`.
+
+If every selected VM is dropped the stage still succeeds with an empty result
+plus the warnings. An unreadable sidecar scan, an invalid VM id, or a selection
+NetBox does not return in full remains an error in every mode. The task-history
+routes keep their own contract (see above).
 
 ## Full Update
 

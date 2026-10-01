@@ -19,6 +19,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.virtual_disks import (
     create_virtual_disks as sync_virtual_disks,
 )
+from proxbox_api.services.sync.vm_filter import SelectionMode
 from proxbox_api.services.sync.vm_helpers import parse_selected_netbox_vm_ids
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
@@ -69,6 +70,7 @@ async def create_virtual_disks(
         use_css=use_css,
         netbox_vm_ids=netbox_vm_id_list,
         fetch_max_concurrency=fetch_max_concurrency,
+        selection_mode=SelectionMode.LENIENT,
     )
     return result
 
@@ -112,6 +114,7 @@ async def create_virtual_disks_stream(
                     use_css=False,
                     netbox_vm_ids=netbox_vm_id_list,
                     fetch_max_concurrency=fetch_max_concurrency,
+                    selection_mode=SelectionMode.LENIENT,
                 )
             finally:
                 await bridge.close()
@@ -175,6 +178,7 @@ async def create_virtual_disks_for_vm_stream(
                     use_css=False,
                     netbox_vm_id=netbox_vm_id,
                     fetch_max_concurrency=fetch_max_concurrency,
+                    selection_mode=SelectionMode.STRICT,
                 )
             finally:
                 await bridge.close()

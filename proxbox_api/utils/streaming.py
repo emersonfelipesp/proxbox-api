@@ -442,6 +442,7 @@ async def sse_stream_generator(  # noqa: C901
                 warning_payloads = [warning for warning in warnings if isinstance(warning, dict)]
                 if warning_payloads:
                     result_data["warnings"] = warning_payloads
+                    result_data["degraded"] = True
             return result_data
         if isinstance(result, dict):
             return result

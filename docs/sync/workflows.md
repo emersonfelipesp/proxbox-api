@@ -37,6 +37,14 @@ values at the write boundary: `bridge`, `lag`, `virtual`, `loopback`, or
 `other`. Python enum names are internal implementation details and must never
 be sent in a `dcim.Interface.type` payload.
 
+The `sync_node_interfaces` behavior flag (`GET /full-update?sync_node_interfaces=true`,
+and the same query parameter on `GET /full-update/stream`) is forwarded to the
+node-interface stage in both the non-streaming and streaming runs. With it set,
+the stage reconciles the full `/nodes/{node}/network` topology, including a
+bridge's pinned `hwaddress` option as its primary MAC address, exactly as
+`GET /dcim/devices/interfaces/create?sync_node_interfaces=true` does. Without
+it, the stage keeps the legacy per-interface behavior, which sets no MAC.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:
@@ -104,6 +112,74 @@ the active `(endpoint, cluster)` session scopes. Retired endpoint-less rows from
 unrelated clusters are unmanaged for that run and are skipped; malformed or
 duplicate identity inside an active scope still fails closed. Explicit NetBox
 VM selections remain strict regardless of scope.
+
+### Staged-run selection: strict versus lenient ownership
+
+The VM-scoped stages (`virtual-machines`, `virtual-disks`, `backups`,
+`snapshots`, `vm-interfaces`, and `vm-ip-addresses`) resolve each VM's Proxmox
+owner from its typed sync-state sidecar (endpoint, cluster, VMID, and VM type)
+and, for the selected-list routes, against the live Proxmox resources. A VM
+whose owner cannot be resolved is handled by an explicit selection mode that the
+route chooses:
+
+| Mode | Used by | Behavior |
+|---|---|---|
+| Strict | Routes that address one VM by path: `/{netbox_vm_id}/create`, `/{netbox_vm_id}/backups/create/stream`, `/{netbox_vm_id}/snapshots/create/stream`, `/{netbox_vm_id}/virtual-disks/create/stream` | Fail closed on the first VM whose ownership is unusable (HTTP 502 or an SSE `complete` with `ok=false`). There is no other VM to make progress on, and a wrong owner must never be guessed. |
+| Lenient | Staged and estate runs: `netbox_vm_ids` list routes, `/all/create`, the estate `interfaces/create` and `interfaces/ip-address/create` stages, the full-backup ownership cache, and both full-update variants | Drop the VM with a `WARNING` naming the NetBox VM id and the reason, process the remaining VMs normally, and report the drop. |
+
+Routes that do not say choose by addressing: list and estate routes are lenient
+and single-VM path routes are strict, so an older orchestrating plugin that sends
+no new parameter keeps working without change.
+
+In lenient mode a VM is dropped when its sidecar is incomplete (no endpoint id,
+cluster, positive VMID, or VM type), when it has more than one sidecar, when an
+explicitly selected VM has no sidecar, when its cluster has no available Proxmox
+source or is ambiguous across endpoints, when its sidecar endpoint disagrees
+with the owner of the cluster, when no live Proxmox resource matches (for
+example a guest deleted in Proxmox but still in NetBox) or several do, and when
+two selected VMs claim the same endpoint/cluster/VMID/type. Every claimant of a
+shared owner is dropped, because which one is right cannot be known. In an
+estate scan a VM with no sidecar at all is unmanaged and is skipped silently,
+without a warning.
+
+These stay fatal in both modes because they are not per-VM ownership problems:
+an unreadable or unavailable sidecar scan, an invalid VM id, and a selection
+that NetBox does not return in full.
+
+A dropped VM is never touched by the stage. It is absent from the ownership
+cache, so it is neither reconciled nor covered by stale-backup or
+stale-snapshot cleanup, and its existing NetBox rows are left as they are.
+
+Dropped VMs are reported as structured warnings,
+`[{"netbox_vm_id": <int>, "reason": "<text>"}]`, and the stage outcome is
+`degraded=true`; the run does not fail, and if every selected VM is dropped the
+stage returns an empty result with the warnings instead of raising:
+
+- Dict results (`snapshots`, `virtual-disks`) carry `degraded` and `warnings`
+  keys. The SSE `complete` and stage `step` events carry the same result.
+- List results (`backups`, `vm-interfaces`, `vm-ip-addresses`) carry the
+  warnings on the result. Their SSE result gains `warnings` and `degraded`
+  next to `count`. Their REST response stays a bare list when clean and becomes
+  `{"<stage>": [...], "count": n, "warnings": [...], "degraded": true}` when
+  degraded.
+- The `virtual-machines` stream reports the same `warnings` and `degraded` in
+  its `complete` result. The REST `/create` route keeps returning a bare list
+  when clean and, when a selected VM was dropped, returns
+  `{"virtual_machines": [...], "count": n, "warnings": [...], "degraded": true}`.
+  The by-id `/{netbox_vm_id}/create` routes stay strict and never degrade.
+- Full-update (REST and SSE) aggregates every stage's warnings, each tagged with
+  its `phase`, into the top-level `warnings` and sets `degraded=true`.
+
+Task-history keeps its own contract and is not part of this mode: an explicitly
+selected VM without identity is still fatal there, and its degraded aggregate
+still raises HTTP 502 from standalone REST. See
+[Task History Synchronization](./task-history.md).
+
+A sidecar becomes incomplete when the VM sync writes its identity only while
+`overwrite_vm_custom_fields` is enabled and drops a missing endpoint id. The
+writer logs a warning naming the VM whenever the live endpoint, cluster, VMID,
+or VM type is absent or the type is `unknown`, so the cause is visible where it
+happens; what is persisted is unchanged.
 
 ### Parallelism Rules
 
@@ -232,6 +308,92 @@ VMs** page is the only supported hard-delete path for these records. It is
 permission-gated, applies the marker and status filter on both selected and
 “all matching” bulk operations, and requires the operator to confirm deletion
 in NetBox. The operation removes NetBox inventory only; it never calls Proxmox.
+
+### Running the sweep from a staged sync
+
+The full-update routes run the sweep themselves. A caller that drives each stage
+separately, such as the paired NetBox plugin, must call the standalone sweep
+after its stages:
+
+- `GET /virtualization/virtual-machines/orphans/sweep`
+- `GET /virtualization/virtual-machines/orphans/sweep/stream`
+
+`run_id` is required and must be the same value the caller passed to the VM
+stage, because it is the run ID stamped into each reconciled VM's sync-state
+sidecar; a VM stamped with any other run ID is an orphan candidate. Optional
+`dry_run=true` previews the sweep. `endpoint_ids` or `proxmox_endpoint_ids`
+(comma-separated, the alias wins) restrict the sweep to VMs owned by those
+Proxmox endpoints, and `vm_stage_failed=true` skips it. A live sweep (not
+`dry_run`) must name an endpoint scope: without one the route answers HTTP 422,
+because `run_id` and `vm_stage_failed` are unverified caller claims and an
+unscoped live sweep could otherwise soft-delete every managed VM. A dry run may
+stay unscoped. The route reads the
+`delete_orphans` setting exactly as full-update does, so a disabled setting
+returns `enabled=false` without scanning or patching. The SSE variant emits the
+usual `step`, item progress and `complete` events, and the sweep result is the
+`result` of the terminal event.
+
+The sweep is deliberately conservative, and every result carries a
+`skipped_reason` (`null` when the sweep ran):
+
+| `skipped_reason` | Meaning |
+|---|---|
+| `disabled` | `delete_orphans` is off and the request was not a dry run. |
+| `vm_stage_failed` | The VM stage reported failed VMs. A live VM that failed to reconcile is not stamped with the run and would otherwise look orphaned. |
+| `sidecar_unavailable` | The sync-state sidecar API is missing (older plugin), so orphan state cannot be verified. |
+| `sidecar_read_failed` | The sidecar read failed transiently, so orphan state cannot be verified. |
+| `run_not_found` | No in-scope sidecar carries the given `run_id`, so the run is not proven to have happened. Checked before any PATCH or tag creation, for the standalone route and full-update alike. |
+| `live_inventory_unavailable` | The standalone live sweep could not fetch the live Proxmox guest inventory for every in-scope endpoint (a session failed, an endpoint in scope had no session, or the fetch errored), so absence from Proxmox cannot be confirmed. |
+
+Because `vm_stage_failed` and `run_id` are caller claims, the sweep also verifies
+against Proxmox itself: a candidate is soft-deleted only when its guest (cluster
+name, vmid, and type) is confirmed absent from the live cluster resources of the
+in-scope sessions. The standalone live sweep fetches that inventory from the
+sessions selected by `endpoint_ids` and fails closed with
+`live_inventory_unavailable` when any of it is missing; full-update fetches a fresh
+inventory at the sweep boundary (not the snapshot taken at request start, so a guest
+created mid-run is seen) and fails closed the same way. A guest resource row whose
+type or vmid cannot be determined (derived from ids such as `qemu/123` when fields
+are missing) also makes the inventory unavailable. A candidate still present is skipped and
+logged (`still_present_in_proxmox`), and one whose sidecar lacks the cluster name,
+vmid, or type is skipped too (`identity_incomplete`). Dry runs do not fetch the
+inventory.
+
+Immediately before each PATCH the sweep re-reads the VM and builds the tag list from
+its fresh tags plus the marker, so tags added since discovery are preserved. It skips
+with `vm_unreadable` when the VM cannot be read and with `already_swept` when the
+marker is already present. NetBox offers no atomic tag add, so a very small window
+between that read and the PATCH remains.
+
+A skipped sweep sends no PATCH and never creates the marker tag. Immediately
+before each PATCH the sweep re-reads that VM's sidecar and skips the VM (counted
+as skipped, reported as `restamped`) when the sidecar now carries this run's ID or
+changed since discovery, so a VM synchronized between discovery and the PATCH is
+not marked. NetBox offers no compare-and-set, so this narrows the race window but
+is not an atomic guard. A VM that reappears is re-adopted by the bulk VM stage,
+which removes the marker and restores the status in one PATCH. Scope is
+attributed through each sidecar's `proxmox_endpoint_raw_id`: when a scope is
+given, a sidecar without a valid endpoint ID is never a candidate. The
+standalone live sweep therefore always needs the same endpoint IDs the caller's
+run used (an unnarrowed full update is the only unscoped live sweep). A full update that was narrowed with
+`endpoint_ids`, `proxmox_endpoint_ids`, `name`, `domain` or `ip_address` derives
+the scope from the Proxmox sessions it actually used, and reports a failed VM
+stage the same way.
+
+The endpoint IDs are the same IDs the VM stage stamps into each sidecar (the
+Proxmox session's endpoint ID), so pass the values the stage requests used. The
+VM stage's SSE `complete` result carries only `count`; a staged caller reads the
+failure count from the `failed` field of the `virtual-machines` phase summary.
+
+### Decommissioned VMs in later stages
+
+The virtual disk, snapshot, VM interface and VM IP address stages skip VMs whose
+status is `decommissioning` or that carry the `proxbox-soft-deleted` tag, so
+soft-deleted guests are not queried in Proxmox on every run. Each stage logs one
+INFO line with the number skipped. The VM stage itself still processes them, so
+a guest that reappears is re-adopted. When the disk stage cannot find a guest in
+Proxmox (for example a stale record that is not yet marked) it logs a warning
+and counts the VM as skipped instead of logging an error.
 
 ### Cloud-init key reflection
 

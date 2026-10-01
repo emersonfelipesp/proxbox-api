@@ -124,7 +124,8 @@ def test_by_netbox_id_matches_by_vmid_when_name_blank(monkeypatch):
     assert result == [{"id": 551, "name": "real-name-from-proxmox"}]
     # Only the vmid-matched resource is forwarded to the create flow.
     assert captured["cluster_resources"] == [
-        {"cluster-a": [{"type": "qemu", "name": "real-name-from-proxmox", "vmid": 9551}]}
+        {"cluster-a": [{"type": "qemu", "name": "real-name-from-proxmox", "vmid": 9551}]},
+        {"cluster-a": []},
     ]
 
 

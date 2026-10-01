@@ -23,6 +23,7 @@ from proxbox_api.dependencies import (
     ResolvedSyncOverwriteFlagsDep,
     ensure_netbox_sync_dependencies,
 )
+from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_compat import VirtualMachine
@@ -90,6 +91,10 @@ from proxbox_api.services.sync.network import (
     normalize_vm_interface_name,
 )
 from proxbox_api.services.sync.node_device_name import NodeDeviceNameError, render_node_device_name
+from proxbox_api.services.sync.orphan_sweep import (
+    clear_soft_delete_marker,
+    exclude_soft_deleted_vms,
+)
 from proxbox_api.services.sync.reconciliation.types import (
     NetBoxVMOperation as _NetBoxVMOperation,
 )
@@ -121,12 +126,23 @@ from proxbox_api.services.sync.role_resolution import (
     persist_sync_state_with_role_compensation,
     resolve_snapshot_read_from_scan,
 )
+from proxbox_api.services.sync.stage_result import (
+    WarningList,
+    attach_skips_to_dict,
+    attach_skips_to_list,
+    require_no_dropped_vms,
+    response_with_stage_warnings,
+    result_warnings,
+)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_reader import (
+    StaleEndpointAdoption,
+    SyncStateVMResolution,
+    adopt_vm_with_stale_endpoint_id,
     load_vm_last_synced_names,
     resolve_virtual_machine_by_sync_state,
     scan_vm_last_synced_role_ids,
@@ -143,15 +159,22 @@ from proxbox_api.services.sync.virtual_machines import (
     build_netbox_virtual_machine_payload,
     build_virtual_machine_sync_state_fields,
 )
+from proxbox_api.services.sync.vm_cluster_guard import (
+    filter_vm_records_in_cluster,
+    log_cross_cluster_rejection,
+    vm_record_in_cluster,
+)
 from proxbox_api.services.sync.vm_create import ensure_vm_type
+from proxbox_api.services.sync.vm_filter import (
+    SelectionMode,
+    hydrate_vm_identities_from_sidecars,
+    selection_skips,
+)
 from proxbox_api.services.sync.vm_filter import (
     filter_cluster_resources_by_netbox_vm_ids as _filter_selected_vm_resources,
 )
 from proxbox_api.services.sync.vm_filter import (
     filter_cluster_resources_for_selected_vm as _filter_selected_vm_resource,
-)
-from proxbox_api.services.sync.vm_filter import (
-    hydrate_vm_identities_from_sidecars,
 )
 from proxbox_api.services.sync.vm_helpers import (
     _compute_vm_patchable_fields,
@@ -182,6 +205,7 @@ from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_vmid,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
+from proxbox_api.session.proxmox_providers import load_configured_proxmox_endpoint_ids
 from proxbox_api.utils import return_status_html
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 
@@ -390,17 +414,46 @@ def _validate_vm_inputs(
 router = APIRouter()
 
 
-class SyncResultList(list[dict]):
-    """List result with optional sync warnings for callers that can surface them."""
+class SyncResultList(WarningList):
+    """List result with optional sync warnings and a failed-item count.
+
+    ``failed_count`` is the number of VMs that failed to reconcile in the stage.
+    Callers such as the full-update orphan sweep use it to avoid treating a live VM
+    that failed to sync as an orphan.
+    """
 
     def __init__(
         self,
         values: list[dict] | None = None,
         *,
         warnings: list[dict[str, object]] | None = None,
+        failed_count: int = 0,
     ) -> None:
-        super().__init__(values or [])
-        self.warnings = warnings or []
+        super().__init__(values, warnings=warnings)
+        self.failed_count = failed_count
+
+
+def _vm_stage_result(
+    results: list,
+    selection_skipped: list[dict[str, object]],
+    *,
+    failed_count: int = 0,
+):
+    """Return the VM stage result, telling the caller about VMs the selection dropped.
+
+    A clean run keeps the historical list carrier; a run that dropped selected VMs
+    returns them as warnings so a REST caller is not told everything synced. The
+    failed-VM count survives either shape so the orphan sweep stays fail-closed.
+    """
+    carrier = SyncResultList(
+        results,
+        warnings=[*result_warnings(results), *selection_skipped],
+        failed_count=failed_count,
+    )
+    wrapped = response_with_stage_warnings(carrier, result_key="virtual_machines")
+    if isinstance(wrapped, dict) and failed_count:
+        wrapped["failed_count"] = failed_count
+    return wrapped
 
 
 @dataclass(slots=True)
@@ -1004,18 +1057,108 @@ def _overlay_sidecar_identity_on_vm_snapshot(
         record["proxmox_vm_type"] = vm_type
 
 
+def _active_session_endpoint_ids(sessions: object) -> frozenset[int]:
+    """Return the endpoint ids of every Proxmox session active in this run."""
+    return frozenset(
+        endpoint_id
+        for session in list(sessions or [])
+        if (endpoint_id := extract_proxmox_session_endpoint_id(session)) is not None
+    )
+
+
+_ConfiguredEndpointLoader = Callable[[], Awaitable[frozenset[int] | None]]
+
+
+class _ConfiguredEndpointIds:
+    """Lazily load, once per run, every configured Proxmox endpoint id.
+
+    Resolves to ``None`` when the inventory cannot be loaded so callers fail
+    closed. The sessions of this run are always included.
+    """
+
+    def __init__(self, nb: object, sessions: object) -> None:
+        self._nb = nb
+        self._active = _active_session_endpoint_ids(sessions)
+        self._loaded = False
+        self._ids: frozenset[int] | None = None
+
+    async def __call__(self) -> frozenset[int] | None:
+        if not self._loaded:
+            inventory = await load_configured_proxmox_endpoint_ids(self._nb)
+            self._ids = None if inventory is None else inventory | self._active
+            self._loaded = True
+        return self._ids
+
+
+async def _resolve_vm_sidecar_identity(
+    nb: object,
+    *,
+    prepared: _PreparedVMState,
+    proxmox_vmid: int,
+    endpoint_id: int | None,
+    cluster_id: int | None,
+    configured_endpoint_ids: _ConfiguredEndpointLoader | None,
+) -> SyncStateVMResolution | None:
+    """Resolve a prepared VM's sidecar identity, self-healing a stale endpoint id.
+
+    Self-heal needs the live endpoint, the NetBox cluster and a loader for the
+    configured endpoint inventory; without all three the plain endpoint-keyed
+    lookup runs. An inventory that cannot be loaded disables adoption.
+    """
+    if endpoint_id is None or cluster_id is None or configured_endpoint_ids is None:
+        return await resolve_virtual_machine_by_sync_state(
+            nb,
+            proxmox_vm_id=proxmox_vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+        )
+    try:
+        # Ambiguous or unverifiable identity raises: only a lookup that proved the
+        # VM absent may fall through to the stale-id adoption.
+        resolution = await resolve_virtual_machine_by_sync_state(
+            nb,
+            proxmox_vm_id=proxmox_vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+            fail_on_ambiguous=True,
+        )
+    except ProxboxException:
+        return None
+    if resolution is not None:
+        return resolution
+    configured = await configured_endpoint_ids()
+    if configured is None:
+        return None
+    return await adopt_vm_with_stale_endpoint_id(
+        nb,
+        proxmox_vm_id=proxmox_vmid,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        adoption=StaleEndpointAdoption(
+            vm_type=str(prepared.vm_type or ""),
+            cluster_name=prepared.cluster_name,
+            vm_name=str(prepared.resource.get("name") or ""),
+            configured_endpoint_ids=configured,
+        ),
+    )
+
+
 async def _hydrate_vm_snapshot_with_sidecar_identity(
     nb: object,
     *,
     prepared_vms: list[_PreparedVMState],
     netbox_snapshot: list[dict[str, object]],
+    configured_endpoint_ids: _ConfiguredEndpointLoader | None = None,
 ) -> int:
     """Overlay typed sidecar VM identity onto snapshot records.
 
     The reconciliation queue is intentionally pure and indexes the loaded VM
     snapshot. Before building that queue, use the sidecar resolver for prepared
     VMs that are not already indexed so owned rows are adopted instead of
-    treated as name collisions or creates.
+    treated as name collisions or creates. ``configured_endpoint_ids`` loads the
+    ids of every configured endpoint; when supplied, a VM stored under an
+    endpoint id that no configured endpoint owns (and whose name matches) is
+    re-bound to the live endpoint instead of being duplicated.
     """
     if not prepared_vms:
         return 0
@@ -1031,7 +1174,7 @@ async def _hydrate_vm_snapshot_with_sidecar_identity(
         for record in netbox_snapshot
         if (record_id := _relation_id(record.get("id"))) is not None
     }
-    resolved_keys: set[tuple[int | None, int, str]] = set()
+    resolved_keys: set[tuple[int | None, int | None, int, str]] = set()
     hydrated = 0
 
     for prepared in prepared_vms:
@@ -1056,16 +1199,18 @@ async def _hydrate_vm_snapshot_with_sidecar_identity(
             continue
 
         vm_type = str(prepared.vm_type or "").strip().lower()
-        resolver_key = (endpoint_id, proxmox_vmid, vm_type)
+        resolver_key = (endpoint_id, cluster_id, proxmox_vmid, vm_type)
         if resolver_key in resolved_keys:
             continue
         resolved_keys.add(resolver_key)
 
-        resolution = await resolve_virtual_machine_by_sync_state(
+        resolution = await _resolve_vm_sidecar_identity(
             nb,
-            proxmox_vm_id=proxmox_vmid,
+            prepared=prepared,
+            proxmox_vmid=proxmox_vmid,
             endpoint_id=endpoint_id,
             cluster_id=cluster_id,
+            configured_endpoint_ids=configured_endpoint_ids,
         )
         if resolution is None or resolution.source != "sidecar":
             continue
@@ -1151,6 +1296,53 @@ def _select_unique_vm_candidate_by_vmid(
     return None
 
 
+def _scope_vm_lookup_to_cluster(
+    vm_index: dict[tuple[int, int], dict[str, object]],
+    candidates_by_vmid: dict[int, list[dict[str, object]]],
+    *,
+    vmid: int,
+    endpoint_id: int | None,
+    cluster_id: int | None,
+    cluster_name: str,
+    sync_context: str,
+) -> tuple[dict[tuple[int, int], dict[str, object]], dict[int, list[dict[str, object]]]]:
+    """Restrict the endpoint/vmid lookup views to VMs of the cluster being synced.
+
+    ``(endpoint id, vmid)`` is not unique across clusters, so a match from
+    another cluster is logged and dropped, and the live cluster's own VM (which
+    the first-wins index may have shadowed) stays reachable. Without a known
+    live cluster the views are returned unchanged.
+    """
+    if cluster_id is None and not cluster_name:
+        return vm_index, candidates_by_vmid
+    candidates = candidates_by_vmid.get(vmid, [])
+    in_cluster = filter_vm_records_in_cluster(
+        candidates, cluster_id=cluster_id, cluster_name=cluster_name
+    )
+    kept_ids = {id(record) for record in in_cluster}
+    for record in candidates:
+        if id(record) not in kept_ids and extract_proxmox_endpoint_id(record) == endpoint_id:
+            log_cross_cluster_rejection(
+                record,
+                vmid=vmid,
+                endpoint_id=endpoint_id,
+                cluster_id=cluster_id,
+                cluster_name=cluster_name,
+                context=sync_context,
+            )
+    scoped_index: dict[tuple[int, int], dict[str, object]] = {}
+    indexed = vm_index.get((endpoint_id, vmid)) if endpoint_id is not None else None
+    if indexed is not None and vm_record_in_cluster(
+        indexed, cluster_id=cluster_id, cluster_name=cluster_name
+    ):
+        scoped_index[(endpoint_id, vmid)] = indexed
+    for record in in_cluster:
+        record_endpoint_id = extract_proxmox_endpoint_id(record)
+        if record_endpoint_id is not None:
+            scoped_index.setdefault((record_endpoint_id, vmid), record)
+    return scoped_index, {vmid: in_cluster}
+
+
 def _resolve_vm_from_index_or_unique_vmid(
     vm_index: dict[tuple[int, int], dict[str, object]],
     candidates_by_vmid: dict[int, list[dict[str, object]]],
@@ -1159,12 +1351,27 @@ def _resolve_vm_from_index_or_unique_vmid(
     raw_vmid: object,
     cluster_name: str,
     sync_context: str,
+    cluster_id: int | None = None,
 ) -> dict[str, object] | None:
-    """Resolve a VM by endpoint-scoped key, with legacy fallback only when safe."""
+    """Resolve a VM by endpoint-scoped key, with legacy fallback only when safe.
+
+    The match must live in the cluster being synced (``cluster_id`` and/or
+    ``cluster_name``); a same-key VM from another cluster is never returned.
+    """
     try:
         vmid = int(str(raw_vmid).strip())
     except (TypeError, ValueError):
         return None
+
+    vm_index, candidates_by_vmid = _scope_vm_lookup_to_cluster(
+        vm_index,
+        candidates_by_vmid,
+        vmid=vmid,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        sync_context=sync_context,
+    )
 
     if endpoint_id is not None:
         scoped_vm = vm_index.get((endpoint_id, vmid))
@@ -1484,6 +1691,32 @@ async def _patch_vm_with_disk_aggregate_retry(
         )
 
 
+async def _clear_reappeared_vm_marker(
+    nb: object,
+    vm_record: object,
+    vmid: int,
+    desired_status: object,
+) -> bool:
+    """Drop the orphan soft-delete marker from a VM the bulk path just re-adopted.
+
+    The reconciliation queue preserves NetBox tags, so without this a VM that was
+    soft-deleted and then reappeared in Proxmox would keep the marker and be excluded
+    from every later stage. The reconciliation diff also reads a ``decommissioning``
+    status back as ``active`` and never patches it, so the status is restored here from
+    the desired Proxmox-derived status. Returns False when the marker could not be cleared.
+    """
+    try:
+        await clear_soft_delete_marker(
+            nb,
+            vm_record,
+            restored_status=ProxmoxToNetBoxVMStatus.from_proxmox(desired_status).value,
+        )
+    except Exception as exc:
+        logger.error("Failed to clear the soft-delete marker for vmid=%s: %s", vmid, exc)
+        return False
+    return True
+
+
 async def _dispatch_vm_operation_queue(
     nb: object,
     operation_queue: list[_NetBoxVMOperation],
@@ -1741,14 +1974,21 @@ async def _filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
     *,
     pxs: object,
     cluster_status: object,
+    mode: SelectionMode = SelectionMode.LENIENT,
 ) -> list[dict]:
-    """Delegate selected-resource filtering to the shared ownership implementation."""
+    """Delegate selected-resource filtering to the shared ownership implementation.
+
+    Query-selected lists are staged runs, so ownership that cannot be resolved for
+    one VM drops that VM with a warning instead of failing the others. The result
+    carries the drops on its ``skipped`` attribute.
+    """
     return await _filter_selected_vm_resources(
         netbox_session,
         cluster_resources,
         netbox_vm_ids,
         pxs=pxs,
         cluster_status=cluster_status,
+        mode=mode,
     )
 
 
@@ -2298,27 +2538,34 @@ async def _create_virtual_machine_by_netbox_id(
         cluster_status=cluster_status,
     )
 
-    return await create_virtual_machines(
-        netbox_session=netbox_session,
-        pxs=pxs,
-        cluster_status=cluster_status,
-        cluster_resources=filtered_for_call,
-        tag=tag,
-        websocket=websocket,
-        use_websocket=use_websocket,
-        sync_task_history=sync_task_history,
-        netbox_vm_ids=str(netbox_vm_id),
-        use_guest_agent_interface_name=use_guest_agent_interface_name,
-        vm_interface_sync_strategy=vm_interface_sync_strategy,
-        ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
-        primary_ip_preference=primary_ip_preference,
-        overwrite_vm_role=overwrite_vm_role,
-        overwrite_vm_type=overwrite_vm_type,
-        overwrite_vm_tags=overwrite_vm_tags,
-        overwrite_vm_description=overwrite_vm_description,
-        overwrite_vm_custom_fields=overwrite_vm_custom_fields,
-        overwrite_flags=overwrite_flags if overwrite_flags is not None else SyncOverwriteFlags(),
-        run_id=run_id,
+    # The strict single-VM filter above already validated this VM. The list-route
+    # entry point below is lenient by default, so a VM it still drops (ownership
+    # changed between the two reads) must fail this strict route, not degrade it.
+    return require_no_dropped_vms(
+        await create_virtual_machines(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=filtered_for_call,
+            tag=tag,
+            websocket=websocket,
+            use_websocket=use_websocket,
+            sync_task_history=sync_task_history,
+            netbox_vm_ids=str(netbox_vm_id),
+            use_guest_agent_interface_name=use_guest_agent_interface_name,
+            vm_interface_sync_strategy=vm_interface_sync_strategy,
+            ignore_ipv6_link_local_addresses=ignore_ipv6_link_local_addresses,
+            primary_ip_preference=primary_ip_preference,
+            overwrite_vm_role=overwrite_vm_role,
+            overwrite_vm_type=overwrite_vm_type,
+            overwrite_vm_tags=overwrite_vm_tags,
+            overwrite_vm_description=overwrite_vm_description,
+            overwrite_vm_custom_fields=overwrite_vm_custom_fields,
+            overwrite_flags=overwrite_flags
+            if overwrite_flags is not None
+            else SyncOverwriteFlags(),
+            run_id=run_id,
+        )
     )
 
 
@@ -2592,6 +2839,8 @@ async def create_virtual_machines(  # noqa: C901
             pxs=pxs,
             cluster_status=cluster_status,
         )
+    # VMs the lenient selection dropped; carried on the returned list as warnings.
+    selection_skipped = selection_skips(filtered_cluster_resources)
 
     # Drop VM/template resources disabled by sync mode at the source so they
     # never drive discovery or dependency precompute (see finding: disabled
@@ -3128,6 +3377,7 @@ async def create_virtual_machines(  # noqa: C901
             nb,
             prepared_vms=prepared_vms,
             netbox_snapshot=netbox_snapshot,
+            configured_endpoint_ids=_ConfiguredEndpointIds(nb, px_list),
         )
         hydration_ms = (time.perf_counter() - hydration_t0) * 1000
         full_update_telemetry.hydration_ms = hydration_ms
@@ -3225,6 +3475,11 @@ async def create_virtual_machines(  # noqa: C901
                 failed_vms += 1
                 continue
             await stamp_vm_last_run_id(nb, vm_record, effective_run_id)
+            if not await _clear_reappeared_vm_marker(
+                nb, vm_record, vmid, operation.prepared.desired_payload.get("status")
+            ):
+                failed_vms += 1
+                continue
             results.append(vm_record)
         persistence_ms = (time.perf_counter() - persistence_t0) * 1000
         full_update_telemetry.persistence_ms = persistence_ms
@@ -3302,7 +3557,7 @@ async def create_virtual_machines(  # noqa: C901
             successful_vms,
             failed_vms,
         )
-        return flattened_results
+        return _vm_stage_result(flattened_results, selection_skipped, failed_count=failed_vms)
 
     # Network-enabled sync still reconciles VMs one task at a time, so preload
     # role ownership once here to avoid a sidecar request per VM.
@@ -3364,6 +3619,7 @@ async def create_virtual_machines(  # noqa: C901
             nb,
             prepared_vms=name_prepass_vms,
             netbox_snapshot=netbox_snapshot,
+            configured_endpoint_ids=_ConfiguredEndpointIds(nb, px_list),
         )
         await _resolve_vm_names_pre_pass(name_prepass_vms, netbox_snapshot, bridge, nb)
         default_resolved_vm_names = {
@@ -4166,7 +4422,7 @@ async def create_virtual_machines(  # noqa: C901
             )
         raise ProxboxException(message=error_msg)
 
-    return flattened_results
+    return _vm_stage_result(flattened_results, selection_skipped, failed_count=failed_vms)
 
 
 async def create_only_vm_interfaces(  # noqa: C901
@@ -4221,7 +4477,10 @@ async def create_only_vm_interfaces(  # noqa: C901
         nb,
         vm_snapshot,
         require_all=False,
+        mode=SelectionMode.LENIENT,
     )
+    sync_warnings.extend(selection_skips(vm_snapshot))
+    vm_snapshot = exclude_soft_deleted_vms(vm_snapshot, stage="VM interface")
     vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
     vm_candidates_by_vmid = _build_vm_candidates_by_proxmox_id(vm_snapshot)
     cluster_id_cache = _build_cluster_id_cache_from_vm_snapshot(vm_snapshot)
@@ -4265,6 +4524,7 @@ async def create_only_vm_interfaces(  # noqa: C901
             raw_vmid=vmid,
             cluster_name=cluster_name_str,
             sync_context="interface",
+            cluster_id=cluster_id,
         )
         if not netbox_vm:
             logger.warning(
@@ -4853,6 +5113,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
     now = datetime.now(timezone.utc)
     results: list[dict] = []
+    sync_warnings: list[dict[str, object]] = []
     normalized_interface_strategy = normalize_vm_interface_sync_strategy(vm_interface_sync_strategy)
     if normalized_interface_strategy == "legacy_rename":
         warn_legacy_vm_interface_strategy()
@@ -4862,7 +5123,10 @@ async def create_only_vm_ip_addresses(  # noqa: C901
         nb,
         vm_snapshot,
         require_all=False,
+        mode=SelectionMode.LENIENT,
     )
+    sync_warnings.extend(selection_skips(vm_snapshot))
+    vm_snapshot = exclude_soft_deleted_vms(vm_snapshot, stage="VM IP address")
     vm_index = _build_vm_index_by_proxmox_id(vm_snapshot)
     vm_candidates_by_vmid = _build_vm_candidates_by_proxmox_id(vm_snapshot)
     cluster_id_cache = _build_cluster_id_cache_from_vm_snapshot(vm_snapshot)
@@ -4891,6 +5155,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
             raw_vmid=vmid,
             cluster_name=cluster_name_str,
             sync_context="IP address",
+            cluster_id=cluster_id,
         )
         if not netbox_vm:
             logger.warning(
@@ -5411,7 +5676,7 @@ async def create_only_vm_ip_addresses(  # noqa: C901
     if use_websocket and websocket:
         await websocket.send_json({"object": "vm_ip", "end": True})
 
-    return results
+    return attach_skips_to_list(results, sync_warnings)
 
 
 @router.get(
@@ -5683,6 +5948,8 @@ async def create_virtual_machines_stream(
             pxs=pxs,
             cluster_status=cluster_status,
         )
+    # VMs the lenient selection dropped, reported on the final stage result.
+    selection_skipped = selection_skips(filtered_cluster_resources)
 
     async def event_stream():
         bridge = WebSocketSSEBridge()
@@ -5734,13 +6001,14 @@ async def create_virtual_machines_stream(
                 yield frame
 
             result = await sync_task
+            result_payload = attach_skips_to_dict({"count": len(result)}, selection_skipped)
             yield sse_event(
                 "step",
                 {
                     "step": "virtual-machines",
                     "status": "completed",
                     "message": "Virtual machines synchronization finished.",
-                    "result": {"count": len(result)},
+                    "result": result_payload,
                 },
             )
             yield sse_event(
@@ -5748,7 +6016,7 @@ async def create_virtual_machines_stream(
                 {
                     "ok": True,
                     "message": "Virtual machines sync completed.",
-                    "result": {"count": len(result)},
+                    "result": result_payload,
                 },
             )
         except asyncio.CancelledError:

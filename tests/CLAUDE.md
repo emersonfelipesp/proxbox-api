@@ -47,12 +47,12 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_interactive_guard_mutations.py` | Explicit guard-removal mutation oracles for every guarded ASGI creator and consumer surface, independent SSH creator and consumer service checks, synchronization authentication-before-provider ordering, and post-wait SSH and console quiesce rechecks. Each mutation must reach its named effect sentinel; a setup error or an unrelated refusal is not equivalent evidence. |
 | `test_proxmox_influx_metrics.py` | Bounded structured Flux generation, destination controls, upstream and normalized response-byte limits, response normalization, and secret-safe Influx failures. |
 | `test_proxmox_metrics_pull.py` | Fixed `cluster/metrics/export` routing, endpoint selection, request and response bounds, filtering, deterministic sorting/deduplication, session closure, authentication, and secret-safe pull failures. |
-| `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers |
+| `conftest.py` | Global fixtures: test DB engine, sync TestClient (`test_client`, `auth_test_client`), async client (`authenticated_client`), dependency overrides, fake NetBox session, auth headers, `proxbox_log_capture` (records from the non-propagating `proxbox` logger; filter by `levelno`, since the console formatter rewrites `levelname`) |
 | `fixtures.py` | Shared reusable fixtures imported by multiple test modules |
 | `test_admin_logs.py` | In-memory log buffer routes (`/admin/logs`) |
 | `test_api_routes.py` | API route integration tests (request/response contracts) |
 | `test_netbox_reachability_probe.py` | Short-timeout NetBox status probe response, credential redaction, fingerprinted recent-result cache, fail-fast sync dependency, repeated-cancellation closure, and stalled-close deadline contracts |
-| `test_backups_vm_sync.py` | VM backup discovery and sync workflow |
+| `test_backups_vm_sync.py` | VM backup discovery and sync workflow, including strict vs lenient selection: lenient estate/list runs drop VMs with incomplete, duplicated, shared-owner, or unavailable-owner ownership with warnings and `degraded`, never delete a dropped VM's NetBox backups, and strict single-VM routes fail closed |
 | `test_bridge_interfaces.py` | VM bridge interface mapping and reconciliation |
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
 | `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
@@ -66,6 +66,10 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_error_handling.py` | Exception hierarchy and HTTP error response shaping |
 | `test_fetch_concurrency_kwarg.py` | `PROXBOX_FETCH_MAX_CONCURRENCY` and per-call concurrency overrides |
 | `test_generated_proxmox_routes.py` | Runtime registration of generated Proxmox proxy routes |
+| `test_full_update_node_interfaces_flag.py` | Regression: `/full-update` and `/full-update/stream` forward the resolved `behavior_flags` (including `sync_node_interfaces`) to `create_all_device_interfaces`, for both flag values |
+| `test_vm_filter_selection_modes.py` | `SelectionMode` for `vm_filter`: lenient mixed-list drops (incomplete, duplicate, no sidecar, unresolvable cluster, no live resource, shared owner, ambiguous live match) with reasons and warnings, strict first-failure raise, all-bad lenient result, and the failures that stay fatal in every mode |
+| `test_staged_selection_http.py` | Mounted-app (`auth_test_client`) REST and SSE reporting of dropped VMs (`degraded` plus `warnings`) for snapshots, backups, VM interfaces/IPs, the VM stream, and strict single-VM path routes (including the by-id VM create routes and their fail-closed guard) |
+| `test_full_update_degraded_stages.py` | Full-update REST and SSE aggregation of every stage's dropped-VM warnings (tagged by `phase`) and top-level `degraded`, including an empty backup result that still carries warnings |
 | `test_health.py` | Health check and root metadata endpoints |
 | `test_hardware_discovery_nic_mac.py` | Default-off physical-NIC MAC opt-in, dual-gate resolution, native `dcim.MACAddress` reconciliation, interface targeting, and per-NIC failure isolation |
 | `test_individual_sync.py` | Individual per-object sync service and dry-run workflows |
@@ -98,11 +102,17 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `reconciliation/test_vm_queue_engine_modes.py` | `python`, `compare`, and `rust` reconciliation engine-mode behavior |
 | `reconciliation/test_vm_queue_parity.py` | Rust/Python fixture parity for VM operation queues |
 | `reconciliation/test_vm_queue_python.py` | Python VM operation-queue contract and edge-case semantics |
+| `test_orphan_sweep.py` | Soft-delete orphan sweep: candidate discovery, endpoint-scoped forwarding, `skipped_reason` for a failed VM stage or an unavailable/failed sidecar scan (no PATCH and no marker-tag creation), the `delete_orphans` setting, marker preservation, and the `is_soft_deleted_vm` / `exclude_soft_deleted_vms` shape matrix |
+| `test_orphan_sweep_route.py` | Standalone `GET /virtualization/virtual-machines/orphans/sweep` (REST and SSE): `run_id` required, scope alias precedence and malformed-scope rejection, `dry_run` / `vm_stage_failed` forwarding, and the setting-off result with no scan or PATCH |
+| `test_full_update_orphan_sweep.py` | Full-update sweep wiring for `/full-update` and `/full-update/stream`: endpoint scope from the used sessions, VM-stage failure skips the sweep, and the scope dependency shape matrix (direct calls and HTTP) |
+| `test_vm_network_soft_deleted_stage.py` | VM interface and VM IP stages never fetch Proxmox config for decommissioned or soft-deleted VMs and still process live ones |
 | `test_replications_backup_routines_sync.py` | Replication and backup-routine sync workflows |
 | `test_schema_contracts.py` | Pydantic schema validation and contract checks |
 | `test_session_and_helpers.py` | Session factory creation and dependency wiring |
 | `test_settings_client.py` | Settings/plugin-config client (`ProxboxPluginSettings`) accessors |
-| `test_snapshots_sync.py` | VM snapshot sync workflow |
+| `test_snapshots_sync.py` | VM snapshot sync workflow, including skipping decommissioned or soft-deleted VMs (also when explicitly selected) and lenient (degraded, warnings, no cleanup of dropped VMs) vs strict selection with the per-route mode choice |
+
+| `test_snapshots_sync.py` | VM snapshot sync workflow, including the cluster-aware `_snapshot_sessions_for_vm` matrix when an endpoint id collides across clusters |
 | `test_sse_stream_output.py` | SSE event formatting and stream transport |
 | `test_storage_sync.py` | Storage discovery and sync workflow |
 | `test_streaming_detailed_messages.py` | Detailed-message streaming payload shape |
@@ -111,15 +121,19 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_sync_active.py` | `GET /sync/active` soft probe + `sync_state` registry lifecycle (issue #71) |
 | `test_sync_error_handling.py` | `@with_retry` decorator and domain error wrapping |
 | `test_sync_overwrite_flags.py` | Behavior of `SyncOverwriteFlags` propagation through the sync pipeline |
-| `test_sync_state_reader.py` | Typed sidecar-first VM identity/name/role reads and legacy fallback contracts |
-| `test_sync_state_writer.py` | Typed sidecar writes, including best-effort reflection fields and required/retried post-success role ownership evidence with exact snapshot compensation |
+| `test_sync_state_reader.py` | Typed sidecar-first VM identity/name/role reads and legacy fallback contracts, plus endpoint-scoped orphan candidate scans (unscoped, scoped, empty scope, sidecar without an endpoint id) |
+| `test_sync_state_writer.py` | Typed sidecar writes, including best-effort reflection fields, required/retried post-success role ownership evidence with exact snapshot compensation, and the warning (with unchanged persistence) for an incomplete VM ownership identity |
 | `test_task_history_sync.py` | Task history sync workflow |
-| `test_virtual_disks_sync.py` | Virtual disk sync workflow |
+| `test_virtual_disks_sync.py` | Virtual disk sync workflow, skipping decommissioned or soft-deleted VMs, the missing-guest classification (WARNING, "VM not found in Proxmox", still counted skipped), and lenient vs strict selection with the per-route mode choice |
 | `test_vm_backup_volids.py` | VM backup volume ID parsing and normalization |
 | `test_vm_network.py` | VM network interface mapping and IP address handling |
 | `test_netbox_version.py` | `detect_netbox_version` caching, `parse_netbox_version` parsing, `ensure_vm_type` version-gate and pre-resolved `netbox_version` short-circuit |
 | `test_vm_sync.py` | Full VM sync workflow including coordinator and dry-run |
 | `test_vm_sync_reconciliation_queue.py` | Reconciliation queue draining, role/snapshot rollback, commit-before-response-loss recovery, retry semantics, failure isolation, and empty-queue short-circuit |
+| `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation, and the `failed_count` the VM stage result carries for the orphan sweep |
+
+| `test_vm_stale_endpoint_adoption.py` | Stale sidecar endpoint id self-heal: adoption of a single same-type, same-cluster VM whose stored endpoint id no active session owns (sidecar rewritten, no ` (2)` suffix, no duplicate create), every refusal path (two candidates, type mismatch, cluster-name mismatch, id owned by another active session, other-cluster VM, unpersisted rewrite), and unknown active sessions keeping the previous behavior |
+| `test_vm_cross_cluster_vmid.py` | Cross-endpoint and colliding-endpoint VMID resolution: interface/IP sync never writes to another cluster's VM when `(endpoint id, vmid)` collides, casefolded cluster-name fallback, mismatch warning content |
 | `test_vm_sync_two_phase.py` | Two-phase full-update VM batch (fetch phase vs. process phase ordering), multi-cluster parallel precompute, and cluster precompute failure propagation |
 | `test_auth_lockout.py` | Composite credential isolation plus shared source-abuse limits, database-bound and process-pinned identity-key generations/loss/skew/post-start-mutation and failed-replacement preservation contracts, atomic key-file publish fault injection, renewable per-token owner leases capped by persisted terminal deadlines, wedged-verifier reclamation and late-result discard, exactly-once duplicate/late-finalizer recovery within the supported horizon, finalizer-driven orphan compaction, credential-cohort coalescing with per-rejection source charging, missing-header and rotating-identity saturation with fair valid admission, bounded active-key recovery scans, unified per-bucket/global admission limits, typed WebSocket auth frames, sync/async/HTTP/WebSocket valid bursts above failure thresholds with deterministic pre-warmed pool capacity and bounded cleanup, durable source budgets/counters, safe expired-row eviction, real ASGI/Uvicorn middleware-stack proxy spoofing and trusted-forwarding partitioning, shell-level nginx bundled/custom-command trust defaults, sync/async and multiprocess atomic races, busy-timeout-before-WAL sync/async contention, full serialized bootstrap, rollback-compatible legacy schema, strict bucket/reservation/metric/key-binding validation, and label-free capacity/row/in-flight/orphan/compaction metrics |
 | `test_auth_lockout_cli.py` | Explicit-existing-database enforcement, exact startup-equivalent recovery-schema validation (including destructive-rebind no-mutation cases for malformed PK/type/CHECK definitions), read-only secret-safe inspection/recovery while HTTP is locked, and offline runtime-lease-enforced identity-key rebind that atomically clears buckets/reservations and advances or safely recreates the generation |
@@ -239,3 +253,9 @@ Use these fixtures for synchronous HTTP integration tests. They drive the full F
 | `authenticated_client` | `httpx.AsyncClient` (async) | `X-Proxbox-API-Key` pre-set | Testing protected routes in `async def` test functions, including SSE streaming via `.stream()` |
 
 Both sync fixtures depend on `client_with_fake_netbox` (which sets up the DB override and fake NetBox session). `auth_test_client` additionally depends on `test_api_key`.
+
+## Native OpenTelemetry
+
+The backend, Firecracker host agent, and standalone Proxmox mock use `fastapi[standard]==0.142.2` and native FastAPI telemetry. Public defaults never select a collector endpoint. Operators opt into OTLP HTTP/protobuf export through standard `OTEL_*` environment variables before lifespan startup. Application factories accept keyword-only `telemetry` settings and explicit providers; set `auto_configure=False` if another library already owns environment export, and retain caller ownership of explicit provider shutdown. Do not add duplicate FastAPI/ASGI instrumentation. Preserve HTTP authentication, SSE, WebSocket admission, console relay, and lifecycle contracts when upgrading dependencies. Configuration and sensitive-error-log guidance are documented in both language versions of `docs/getting-started/configuration.md`.
+
+Native exporter privacy processors redact concrete HTTP paths and query values and remove arbitrary exception messages and stack traces while retaining route templates and error classification. Install caller-owned log redaction before caller-owned exporters; existing exporter order is preserved. Keep the standalone mock privacy helper independent of `proxbox_api`.

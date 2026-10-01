@@ -76,6 +76,14 @@ subsequentes.
   cruzado durável. O resolvedor pode inverter qual VM mantém o nome puro
   se os nomes de cluster Proxmox forem reordenados, mas o vínculo por
   VMID permanece.
+- **Ids de endpoint obsoletos nao causam colisoes falsas.** Uma VM cujo sidecar
+  guarda um id de endpoint que nenhum endpoint configurado possui e adotada por
+  `(vmid, cluster)`, desde que o nome tambem coincida, conforme os criterios em
+  [Arquitetura de Reconciliacao](reconciliation-architecture.md#guarda-entre-clusters-e-ids-de-endpoint-obsoletos)
+  antes deste pre-passo, portanto o proprio nome nao e tratado como ocupado e
+  nenhum sufixo `" (2)"` ou registro duplicado e produzido. Casos ambiguos
+  mantem o comportamento anterior; VMs com vmids diferentes continuam recebendo
+  sufixo.
 - **Registros não gerenciados.** Uma VM NetBox sem identidade tipada não pode
   ser correlacionada por VMID; o resolvedor a trata como um registro
   não-Proxbox e não a considerará uma renomeação manual.

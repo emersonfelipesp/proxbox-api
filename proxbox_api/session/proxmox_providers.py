@@ -16,7 +16,7 @@ from proxmox_sdk.sdk.exceptions import ResourceException
 from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from proxbox_api.database import ProxmoxEndpoint, get_async_session
+from proxbox_api.database import ProxmoxEndpoint, get_async_session, get_async_sessionmaker
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async
@@ -102,7 +102,8 @@ _DB_SETTINGS_INFLIGHT: dict[
 ] = {}
 
 
-def _parse_endpoint_ids(raw_endpoint_ids: str | None) -> list[int] | None:
+def parse_endpoint_ids(raw_endpoint_ids: str | None) -> list[int] | None:
+    """Parse the comma-separated ``endpoint_ids`` query value shared by sync routes."""
     if raw_endpoint_ids is None or not raw_endpoint_ids.strip():
         return None
     if len(raw_endpoint_ids) > 255:
@@ -391,7 +392,7 @@ async def proxmox_sessions(
             detail="source must be 'database' or 'netbox'.",
         )
 
-    endpoint_id_list = _parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
+    endpoint_id_list = parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
 
     proxmox_schemas = await _load_request_schemas(
         database_session=database_session,
@@ -440,7 +441,7 @@ async def proxmox_sessions_partial(
             message="Invalid source parameter",
             detail="source must be 'database' or 'netbox'.",
         )
-    endpoint_id_list = _parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
+    endpoint_id_list = parse_endpoint_ids(proxmox_endpoint_ids or endpoint_ids)
     schemas = await _load_request_schemas(
         database_session=database_session,
         source=source,
@@ -972,6 +973,36 @@ async def load_proxmox_session_schemas(
     if source == "netbox":
         return await _load_netbox_schemas(database_session, endpoint_ids)
     return await _load_database_schemas(database_session, endpoint_ids)
+
+
+async def _load_database_endpoint_ids() -> set[int]:
+    """Return the ids of every stored endpoint, enabled or not."""
+    async with get_async_sessionmaker()() as session:
+        result = await session.exec(select(ProxmoxEndpoint.id))  # type: ignore[call-overload]
+        return {endpoint_id for endpoint_id in result.all() if endpoint_id is not None}
+
+
+async def load_configured_proxmox_endpoint_ids(netbox_session: object) -> frozenset[int] | None:
+    """Return every configured Proxmox endpoint id, or ``None`` when unknown.
+
+    Endpoint ids live in the database id space or the NetBox plugin id space
+    depending on the request source, and a run does not know which one stored a
+    given sidecar id. The union of both is returned: a collision between the two
+    spaces only makes callers more conservative. Any load failure yields
+    ``None`` so callers fail closed.
+    """
+    try:
+        database_ids = await _load_database_endpoint_ids()
+        endpoints = await _load_netbox_endpoints(netbox_session, None)
+    except Exception as error:  # noqa: BLE001 - inventory is optional evidence
+        logger.warning("Could not load the configured Proxmox endpoint inventory: %s", error)
+        return None
+    netbox_ids = {
+        endpoint_id
+        for endpoint in endpoints
+        if (endpoint_id := _netbox_endpoint_id(endpoint)) is not None
+    }
+    return frozenset(database_ids | netbox_ids)
 
 
 async def resolve_proxmox_target_session(

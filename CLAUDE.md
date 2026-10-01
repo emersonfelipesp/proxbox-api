@@ -417,6 +417,25 @@ node failure, or global reconciliation failure raises `ProxboxException`, so
 REST and SSE cannot report a misleading success. The full operational contract
 is documented in [`docs/sync/task-history.md`](docs/sync/task-history.md).
 
+### Staged VM selection (strict vs lenient)
+
+VM-scoped stages resolve each VM's Proxmox owner through
+`services/sync/vm_filter.py` under an explicit `SelectionMode`. `STRICT` raises
+HTTP 502 on the first VM whose ownership cannot be resolved and is used by the
+single-VM path routes (`/{netbox_vm_id}/...` for VM sync, backups, snapshots,
+and disks). `LENIENT` drops such a VM with a `WARNING` naming its NetBox id,
+processes the rest, and reports `[{"netbox_vm_id", "reason"}]` warnings with
+`degraded=true` (HTTP 200 / `ok=true`, never 502); it is used by
+`netbox_vm_ids` list routes, `/all/create`, the estate interface and IP stages,
+the full-backup cache, and both full-update variants. Routes choose by
+addressing, so an older plugin that sends no new flag keeps working. A dropped
+VM is never reconciled or covered by stale-backup or stale-snapshot cleanup, and
+an unreadable sidecar scan, an invalid id, or a selection NetBox does not return
+in full stays fatal in every mode. Task history is not part of this mode: its
+explicitly selected VMs without identity remain fatal. The full contract, the
+REST/SSE result shapes, and the full-update aggregation are in
+[`docs/sync/workflows.md`](docs/sync/workflows.md#staged-run-selection-strict-versus-lenient-ownership).
+
 ### VM interface sync strategy
 
 VM sync, VM-interface sync, and VM-IP sync routes accept
@@ -817,3 +836,9 @@ evidence; and remove claimed proof material on every exit path. The signed
 authorization has no CI-bypass field, so production exposes no unsigned bypass.
 
 | Trigger | Use for | Publishes to |
+
+## Native OpenTelemetry
+
+The backend, Firecracker host agent, and standalone Proxmox mock use `fastapi[standard]==0.142.2` and native FastAPI telemetry. Public defaults never select a collector endpoint. Operators opt into OTLP HTTP/protobuf export through standard `OTEL_*` environment variables before lifespan startup. Application factories accept keyword-only `telemetry` settings and explicit providers; set `auto_configure=False` if another library already owns environment export, and retain caller ownership of explicit provider shutdown. Do not add duplicate FastAPI/ASGI instrumentation. Preserve HTTP authentication, SSE, WebSocket admission, console relay, and lifecycle contracts when upgrading dependencies. Configuration and sensitive-error-log guidance are documented in both language versions of `docs/getting-started/configuration.md`.
+
+Native exporter privacy processors redact concrete HTTP paths and query values and remove arbitrary exception messages and stack traces while retaining route templates and error classification. Install caller-owned log redaction before caller-owned exporters; existing exporter order is preserved. Keep the standalone mock privacy helper independent of `proxbox_api`.

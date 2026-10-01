@@ -38,7 +38,7 @@ def bridge_vm_snapshot_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
     # provide a one-page path-aware fake, so bridge the new dependency to it.
     monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _legacy_vm_snapshot_bridge)
 
-    async def _typed_identity_bridge(_nb, vms, *, require_all):
+    async def _typed_identity_bridge(_nb, vms, *, require_all, **_kwargs):
         del require_all
         return vms
 

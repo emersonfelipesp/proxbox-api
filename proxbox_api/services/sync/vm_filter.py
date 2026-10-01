@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Enum
+from typing import NamedTuple
 
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.exception import ProxboxException
+from proxbox_api.logger import logger
 from proxbox_api.services.sync.sync_state_reader import load_vm_sync_state_identities
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
@@ -21,6 +26,77 @@ from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_vmid,
     normalize_positive_int,
 )
+
+
+class SelectionMode(str, Enum):
+    """How a selection reacts to a VM whose Proxmox ownership cannot be resolved.
+
+    ``STRICT`` fails the whole selection closed on the first such VM. Routes that
+    address one VM by path use it: there is no other VM to make progress on, and
+    a wrong owner must never be guessed. ``LENIENT`` drops the VM with a warning
+    and lets the remaining VMs proceed. Staged and estate-wide runs use it so a
+    single incomplete or ambiguous record cannot abort every other VM.
+    """
+
+    STRICT = "strict"
+    LENIENT = "lenient"
+
+
+SelectionSkip = dict[str, object]
+"""One dropped VM: ``{"netbox_vm_id": int, "reason": str}``."""
+
+
+class SelectionResult(list):
+    """Selected VMs (or filtered cluster resources) plus the VMs dropped from them.
+
+    A plain ``list`` subclass so existing callers keep working unchanged;
+    ``skipped`` is only populated by ``SelectionMode.LENIENT``.
+    """
+
+    def __init__(
+        self,
+        values: list | None = None,
+        *,
+        skipped: list[SelectionSkip] | None = None,
+    ) -> None:
+        super().__init__(values or [])
+        self.skipped: list[SelectionSkip] = skipped if skipped is not None else []
+
+
+def selection_skips(result: object) -> list[SelectionSkip]:
+    """Return the skips recorded on a selection result, or none for a plain list."""
+
+    skipped = getattr(result, "skipped", None)
+    return list(skipped) if isinstance(skipped, list) else []
+
+
+def skip_or_raise(
+    error: ProxboxException,
+    *,
+    mode: SelectionMode,
+    netbox_vm_id: object,
+    skipped: list[SelectionSkip] | None,
+) -> None:
+    """Re-raise ``error`` in strict mode; otherwise log and record the skip."""
+
+    if mode is SelectionMode.STRICT:
+        raise error
+    reason = str(error.detail or error.message)
+    logger.warning(
+        "Skipping NetBox VM id %s during lenient VM selection: %s",
+        netbox_vm_id,
+        reason,
+    )
+    if skipped is not None:
+        skipped.append({"netbox_vm_id": netbox_vm_id, "reason": reason})
+
+
+class _OwnerMatch(NamedTuple):
+    """One live Proxmox resource matched to a selected owner."""
+
+    position: tuple[int, object]
+    resource: dict[str, object]
+    netbox_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,9 +233,52 @@ def _hydrate_selected_vm_identity(
     raise _selection_error(f"NetBox VM id {netbox_id} has no typed Proxbox sync-state owner.")
 
 
+def _group_sidecars_by_vm_id(
+    rows: Iterable[dict[str, object]],
+    selected_ids: set[int],
+) -> dict[int, list[dict[str, object]]]:
+    sidecars_by_vm_id: dict[int, list[dict[str, object]]] = {}
+    for row in rows:
+        parent_id = relation_id(row.get("virtual_machine"))
+        if parent_id in selected_ids:
+            sidecars_by_vm_id.setdefault(parent_id, []).append(row)
+    return sidecars_by_vm_id
+
+
+def _hydrate_selection(
+    vms: list[dict[str, object]],
+    *,
+    sidecars_by_vm_id: dict[int, list[dict[str, object]]],
+    require_all: bool,
+    mode: SelectionMode,
+    skipped: list[SelectionSkip] | None,
+) -> list[dict[str, object]]:
+    """Overlay each VM's sidecar identity, dropping unresolvable VMs when lenient.
+
+    A VM with no sidecar at all is unmanaged and silently left out unless
+    ``require_all`` says it was explicitly selected. Only a sidecar that is
+    present but incomplete or duplicated, or an explicitly selected VM without
+    one, is a warned skip.
+    """
+
+    hydrated: list[dict[str, object]] = []
+    for vm in vms:
+        netbox_id = relation_id(vm.get("id"))
+        if not require_all and not sidecars_by_vm_id.get(netbox_id):
+            continue
+        try:
+            hydrated.append(_hydrate_selected_vm_identity(vm, sidecars_by_vm_id=sidecars_by_vm_id))
+        except ProxboxException as error:
+            skip_or_raise(error, mode=mode, netbox_vm_id=netbox_id, skipped=skipped)
+    return hydrated
+
+
 async def _hydrate_selected_sidecar_identities(
     netbox_session: NetBoxSessionDep,
     vms: list[dict[str, object]],
+    *,
+    mode: SelectionMode = SelectionMode.STRICT,
+    skipped: list[SelectionSkip] | None = None,
 ) -> list[dict[str, object]]:
     """Join explicit selections to authoritative sidecars in one scan."""
 
@@ -177,19 +296,13 @@ async def _hydrate_selected_sidecar_identities(
             + "."
         )
 
-    sidecars_by_vm_id: dict[int, list[dict[str, object]]] = {}
-    for row in scan.rows:
-        parent_id = relation_id(row.get("virtual_machine"))
-        if parent_id in selected_ids:
-            sidecars_by_vm_id.setdefault(parent_id, []).append(row)
-
-    return [
-        _hydrate_selected_vm_identity(
-            vm,
-            sidecars_by_vm_id=sidecars_by_vm_id,
-        )
-        for vm in vms
-    ]
+    return _hydrate_selection(
+        vms,
+        sidecars_by_vm_id=_group_sidecars_by_vm_id(scan.rows, selected_ids),
+        require_all=True,
+        mode=mode,
+        skipped=skipped,
+    )
 
 
 async def hydrate_vm_identities_from_sidecars(
@@ -197,48 +310,54 @@ async def hydrate_vm_identities_from_sidecars(
     vms: list[dict[str, object]],
     *,
     require_all: bool,
-) -> list[dict[str, object]]:
-    """Overlay typed ownership state and optionally skip unmanaged VMs."""
+    mode: SelectionMode = SelectionMode.STRICT,
+) -> SelectionResult:
+    """Overlay typed ownership state and optionally skip unmanaged VMs.
+
+    A failed or unavailable sidecar scan is fatal in every mode: it is not a
+    per-VM ownership problem, and continuing would treat unreadable state as
+    absent. ``mode`` only governs VMs whose own sidecar is unusable; the dropped
+    VMs are reported on the result's ``skipped`` attribute.
+    """
     selected_ids = {vm_id for vm in vms if (vm_id := relation_id(vm.get("id"))) is not None}
     if not selected_ids:
-        return [] if not require_all else vms
+        return SelectionResult([] if not require_all else vms)
 
     scan = await load_vm_sync_state_identities(netbox_session)
     if scan.sidecar_read_failed or scan.sidecar_unavailable:
         outcome = "failed" if scan.sidecar_read_failed else "is unavailable"
         raise _selection_error(f"Typed Proxbox VM sync-state lookup {outcome}.")
 
-    sidecars_by_vm_id: dict[int, list[dict[str, object]]] = {}
-    for row in scan.rows:
-        parent_id = relation_id(row.get("virtual_machine"))
-        if parent_id in selected_ids:
-            sidecars_by_vm_id.setdefault(parent_id, []).append(row)
-
-    hydrated: list[dict[str, object]] = []
-    for vm in vms:
-        netbox_id = relation_id(vm.get("id"))
-        candidates = sidecars_by_vm_id.get(netbox_id, []) if netbox_id is not None else []
-        if not candidates and not require_all:
-            continue
-        hydrated.append(_hydrate_selected_vm_identity(vm, sidecars_by_vm_id=sidecars_by_vm_id))
-    return hydrated
+    skipped: list[SelectionSkip] = []
+    hydrated = _hydrate_selection(
+        vms,
+        sidecars_by_vm_id=_group_sidecars_by_vm_id(scan.rows, selected_ids),
+        require_all=require_all,
+        mode=mode,
+        skipped=skipped,
+    )
+    return SelectionResult(hydrated, skipped=skipped)
 
 
 async def hydrate_selected_vm_identities(
     netbox_session: NetBoxSessionDep,
     vms: list[dict[str, object]],
-) -> list[dict[str, object]]:
+    *,
+    mode: SelectionMode = SelectionMode.STRICT,
+) -> SelectionResult:
     """Overlay authoritative sidecar identity onto explicitly selected VMs.
 
     Shared by selection paths outside this module (for example targeted backup
-    sync) so every explicit selection resolves ownership sidecar-first with the
-    same malformed/duplicate fail-closed semantics.
+    sync) so every explicit selection resolves ownership sidecar-first. Strict
+    mode keeps the malformed/duplicate fail-closed semantics; lenient mode drops
+    the offending VM and records it on the result's ``skipped`` attribute.
     """
 
     return await hydrate_vm_identities_from_sidecars(
         netbox_session,
         vms,
         require_all=True,
+        mode=mode,
     )
 
 
@@ -303,14 +422,21 @@ def _resolve_selected_owner(
     )
 
 
-def _resolve_selected_owners(
+def _records_by_selected_id(vms: list[dict[str, object]]) -> dict[int, dict[str, object]]:
+    return {vm_id: vm for vm in vms if (vm_id := relation_id(vm.get("id"))) is not None}
+
+
+def _require_returned_selection(
     vms: list[dict[str, object]],
-    *,
     requested_ids: list[int],
-    endpoint_ids_by_cluster: dict[str, set[int | None]],
-    require_stored_endpoint: bool = False,
-) -> list[_SelectedVMOwner]:
-    records_by_id = {vm_id: vm for vm in vms if (vm_id := relation_id(vm.get("id"))) is not None}
+) -> dict[int, dict[str, object]]:
+    """Require NetBox to have returned every selected VM, whatever the mode.
+
+    A selection NetBox cannot fully return is a lookup-coverage failure, not a
+    per-VM ownership problem, so it stays fatal for lenient runs as well.
+    """
+
+    records_by_id = _records_by_selected_id(vms)
     missing_ids = sorted(set(requested_ids).difference(records_by_id))
     if missing_ids:
         raise _selection_error(
@@ -318,83 +444,208 @@ def _resolve_selected_owners(
             + ", ".join(str(vm_id) for vm_id in missing_ids)
             + "."
         )
+    return records_by_id
+
+
+def _join_ids(vm_ids: list[int]) -> str:
+    if len(vm_ids) == 2:
+        return f"{vm_ids[0]} and {vm_ids[1]}"
+    return ", ".join(str(vm_id) for vm_id in vm_ids)
+
+
+def _reject_conflicting_owners(
+    owners: list[_SelectedVMOwner],
+    *,
+    mode: SelectionMode,
+    skipped: list[SelectionSkip] | None,
+) -> list[_SelectedVMOwner]:
+    """Drop every owner whose endpoint/cluster/VMID/type is claimed more than once.
+
+    Which of several claimants is right cannot be known, so lenient mode drops
+    all of them rather than keeping whichever happened to come first.
+    """
+
+    ids_by_resource_key: dict[tuple[int, str, int, str], list[int]] = {}
+    for owner in owners:
+        ids_by_resource_key.setdefault(owner.resource_key, []).append(owner.netbox_id)
+
+    conflicting_ids: set[int] = set()
+    for claimant_ids in ids_by_resource_key.values():
+        if len(claimant_ids) < 2:
+            continue
+        error = _selection_error(
+            f"NetBox VM ids {_join_ids(claimant_ids)} claim the same "
+            "Proxmox endpoint/cluster/VMID/type owner."
+        )
+        for claimant_id in claimant_ids:
+            skip_or_raise(error, mode=mode, netbox_vm_id=claimant_id, skipped=skipped)
+            conflicting_ids.add(claimant_id)
+    return [owner for owner in owners if owner.netbox_id not in conflicting_ids]
+
+
+def _resolve_selected_owners(
+    vms: list[dict[str, object]],
+    *,
+    requested_ids: list[int],
+    endpoint_ids_by_cluster: dict[str, set[int | None]],
+    require_stored_endpoint: bool = False,
+    mode: SelectionMode = SelectionMode.STRICT,
+    skipped: list[SelectionSkip] | None = None,
+) -> list[_SelectedVMOwner]:
+    records_by_id = _require_returned_selection(vms, requested_ids)
 
     owners: list[_SelectedVMOwner] = []
-    owner_to_netbox_id: dict[tuple[int, str, int, str], int] = {}
     for netbox_id in requested_ids:
-        owner = _resolve_selected_owner(
-            records_by_id[netbox_id],
-            netbox_id=netbox_id,
-            endpoint_ids_by_cluster=endpoint_ids_by_cluster,
-            require_stored_endpoint=require_stored_endpoint,
-        )
-        conflicting_id = owner_to_netbox_id.get(owner.resource_key)
-        if conflicting_id is not None and conflicting_id != netbox_id:
-            raise _selection_error(
-                f"NetBox VM ids {conflicting_id} and {netbox_id} claim the same "
-                "Proxmox endpoint/cluster/VMID/type owner."
+        try:
+            owners.append(
+                _resolve_selected_owner(
+                    records_by_id[netbox_id],
+                    netbox_id=netbox_id,
+                    endpoint_ids_by_cluster=endpoint_ids_by_cluster,
+                    require_stored_endpoint=require_stored_endpoint,
+                )
             )
-        owner_to_netbox_id[owner.resource_key] = netbox_id
-        owners.append(owner)
-    return owners
+        except ProxboxException as error:
+            skip_or_raise(error, mode=mode, netbox_vm_id=netbox_id, skipped=skipped)
+    return _reject_conflicting_owners(owners, mode=mode, skipped=skipped)
 
 
-def _filter_cluster_resources_by_owners(  # noqa: C901
+def _cluster_endpoint_id(
+    cluster_key: object,
+    endpoint_ids_by_cluster: dict[str, set[int | None]],
+) -> int | None:
+    """Return the one endpoint id that unambiguously owns ``cluster_key``, if any."""
+
+    source_endpoint_ids = endpoint_ids_by_cluster.get(_normalize_cluster_name(cluster_key), set())
+    if len(source_endpoint_ids) != 1 or None in source_endpoint_ids:
+        return None
+    return next(iter(source_endpoint_ids))
+
+
+def _match_owner_resources(
+    cluster_resources: list[dict[str, object]],
+    *,
+    owners_by_resource_key: dict[tuple[int, str, int, str], _SelectedVMOwner],
+    endpoint_ids_by_cluster: dict[str, set[int | None]],
+) -> list[_OwnerMatch]:
+    """Pair every live resource with the selected owner it belongs to, in order."""
+
+    matches: list[_OwnerMatch] = []
+    for index, cluster in enumerate(cluster_resources):
+        if not isinstance(cluster, dict):
+            continue
+        for cluster_key, resources in cluster.items():
+            endpoint_id = _cluster_endpoint_id(cluster_key, endpoint_ids_by_cluster)
+            if not isinstance(resources, list) or endpoint_id is None:
+                continue
+            normalized_cluster = _normalize_cluster_name(cluster_key)
+            for resource in resources:
+                owner = _owner_for_resource(
+                    resource, endpoint_id, normalized_cluster, owners_by_resource_key
+                )
+                if owner is not None:
+                    matches.append(_OwnerMatch((index, cluster_key), resource, owner.netbox_id))
+    return matches
+
+
+def _owner_for_resource(
+    resource: object,
+    endpoint_id: int,
+    normalized_cluster: str,
+    owners_by_resource_key: dict[tuple[int, str, int, str], _SelectedVMOwner],
+) -> _SelectedVMOwner | None:
+    if not isinstance(resource, dict):
+        return None
+    vm_type = str(resource.get("type") or "").strip().lower()
+    vmid = normalize_positive_int(resource.get("vmid"))
+    if vm_type not in ("qemu", "lxc") or vmid is None:
+        return None
+    return owners_by_resource_key.get((endpoint_id, normalized_cluster, vmid, vm_type))
+
+
+def _reject_selection_gaps(
+    vm_ids: list[int],
+    *,
+    prefix: str,
+    mode: SelectionMode,
+    skipped: list[SelectionSkip] | None,
+) -> set[int]:
+    """Fail closed on every id in ``vm_ids`` (strict) or drop each one (lenient)."""
+
+    if not vm_ids:
+        return set()
+    if mode is SelectionMode.STRICT:
+        raise _selection_error(prefix + ", ".join(str(vm_id) for vm_id in vm_ids) + ".")
+    for vm_id in vm_ids:
+        error = _selection_error(f"{prefix}{vm_id}.")
+        skip_or_raise(error, mode=mode, netbox_vm_id=vm_id, skipped=skipped)
+    return set(vm_ids)
+
+
+def _group_owner_matches(
+    cluster_resources: list[dict[str, object]],
+    matches: list[_OwnerMatch],
+    excluded_ids: set[int],
+) -> list[dict[str, object]]:
+    """Keep only the matched resources, preserving one row per input source row.
+
+    Downstream stages pair ``filtered[i]`` with ``pxs[i]`` and ``cluster_status[i]``
+    by position. The invariant is therefore that the result has exactly as many
+    rows as ``cluster_resources`` and every row keeps its source index and cluster
+    keys; filtering only empties resource lists, it never drops or shifts a row.
+    Dropping a row would rebind a later source's resources to an earlier endpoint.
+    """
+
+    kept: dict[tuple[int, object], list[dict[str, object]]] = {}
+    for match in matches:
+        if match.netbox_id not in excluded_ids:
+            kept.setdefault(match.position, []).append(match.resource)
+    return [
+        {key: kept.get((index, key), []) for key in row} if isinstance(row, dict) else {}
+        for index, row in enumerate(cluster_resources)
+    ]
+
+
+def _filter_cluster_resources_by_owners(
     cluster_resources: list[dict[str, object]],
     *,
     owners: list[_SelectedVMOwner],
     endpoint_ids_by_cluster: dict[str, set[int | None]],
+    mode: SelectionMode = SelectionMode.STRICT,
+    skipped: list[SelectionSkip] | None = None,
 ) -> list[dict[str, object]]:
-    """Return exactly one live resource for every resolved selected owner."""
+    """Return exactly one live resource for every resolved selected owner.
 
-    owners_by_resource_key = {owner.resource_key: owner for owner in owners}
-    match_counts = {owner.netbox_id: 0 for owner in owners}
+    Strict mode fails closed unless each owner matches exactly one live resource.
+    Lenient mode drops an owner with no match (for example a guest deleted in
+    Proxmox but still in NetBox) or several matches, together with every resource
+    it matched, and returns the rest.
+    """
 
-    filtered: list[dict[str, object]] = []
-    for cluster in cluster_resources:
-        if not isinstance(cluster, dict):
-            continue
-        for cluster_key, resources in cluster.items():
-            if not isinstance(resources, list):
-                continue
-            normalized_cluster = _normalize_cluster_name(cluster_key)
-            source_endpoint_ids = endpoint_ids_by_cluster.get(normalized_cluster, set())
-            if len(source_endpoint_ids) != 1 or None in source_endpoint_ids:
-                continue
-            endpoint_id = next(iter(source_endpoint_ids))
-            assert endpoint_id is not None
-            selected: list[dict[str, object]] = []
-            for resource in resources:
-                if not isinstance(resource, dict):
-                    continue
-                vm_type = str(resource.get("type") or "").strip().lower()
-                vmid = normalize_positive_int(resource.get("vmid"))
-                if vm_type not in ("qemu", "lxc") or vmid is None:
-                    continue
-                owner = owners_by_resource_key.get((endpoint_id, normalized_cluster, vmid, vm_type))
-                if owner is None:
-                    continue
-                match_counts[owner.netbox_id] += 1
-                selected.append(resource)
-            if selected:
-                filtered.append({cluster_key: selected})
+    matches = _match_owner_resources(
+        cluster_resources,
+        owners_by_resource_key={owner.resource_key: owner for owner in owners},
+        endpoint_ids_by_cluster=endpoint_ids_by_cluster,
+    )
+    match_counts = Counter(match.netbox_id for match in matches)
+    ambiguous_ids = sorted(owner.netbox_id for owner in owners if match_counts[owner.netbox_id] > 1)
+    unresolved_ids = sorted(
+        owner.netbox_id for owner in owners if not match_counts[owner.netbox_id]
+    )
 
-    ambiguous_ids = sorted(vm_id for vm_id, count in match_counts.items() if count > 1)
-    if ambiguous_ids:
-        raise _selection_error(
-            "Multiple live Proxmox resources matched explicitly selected NetBox VM id(s): "
-            + ", ".join(str(vm_id) for vm_id in ambiguous_ids)
-            + "."
-        )
-    unresolved_ids = sorted(vm_id for vm_id, count in match_counts.items() if count == 0)
-    if unresolved_ids:
-        raise _selection_error(
-            "No exact live Proxmox resource matched explicitly selected NetBox VM id(s): "
-            + ", ".join(str(vm_id) for vm_id in unresolved_ids)
-            + "."
-        )
-
-    return filtered
+    excluded_ids = _reject_selection_gaps(
+        ambiguous_ids,
+        prefix="Multiple live Proxmox resources matched explicitly selected NetBox VM id(s): ",
+        mode=mode,
+        skipped=skipped,
+    )
+    excluded_ids |= _reject_selection_gaps(
+        unresolved_ids,
+        prefix="No exact live Proxmox resource matched explicitly selected NetBox VM id(s): ",
+        mode=mode,
+        skipped=skipped,
+    )
+    return _group_owner_matches(cluster_resources, matches, excluded_ids)
 
 
 async def filter_cluster_resources_for_selected_vm(
@@ -433,14 +684,15 @@ async def filter_cluster_resources_for_selected_vm(
     )
 
 
-async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
+async def filter_cluster_resources_by_netbox_vm_ids(
     netbox_session: NetBoxSessionDep,
     cluster_resources: list[dict[str, object]],
     netbox_vm_ids: list[int],
     *,
     pxs: object,
     cluster_status: object,
-) -> list[dict[str, object]]:
+    mode: SelectionMode = SelectionMode.STRICT,
+) -> SelectionResult:
     """Filter resources by exact selected NetBox VM ownership.
 
     Args:
@@ -449,30 +701,46 @@ async def filter_cluster_resources_by_netbox_vm_ids(  # noqa: C901
         netbox_vm_ids: NetBox VM IDs to filter by
         pxs: Available Proxmox sessions carrying endpoint identity
         cluster_status: Cluster status rows aligned with ``pxs``
+        mode: ``STRICT`` (default) raises on the first selected VM whose ownership
+            cannot be resolved. ``LENIENT`` drops such a VM, logs a warning naming
+            it, and returns the resources of the others.
 
     Returns:
-        Filtered cluster resources
+        Filtered cluster resources; the VMs dropped in lenient mode are listed on
+        the result's ``skipped`` attribute. A selection NetBox cannot fully
+        return, or an unreadable sidecar scan, is fatal in every mode.
     """
     if not netbox_vm_ids:
-        return []
+        return SelectionResult()
 
     requested_ids = _requested_ids(netbox_vm_ids)
     vms = await list_netbox_virtual_machines_by_ids(netbox_session, requested_ids)
+    _require_returned_selection(vms, requested_ids)
+
+    skipped: list[SelectionSkip] = []
     vms = await _hydrate_selected_sidecar_identities(
         netbox_session,
         vms,
+        mode=mode,
+        skipped=skipped,
     )
+    hydrated_ids = set(_records_by_selected_id(vms))
     endpoint_ids_by_cluster = _source_endpoint_ids_by_cluster(pxs, cluster_status)
     owners = _resolve_selected_owners(
         vms,
-        requested_ids=requested_ids,
+        requested_ids=[vm_id for vm_id in requested_ids if vm_id in hydrated_ids],
         endpoint_ids_by_cluster=endpoint_ids_by_cluster,
+        mode=mode,
+        skipped=skipped,
     )
-    return _filter_cluster_resources_by_owners(
+    filtered = _filter_cluster_resources_by_owners(
         cluster_resources,
         owners=owners,
         endpoint_ids_by_cluster=endpoint_ids_by_cluster,
+        mode=mode,
+        skipped=skipped,
     )
+    return SelectionResult(filtered, skipped=skipped)
 
 
 def parse_network_config(vm_config: dict[str, object]) -> list[dict[str, dict[str, str]]]:

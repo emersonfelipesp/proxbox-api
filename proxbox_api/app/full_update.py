@@ -8,7 +8,7 @@ import uuid
 from contextlib import nullcontext
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from proxbox_api.app.sync_state import (
@@ -26,7 +26,13 @@ from proxbox_api.dependencies import (
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.routes.dcim import create_all_device_interfaces
-from proxbox_api.routes.proxmox.cluster import ClusterResourcesDep, ClusterStatusDep
+from proxbox_api.routes.proxmox.cluster import (
+    ClusterResourcesDep,
+    ClusterStatusDep,
+)
+from proxbox_api.routes.proxmox.cluster import (
+    cluster_resources as fetch_cluster_resources,
+)
 from proxbox_api.routes.virtualization.virtual_machines import create_virtual_machines
 from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
     _create_all_virtual_machine_backups,
@@ -43,21 +49,25 @@ from proxbox_api.routes.virtualization.virtual_machines.sync_vm import (
     create_only_vm_interfaces,
     create_only_vm_ip_addresses,
 )
-from proxbox_api.runtime_settings import get_bool
 from proxbox_api.schemas.stream_messages import ErrorCategory
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
 from proxbox_api.services.sync.devices import create_proxmox_devices
 from proxbox_api.services.sync.orphan_sweep import (
+    LiveInventoryError,
+    build_live_vm_keys,
     extract_touched_vm_ids,
+    is_delete_orphans_enabled,
     run_orphan_vm_sweep,
 )
 from proxbox_api.services.sync.replications import sync_all_replications
+from proxbox_api.services.sync.stage_result import result_warnings
 from proxbox_api.services.sync.storages import create_storages
 from proxbox_api.services.sync.sync_state_writer import reset_sidecar_availability_cache
 from proxbox_api.services.sync.task_history import (
     sync_all_virtual_machine_task_histories,
 )
+from proxbox_api.services.sync.vmid_helpers import extract_proxmox_session_endpoint_id
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_event
 from proxbox_api.utils.structured_logging import set_operation_id
@@ -79,10 +89,102 @@ def _result_count(value) -> int:
 
 
 def _result_warnings(value) -> list[dict[str, object]]:
-    warnings = getattr(value, "warnings", None)
-    if isinstance(warnings, list):
-        return [item for item in warnings if isinstance(item, dict)]
-    return []
+    return result_warnings(value)
+
+
+def _stage_warnings(value, phase: str) -> list[dict[str, object]]:
+    """Warnings a stage reported, each tagged with the stage that raised it."""
+    return [
+        warning if "phase" in warning else {"phase": phase, **warning}
+        for warning in result_warnings(value)
+    ]
+
+
+def _stage_result(count: int, value, phase: str) -> dict[str, object]:
+    """Step result for a stage that may have finished degraded."""
+    result: dict[str, object] = {"count": count}
+    warnings = _stage_warnings(value, phase)
+    if warnings:
+        result.update({"degraded": True, "warnings": warnings})
+    return result
+
+
+def _empty_if_none(value):
+    """Default a missing stage result to an empty list.
+
+    Deliberately not ``value or []``: an empty result that carries warnings is
+    falsy, and ``or`` would replace it and silently lose them.
+    """
+    return [] if value is None else value
+
+
+def _backup_rows(value):
+    """Backup rows from a backup stage result, whether bare or degraded-wrapped."""
+    if isinstance(value, dict) and isinstance(value.get("backups"), list):
+        return value["backups"]
+    return value
+
+
+# Query parameters that narrow the Proxmox sessions a run acts on. A run using any of
+# them must only sweep orphans owned by the endpoints it actually synchronized.
+_SESSION_SCOPE_QUERY_PARAMS = (
+    "endpoint_ids",
+    "proxmox_endpoint_ids",
+    "name",
+    "domain",
+    "ip_address",
+)
+
+
+def orphan_sweep_endpoint_scope(
+    request: Request,
+    pxs: ProxmoxSessionsDep,
+) -> frozenset[int] | None:
+    """Return the endpoint ids an orphan sweep may touch, or ``None`` when unscoped.
+
+    The scope is derived from the Proxmox sessions the run used, so an
+    endpoint-limited full update never marks another endpoint's VMs.
+    """
+    scoped = any(
+        (request.query_params.get(name) or "").strip() for name in _SESSION_SCOPE_QUERY_PARAMS
+    )
+    if not scoped:
+        return None
+    endpoint_ids = (extract_proxmox_session_endpoint_id(session) for session in pxs)
+    return frozenset(endpoint_id for endpoint_id in endpoint_ids if endpoint_id is not None)
+
+
+OrphanSweepScopeDep = Annotated[frozenset[int] | None, Depends(orphan_sweep_endpoint_scope)]
+
+
+def _vm_stage_rows(vm_result):
+    """VM rows from the VM stage result, whether bare or degraded-wrapped."""
+    if isinstance(vm_result, dict) and isinstance(vm_result.get("virtual_machines"), list):
+        return vm_result["virtual_machines"]
+    return vm_result
+
+
+def _vm_stage_failed(vm_result: object) -> bool:
+    """Return whether the VM stage reported VMs that failed to reconcile."""
+    if isinstance(vm_result, dict):
+        failed_count = vm_result.get("failed_count", 0)
+    else:
+        failed_count = getattr(vm_result, "failed_count", 0)
+    return isinstance(failed_count, int) and failed_count > 0
+
+
+async def _fresh_sweep_inventory(pxs) -> dict[str, object]:
+    """Fetch live guest inventory at the sweep boundary as ``run_orphan_vm_sweep`` kwargs.
+
+    The request's original cluster resources predate the sync, so a guest created
+    meanwhile would look absent. Any fetch or identification failure fails closed.
+    """
+    try:
+        keys = build_live_vm_keys(await fetch_cluster_resources(pxs))
+    except (LiveInventoryError, Exception) as error:  # noqa: BLE001
+        logger.warning("Orphan sweep cannot fetch fresh live inventory: %s", error)
+        return {"live_vm_keys": None, "live_inventory_unavailable": True}
+    return {"live_vm_keys": keys, "live_inventory_unavailable": False}
 
 
 @full_update_router.get(
@@ -116,6 +218,7 @@ async def full_update_sync(
             ),
         ),
     ] = None,
+    sweep_endpoint_ids: OrphanSweepScopeDep = None,
 ) -> dict:
     return await _full_update_sync_run(
         netbox_session=netbox_session,
@@ -127,6 +230,7 @@ async def full_update_sync(
         behavior_flags=behavior_flags,
         fetch_max_concurrency=fetch_max_concurrency,
         netbox_branch_schema_id=netbox_branch_schema_id,
+        sweep_endpoint_ids=sweep_endpoint_ids,
     )
 
 
@@ -141,6 +245,7 @@ async def _full_update_sync_run(
     behavior_flags: SyncBehaviorFlags,
     fetch_max_concurrency: int | None,
     netbox_branch_schema_id: str | None,
+    sweep_endpoint_ids: frozenset[int] | None = None,
 ) -> dict:
     branch_scope = (
         netbox_session.activate_branch(netbox_branch_schema_id)
@@ -157,6 +262,7 @@ async def _full_update_sync_run(
             overwrite_flags=overwrite_flags,
             behavior_flags=behavior_flags,
             fetch_max_concurrency=fetch_max_concurrency,
+            sweep_endpoint_ids=sweep_endpoint_ids,
         )
 
 
@@ -170,6 +276,7 @@ async def _full_update_sync_impl(  # noqa: C901
     overwrite_flags: SyncOverwriteFlags,
     behavior_flags: SyncBehaviorFlags,
     fetch_max_concurrency: int | None,
+    sweep_endpoint_ids: frozenset[int] | None = None,
 ) -> dict:
     sync_nodes: list = []
     sync_storage: list = []
@@ -256,6 +363,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 behavior_flags=behavior_flags,
                 run_id=operation_id,
             )
+            sync_warnings.extend(_stage_warnings(sync_vms, "virtual-machines"))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -293,6 +401,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 use_css=False,
                 fetch_max_concurrency=fetch_max_concurrency,
             )
+            sync_warnings.extend(_stage_warnings(sync_disks, "virtual-disks"))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -303,7 +412,7 @@ async def _full_update_sync_impl(  # noqa: C901
             ) from error
 
         try:
-            sync_backups = (
+            backups_stage = _empty_if_none(
                 await create_all_virtual_machine_backups(
                     netbox_session=netbox_session,
                     pxs=pxs,
@@ -312,7 +421,9 @@ async def _full_update_sync_impl(  # noqa: C901
                     delete_nonexistent_backup=True,
                     fetch_max_concurrency=fetch_max_concurrency,
                 )
-            ) or []
+            )
+            sync_warnings.extend(_stage_warnings(backups_stage, "backups"))
+            sync_backups = _backup_rows(backups_stage)
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -331,6 +442,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 tag=tag,
                 fetch_max_concurrency=fetch_max_concurrency,
             )
+            sync_warnings.extend(_stage_warnings(sync_snapshots, "snapshots"))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -347,6 +459,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 clusters_status=cluster_status,
                 pxs=pxs,
                 use_websocket=False,
+                behavior_flags=behavior_flags,
             )
         except ProxboxException:
             raise
@@ -367,7 +480,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 use_websocket=False,
                 overwrite_flags=overwrite_flags,
             )
-            sync_warnings.extend(_result_warnings(sync_vm_interfaces))
+            sync_warnings.extend(_stage_warnings(sync_vm_interfaces, "vm-interfaces"))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -387,6 +500,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 use_websocket=False,
                 overwrite_flags=overwrite_flags,
             )
+            sync_warnings.extend(_stage_warnings(sync_vm_ip_addresses, "vm-ip-addresses"))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -424,18 +538,17 @@ async def _full_update_sync_impl(  # noqa: C901
                 python_exception=str(error),
             ) from error
 
-        delete_orphans_enabled = get_bool(
-            settings_key="delete_orphans",
-            env="PROXBOX_DELETE_ORPHANS",
-            default=False,
-        )
+        delete_orphans_enabled = is_delete_orphans_enabled()
         if delete_orphans_enabled:
             try:
                 orphan_sweep_result = await run_orphan_vm_sweep(
                     netbox_session,
                     run_id=operation_id,
                     enabled=delete_orphans_enabled,
-                    touched_vm_ids=extract_touched_vm_ids(sync_vms),
+                    touched_vm_ids=extract_touched_vm_ids(_vm_stage_rows(sync_vms)),
+                    endpoint_ids=sweep_endpoint_ids,
+                    vm_stage_failed=_vm_stage_failed(sync_vms),
+                    **await _fresh_sweep_inventory(pxs),
                 )
             except ProxboxException:
                 raise
@@ -450,7 +563,7 @@ async def _full_update_sync_impl(  # noqa: C901
             "status": "completed",
             "devices": sync_nodes,
             "storage": sync_storage,
-            "virtual_machines": sync_vms,
+            "virtual_machines": _vm_stage_rows(sync_vms),
             "virtual_disks": sync_disks,
             "task_history": sync_task_history,
             "backups": sync_backups,
@@ -462,7 +575,7 @@ async def _full_update_sync_impl(  # noqa: C901
             "vm_ip_addresses": sync_vm_ip_addresses,
             "devices_count": len(sync_nodes),
             "storage_count": len(sync_storage),
-            "virtual_machines_count": len(sync_vms),
+            "virtual_machines_count": len(_vm_stage_rows(sync_vms)),
             "virtual_disks_count": _result_count(sync_disks),
             "task_history_count": _result_count(sync_task_history),
             "backups_count": len(sync_backups),
@@ -479,6 +592,7 @@ async def _full_update_sync_impl(  # noqa: C901
             result["orphan_sweep"] = orphan_sweep_result
         if sync_warnings:
             result["warnings"] = sync_warnings
+            result["degraded"] = True
         return result
     finally:
         await release_active_sync(_active_entry)
@@ -523,6 +637,7 @@ async def full_update_sync_stream(  # noqa: C901
             ),
         ),
     ] = None,
+    sweep_endpoint_ids: OrphanSweepScopeDep = None,
 ) -> StreamingResponse:
     bootstrap_payload: dict[str, object] = _sync_deps.as_dict()
 
@@ -729,6 +844,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in vm_bridge.iter_sse():
                     yield frame
                 sync_vms = await vms_task
+                sync_warnings.extend(_stage_warnings(sync_vms, "virtual-machines"))
 
                 yield sse_event(
                     "step",
@@ -736,7 +852,7 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "virtual-machines",
                         "status": "completed",
                         "message": "Virtual machines synchronization finished.",
-                        "result": {"count": len(sync_vms)},
+                        "result": {"count": len(_vm_stage_rows(sync_vms))},
                         "duration_seconds": round(time.monotonic() - _vms_start, 3),
                     },
                 )
@@ -771,6 +887,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in disks_bridge.iter_sse():
                     yield frame
                 sync_disks = await disks_task
+                sync_warnings.extend(_stage_warnings(sync_disks, "virtual-disks"))
 
                 yield sse_event(
                     "step",
@@ -778,7 +895,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "virtual-disks",
                         "status": "completed",
                         "message": "Virtual disks synchronization finished.",
-                        "result": {"count": _result_count(sync_disks)},
+                        "result": _stage_result(
+                            _result_count(sync_disks), sync_disks, "virtual-disks"
+                        ),
                         "duration_seconds": round(time.monotonic() - _disks_start, 3),
                     },
                 )
@@ -851,7 +970,8 @@ async def full_update_sync_stream(  # noqa: C901
                 backups_task = asyncio.create_task(_run_backups_sync())
                 async for frame in backups_bridge.iter_sse():
                     yield frame
-                sync_backups = (await backups_task) or []
+                sync_backups = _empty_if_none(await backups_task)
+                sync_warnings.extend(_stage_warnings(sync_backups, "backups"))
 
                 yield sse_event(
                     "step",
@@ -859,7 +979,7 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "backups",
                         "status": "completed",
                         "message": "Backup synchronization finished.",
-                        "result": {"count": len(sync_backups)},
+                        "result": _stage_result(len(sync_backups), sync_backups, "backups"),
                         "duration_seconds": round(time.monotonic() - _backups_start, 3),
                     },
                 )
@@ -893,6 +1013,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in snapshots_bridge.iter_sse():
                     yield frame
                 sync_snapshots = await snapshots_task
+                sync_warnings.extend(_stage_warnings(sync_snapshots, "snapshots"))
 
                 yield sse_event(
                     "step",
@@ -900,7 +1021,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "snapshots",
                         "status": "completed",
                         "message": "Snapshot synchronization finished.",
-                        "result": {"count": _result_count(sync_snapshots)},
+                        "result": _stage_result(
+                            _result_count(sync_snapshots), sync_snapshots, "snapshots"
+                        ),
                         "duration_seconds": round(time.monotonic() - _snapshots_start, 3),
                     },
                 )
@@ -923,6 +1046,7 @@ async def full_update_sync_stream(  # noqa: C901
                             pxs=pxs,
                             websocket=node_interfaces_bridge,
                             use_websocket=True,
+                            behavior_flags=behavior_flags,
                         )
                     finally:
                         await node_interfaces_bridge.close()
@@ -973,7 +1097,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in vm_interfaces_bridge.iter_sse():
                     yield frame
                 sync_vm_interfaces = await vm_interfaces_task
-                sync_warnings.extend(_result_warnings(sync_vm_interfaces))
+                sync_warnings.extend(_stage_warnings(sync_vm_interfaces, "vm-interfaces"))
 
                 yield sse_event(
                     "step",
@@ -981,7 +1105,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "vm-interfaces",
                         "status": "completed",
                         "message": "VM interfaces synchronization finished.",
-                        "result": {"count": len(sync_vm_interfaces)},
+                        "result": _stage_result(
+                            len(sync_vm_interfaces), sync_vm_interfaces, "vm-interfaces"
+                        ),
                         "duration_seconds": round(time.monotonic() - _vm_interfaces_start, 3),
                     },
                 )
@@ -1015,6 +1141,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in vm_ip_addresses_bridge.iter_sse():
                     yield frame
                 sync_vm_ip_addresses = await vm_ip_addresses_task
+                sync_warnings.extend(_stage_warnings(sync_vm_ip_addresses, "vm-ip-addresses"))
 
                 yield sse_event(
                     "step",
@@ -1022,7 +1149,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "vm-ip-addresses",
                         "status": "completed",
                         "message": "VM IP address synchronization finished.",
-                        "result": {"count": len(sync_vm_ip_addresses)},
+                        "result": _stage_result(
+                            len(sync_vm_ip_addresses), sync_vm_ip_addresses, "vm-ip-addresses"
+                        ),
                         "duration_seconds": round(time.monotonic() - _vm_ip_addresses_start, 3),
                     },
                 )
@@ -1104,11 +1233,7 @@ async def full_update_sync_stream(  # noqa: C901
                     },
                 )
 
-                delete_orphans_enabled = get_bool(
-                    settings_key="delete_orphans",
-                    env="PROXBOX_DELETE_ORPHANS",
-                    default=False,
-                )
+                delete_orphans_enabled = is_delete_orphans_enabled()
                 if delete_orphans_enabled or dry_run:
                     yield sse_event(
                         "step",
@@ -1136,7 +1261,10 @@ async def full_update_sync_stream(  # noqa: C901
                                 enabled=delete_orphans_enabled,
                                 dry_run=dry_run,
                                 stream=orphan_sweep_bridge,
-                                touched_vm_ids=extract_touched_vm_ids(sync_vms),
+                                touched_vm_ids=extract_touched_vm_ids(_vm_stage_rows(sync_vms)),
+                                endpoint_ids=sweep_endpoint_ids,
+                                vm_stage_failed=_vm_stage_failed(sync_vms),
+                                **await _fresh_sweep_inventory(pxs),
                             )
                         finally:
                             await orphan_sweep_bridge.close()
@@ -1165,7 +1293,7 @@ async def full_update_sync_stream(  # noqa: C901
                 final_result = {
                     "devices": sync_nodes,
                     "storage": sync_storage,
-                    "virtual_machines": sync_vms,
+                    "virtual_machines": _vm_stage_rows(sync_vms),
                     "virtual_disks": sync_disks,
                     "task_history": sync_task_history,
                     "backups": sync_backups,
@@ -1177,7 +1305,7 @@ async def full_update_sync_stream(  # noqa: C901
                     "backup_routines": sync_backup_routines,
                     "devices_count": len(sync_nodes),
                     "storage_count": len(sync_storage),
-                    "virtual_machines_count": len(sync_vms),
+                    "virtual_machines_count": len(_vm_stage_rows(sync_vms)),
                     "virtual_disks_count": _result_count(sync_disks),
                     "task_history_count": _result_count(sync_task_history),
                     "backups_count": len(sync_backups),
@@ -1194,6 +1322,7 @@ async def full_update_sync_stream(  # noqa: C901
                     final_result["orphan_sweep"] = orphan_sweep_result
                 if sync_warnings:
                     final_result["warnings"] = sync_warnings
+                    final_result["degraded"] = True
 
                 yield sse_event(
                     "complete",

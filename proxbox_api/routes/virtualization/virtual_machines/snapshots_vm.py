@@ -21,6 +21,7 @@ from proxbox_api.routes.proxmox.cluster import (
 from proxbox_api.services.sync.snapshots import (
     create_virtual_machine_snapshots as sync_snapshots,
 )
+from proxbox_api.services.sync.vm_filter import SelectionMode
 from proxbox_api.services.sync.vm_helpers import parse_selected_netbox_vm_ids
 from proxbox_api.session.proxmox import ProxmoxSessionsDep  # Sessions
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
@@ -40,10 +41,14 @@ async def _create_all_virtual_machine_snapshots(
     vmid_filter: int | list[int] | None = None,
     netbox_vm_ids: list[int] | None = None,
     delete_nonexistent_snapshot: bool = False,
+    selection_mode: SelectionMode = SelectionMode.LENIENT,
 ):
     """Internal function that handles snapshot sync with optional websocket support.
 
     When ``vmid_filter`` is provided only snapshots for that Proxmox VMID are synced.
+    ``selection_mode`` is ``LENIENT`` for list and estate routes (a VM with
+    unresolvable ownership is dropped with a warning) and ``STRICT`` for the
+    single-VM path route (it fails closed).
     """
     nb = netbox_session
     created_count = 0
@@ -71,6 +76,7 @@ async def _create_all_virtual_machine_snapshots(
             vmid=vmid_filter,
             netbox_vm_ids=netbox_vm_ids,
             delete_nonexistent_snapshot=delete_nonexistent_snapshot,
+            selection_mode=selection_mode,
         )
 
         if result:
@@ -189,6 +195,7 @@ async def create_all_virtual_machine_snapshots(
         fetch_max_concurrency=fetch_max_concurrency,
         netbox_vm_ids=vm_ids,
         delete_nonexistent_snapshot=delete_nonexistent_snapshot,
+        selection_mode=SelectionMode.LENIENT,
     )
 
 
@@ -241,6 +248,7 @@ async def create_all_virtual_machine_snapshots_stream(  # noqa: C901
                     websocket=bridge,
                     use_websocket=True,
                     delete_nonexistent_snapshot=delete_nonexistent_snapshot,
+                    selection_mode=SelectionMode.LENIENT,
                 )
             finally:
                 await bridge.close()
@@ -301,6 +309,7 @@ async def create_virtual_machine_snapshots_by_id_stream(
                     websocket=bridge,
                     use_websocket=True,
                     netbox_vm_ids=[netbox_vm_id],
+                    selection_mode=SelectionMode.STRICT,
                 )
             finally:
                 await bridge.close()

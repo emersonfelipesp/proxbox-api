@@ -511,3 +511,21 @@ Or set it in the NetBox plugin settings page under **Encryption** → **Encrypti
 If credentials were stored in plaintext before encryption was enabled, they continue to work — `decrypt_value` returns them unchanged when no `enc:` prefix is found. They are re-encrypted the next time the endpoint is saved.
 
 If the encryption key changes after credentials were already encrypted, proxbox-api logs a warning and returns the raw ciphertext (unusable as a credential). Re-save each endpoint with the correct credentials after rotating the key.
+
+## OpenTelemetry
+
+All Python applications in this repository use `fastapi[standard]==0.142.2`, including the backend, Firecracker host agent, and standalone Proxmox mock. FastAPI records native HTTP traces, request metrics, validation/error logs, and WebSocket traces and logs. No collector endpoint is configured by this public project. Remote export requires an operator-selected OTLP HTTP/protobuf endpoint before startup:
+
+```sh
+export OTEL_SERVICE_NAME=proxbox-api
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+Use a distinct `OTEL_SERVICE_NAME` for separately deployed host-agent and mock processes. The base endpoint receives `/v1/traces`, `/v1/metrics`, and `/v1/logs`; standard signal-specific endpoint variables override the corresponding URL. `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none` disable individual exports. `OTEL_SDK_DISABLED=true` disables automatic exporter setup. Leaving endpoint variables unset performs no remote export. Protect any `OTEL_EXPORTER_OTLP_HEADERS` credentials with the deployment secret mechanism.
+
+Each application factory accepts the optional keyword-only `telemetry` configuration dictionary. If another library already owns environment export, pass `telemetry={"auto_configure": False}` to avoid duplicate export; native request instrumentation continues using the configured providers. Pass explicit `tracer_provider`, `meter_provider`, and `logger_provider` entries when needed. The caller owns explicit provider shutdown; FastAPI flushes its own export components at lifespan exit. Do not add `FastAPIInstrumentor` or ASGI instrumentation around these applications. Global providers are process-shared, so mounted applications do not have guaranteed independent telemetry configuration.
+
+Before FastAPI adds native exporters, the project registers SDK privacy processors. Spans retain route templates, method and status, but replace concrete paths and query strings with `REDACTED`. Native logs retain exception type, event and correlation while removing arbitrary exception messages and stack traces. Native exporters do not capture request bodies or headers. Existing providers are preserved. Caller-installed log exporters registered before application construction can observe records before the processor; callers must register `ExceptionPrivacyProcessor` before their own exporters, or apply equivalent redaction. Custom providers without the SDK processor interface also require caller-managed redaction. This protection does not change the existing operational logger or configure third-party instrumentation.
+
+See [FastAPI OpenTelemetry](https://fastapi.tiangolo.com/advanced/opentelemetry/) for native signal and provider settings.

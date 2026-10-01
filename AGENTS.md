@@ -174,7 +174,9 @@ fixed run-start `until`, load the typed VM sync-state sidecar once, map by its
 endpoint + cluster + VMID identity, deduplicate UPIDs, then issue one NetBox bulk
 reconcile. A present malformed/duplicate sidecar for a relevant VM always fails closed. There is no
 custom-field fallback. A successful estate scan skips unmanaged VMs,
-but explicitly selected VMs without identity remain fatal. Encode selected
+but for task history explicitly selected VMs without identity remain fatal (it
+has no lenient mode; the other VM-scoped stages do, see "Staged VM Selection"
+below). Encode selected
 NetBox IDs as repeated multi-value parameters in deduplicated groups of at most
 100; comma text is invalid for `MultiValueNumberFilter`. Never restore per-VM
 node scans, per-UPID status requests, or per-record NetBox fallback. Preserve
@@ -191,6 +193,41 @@ caller offset/record cap raise HTTP 502 before another over-bound request; never
 return or cache partial data. Omitted `netbox_vm_ids` means all, but present
 empty/malformed selectors are HTTP 422. VM, backup, snapshot, and disk lookups
 use deduplicated repeated-ID chunks of at most 100 and propagate lookup failure.
+
+## Staged VM Selection (Strict vs Lenient)
+
+`proxbox_api/services/sync/vm_filter.py` resolves a VM's Proxmox owner from its
+typed sidecar (endpoint, cluster, VMID, type) and the live resources. Its
+`SelectionMode` decides what an unresolvable VM does. `STRICT` (the default of
+the shared functions) raises HTTP 502 on the first one; routes that address one
+VM by path (`/{netbox_vm_id}/...` for VM sync, backups, snapshots, and disks)
+pass it explicitly. `LENIENT` drops the VM with a `WARNING` naming its NetBox id
+and the reason, processes the rest, and returns the drops on the result's
+`skipped` attribute as `[{"netbox_vm_id", "reason"}]`. Staged and estate runs
+(`netbox_vm_ids` lists, `/all/create`, estate interface/IP stages, the full
+backup cache, both full-update variants) are lenient. The mode is a plain kwarg
+on internal functions, never a new `Query` parameter on a route function that
+`full_update` calls directly.
+
+- Lenient drops: incomplete or duplicated sidecar, an explicitly selected VM with
+  none, no available/ambiguous cluster source, endpoint mismatch, no or several
+  live resources, and shared-owner claims (all claimants dropped). Unmanaged VMs
+  in an estate scan are skipped silently. An unreadable sidecar scan, an invalid
+  id, and a selection NetBox does not return in full stay fatal in every mode.
+- Never let a dropped VM reach a write or cleanup: it is absent from the backup
+  ownership cache and never scanned for snapshots, so stale-row deletion cannot
+  cover it. Tests pin this for backups and snapshots.
+- Report drops through `services/sync/stage_result.py`: dict results get
+  `degraded` and `warnings`; list results become `WarningList` (`.warnings`),
+  which REST wraps as `{<stage>: [...], count, warnings, degraded}` only when
+  degraded and SSE surfaces as `warnings` plus `degraded` (the `virtual-machines`
+  `/create` result follows the same wrap; never write `or []` over a stage
+  result, since an empty result that carries warnings is falsy). Lenient drops are
+  HTTP 200 / `ok=true`, not 502. `full_update` aggregates every stage's warnings
+  (tagged with `phase`) and sets top-level `degraded`.
+- `write_virtual_machine_sync_state` logs a warning when the live endpoint,
+  cluster, VMID, or type is missing or `unknown`; it never changes what is
+  persisted.
 
 ## Required Checks
 
@@ -833,3 +870,9 @@ Before invoking ANY destructive route, an LLM agent MUST:
 - Never autonomously trigger snapshot or backup deletion — these are the last recovery options. Snapshot deletion is enforced by `proxbox_api/routes/proxmox_actions.py::delete_snapshot_qemu` / `delete_snapshot_lxc` -> `_handle_delete_snapshot` -> `_gate`; any backup-delete route must use the same `ProxmoxEndpoint.allow_writes` trust boundary before dispatch.
 - Treat any `403 writes_disabled_for_endpoint` as a hard stop; do not attempt to work around it. Emitted by `proxbox_api/routes/proxmox_actions.py::_gate` through `LIFECYCLE_WRITES_DISABLED_REASON`.
 - [tests/CLAUDE.md](tests/CLAUDE.md)
+
+## Native OpenTelemetry
+
+The backend, Firecracker host agent, and standalone Proxmox mock use `fastapi[standard]==0.142.2` and native FastAPI telemetry. Public defaults never select a collector endpoint. Operators opt into OTLP HTTP/protobuf export through standard `OTEL_*` environment variables before lifespan startup. Application factories accept keyword-only `telemetry` settings and explicit providers; set `auto_configure=False` if another library already owns environment export, and retain caller ownership of explicit provider shutdown. Do not add duplicate FastAPI/ASGI instrumentation. Preserve HTTP authentication, SSE, WebSocket admission, console relay, and lifecycle contracts when upgrading dependencies. Configuration and sensitive-error-log guidance are documented in both language versions of `docs/getting-started/configuration.md`.
+
+Native exporter privacy processors redact concrete HTTP paths and query values and remove arbitrary exception messages and stack traces while retaining route templates and error classification. Install caller-owned log redaction before caller-owned exporters; existing exporter order is preserved. Keep the standalone mock privacy helper independent of `proxbox_api`.

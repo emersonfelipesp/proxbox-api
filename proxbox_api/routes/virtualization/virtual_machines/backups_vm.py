@@ -28,6 +28,11 @@ from proxbox_api.proxmox_to_netbox.models import NetBoxBackupSyncState
 from proxbox_api.routes.proxmox.cluster import ClusterStatusDep
 from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox_helpers import dump_models, get_node_storage_content
+from proxbox_api.services.sync.stage_result import (
+    attach_skips_to_dict,
+    attach_skips_to_list,
+    response_with_stage_warnings,
+)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -35,8 +40,11 @@ from proxbox_api.services.sync.storage_links import (
 )
 from proxbox_api.services.sync.sync_state_reader import resolve_virtual_machine_by_sync_state
 from proxbox_api.services.sync.vm_filter import (
+    SelectionMode,
     hydrate_selected_vm_identities,
     hydrate_vm_identities_from_sidecars,
+    selection_skips,
+    skip_or_raise,
 )
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
@@ -152,6 +160,8 @@ class _BackupVMCache:
         default_factory=dict
     )
     selected_scopes: tuple[_BackupVMScope, ...] = ()
+    # VMs dropped by lenient selection, as ``{"netbox_vm_id", "reason"}`` rows.
+    skipped: list[dict[str, object]] = field(default_factory=list)
 
     def _insert(
         self,
@@ -952,44 +962,16 @@ def _backup_vm_scope(record: object) -> _BackupVMScope | None:
     )
 
 
-async def _prefetch_vm_cache(
-    nb,
-    netbox_vm_ids: list[int] | None = None,
-) -> _BackupVMCache:
-    """Load a collision-safe VM identity cache, optionally for exact NetBox IDs."""
+def _require_returned_backup_selection(
+    selected: list[object],
+    netbox_vm_ids: list[int],
+) -> None:
+    """Require NetBox to return every selected VM; fatal in every selection mode."""
 
-    if netbox_vm_ids is None:
-        listed = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
-        vms = await hydrate_vm_identities_from_sidecars(
-            nb,
-            [to_mapping(vm) for vm in listed],
-            require_all=False,
-        )
-    else:
-        selected = await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
-        # Explicit selections resolve ownership sidecar-first (authoritative
-        # endpoint/cluster/VMID overlay) before scope validation, matching the
-        # targeted VM-sync and task-history selection contract.
-        vms = await hydrate_selected_vm_identities(
-            nb,
-            [to_mapping(vm) for vm in selected],
-        )
-
-    cache = _BackupVMCache()
-    for vm in vms:
-        cache.add(vm)
-
-    scopes = tuple(scope for vm in vms if (scope := _backup_vm_scope(vm)) is not None)
-    cache.selected_scopes = tuple(sorted(scopes, key=lambda scope: scope.netbox_vm_id))
-
-    if netbox_vm_ids is None:
-        return cache
-
-    requested_ids = set(netbox_vm_ids)
-    resolved_ids = {
-        vm_id for vm in vms if (vm_id := relation_id(to_mapping(vm).get("id"))) is not None
+    returned_ids = {
+        vm_id for vm in selected if (vm_id := relation_id(to_mapping(vm).get("id"))) is not None
     }
-    missing_ids = requested_ids - resolved_ids
+    missing_ids = set(netbox_vm_ids) - returned_ids
     if missing_ids:
         raise ProxboxException(
             message="Unable to resolve explicitly selected NetBox VMs",
@@ -997,18 +979,182 @@ async def _prefetch_vm_cache(
             http_status_code=502,
         )
 
-    scoped_ids = {scope.netbox_vm_id for scope in scopes}
-    invalid_ids = requested_ids - scoped_ids
-    if invalid_ids:
-        raise ProxboxException(
+
+def _require_scoped_backup_selection(
+    vms: list[dict[str, object]],
+    netbox_vm_ids: list[int],
+    *,
+    mode: SelectionMode,
+    skipped: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Require each selected VM to carry a complete backup scope.
+
+    Strict mode fails closed on the first VM without one. Lenient mode drops it,
+    with a warning, and keeps the others; VMs already dropped by sidecar hydration
+    are not reported twice.
+    """
+
+    scoped_ids = {scope.netbox_vm_id for vm in vms if (scope := _backup_vm_scope(vm)) is not None}
+    already_skipped = {skip["netbox_vm_id"] for skip in skipped}
+    invalid_ids = sorted(set(netbox_vm_ids) - scoped_ids - already_skipped)
+    for vm_id in invalid_ids:
+        # Strict names every offending id once; lenient names only the dropped VM.
+        reported_ids = invalid_ids if mode is SelectionMode.STRICT else [vm_id]
+        error = ProxboxException(
             message="Unable to verify selected backup VM ownership",
             detail=(
                 "Selected VM id(s) are missing a positive NetBox id, Proxmox endpoint id, "
-                f"cluster, or Proxmox VMID: {sorted(invalid_ids)}."
+                f"cluster, or Proxmox VMID: {reported_ids}."
             ),
             http_status_code=502,
         )
+        skip_or_raise(error, mode=mode, netbox_vm_id=vm_id, skipped=skipped)
+    return [vm for vm in vms if relation_id(vm.get("id")) not in invalid_ids]
+
+
+async def _prefetch_vm_cache(
+    nb,
+    netbox_vm_ids: list[int] | None = None,
+    *,
+    mode: SelectionMode = SelectionMode.LENIENT,
+) -> _BackupVMCache:
+    """Load a collision-safe VM identity cache, optionally for exact NetBox IDs.
+
+    ``mode`` decides what a VM with incomplete or duplicated sidecar ownership
+    does: ``LENIENT`` leaves it out of the cache (so it is neither reconciled nor
+    covered by stale-backup cleanup) and records it on ``cache.skipped``;
+    ``STRICT`` raises.
+    """
+
+    if netbox_vm_ids is None:
+        listed = await rest_list_async(nb, "/api/virtualization/virtual-machines/")
+        hydrated = await hydrate_vm_identities_from_sidecars(
+            nb,
+            [to_mapping(vm) for vm in listed],
+            require_all=False,
+            mode=mode,
+        )
+    else:
+        selected = await list_netbox_virtual_machines_by_ids(nb, netbox_vm_ids)
+        _require_returned_backup_selection(selected, netbox_vm_ids)
+        # Explicit selections resolve ownership sidecar-first (authoritative
+        # endpoint/cluster/VMID overlay) before scope validation, matching the
+        # targeted VM-sync and task-history selection contract.
+        hydrated = await hydrate_selected_vm_identities(
+            nb,
+            [to_mapping(vm) for vm in selected],
+            mode=mode,
+        )
+
+    vms = list(hydrated)
+    skipped = selection_skips(hydrated)
+    if netbox_vm_ids is not None:
+        vms = _require_scoped_backup_selection(vms, netbox_vm_ids, mode=mode, skipped=skipped)
+
+    cache = _BackupVMCache(skipped=skipped)
+    for vm in vms:
+        cache.add(vm)
+
+    scopes = tuple(scope for vm in vms if (scope := _backup_vm_scope(vm)) is not None)
+    cache.selected_scopes = tuple(sorted(scopes, key=lambda scope: scope.netbox_vm_id))
     return cache
+
+
+def _cache_skips(vm_cache: object) -> list[dict[str, object]]:
+    """Return the live skip list of a VM cache, or a fresh one for a bare test double."""
+
+    skipped = getattr(vm_cache, "skipped", None)
+    return skipped if isinstance(skipped, list) else []
+
+
+def _selected_backup_owner_vmids(
+    vm_cache: _BackupVMCache,
+    *,
+    mode: SelectionMode,
+    skipped: list[dict[str, object]],
+) -> dict[tuple[int, str], set[str]]:
+    """Map each selected owner to its VMIDs, dropping VMs that claim one identity.
+
+    Which claimant of a shared endpoint/cluster/VMID identity is right cannot be
+    known, so lenient mode drops every claimant (and removes it from the cache's
+    cleanup scopes) while strict mode fails closed.
+    """
+
+    claimants: dict[tuple[int, str, int], list[int]] = {}
+    for scope in vm_cache.selected_scopes:
+        identity_key = (scope.endpoint_id, scope.cluster_name, scope.proxmox_vmid)
+        claimants.setdefault(identity_key, []).append(scope.netbox_vm_id)
+
+    dropped_ids: set[int] = set()
+    for identity_key, claimant_ids in claimants.items():
+        if len(claimant_ids) < 2:
+            continue
+        error = ProxboxException(
+            message="Unable to verify selected backup VM ownership",
+            detail=(
+                f"Multiple selected NetBox VMs claim endpoint/cluster/VMID identity {identity_key}."
+            ),
+            http_status_code=502,
+        )
+        for claimant_id in claimant_ids:
+            skip_or_raise(error, mode=mode, netbox_vm_id=claimant_id, skipped=skipped)
+            dropped_ids.add(claimant_id)
+
+    vm_cache.selected_scopes = tuple(
+        scope for scope in vm_cache.selected_scopes if scope.netbox_vm_id not in dropped_ids
+    )
+    owner_vmids: dict[tuple[int, str], set[str]] = {}
+    for scope in vm_cache.selected_scopes:
+        owner_vmids.setdefault((scope.endpoint_id, scope.cluster_name), set()).add(
+            str(scope.proxmox_vmid)
+        )
+    return owner_vmids
+
+
+def _drop_unavailable_backup_owners(
+    selected_owner_vmids: dict[tuple[int, str], set[str]],
+    vm_cache: _BackupVMCache,
+    *,
+    pxs,
+    cluster_status,
+    mode: SelectionMode,
+    skipped: list[dict[str, object]],
+) -> dict[tuple[int, str], set[str]]:
+    """Require an active Proxmox session/cluster pair for each selected owner.
+
+    Strict mode fails closed. Lenient mode drops the VMs of an owner with no
+    active session, with a warning each, and keeps the rest.
+    """
+
+    available_owner_keys = {
+        (endpoint_id, cluster_name)
+        for proxmox, cluster in zip(pxs, cluster_status)
+        if (endpoint_id := extract_proxmox_session_endpoint_id(proxmox)) is not None
+        and (cluster_name := _normalize_cluster_name(getattr(cluster, "name", None))) is not None
+    }
+    missing_owners = set(selected_owner_vmids) - available_owner_keys
+    if not missing_owners:
+        return selected_owner_vmids
+
+    error = ProxboxException(
+        message="Selected backup VM owner is unavailable",
+        detail=(
+            "No active Proxmox session/cluster pair exists for selected owner(s): "
+            f"{sorted(missing_owners)}."
+        ),
+        http_status_code=502,
+    )
+    for scope in vm_cache.selected_scopes:
+        if (scope.endpoint_id, scope.cluster_name) in missing_owners:
+            skip_or_raise(error, mode=mode, netbox_vm_id=scope.netbox_vm_id, skipped=skipped)
+    vm_cache.selected_scopes = tuple(
+        scope
+        for scope in vm_cache.selected_scopes
+        if (scope.endpoint_id, scope.cluster_name) not in missing_owners
+    )
+    return {
+        owner: vmids for owner, vmids in selected_owner_vmids.items() if owner not in missing_owners
+    }
 
 
 async def _create_all_virtual_machine_backups(  # noqa: C901
@@ -1022,6 +1168,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     use_websocket=False,
     vmid_filter: str | int | list[int] | None = None,
     netbox_vm_ids: list[int] | None = None,
+    selection_mode: SelectionMode = SelectionMode.LENIENT,
 ):
     """Internal function that handles backup sync with optional websocket support.
 
@@ -1032,6 +1179,13 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
     ``netbox_vm_ids`` carries exact NetBox/endpoint/cluster ownership. The legacy
     ``vmid_filter`` is retained for direct Proxmox-VMID callers, but must not be
     used to implement a NetBox-ID selection because VMIDs are endpoint-local.
+
+    ``selection_mode`` is ``LENIENT`` for estate and list runs: a VM whose typed
+    ownership is incomplete, duplicated, or unavailable is dropped with a warning
+    and the returned list carries the drops as ``warnings`` so callers report the
+    stage ``degraded``. A dropped VM is absent from the ownership cache, so it is
+    never reconciled and its NetBox backups are never covered by stale cleanup.
+    ``STRICT`` (the single-VM route) fails closed instead.
     """
     nb = netbox_session
     if vmid_filter is None:
@@ -1042,6 +1196,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
         selected_vmids = {str(vmid_filter).strip()}
     selected_netbox_ids = set(netbox_vm_ids) if netbox_vm_ids is not None else None
     results = []
+    selection_skipped: list[dict[str, object]] = []
     failure_count = 0
     deleted_count = 0
     backup_sync_ok = False
@@ -1057,11 +1212,8 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 }
             )
 
-        vm_cache = (
-            await _prefetch_vm_cache(nb)
-            if netbox_vm_ids is None
-            else await _prefetch_vm_cache(nb, netbox_vm_ids)
-        )
+        vm_cache = await _prefetch_vm_cache(nb, netbox_vm_ids, mode=selection_mode)
+        selection_skipped = _cache_skips(vm_cache)
 
         ambiguous_exact_identities = {
             (scope.endpoint_id, scope.cluster_name, scope.proxmox_vmid)
@@ -1085,45 +1237,22 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                     detail="The selected VM cache did not preserve endpoint ownership.",
                     http_status_code=502,
                 )
-            selected_owner_vmids = {}
-            selected_identity_keys: set[tuple[int, str, int]] = set()
-            for scope in vm_cache.selected_scopes:
-                identity_key = (scope.endpoint_id, scope.cluster_name, scope.proxmox_vmid)
-                if identity_key in selected_identity_keys:
-                    raise ProxboxException(
-                        message="Unable to verify selected backup VM ownership",
-                        detail=(
-                            "Multiple selected NetBox VMs claim endpoint/cluster/VMID "
-                            f"identity {identity_key}."
-                        ),
-                        http_status_code=502,
-                    )
-                selected_identity_keys.add(identity_key)
-                selected_owner_vmids.setdefault((scope.endpoint_id, scope.cluster_name), set()).add(
-                    str(scope.proxmox_vmid)
-                )
-
+            selected_owner_vmids = _selected_backup_owner_vmids(
+                vm_cache,
+                mode=selection_mode,
+                skipped=selection_skipped,
+            )
+            selected_owner_vmids = _drop_unavailable_backup_owners(
+                selected_owner_vmids,
+                vm_cache,
+                pxs=pxs,
+                cluster_status=cluster_status,
+                mode=selection_mode,
+                skipped=selection_skipped,
+            )
             if not selected_owner_vmids:
                 logger.info("Backup sync received an explicit empty VM selection")
-                return results
-
-            available_owner_keys = {
-                (endpoint_id, cluster_name)
-                for proxmox, cluster in zip(pxs, cluster_status)
-                if (endpoint_id := extract_proxmox_session_endpoint_id(proxmox)) is not None
-                and (cluster_name := _normalize_cluster_name(getattr(cluster, "name", None)))
-                is not None
-            }
-            missing_owners = set(selected_owner_vmids) - available_owner_keys
-            if missing_owners:
-                raise ProxboxException(
-                    message="Selected backup VM owner is unavailable",
-                    detail=(
-                        "No active Proxmox session/cluster pair exists for selected owner(s): "
-                        f"{sorted(missing_owners)}."
-                    ),
-                    http_status_code=502,
-                )
+                return attach_skips_to_list(results, selection_skipped)
 
         all_raw_backups: list[dict] = []
         discovery_tasks: list[asyncio.Task] = []
@@ -1279,7 +1408,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
             # enabled: skip reconciliation, but continue into owner-covered cleanup.
             logger.info("Backup sync: %s — skipping reconcile", warning_msg)
             if not delete_nonexistent_backup:
-                return results
+                return attach_skips_to_list(results, selection_skipped)
         else:
             if use_websocket and websocket:
                 await websocket.send_json(
@@ -1388,11 +1517,14 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                         f"Backup sync completed. {len(results)} reconciled, "
                         f"{failure_count} task error(s), {deleted_count} deleted."
                     ),
-                    "result": {
-                        "reconciled": len(results),
-                        "failed_tasks": failure_count,
-                        "deleted": deleted_count,
-                    },
+                    "result": attach_skips_to_dict(
+                        {
+                            "reconciled": len(results),
+                            "failed_tasks": failure_count,
+                            "deleted": deleted_count,
+                        },
+                        selection_skipped,
+                    ),
                 }
             )
 
@@ -1413,7 +1545,7 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
         raise ProxboxException(message=error_msg)
 
     logger.info("Syncing backups finished")
-    return results
+    return attach_skips_to_list(results, selection_skipped)
 
 
 @router.get("/backups/all/create")
@@ -1447,7 +1579,7 @@ async def create_all_virtual_machine_backups(
         vm_ids = parse_selected_netbox_vm_ids(netbox_vm_ids)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    return await _create_all_virtual_machine_backups(
+    results = await _create_all_virtual_machine_backups(
         netbox_session=netbox_session,
         pxs=pxs,
         cluster_status=cluster_status,
@@ -1455,7 +1587,11 @@ async def create_all_virtual_machine_backups(
         delete_nonexistent_backup=delete_nonexistent_backup,
         fetch_max_concurrency=fetch_max_concurrency,
         netbox_vm_ids=vm_ids,
+        selection_mode=SelectionMode.LENIENT,
     )
+    # A clean run keeps the historical bare list; a degraded one carries the
+    # dropped VMs as structured warnings.
+    return response_with_stage_warnings(results, result_key="backups")
 
 
 @router.get("/backups/all/create/stream", response_model=None)
@@ -1505,6 +1641,7 @@ async def create_all_virtual_machine_backups_stream(
                     netbox_vm_ids=vm_ids,
                     websocket=bridge,
                     use_websocket=True,
+                    selection_mode=SelectionMode.LENIENT,
                 )
             finally:
                 await bridge.close()
@@ -1571,6 +1708,7 @@ async def create_virtual_machine_backups_by_id_stream(
                     websocket=bridge,
                     use_websocket=True,
                     netbox_vm_ids=[netbox_vm_id],
+                    selection_mode=SelectionMode.STRICT,
                 )
             finally:
                 await bridge.close()

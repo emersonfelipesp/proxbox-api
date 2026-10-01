@@ -20,6 +20,7 @@ Main synchronization endpoints for virtual machines and related resources.
 - `backups_vm.py`: backup reconciliation helpers and routes.
 - `disks_vm.py`: VM disk reconciliation helpers and routes.
 - `helpers.py`: shared VM route helpers and concurrency helpers.
+- `orphans_vm.py`: standalone orphan VM sweep routes (`/orphans/sweep` and `/orphans/sweep/stream`).
 - `snapshots_vm.py`: snapshot reconciliation helpers and routes.
 - `storages_vm.py`: storage reconciliation helpers and routes.
 - `sync_vm.py`: VM sync orchestration routes, including the create and stream
@@ -71,6 +72,14 @@ Main synchronization endpoints for virtual machines and related resources.
   `vm_filter.hydrate_selected_vm_identities`) before validating exact
   endpoint/cluster/VMID scope. The by-id snapshot and backup stream routes have
   no custom-field precondition — ownership resolves downstream from the sidecar.
+  Selection is strict only where one VM is addressed by path
+  (`/{netbox_vm_id}/...` for VM sync, backups, snapshots, and disks), so an
+  unresolvable owner fails closed there. `netbox_vm_ids` list routes,
+  `/all/create`, and the estate interface/IP stages use
+  `SelectionMode.LENIENT`: the VM is dropped with a warning and the response
+  carries `warnings` plus `degraded=true` (REST list results become
+  `{<stage>: [...], count, warnings, degraded}` only when degraded). See
+  `services/sync/CLAUDE.md` "Strict vs lenient VM selection".
 - **Interface failures are surfaced, not swallowed.** Per-interface creation is
   retried a bounded number of times for transient NetBox errors; interfaces
   that still fail are counted. The per-VM progress item carries
@@ -324,6 +333,81 @@ Main synchronization endpoints for virtual machines and related resources.
   typed snapshot, accepts a confirmed commit, or restores and verifies both the
   previous role and snapshot. The next pass therefore retries only a genuinely
   rolled-back change instead of treating response loss as an operator lock.
+
+- **Standalone, scoped orphan sweep.** `orphans_vm.py` exposes
+  `GET /orphans/sweep` and `GET /orphans/sweep/stream` so a caller that drives
+  each stage separately (the netbox-proxbox plugin) can run the end-of-run sweep;
+  before this the sweep only ran inside `/full-update` and `/full-update/stream`.
+  They take the required non-empty `run_id` used for VM stage stamping, `dry_run`,
+  `vm_stage_failed` and comma-separated `endpoint_ids` / `proxmox_endpoint_ids`
+  (alias wins), parsed by `session/proxmox_providers.py::parse_endpoint_ids`
+  before any streaming starts. A live (non-`dry_run`) request also acquires the
+  scoped Proxmox sessions (`proxmox_sessions_partial`) and fetches cluster resources
+  via `live_inventory_dependency`, passing `live_vm_keys` to the sweep; any failed or
+  missing in-scope session or fetch error fails closed as
+  `skipped_reason=live_inventory_unavailable`. Dry runs skip that fetch. They read `delete_orphans` through `is_delete_orphans_enabled()` (the same
+  call full-update uses), reset sidecar availability memoization per request, are
+  registered before `sync_vm` so its dynamic `/{netbox_vm_id}/...` routes cannot
+  shadow them, and only soft-delete (`status=decommissioning` plus the
+  `proxbox-soft-deleted` tag). The result always carries `skipped_reason`:
+  `disabled`, `vm_stage_failed`, `sidecar_unavailable`, `sidecar_read_failed`,
+  `run_not_found`, `live_inventory_unavailable`, or `None` when the sweep ran. With a scope, only sidecars whose
+  `proxmox_endpoint_raw_id` is in it are candidates. A live (non-`dry_run`) request
+  without a scope is HTTP 422 (`require_scope_for_live_sweep`) because `run_id` and
+  `vm_stage_failed` are unverified caller claims; only `dry_run` may be unscoped.
+  The bulk VM stage clears the soft-delete marker and restores the status of a
+  reappearing VM (`_clear_reappeared_vm_marker`); the reconciliation diff reads
+  `decommissioning` back as `active`, so the status cannot be restored by the diff.
+  The IDs are in the same id space the VM stage stamps into
+  `proxmox_endpoint_raw_id` (the session's `db_endpoint_id`, which the
+  `endpoint_ids` / `proxmox_endpoint_ids` filter selects for both `source=database`
+  and `source=netbox`), so pass the same values given to the stage requests.
+  The VM stage's SSE `complete` result carries only `count`; the failure count
+  reaches a staged caller as `failed` in the `virtual-machines` phase summary.
+  Downstream: the netbox-proxbox plugin must call the route after its VM stage
+  with the same `run_id`, pass the endpoint IDs it synchronized, and set
+  `vm_stage_failed=true` when that stage reported failures; until it does,
+  plugin-driven syncs still never sweep. Coverage: `tests/test_orphan_sweep_route.py`.
+- **The VM stage result carries its failure count.** `create_virtual_machines`
+  returns a `SyncResultList` whose `failed_count` is the number of VMs that failed
+  to reconcile (a plain list before). Full-update reads it and skips the sweep
+  (`skipped_reason=vm_stage_failed`), because a live VM that failed is not stamped
+  with the run and would look orphaned. Full-update derives the sweep's endpoint
+  scope from the Proxmox sessions it used whenever the request narrowed them
+  (`endpoint_ids`, `proxmox_endpoint_ids`, `name`, `domain`, `ip_address`), via
+  `full_update.orphan_sweep_endpoint_scope`; an unnarrowed run stays unscoped.
+  Coverage: `tests/test_full_update_orphan_sweep.py`,
+  `tests/test_vm_sync_two_phase.py`.
+- **Later stages skip decommissioned and soft-deleted VMs.** The VM interface and
+  IP address stages (`create_only_vm_interfaces`, `create_only_vm_ip_addresses`)
+  drop them from the NetBox VM snapshot right after sidecar hydration, using
+  `orphan_sweep.exclude_soft_deleted_vms`; the VM stage itself must keep them so
+  a reappearing guest is re-adopted. Coverage:
+  `tests/test_vm_network_soft_deleted_stage.py`.
+
+- **VM lookups are cluster-guarded and self-heal stale endpoint ids.**
+  `_resolve_vm_from_index_or_unique_vmid` accepts the live `cluster_id` and
+  `cluster_name` (passed by the interface and IP sync closures) and, through
+  `_scope_vm_lookup_to_cluster`, never returns a VM that belongs to another
+  cluster even when `(endpoint id, vmid)` collides; the live cluster's VM stays
+  reachable when another cluster's record shadowed it in the first-wins index.
+  `_hydrate_vm_snapshot_with_sidecar_identity` takes `configured_endpoint_ids`
+  (a `_ConfiguredEndpointIds(nb, px_list)` lazy loader built at both call sites in
+  `create_virtual_machines`; it unions every configured database and NetBox plugin
+  endpoint id with this run's sessions and yields `None`, meaning no adoption, when
+  the inventory cannot be loaded) and resolves through `_resolve_vm_sidecar_identity`,
+  which falls back to `sync_state_reader.adopt_vm_with_stale_endpoint_id` only
+  when the endpoint-keyed sidecar lookup found nothing. Adoption (single
+  candidate, same type, blank/equal sidecar cluster name, stored endpoint id not
+  owned by any configured endpoint, live name equal to the NetBox or sidecar name;
+  best-effort, a same-name recreated VM is an accepted residual risk) rewrites the sidecar to the live endpoint id so
+  the name pre-pass and queue see the existing VM: no ` (2)` suffix, no duplicate.
+  Why: stale or colliding endpoint ids (independent id spaces after a database
+  recreate) previously produced duplicate half-populated VMs and cross-cluster
+  NIC/IP writes. Downstream: netbox-proxbox sidecar rows are rewritten in place;
+  older callers omitting `configured_endpoint_ids` keep the previous behavior. See
+  `services/sync/CLAUDE.md` for the full contract and
+  `docs/sync/reconciliation-architecture.md`.
 
 ## Extension Guidance
 

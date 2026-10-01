@@ -27,6 +27,33 @@ def _format_session_error(error: ProxboxException) -> str:
     return " | ".join(parts)
 
 
+_GUEST_MISSING_MARKER = "does not exist"
+_VM_CONFIG_NOT_FOUND_MARKER = "vm config not found"
+_SESSION_ERRORS_MARKER = "session errors:"
+
+
+def _error_text(error: Exception) -> str:
+    if isinstance(error, ProxboxException):
+        parts = (error.message, error.detail, error.python_exception)
+    else:
+        parts = (str(error),)
+    return " ".join(str(part) for part in parts if part).lower()
+
+
+def is_guest_not_found_error(error: Exception) -> bool:
+    """Return whether a VM config failure means the guest no longer exists in Proxmox.
+
+    Proxmox answers ``Configuration file '...' does not exist`` for a missing guest, and
+    ``resolve_vm_config`` reports ``VM Config not found`` when no session returned a
+    config. The latter also wraps transport failures, so it only counts as a missing
+    guest when no per-session error was recorded.
+    """
+    text = _error_text(error)
+    if _GUEST_MISSING_MARKER in text:
+        return True
+    return _VM_CONFIG_NOT_FOUND_MARKER in text and _SESSION_ERRORS_MARKER not in text
+
+
 async def resolve_vm_config(
     *,
     pxs: Iterable[object],

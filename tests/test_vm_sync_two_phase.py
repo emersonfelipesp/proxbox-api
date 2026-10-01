@@ -7,11 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from proxbox_api.constants import SOFT_DELETE_TAG_SLUG
 from proxbox_api.exception import ProxboxException
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
-from proxbox_api.services.sync import sync_state_reader, sync_state_writer
+from proxbox_api.services.sync import orphan_sweep, sync_state_reader, sync_state_writer
 from proxbox_api.utils.streaming import WebSocketSSEBridge
 from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
@@ -754,6 +755,40 @@ def test_full_update_fetch_failure_isolated_and_counted(monkeypatch):
     assert terminal_args[-1] > 0
 
 
+@pytest.mark.parametrize(
+    ("failing_vmids", "expected_failed"), [((), 0), ((102,), 1), ((101, 102), 2)]
+)
+def test_full_update_vm_stage_result_carries_the_failed_vm_count(
+    monkeypatch, failing_vmids, expected_failed
+):
+    """The VM stage result reports failures so a caller can skip the orphan sweep."""
+    _install_full_update_stubs(monkeypatch)
+
+    async def _fake_get_vm_config(**kwargs):
+        if int(kwargs["vmid"]) in failing_vmids:
+            raise RuntimeError("spurious timeout")
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[
+                {"cluster-a": [_resource(101), _resource(102)]},
+            ],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert isinstance(result, sync_vm.SyncResultList)
+    assert result.failed_count == expected_failed
+    assert len(result) == 2 - expected_failed
+
+
 def test_full_update_logs_effective_fetch_capacity_for_small_batch(monkeypatch):
     _install_full_update_stubs(monkeypatch)
     log_calls: list[tuple[str, tuple[object, ...]]] = []
@@ -1350,3 +1385,136 @@ def test_full_update_cluster_precompute_failure_propagates_as_proxbox_exception(
                 sync_vm_network=False,
             )
         )
+
+
+def test_full_update_bulk_path_readopts_soft_deleted_vm_and_clears_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_vm = {
+        **_existing_vm_snapshot(name="web-01"),
+        "status": "decommissioning",
+        "tags": [{"id": 5}, {"id": 99, "slug": SOFT_DELETE_TAG_SLUG}],
+    }
+    vm_patches: list[dict[str, object]] = []
+    marker_patches: list[dict[str, object]] = []
+    _install_full_update_stubs(
+        monkeypatch,
+        netbox_snapshot=[existing_vm],
+        sidecar_rows=[
+            {
+                "id": 1,
+                "virtual_machine": {"id": 55},
+                "proxmox_vm_id": 101,
+                "proxmox_vm_type": "qemu",
+                "proxmox_vm_name": "web-01",
+            }
+        ],
+    )
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _fake_patch(_nb, _path, record_id, payload):
+        vm_patches.append(dict(payload))
+        return {**existing_vm, "id": record_id, **payload}
+
+    async def _fake_marker_patch(_nb, _path, record_id, payload):
+        assert record_id == 55
+        marker_patches.append(dict(payload))
+        return {"id": record_id, **payload}
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "rest_patch_async", _fake_patch)
+    monkeypatch.setattr(orphan_sweep, "rest_patch_async", _fake_marker_patch)
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(101)]}],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert len(result) == 1
+    # The bulk diff cannot see the decommissioning status, so the clear PATCH restores it.
+    assert marker_patches == [{"tags": [{"id": 5}], "status": "active"}]
+
+
+def test_selected_vm_batch_drops_unowned_vm_and_reports_it_as_degraded(monkeypatch):
+    """A selected VM with an incomplete sidecar is dropped; the others still sync."""
+
+    async def _inline_to_thread(func, /, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
+    _install_full_update_stubs(monkeypatch)
+
+    async def _selected_vm_list(_nb, path, *, query=None):
+        assert query == {"id": ["501", "502"]}
+        return [
+            {"id": 501, "name": "vm-501", "cluster": {"id": 41, "name": "cluster-a"}},
+            {"id": 502, "name": "vm-502", "cluster": {"id": 41, "name": "cluster-a"}},
+        ]
+
+    async def _sidecar_scan(_nb):
+        complete = {
+            "virtual_machine": {"id": 501},
+            "proxmox_cluster_name": "cluster-a",
+            "proxmox_endpoint_raw_id": 11,
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+        }
+        no_endpoint = {
+            "virtual_machine": {"id": 502},
+            "proxmox_cluster_name": "cluster-a",
+            "proxmox_vm_id": 102,
+            "proxmox_vm_type": "qemu",
+        }
+        return SimpleNamespace(
+            rows=(complete, no_endpoint),
+            sidecar_unavailable=False,
+            sidecar_read_failed=False,
+        )
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _fake_rest_create(_nb, _path, payload, *, lookup=None):
+        return {"id": 501, **payload}
+
+    async def _fake_task_history(**_kwargs):
+        return {"count": 0, "created": 0, "skipped": 0}
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _selected_vm_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities", _sidecar_scan
+    )
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "rest_create_async", _fake_rest_create)
+    monkeypatch.setattr(sync_vm, "sync_all_virtual_machine_task_histories", _fake_task_history)
+    px = SimpleNamespace(name="cluster-a", cluster_name="cluster-a", db_endpoint_id=11)
+
+    def _run(ids: str):
+        return asyncio.run(
+            sync_vm.create_virtual_machines(
+                netbox_session=object(),
+                pxs=[px],
+                cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+                cluster_resources=[{"cluster-a": [_resource(101), _resource(102)]}],
+                tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+                netbox_vm_ids=ids,
+                sync_vm_network=False,
+            )
+        )
+
+    result = _run("501,502")
+
+    # REST is told about the dropped VM instead of receiving a bare, seemingly
+    # complete list.
+    assert result["degraded"] is True
+    assert result["count"] == 1
+    assert [record["id"] for record in result["virtual_machines"]] == [501]
+    assert [warning["netbox_vm_id"] for warning in result["warnings"]] == [502]

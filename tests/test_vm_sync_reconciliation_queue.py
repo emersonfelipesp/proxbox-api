@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -11,6 +12,17 @@ from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput
 from proxbox_api.routes.virtualization.virtual_machines import sync_vm
 from proxbox_api.services.sync import role_resolution
 from proxbox_api.services.sync.sync_state_reader import VMRoleSnapshotScan
+
+
+@pytest.fixture
+def proxbox_caplog(caplog):
+    """Attach caplog to the non-propagating ``proxbox`` logger."""
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
 
 
 def _prepared_vm(
@@ -1047,3 +1059,184 @@ async def test_dispatch_vm_operation_queue_empty_queue_returns_empty_results():
 
     assert resolved == {}
     assert failed_keys == set()
+
+
+# ---------------------------------------------------------------------------
+# Cluster guard: the same (endpoint id, vmid) key in two NetBox clusters.
+# ---------------------------------------------------------------------------
+
+
+def _colliding_vm(vm_id: int, cluster_id: int, cluster_name: str, **extra) -> dict[str, object]:
+    return {
+        "id": vm_id,
+        "name": f"vm-{vm_id}",
+        "status": "active",
+        "cluster": {"id": cluster_id, "name": cluster_name},
+        "device": {"id": 10},
+        "role": {"id": 20},
+        "vcpus": 2,
+        "memory": 1024,
+        "disk": 30,
+        "tags": [{"id": 99}],
+        "description": "Synced from Proxmox node pve01",
+        "proxmox_endpoint_id": 500,
+        "proxmox_vm_id": 401,
+        "proxmox_vm_type": "qemu",
+        **extra,
+    }
+
+
+def _prepared_for_cluster(cluster_id: int, cluster_name: str) -> sync_vm._PreparedVMState:
+    prepared = _prepared_vm(cluster_name=cluster_name, vmid=401, memory=2048)
+    prepared.desired_payload["cluster"] = cluster_id
+    return prepared
+
+
+@pytest.mark.parametrize("beta_first", [False, True])
+def test_queue_selects_the_live_clusters_vm_when_endpoint_and_vmid_collide(beta_first):
+    alpha = _colliding_vm(7001, 1, "cluster-a")
+    beta = _colliding_vm(7002, 2, "cluster-b")
+    snapshot = [beta, alpha] if beta_first else [alpha, beta]
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b"), _prepared_for_cluster(1, "cluster-a")],
+        snapshot,
+    )
+
+    assert [(op.method, op.existing_record["id"]) for op in queue] == [
+        ("UPDATE", 7002),
+        ("UPDATE", 7001),
+    ]
+
+
+def test_queue_creates_instead_of_updating_another_clusters_vm(proxbox_caplog):
+    proxbox_caplog.set_level(logging.WARNING, logger="proxbox_api.services.sync.reconciliation")
+    other_cluster = _colliding_vm(7001, 1, "cluster-a")
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [other_cluster]
+    )
+
+    assert [op.method for op in queue] == ["CREATE"]
+    assert queue[0].existing_record is None
+    assert "Rejecting endpoint-scoped VM match for vmid=401 endpoint_id=500" in proxbox_caplog.text
+
+
+def test_queue_keeps_matching_the_same_cluster_by_name_when_ids_are_unknown():
+    record = _colliding_vm(7001, 1, "cluster-a")
+    record["cluster"] = {"name": "Cluster-A"}
+    prepared = _prepared_for_cluster(1, "cluster-a")
+    prepared.desired_payload.pop("cluster")
+
+    queue = sync_vm._build_vm_operation_queue([prepared], [record])
+
+    assert [op.method for op in queue] == ["UPDATE"]
+
+
+def test_select_existing_vm_record_matches_only_the_live_cluster_untyped():
+    alpha = _colliding_vm(7001, 1, "cluster-a", proxmox_vm_type=None)
+    beta = _colliding_vm(7002, 2, "cluster-b", proxmox_vm_type=None)
+    indexes = sync_vm._build_vm_snapshot_identity_indexes([alpha, beta])
+
+    def _select(cluster_id: int, cluster_name: str):
+        return sync_vm._select_existing_vm_record(
+            prepared=_prepared_for_cluster(cluster_id, cluster_name),
+            endpoint_id=500,
+            cluster_id=cluster_id,
+            proxmox_vmid=401,
+            endpoint_typed_index=indexes[0],
+            endpoint_untyped_candidates=indexes[1],
+            cluster_typed_index=indexes[2],
+            cluster_untyped_candidates=indexes[3],
+        )
+
+    assert _select(1, "cluster-a") is alpha
+    assert _select(2, "cluster-b") is beta
+
+
+def test_rust_operations_on_another_clusters_vm_become_creates():
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    other_cluster = _colliding_vm(7001, 1, "cluster-a")
+    same_cluster = _colliding_vm(7002, 2, "cluster-b")
+    foreign_prepared = _prepared_for_cluster(2, "cluster-b")
+    own_prepared = _prepared_for_cluster(2, "cluster-b")
+    operations = [
+        sync_vm._NetBoxVMOperation(
+            method="UPDATE",
+            prepared=foreign_prepared,
+            existing_record=other_cluster,
+            patch_payload={"memory": 2048},
+        ),
+        sync_vm._NetBoxVMOperation(
+            method="UPDATE",
+            prepared=own_prepared,
+            existing_record=same_cluster,
+            patch_payload={"memory": 2048},
+        ),
+    ]
+
+    guarded = vm_queue._reject_cross_cluster_operations(
+        operations, [other_cluster, same_cluster], {}
+    )
+
+    # The live cluster's own colliding record is found in the snapshot, so the
+    # foreign pick is rebuilt against it instead of becoming a duplicate CREATE.
+    assert guarded[0].method in {"GET", "UPDATE"}
+    assert guarded[0].existing_record is same_cluster
+    assert guarded[1] is operations[1]
+
+
+def test_rust_foreign_pick_without_a_live_candidate_becomes_create():
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    other_cluster = _colliding_vm(7001, 1, "cluster-a")
+    prepared = _prepared_for_cluster(2, "cluster-b")
+    operations = [
+        sync_vm._NetBoxVMOperation(
+            method="UPDATE",
+            prepared=prepared,
+            existing_record=other_cluster,
+            patch_payload={"memory": 2048},
+        )
+    ]
+
+    guarded = vm_queue._reject_cross_cluster_operations(operations, [other_cluster], {})
+
+    assert [op.method for op in guarded] == ["CREATE"]
+    assert guarded[0].existing_record is None and guarded[0].patch_payload == {}
+
+
+@pytest.mark.parametrize("beta_first", [False, True])
+@pytest.mark.parametrize("engine", ["rust", "compare"])
+def test_rust_engine_pick_of_foreign_vm_resolves_live_cluster_record(
+    monkeypatch, engine, beta_first
+):
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    alpha = _colliding_vm(7001, 1, "cluster-a")
+    beta = _colliding_vm(7002, 2, "cluster-b")
+    snapshot = [beta, alpha] if beta_first else [alpha, beta]
+    prepared = _prepared_for_cluster(2, "cluster-b")
+
+    def _fake_rust(*, prepared_vms, netbox_snapshot, flags):
+        # The engine always picks the foreign-cluster VM for the live cluster.
+        return [
+            {
+                "method": "UPDATE",
+                "cluster_name": "cluster-b",
+                "vmid": 401,
+                "vm_type": "qemu",
+                "existing_record": alpha,
+                "patch_payload": {"memory": 2048},
+            }
+        ]
+
+    monkeypatch.setattr(vm_queue, "build_vm_operation_queue_rust", _fake_rust)
+    monkeypatch.setattr(vm_queue, "rust_available", lambda: True)
+    monkeypatch.setattr(vm_queue, "_reconciliation_engine", lambda: engine)
+    monkeypatch.setattr(vm_queue, "_reconciliation_compare_strict", lambda: True)
+
+    queue = vm_queue.build_vm_operation_queue([prepared], snapshot)
+
+    assert [(op.method, op.existing_record["id"]) for op in queue] == [("UPDATE", 7002)]

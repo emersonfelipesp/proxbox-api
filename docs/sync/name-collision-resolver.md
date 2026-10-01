@@ -71,6 +71,13 @@ will be retained on subsequent syncs as if they were resolver-assigned.
 - **Stable identifier.** The typed VM sync-state identity is the durable
   cross-reference. The resolver may flip which VM keeps the bare name if
   Proxmox cluster names are re-ordered, but the VMID-keyed link survives.
+- **Stale endpoint ids do not cause false collisions.** A VM whose sidecar
+  stores an endpoint id that no configured endpoint owns is adopted by
+  `(vmid, cluster)` when its name also matches, under the criteria in
+  [Reconciliation Architecture](reconciliation-architecture.md#cross-cluster-guard-and-stale-endpoint-ids)
+  before this pre-pass runs, so its own name is not treated as taken and no
+  `" (2)"` suffix or duplicate record is produced. Ambiguous cases keep the
+  previous behavior; VMs with different vmids are still suffixed.
 - **Unmanaged records.** A NetBox VM without typed sync-state identity cannot
   be matched by VMID; the resolver treats it as a non-Proxbox record and will
   not consider it an operator rename.

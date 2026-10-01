@@ -1,6 +1,7 @@
 """Regression tests for virtual disk synchronization."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -24,7 +25,7 @@ def bridge_virtual_disk_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(asyncio, "to_thread", _inline_to_thread)
 
-    async def _typed_identity_bridge(_nb, vms, *, require_all):
+    async def _typed_identity_bridge(_nb, vms, *, require_all, **_kwargs):
         del require_all
         return vms
 
@@ -982,3 +983,363 @@ def test_bulk_create_fallback_forwards_nullable_fields(monkeypatch):
     assert result.unchanged == 1
     assert result.created == 0
     assert result.updated == 0
+
+
+def _run_disk_sync_with_vms(monkeypatch, *, vms, resolver):
+    """Run the disk stage over ``vms`` with ``resolver`` standing in for the Proxmox fetch."""
+
+    async def _fake_rest_list(_nb, path, query=None):
+        return vms if path == "/api/virtualization/virtual-machines/" else []
+
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        return SimpleNamespace(records=[], created=len(payloads), updated=0, unchanged=0, failed=0)
+
+    monkeypatch.setattr(virtual_disks_module, "rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(virtual_disks_module, "resolve_vm_config", resolver)
+    monkeypatch.setattr(virtual_disks_module, "rest_bulk_reconcile_async", _fake_bulk_reconcile)
+    return asyncio.run(
+        create_virtual_disks(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[
+                {
+                    "cluster-a": [
+                        {"type": "qemu", "name": "vm-101", "vmid": "101", "node": "pve01"},
+                        {"type": "qemu", "name": "vm-102", "vmid": "102", "node": "pve01"},
+                    ]
+                }
+            ],
+            tag=None,
+            use_websocket=False,
+            use_css=False,
+        )
+    )
+
+
+def _disk_vm(record_id, vmid, **extra):
+    return {
+        "id": record_id,
+        "name": f"vm-{vmid}",
+        "cluster": {"name": "cluster-a"},
+        "proxmox_vm_id": vmid,
+        **extra,
+    }
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"status": {"value": "decommissioning", "label": "Decommissioning"}},
+        {"status": "decommissioning"},
+        {"status": {"value": "active"}, "tags": [{"slug": "proxbox-soft-deleted"}]},
+        {"tags": ["proxbox-soft-deleted"]},
+    ],
+)
+def test_create_virtual_disks_skips_decommissioned_and_soft_deleted_vms(
+    monkeypatch, proxbox_log_capture, marker
+):
+    resolved_vmids: list[object] = []
+
+    async def _resolver(**kwargs):
+        resolved_vmids.append(kwargs["vmid"])
+        return {"scsi0": "local-lvm:vm-102-disk-0,size=1G"}
+
+    result = _run_disk_sync_with_vms(
+        monkeypatch,
+        vms=[_disk_vm(7, 101, **marker), _disk_vm(8, 102, status={"value": "active"})],
+        resolver=_resolver,
+    )
+
+    assert resolved_vmids == ["102"]
+    assert result["count"] == 1
+    assert (
+        proxbox_log_capture.messages(logging.INFO).count(
+            "Skipping 1 decommissioned or soft-deleted VM(s) during virtual disk sync"
+        )
+        == 1
+    )
+
+
+def test_create_virtual_disks_with_only_decommissioned_vms_never_fetches_configs(monkeypatch):
+    async def _resolver(**_kwargs):
+        raise AssertionError("decommissioned VMs must not reach Proxmox")
+
+    result = _run_disk_sync_with_vms(
+        monkeypatch,
+        vms=[_disk_vm(7, 101, status={"value": "decommissioning"})],
+        resolver=_resolver,
+    )
+
+    assert result == {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+
+
+def _missing_guest_error():
+    return ProxboxException(
+        message="VM Config not found.",
+        detail=(
+            "VM Config not found. Check if the 'node', 'type', and 'vmid' are correct. "
+            "Session errors: pve: Configuration file 'nodes/pve01/qemu-server/101.conf' "
+            "does not exist"
+        ),
+    )
+
+
+def _config_failure_records(capture):
+    return [r for r in capture.records if r.getMessage().startswith("Error getting VM config")]
+
+
+def test_create_virtual_disks_logs_a_missing_guest_below_error_and_counts_it_skipped(
+    monkeypatch, proxbox_log_capture
+):
+    async def _resolver(**_kwargs):
+        raise _missing_guest_error()
+
+    result = _run_disk_sync_with_vms(monkeypatch, vms=[_disk_vm(7, 101)], resolver=_resolver)
+
+    records = _config_failure_records(proxbox_log_capture)
+    assert [r.levelno for r in records] == [logging.WARNING]
+    assert result["skipped"] == 1
+    assert result["created"] == 0
+
+
+def test_create_virtual_disks_keeps_error_level_for_other_config_failures(
+    monkeypatch, proxbox_log_capture
+):
+    async def _resolver(**_kwargs):
+        raise ProxboxException(
+            message="VM Config not found.",
+            detail="Session errors: pve: ClientConnectorError: connection refused",
+        )
+
+    result = _run_disk_sync_with_vms(monkeypatch, vms=[_disk_vm(7, 101)], resolver=_resolver)
+
+    records = _config_failure_records(proxbox_log_capture)
+    assert [r.levelno for r in records] == [logging.ERROR]
+    assert result["skipped"] == 1
+
+
+def test_missing_guest_failure_message_is_reported_to_the_stage(monkeypatch):
+    async def _resolver(**_kwargs):
+        raise _missing_guest_error()
+
+    monkeypatch.setattr(virtual_disks_module, "resolve_vm_config", _resolver)
+
+    fetched = asyncio.run(
+        virtual_disks_module._fetch_virtual_disk_vm_config(
+            vm={"id": 7, "name": "vm-101", "cluster": {"name": "cluster-a"}, "proxmox_vm_id": 101},
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[
+                {"cluster-a": [{"type": "qemu", "name": "vm-101", "vmid": "101", "node": "pve01"}]}
+            ],
+        )
+    )
+
+    assert fetched.failure_message == "VM not found in Proxmox"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_missing_guest_error(), True),
+        (
+            ProxboxException(
+                message="VM Config not found.",
+                detail="VM Config not found. Check if the 'node', 'type', and 'vmid' are correct.",
+            ),
+            True,
+        ),
+        (
+            ProxboxException(
+                message="Cannot reach node", detail="Configuration FILE DOES NOT EXIST"
+            ),
+            True,
+        ),
+        (RuntimeError("Configuration file 'x.conf' does not exist"), True),
+        (
+            ProxboxException(
+                message="VM Config not found.",
+                detail="Session errors: pve: TimeoutError: request timed out",
+            ),
+            False,
+        ),
+        (ProxboxException(message="Invalid VM Type. Use 'qemu' or 'lxc'."), False),
+        (RuntimeError("connection reset by peer"), False),
+        (ProxboxException(message="", detail=None), False),
+    ],
+)
+def test_is_guest_not_found_error_classification(error, expected):
+    from proxbox_api.services.proxmox.config import is_guest_not_found_error
+
+    assert is_guest_not_found_error(error) is expected
+
+
+# --- strict vs lenient selection of VMs with unusable ownership -----------------
+
+
+def _selection_vm(netbox_id: int, vmid: int) -> dict[str, object]:
+    return {"id": netbox_id, "name": f"vm-{netbox_id}", "cluster": {"name": "cluster-a"}}
+
+
+def _disk_sidecar(netbox_id: int, vmid: int, *, endpoint_id: int | None = 1):
+    row: dict[str, object] = {
+        "virtual_machine": {"id": netbox_id},
+        "proxmox_cluster_name": "cluster-a",
+        "proxmox_vm_id": vmid,
+        "proxmox_vm_type": "qemu",
+    }
+    if endpoint_id is not None:
+        row["proxmox_endpoint_raw_id"] = endpoint_id
+    return row
+
+
+@pytest.fixture
+def mixed_disk_selection(monkeypatch):
+    """VM 7 is usable, VM 8 has no endpoint id, VM 9 has two sidecars."""
+
+    from proxbox_api.services.sync import vm_filter
+
+    monkeypatch.setattr(
+        virtual_disks_module,
+        "hydrate_vm_identities_from_sidecars",
+        vm_filter.hydrate_vm_identities_from_sidecars,
+    )
+    vms = [_selection_vm(7, 101), _selection_vm(8, 102), _selection_vm(9, 103)]
+    sidecars = [
+        _disk_sidecar(7, 101),
+        _disk_sidecar(8, 102, endpoint_id=None),
+        _disk_sidecar(9, 103),
+        _disk_sidecar(9, 103, endpoint_id=2),
+    ]
+
+    async def _lookup(_nb, path, *, query=None):
+        requested = {int(vm_id) for vm_id in (query or {}).get("id", [])}
+        return [vm for vm in vms if vm["id"] in requested]
+
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=tuple(sidecars), sidecar_unavailable=False, sidecar_read_failed=False
+        )
+
+    async def _no_records(*_args, **_kwargs):
+        return []
+
+    fetched: list[int] = []
+
+    async def _fetch(*, vm, **_kwargs):
+        fetched.append(vm["id"])
+        return virtual_disks_module.VmDiskFetchResult(
+            vm=vm,
+            vmid=str(vm["proxmox_vm_id"]),
+            vm_name=str(vm["name"]),
+            cluster_name="cluster-a",
+            target=None,
+            vm_config={},
+        )
+
+    async def _sync(*, fetched_vm, **_kwargs):
+        return virtual_disks_module.VmDiskSyncOutcome(state="created")
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _lookup)
+    monkeypatch.setattr(vm_filter, "load_vm_sync_state_identities", _scan)
+    monkeypatch.setattr(virtual_disks_module, "rest_list_async", _no_records)
+    monkeypatch.setattr(virtual_disks_module, "_fetch_virtual_disk_vm_config", _fetch)
+    monkeypatch.setattr(virtual_disks_module, "_sync_virtual_disks_for_vm", _sync)
+    return fetched
+
+
+def _run_disks(**kwargs):
+    return asyncio.run(
+        create_virtual_disks(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=None,
+            **kwargs,
+        )
+    )
+
+
+def test_selected_virtual_disks_lenient_syncs_good_vm_and_reports_degraded(mixed_disk_selection):
+    result = _run_disks(netbox_vm_ids=[7, 8, 9])
+
+    assert mixed_disk_selection == [7]
+    assert result["count"] == 1
+    assert result["created"] == 1
+    assert result["degraded"] is True
+    assert sorted(w["netbox_vm_id"] for w in result["warnings"]) == [8, 9]
+
+
+def test_selected_virtual_disks_lenient_with_every_vm_bad_is_degraded_not_error(
+    mixed_disk_selection,
+):
+    result = _run_disks(netbox_vm_ids=[8, 9])
+
+    assert mixed_disk_selection == []
+    assert result["count"] == 0
+    assert result["degraded"] is True
+    assert sorted(w["netbox_vm_id"] for w in result["warnings"]) == [8, 9]
+
+
+def test_single_vm_virtual_disks_stays_strict_when_the_route_says_so(mixed_disk_selection):
+    from proxbox_api.services.sync.vm_filter import SelectionMode
+
+    with pytest.raises(ProxboxException, match="selected VM ownership"):
+        _run_disks(netbox_vm_id=8, selection_mode=SelectionMode.STRICT)
+
+    assert mixed_disk_selection == []
+
+
+def test_virtual_disk_routes_choose_selection_mode_by_addressing(monkeypatch):
+    from proxbox_api.routes.virtualization.virtual_machines import disks_vm
+    from proxbox_api.services.sync.vm_filter import SelectionMode
+
+    captured: list[dict[str, object]] = []
+
+    async def _fake_sync(**kwargs):
+        captured.append(kwargs)
+        return {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+
+    async def _get(id):
+        return {"id": id}
+
+    monkeypatch.setattr(disks_vm, "sync_virtual_disks", _fake_sync)
+    common = {
+        "pxs": [],
+        "cluster_status": [],
+        "cluster_resources": [],
+        "tag": SimpleNamespace(id=1),
+        "fetch_max_concurrency": None,
+    }
+
+    async def _drain(response):
+        async for _chunk in response.body_iterator:
+            pass
+
+    async def _drive():
+        session = SimpleNamespace(
+            virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_get))
+        )
+        await disks_vm.create_virtual_disks(
+            netbox_session=session, netbox_vm_ids="5,6", websocket=None, **common
+        )
+        await _drain(
+            await disks_vm.create_virtual_disks_stream(
+                netbox_session=session, netbox_vm_ids="5,6", **common
+            )
+        )
+        await _drain(
+            await disks_vm.create_virtual_disks_for_vm_stream(
+                netbox_vm_id=5, netbox_session=session, **common
+            )
+        )
+
+    asyncio.run(_drive())
+
+    assert [call["selection_mode"] for call in captured] == [
+        SelectionMode.LENIENT,
+        SelectionMode.LENIENT,
+        SelectionMode.STRICT,
+    ]

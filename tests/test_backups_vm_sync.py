@@ -20,6 +20,9 @@ from proxbox_api.routes.virtualization.virtual_machines.backups_vm import (
     get_node_backups,
 )
 from proxbox_api.services.sync.vm_filter import (
+    SelectionMode,
+)
+from proxbox_api.services.sync.vm_filter import (
     hydrate_vm_identities_from_sidecars as production_hydrate_vm_identities,
 )
 
@@ -46,7 +49,7 @@ def _allow_dict_proxmox_rows(monkeypatch):
 
     monkeypatch.setattr(backups_vm, "dump_models", lambda items: items)
 
-    async def _preserve_vm_identities(_nb, vms, *, require_all):
+    async def _preserve_vm_identities(_nb, vms, *, require_all, **_kwargs):
         assert require_all is False
         return vms
 
@@ -553,7 +556,7 @@ async def test_full_backup_sync_hydrates_sidecar_only_vm_identity(monkeypatch):
     async def _empty_storage_index(_nb):
         return {}
 
-    async def _hydrate(_nb, vms, *, require_all):
+    async def _hydrate(_nb, vms, *, require_all, **_kwargs):
         hydration_calls.append(require_all)
         assert vms == [
             {
@@ -664,7 +667,17 @@ async def test_full_backup_cache_uses_real_sidecar_authority_and_excludes_unmana
     ],
     ids=("duplicate", "incomplete"),
 )
-async def test_full_backup_cache_rejects_invalid_sidecar_ownership(monkeypatch, sidecars):
+async def test_full_backup_cache_drops_invalid_sidecar_ownership_when_lenient(
+    monkeypatch, sidecars
+):
+    """An estate scan drops a VM whose sidecar is unusable instead of aborting.
+
+    This pinned the opposite behaviour (the whole estate backup stage raised for
+    one bad sidecar). The estate cache is now lenient by default: the VM is
+    absent from the cache, so it is neither reconciled nor covered by stale-backup
+    cleanup, and it is reported as skipped. Strict selection still fails closed.
+    """
+
     async def _all_vms(_nb, _path, *, query=None):
         return [{"id": 7, "name": "vm-7", "cluster": None, "custom_fields": {}}]
 
@@ -677,8 +690,15 @@ async def test_full_backup_cache_rejects_invalid_sidecar_ownership(monkeypatch, 
         _vm_sidecar_rows(*sidecars),
     )
 
+    cache = await backups_vm._prefetch_vm_cache(object())
+
+    assert cache.selected_scopes == ()
+    assert cache.resolve(endpoint_id=1, cluster_name="cluster-a", proxmox_vmid=101) is None
+    assert [skip["netbox_vm_id"] for skip in cache.skipped] == [7]
+    assert "NetBox VM id 7" in cache.skipped[0]["reason"]
+
     with pytest.raises(ProxboxException, match="typed Proxbox sync-state owner"):
-        await backups_vm._prefetch_vm_cache(object())
+        await backups_vm._prefetch_vm_cache(object(), mode=SelectionMode.STRICT)
 
 
 @pytest.mark.asyncio
@@ -1027,3 +1047,324 @@ async def test_estate_backup_cleanup_suppresses_ambiguous_exact_vm_owners(monkey
     assert deleted_ids == []
     completed = [message for message in messages if message.get("status") == "completed"]
     assert completed[-1]["result"]["failed_tasks"] == 1
+
+
+# --- strict vs lenient selection of VMs with unusable ownership -----------------
+
+
+@pytest.fixture
+def proxbox_caplog(caplog):
+    """Capture the non-propagating application logger."""
+
+    import logging
+
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="proxbox"):
+            yield caplog
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
+
+
+def _backup_sidecar(
+    netbox_id: int,
+    *,
+    endpoint_id: int | None = 1,
+    cluster_name: str = "cluster-a",
+    vmid: int = 101,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "virtual_machine": {"id": netbox_id},
+        "proxmox_cluster_name": cluster_name,
+        "proxmox_vm_id": vmid,
+        "proxmox_vm_type": "qemu",
+    }
+    if endpoint_id is not None:
+        row["proxmox_endpoint_raw_id"] = endpoint_id
+    return row
+
+
+def _bare_vm(netbox_id: int) -> dict[str, object]:
+    return {"id": netbox_id, "name": f"vm-{netbox_id}", "cluster": None, "custom_fields": {}}
+
+
+def _install_selected_backup_world(
+    monkeypatch,
+    sidecars: list[dict[str, object]],
+    *,
+    existing_backups: list[dict[str, object]] | None = None,
+):
+    """NetBox holds ``sidecars``; Proxmox on endpoint 1 has one backup for VMID 101."""
+
+    reconciled: list[dict] = []
+    deleted: list[int] = []
+    discovered_vmids: list[set[str]] = []
+
+    async def _lookup(_nb, path, *, query=None):
+        assert path == "/api/virtualization/virtual-machines/"
+        requested = {int(vm_id) for vm_id in (query or {}).get("id", [])}
+        return [_bare_vm(vm_id) for vm_id in sorted(requested)]
+
+    async def _empty_storage_index(_nb):
+        return {}
+
+    async def _get_backups(_proxmox, **kwargs):
+        discovered_vmids.append({str(kwargs.get("vmid"))})
+        return [
+            {
+                "content": "backup",
+                "vmid": 101,
+                "volid": "pbs:backup/vm/101/current",
+                "format": "pbs-vm",
+                "subtype": "qemu",
+            }
+        ]
+
+    async def _bulk(_nb, payloads, **_kwargs):
+        reconciled.extend(payloads)
+        return payloads, len(payloads), 0
+
+    async def _existing(_nb, path, **_kwargs):
+        return [
+            RestRecord(SimpleNamespace(), path, dict(record)) for record in existing_backups or []
+        ]
+
+    async def _delete(_nb, _path, ids):
+        deleted.extend(ids)
+        return len(ids)
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _lookup)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_filter.load_vm_sync_state_identities",
+        _vm_sidecar_rows(*sidecars),
+    )
+    monkeypatch.setattr(backups_vm, "_load_storage_index", _empty_storage_index)
+    monkeypatch.setattr(backups_vm, "get_node_storage_content", _get_backups)
+    monkeypatch.setattr(backups_vm, "_bulk_reconcile_backups", _bulk)
+    monkeypatch.setattr(backups_vm, "rest_list_paginated_async", _existing)
+    monkeypatch.setattr(backups_vm, "rest_bulk_delete_async", _delete)
+    monkeypatch.setattr(backups_vm, "_resolve_backup_batch_delay_ms", lambda: 0)
+    monkeypatch.setattr(backups_vm, "_resolve_bulk_batch_delay_ms", lambda: 0)
+    return reconciled, deleted, discovered_vmids
+
+
+async def _run_selected_backups(ids: list[int], **overrides):
+    return await _create_all_virtual_machine_backups(
+        netbox_session=object(),
+        pxs=[_px(1)],
+        cluster_status=[_cluster("cluster-a", "pve-a")],
+        tag=object(),
+        netbox_vm_ids=ids,
+        **overrides,
+    )
+
+
+@pytest.mark.asyncio
+async def test_selected_backups_lenient_syncs_good_vm_and_reports_degraded(
+    monkeypatch, proxbox_caplog
+):
+    reconciled, _deleted, _ = _install_selected_backup_world(
+        monkeypatch,
+        [
+            _backup_sidecar(7),
+            _backup_sidecar(8, endpoint_id=None, vmid=102),
+            _backup_sidecar(9, vmid=103),
+            _backup_sidecar(9, vmid=103, endpoint_id=2),
+        ],
+    )
+
+    result = await _run_selected_backups([7, 8, 9])
+
+    assert [payload["virtual_machine"] for payload in reconciled] == [7]
+    assert result.degraded is True
+    assert sorted(warning["netbox_vm_id"] for warning in result.warnings) == [8, 9]
+    for vm_id in (8, 9):
+        assert any(
+            f"NetBox VM id {vm_id}" in record.getMessage() for record in proxbox_caplog.records
+        )
+
+
+@pytest.mark.asyncio
+async def test_selected_backups_strict_fails_closed_on_first_bad_vm(monkeypatch):
+    reconciled, _deleted, _ = _install_selected_backup_world(
+        monkeypatch, [_backup_sidecar(7), _backup_sidecar(8, endpoint_id=None, vmid=102)]
+    )
+
+    with pytest.raises(ProxboxException, match="selected VM ownership"):
+        await _run_selected_backups([7, 8], selection_mode=SelectionMode.STRICT)
+
+    assert reconciled == []
+
+
+@pytest.mark.asyncio
+async def test_selected_backups_lenient_with_every_vm_bad_is_degraded_not_error(monkeypatch):
+    reconciled, _deleted, discovered = _install_selected_backup_world(
+        monkeypatch, [_backup_sidecar(8, endpoint_id=None, vmid=102)]
+    )
+
+    result = await _run_selected_backups([8])
+
+    assert list(result) == []
+    assert reconciled == []
+    assert discovered == []
+    assert result.degraded is True
+    assert [warning["netbox_vm_id"] for warning in result.warnings] == [8]
+
+
+@pytest.mark.asyncio
+async def test_lenient_backup_skip_never_deletes_the_skipped_vms_netbox_backups(monkeypatch):
+    existing = [
+        {"id": 70, "virtual_machine": {"id": 7}, "volume_id": "pbs:stale-7"},
+        {"id": 80, "virtual_machine": {"id": 8}, "volume_id": "pbs:stale-8"},
+        {"id": 90, "virtual_machine": {"id": 9}, "volume_id": "pbs:stale-9"},
+    ]
+    _reconciled, deleted, _ = _install_selected_backup_world(
+        monkeypatch,
+        [
+            _backup_sidecar(7),
+            _backup_sidecar(8, endpoint_id=None, vmid=102),
+            _backup_sidecar(9, vmid=103),
+            _backup_sidecar(9, vmid=103, endpoint_id=2),
+        ],
+        existing_backups=existing,
+    )
+
+    result = await _run_selected_backups([7, 8, 9], delete_nonexistent_backup=True)
+
+    # Only the VM that was actually discovered may have its stale backups removed.
+    assert deleted == [70]
+    assert result.degraded is True
+
+
+@pytest.mark.asyncio
+async def test_estate_backups_lenient_skip_never_deletes_the_skipped_vms_netbox_backups(
+    monkeypatch,
+):
+    existing = [
+        {"id": 70, "virtual_machine": {"id": 7}, "volume_id": "pbs:stale-7"},
+        {"id": 80, "virtual_machine": {"id": 8}, "volume_id": "pbs:stale-8"},
+    ]
+    _reconciled, deleted, _ = _install_selected_backup_world(
+        monkeypatch,
+        [_backup_sidecar(7), _backup_sidecar(8, endpoint_id=None, vmid=102)],
+        existing_backups=existing,
+    )
+
+    async def _all_vms(_nb, _path, *, query=None):
+        return [_bare_vm(7), _bare_vm(8)]
+
+    monkeypatch.setattr(backups_vm, "rest_list_async", _all_vms)
+    monkeypatch.setattr(
+        backups_vm, "hydrate_vm_identities_from_sidecars", production_hydrate_vm_identities
+    )
+
+    result = await _create_all_virtual_machine_backups(
+        netbox_session=object(),
+        pxs=[_px(1)],
+        cluster_status=[_cluster("cluster-a", "pve-a")],
+        tag=object(),
+        delete_nonexistent_backup=True,
+    )
+
+    assert deleted == [70]
+    assert result.degraded is True
+    assert [warning["netbox_vm_id"] for warning in result.warnings] == [8]
+
+
+@pytest.mark.asyncio
+async def test_selected_backups_lenient_drops_every_claimant_of_one_identity(monkeypatch):
+    reconciled, _deleted, _ = _install_selected_backup_world(
+        monkeypatch,
+        [
+            _backup_sidecar(5, vmid=101),
+            _backup_sidecar(6, vmid=101),
+            _backup_sidecar(7, vmid=102),
+        ],
+    )
+
+    result = await _run_selected_backups([5, 6, 7])
+
+    assert reconciled == []
+    assert sorted(warning["netbox_vm_id"] for warning in result.warnings) == [5, 6]
+
+    with pytest.raises(ProxboxException, match="selected backup VM ownership"):
+        await _run_selected_backups([5, 6, 7], selection_mode=SelectionMode.STRICT)
+
+
+@pytest.mark.asyncio
+async def test_selected_backups_lenient_skips_vm_whose_owner_has_no_active_session(monkeypatch):
+    reconciled, _deleted, _ = _install_selected_backup_world(
+        monkeypatch,
+        [_backup_sidecar(7), _backup_sidecar(6, endpoint_id=2, cluster_name="cluster-b", vmid=201)],
+    )
+
+    result = await _run_selected_backups([7, 6])
+
+    assert [payload["virtual_machine"] for payload in reconciled] == [7]
+    assert [warning["netbox_vm_id"] for warning in result.warnings] == [6]
+    assert "No active Proxmox session/cluster pair" in result.warnings[0]["reason"]
+
+    with pytest.raises(ProxboxException, match="owner is unavailable"):
+        await _run_selected_backups([7, 6], selection_mode=SelectionMode.STRICT)
+
+
+@pytest.mark.asyncio
+async def test_clean_backup_run_keeps_the_historical_bare_list(monkeypatch):
+    reconciled, _deleted, _ = _install_selected_backup_world(monkeypatch, [_backup_sidecar(7)])
+
+    result = await _run_selected_backups([7])
+
+    assert [payload["virtual_machine"] for payload in reconciled] == [7]
+    assert not getattr(result, "warnings", [])
+
+
+@pytest.mark.asyncio
+async def test_backup_routes_choose_selection_mode_by_addressing(monkeypatch):
+    captured: list[dict[str, object]] = []
+
+    async def _fake_create_all(**kwargs):
+        captured.append(kwargs)
+        return []
+
+    async def _get(id):
+        return {"id": id}
+
+    monkeypatch.setattr(backups_vm, "_create_all_virtual_machine_backups", _fake_create_all)
+    session = SimpleNamespace(
+        virtualization=SimpleNamespace(virtual_machines=SimpleNamespace(get=_get))
+    )
+    common = {"netbox_session": session, "pxs": [], "cluster_status": [], "tag": object()}
+
+    async def _drain(response):
+        async for _chunk in response.body_iterator:
+            pass
+
+    await backups_vm.create_all_virtual_machine_backups(
+        netbox_vm_ids="5,6",
+        delete_nonexistent_backup=False,
+        fetch_max_concurrency=None,
+        **common,
+    )
+    await _drain(
+        await backups_vm.create_all_virtual_machine_backups_stream(
+            netbox_vm_ids="5,6",
+            delete_nonexistent_backup=False,
+            fetch_max_concurrency=None,
+            **common,
+        )
+    )
+    await _drain(
+        await backups_vm.create_virtual_machine_backups_by_id_stream(
+            netbox_vm_id=5,
+            delete_nonexistent_backup=False,
+            fetch_max_concurrency=None,
+            **common,
+        )
+    )
+
+    assert [call["selection_mode"] for call in captured] == [
+        SelectionMode.LENIENT,
+        SelectionMode.LENIENT,
+        SelectionMode.STRICT,
+    ]

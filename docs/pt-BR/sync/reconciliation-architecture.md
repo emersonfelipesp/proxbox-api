@@ -71,6 +71,69 @@ consultados em grupos de no maximo 100 como parametros `id` repetidos
 
 O segmento de tipo evita colisao entre uma VM QEMU 100 e um CT LXC 100 no mesmo cluster.
 
+#### Guarda entre clusters e ids de endpoint obsoletos
+
+O `proxmox_endpoint_id` gravado no sidecar de estado de uma VM identifica a
+sessao de endpoint que sincronizou a VM pela ultima vez. Ele vem de um espaco de
+ids independente por implantacao: ids do banco do proxbox-api quando a origem do
+endpoint e o banco (padrao), ou chaves primarias de endpoint do plugin NetBox
+quando a origem e o NetBox. Gerenciar esse espaco de ids e responsabilidade do
+operador e do plugin: recriar o banco do proxbox-api ou registrar novamente os
+endpoints reatribui ids, e os ids gravados podem ficar obsoletos ou colidir com
+os de endpoints nao relacionados. Por isso o proxbox-api nunca considera uma
+correspondencia por endpoint suficiente por si so.
+
+**Guarda de cluster.** Toda busca por `(id do endpoint, vmid)` deve confirmar que
+a VM NetBox encontrada pertence ao cluster em sincronizacao antes de ser usada:
+
+- selecao da fila de reconciliacao (`select_existing_vm_record`), tambem usada
+  pela hidratacao via sidecar e pelo pre-passo de colisao de nomes;
+- sincronizacao de interfaces e IPs (`_resolve_vm_from_index_or_unique_vmid`),
+  para que NICs e IPs nunca sejam gravados na VM de outro cluster quando ids
+  colidem;
+- sincronizacao de snapshots (`_snapshot_sessions_for_vm`), que so consulta as
+  sessoes Proxmox do cluster da VM quando esse cluster e conhecido;
+- operacoes retornadas pelo engine Rust opcional: uma que aponta para a VM de
+  outro cluster e reconstruida pelo seletor Python sobre o snapshot completo do
+  NetBox, de modo que a VM do proprio cluster ainda e atualizada, e so vira
+  `CREATE` quando o cluster em sincronizacao nao tem nenhum candidato.
+
+A comparacao usa o id do cluster NetBox quando os dois lados o conhecem e, caso
+contrario, o nome do cluster sem diferenciar maiusculas de minusculas. Um
+registro so e descartado diante de divergencia positiva; cluster desconhecido
+mantem a correspondencia. A correspondencia descartada gera um aviso com o id da
+VM NetBox, o vmid, o id do endpoint e ambos os clusters, e o registro nunca e
+gravado. Quando dois clusters expoem a mesma chave `(id do endpoint, vmid)`, a
+VM do cluster em sincronizacao ainda e encontrada.
+
+**Autocorrecao de id obsoleto.** Quando a busca no sidecar por `(endpoint,
+cluster, vmid, tipo)` nao encontra nada, a hidratacao repete a busca por `(vmid,
+cluster NetBox)` sem o id do endpoint e so adota a VM quando todas as condicoes
+abaixo sao verdadeiras:
+
+1. existe exatamente um candidato no cluster;
+2. o tipo de VM no sidecar e igual ao tipo atual;
+3. o nome de cluster no sidecar esta vazio ou e igual ao cluster atual (sem
+   diferenciar maiusculas de minusculas);
+4. o id de endpoint do sidecar esta ausente ou nao e o id de nenhum endpoint
+   configurado. O inventario configurado completo e verificado (endpoints do
+   banco e do plugin NetBox, habilitados ou nao), e nao apenas as sessoes desta
+   execucao; assim uma execucao restrita a um endpoint nao toma uma VM de outro
+   endpoint configurado. Se o inventario nao puder ser carregado, nada e adotado;
+5. o nome da VM atual no Proxmox e igual, sem diferenciar maiusculas de
+   minusculas, ao nome da VM no NetBox ou ao nome Proxmox gravado no sidecar. E
+   uma protecao de melhor esforco contra uma VM substituta que reutiliza o VMID:
+   uma VM recriada com o mesmo nome e VMID e um risco residual aceito.
+
+O id de endpoint do sidecar e entao reescrito para o id do endpoint atual, uma
+linha informativa e registrada e a VM e reconciliada como registro existente:
+nenhum sufixo ` (2)` e aplicado e nenhuma VM duplicada e criada. Se a reescrita
+nao puder ser persistida, nada e adotado. Qualquer caso ambiguo (zero ou varios
+candidatos, divergencia de tipo, de cluster ou de nome, id pertencente a um endpoint
+configurado) mantem o comportamento anterior, e o operador deve corrigir esses ids no
+NetBox ou no plugin. O sufixo de colisao de nomes para VMs realmente distintas
+(vmid diferente) nao muda.
+
 ### Fase 4: Reconciliacao da Fila
 
 O engine padrao de reconciliacao e Python. Para cada VM preparada:

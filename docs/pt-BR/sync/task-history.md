@@ -55,8 +55,12 @@ e um pedido selecionado nao falha por um sidecar corrompido que pertence apenas
 a outra VM.
 
 Quando o scan completo do sidecar termina com sucesso, uma VM do NetBox sem
-sidecar e considerada nao gerenciada e e ignorada. Uma VM explicitamente
-selecionada sem identidade continua fatal. Uma leitura indisponivel ou
+sidecar e considerada nao gerenciada e e ignorada. O task-history nao tem modo
+tolerante: uma VM explicitamente selecionada sem identidade continua fatal aqui,
+diferentemente das demais etapas por VM, que descartam essa VM com um aviso e
+reportam `degraded=true` em execucoes por etapa e de todo o ambiente (veja
+[Selecao em execucoes por etapa](./workflows.md#selecao-em-execucoes-por-etapa-propriedade-estrita-versus-tolerante)).
+Uma leitura indisponivel ou
 transiente do sidecar tambem e fatal porque a propriedade nao pode ser
 verificada. Uma tarefa do endpoint 11 nao pode ser atribuida a uma VM ligada ao
 endpoint 22. Colisoes de propriedade e fontes duplicadas de cluster sao

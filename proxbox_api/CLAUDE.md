@@ -98,6 +98,10 @@ workflow. Enabled full updates PATCH stale Proxbox-discovered QEMU/LXC records
 with `status=decommissioning` and the `proxbox-soft-deleted` tag; they never
 call NetBox DELETE. Re-adoption clears only that marker and preserves all other
 tags. The paired NetBox plugin owns the permission-gated human bulk-delete page.
+The sweep also runs from the standalone `GET /virtualization/virtual-machines/orphans/sweep`
+routes for callers that drive each stage separately; it can be scoped to Proxmox
+endpoint IDs and is skipped when the VM stage failed or the sidecar state cannot
+be verified. See `routes/virtualization/virtual_machines/CLAUDE.md`.
 
 ## Extension Guidance
 

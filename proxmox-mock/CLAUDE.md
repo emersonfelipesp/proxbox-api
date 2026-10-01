@@ -84,3 +84,9 @@ uv run pytest tests
 - Keep `generated/openapi.json` in sync with the Proxmox schema version it targets.
 - Do not import from `proxbox_api` — this package must remain standalone.
 - Reset in-memory state between test cases to avoid cross-test pollution.
+
+## Native OpenTelemetry
+
+The backend, Firecracker host agent, and standalone Proxmox mock use `fastapi[standard]==0.142.2` and native FastAPI telemetry. Public defaults never select a collector endpoint. Operators opt into OTLP HTTP/protobuf export through standard `OTEL_*` environment variables before lifespan startup. Application factories accept keyword-only `telemetry` settings and explicit providers; set `auto_configure=False` if another library already owns environment export, and retain caller ownership of explicit provider shutdown. Do not add duplicate FastAPI/ASGI instrumentation. Preserve HTTP authentication, SSE, WebSocket admission, console relay, and lifecycle contracts when upgrading dependencies. Configuration and sensitive-error-log guidance are documented in both language versions of `docs/getting-started/configuration.md`.
+
+Native exporter privacy processors redact concrete HTTP paths and query values and remove arbitrary exception messages and stack traces while retaining route templates and error classification. Install caller-owned log redaction before caller-owned exporters; existing exporter order is preserved. Keep the standalone mock privacy helper independent of `proxbox_api`.

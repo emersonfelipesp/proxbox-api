@@ -487,6 +487,23 @@ Cobertura de testes:
 - `GET /virtualization/virtual-machines/storage/create`
 - `GET /virtualization/virtual-machines/storage/create/stream`
 - `GET /virtualization/virtual-machines/task-history/create/stream` - Etapa SSE
+- `GET /virtualization/virtual-machines/orphans/sweep`
+- `GET /virtualization/virtual-machines/orphans/sweep/stream` - Varredura
+  independente de VMs orfas para chamadores que disparam cada etapa
+  separadamente. `run_id` e obrigatorio e nao pode ser vazio (ausente ou vazio
+  retorna HTTP 422) e deve ser o `run_id` enviado a etapa de VMs. `dry_run`,
+  `vm_stage_failed` e `endpoint_ids` / `proxmox_endpoint_ids` (separados por
+  virgula; o alias tem precedencia; valor invalido e rejeitado antes da
+  varredura) limitam a execucao. Uma varredura real (sem `dry_run`) sem escopo
+  de endpoints e rejeitada com HTTP 422, pois `run_id` e `vm_stage_failed` sao
+  informados pelo chamador; apenas `dry_run=true` pode ficar sem escopo. A configuracao `delete_orphans` decide se ha
+  alteracao. Orfas recebem apenas soft-delete (`status=decommissioning` e a tag
+  `proxbox-soft-deleted`). O resultado sempre inclui `skipped_reason` (`null`,
+  `disabled`, `vm_stage_failed`, `sidecar_unavailable`, `sidecar_read_failed`,
+  `run_not_found` ou `live_inventory_unavailable`). Uma varredura real tambem busca
+  o inventario vivo de convidados do Proxmox nos endpoints do escopo e so marca VMs
+  confirmadas como ausentes, falhando de forma fechada quando nao consegue obte-lo.
+  Veja [Tratamento de VMs orfas](../sync/workflows.md#tratamento-de-vms-orfas).
 
 ### Parametros de overwrite dos streams de VM
 
@@ -517,6 +534,45 @@ responde HTTP 502; o SSE publica o resumo degradado da etapa de task history.
 O campo `created` do resultado de task history e mantido por compatibilidade e
 conta todas as linhas reconciliadas (criadas, atualizadas e inalteradas), nao
 somente operacoes POST.
+
+### Resultados degradados por etapa
+
+As rotas de etapa por VM (`virtual-machines`, `virtual-disks`, `backups`,
+`snapshots`, `interfaces` e `interfaces/ip-address`) escolhem um modo de selecao
+pela forma como enderecam as VMs, conforme descrito em
+[Selecao em execucoes por etapa](../sync/workflows.md#selecao-em-execucoes-por-etapa-propriedade-estrita-versus-tolerante).
+Rotas que enderecam uma VM pelo caminho (`/{netbox_vm_id}/...`) falham de forma
+fechada em uma VM cuja propriedade Proxmox nao pode ser resolvida. Rotas de lista
+e de todo o ambiente (uma selecao `netbox_vm_ids`, `/all/create` e as etapas de
+interface de todo o ambiente) descartam essa VM com um aviso, processam as demais
+e reportam o descarte em vez de devolver HTTP 502:
+
+- `snapshots/all/create` e `virtual-disks/create` (e suas variantes `/stream`)
+  devolvem seu objeto de resultado com duas chaves extras quando uma VM foi
+  descartada: `degraded: true` e `warnings: [{"netbox_vm_id": <int>, "reason":
+  "<texto>"}]`. Ambas as chaves ficam ausentes em uma execucao limpa.
+- `backups/all/create`, `interfaces/create` e `interfaces/ip-address/create`
+  continuam devolvendo uma lista simples em uma execucao limpa. Quando degradadas
+  devolvem `{"<etapa>": [...], "count": <int>, "warnings": [...], "degraded":
+  true}`, onde `<etapa>` e `backups`, `vm_interfaces` ou `vm_ip_addresses`. A
+  resposta de `interfaces/create` ja usava esse formato para falhas parciais de
+  interface; agora tambem carrega `degraded: true`.
+- As variantes `/stream` colocam as mesmas chaves `warnings` e `degraded` no
+  `result` dos eventos `step` da etapa e `complete` final, ao lado de `count`.
+  `virtual-machines/create/stream` faz o mesmo para uma VM selecionada
+  descartada; `virtual-machines/create` continua devolvendo uma lista simples
+  quando limpa e devolve `{"virtual_machines": [...], "count": <int>,
+  "warnings": [...], "degraded": true}` quando uma VM selecionada foi descartada.
+  As rotas por ID `/{netbox_vm_id}/create` permanecem estritas.
+- `GET /full-update` e `GET /full-update/stream` agregam os avisos de todas as
+  etapas, cada um com sua `phase`, na chave `warnings` de nivel superior e
+  definem `degraded: true`.
+
+Se todas as VMs selecionadas forem descartadas, a etapa ainda termina com sucesso
+e um resultado vazio mais os avisos. Uma varredura de sidecar ilegivel, um ID de
+VM invalido ou uma selecao que o NetBox nao devolve por completo continuam sendo
+erro em todos os modos. As rotas de task-history mantem seu proprio contrato
+(veja acima).
 
 ## Full Update
 

@@ -37,7 +37,8 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   uses their endpoint + cluster + VMID + type identity authoritatively, with
   fail-closed malformed/duplicate rows and opt-in legacy fallback only for
   absent rows. A successful full scan skips unmanaged NetBox VMs, but selected
-  VMs without identity remain fatal. It also provides UPID conflict detection,
+  VMs without identity remain fatal: task history has no lenient selection mode
+  (see `vm_filter.py`). It also provides UPID conflict detection,
   requested-scope coverage checks, a run-global fetch semaphore, archive
   terminal status (no per-UPID status N+1), and degraded results for
   partial/no-progress collection plus fatal exceptions for unusable identity,
@@ -45,9 +46,16 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   pagination, or global reconcile failures.
 - `virtual_disks.py`: VM disk sync helpers.
 - `virtual_machines.py`: virtual machine payload and sync helpers.
+- `vm_cluster_guard.py`: cross-cluster guard shared by every endpoint/vmid-keyed
+  NetBox VM lookup (`vm_record_in_cluster`, `filter_vm_records_in_cluster`,
+  `log_cross_cluster_rejection`).
 - `vm_coordinator.py`: VM sync orchestration.
 - `vm_create.py`: VM create path helpers.
-- `vm_filter.py`: VM filtering helpers.
+- `stage_result.py`: result carriers for stages that finish degraded
+  (`WarningList`, `attach_skips_to_dict`, `attach_skips_to_list`,
+  `response_with_stage_warnings`, `degraded_suffix`).
+- `vm_filter.py`: VM ownership filtering and sidecar identity hydration under an
+  explicit `SelectionMode` (see "Strict vs lenient VM selection" below).
 - `vm_helpers.py`: shared VM helper functions, including `to_mapping()` (coerces
   a NetBox record-ish value to a dict: plain dicts, netbox-sdk `Record`
   `serialize()`, Pydantic v2 `model_dump()`, Pydantic v1 `dict()`, and
@@ -92,6 +100,9 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   NetBox node names. Explicit multi-VM selections require complete NetBox
   lookup coverage; empty or partial service-level selections are typed 502
   failures rather than zero-count success.
+  A guest that no longer exists in Proxmox (`services/proxmox/config.py::is_guest_not_found_error`:
+  "does not exist", or "VM Config not found" with no per-session error) is logged at WARNING,
+  reported as "VM not found in Proxmox", and still counted skipped; other config failures stay ERROR.
 - **IP ownership invariant (all sync paths).** IP sync must never reassign an
   address that already belongs to a *different* object. The shared helper
   `ip_ownership.py` (`_reconcile_interface_ip`) resolves ownership before
@@ -242,6 +253,44 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   `false` preserve operator-managed NetBox platform assignments; the resolved
   platform remains part of the create payload for new VMs.
 
+## Strict vs lenient VM selection
+
+**What changed.** `vm_filter.py` gained `SelectionMode` (`STRICT` default,
+`LENIENT`) on `hydrate_vm_identities_from_sidecars`,
+`hydrate_selected_vm_identities`, and `filter_cluster_resources_by_netbox_vm_ids`,
+returning `SelectionResult` (a `list` that also carries `.skipped`). The single-VM
+`filter_cluster_resources_for_selected_vm` stays strict. The snapshot, virtual-disk,
+and backup services take `selection_mode` (default `LENIENT`); the single-VM path
+routes pass `STRICT`, and every list/estate route passes `LENIENT` explicitly.
+
+**Source-row alignment invariant.** `filter_cluster_resources_by_netbox_vm_ids`
+and `filter_cluster_resources_for_selected_vm` return exactly one row per input
+`cluster_resources` row, with the same cluster keys, in the same order. Filtering
+only empties resource lists. Stages such as `create_virtual_machines` pair row `i`
+with `pxs[i]` and `cluster_status[i]` by position, so dropping a row (for example
+when the first source's selected VM is skipped) would bind a later source's VMs to
+the wrong Proxmox endpoint. Consumers must tolerate empty rows.
+
+**Why.** Every VM-scoped stage used to raise on the first selected VM whose
+sidecar was incomplete or duplicated, or whose owner cluster or live resource
+could not be resolved, so one bad or Proxmox-deleted VM aborted the stage and the
+whole job for every other VM. Sidecars become incomplete because the VM sync
+writes identity only while `overwrite_vm_custom_fields` is on and drops a null
+endpoint id; `sync_state_writer.write_virtual_machine_sync_state` now logs a
+warning when the live identity is incomplete (persistence is unchanged).
+
+**Downstream effect.** A lenient stage drops the VM with a `WARNING`, finishes for
+the others, and reports `[{"netbox_vm_id", "reason"}]` warnings with
+`degraded=true` (HTTP 200 / `ok=true`); if every VM is dropped it returns an empty
+result with the warnings instead of raising. The netbox-proxbox plugin therefore
+sees degraded/warnings for staged runs where it used to see a 502, and
+`full_update` includes every stage's warnings (tagged with `phase`) plus
+top-level `degraded`. A dropped VM is absent from the backup ownership cache and
+never scanned for snapshots, so stale-backup/snapshot cleanup cannot delete its
+NetBox rows. A failed/unavailable sidecar scan, an invalid id, and a selection
+NetBox does not return in full stay fatal in every mode. Do not add branches to
+the noqa-C901 stage orchestrators for this; extend the helpers instead.
+
 ## Orphan VM sweep
 
 `orphan_sweep.py` is the only owner of end-of-run orphan handling. Its enabled
@@ -252,6 +301,87 @@ does not send PATCH requests. `vm_create.py` and the individual VM sync call
 guest becomes live without losing unrelated operator tags. The marker and
 status are the contract consumed by the paired NetBox plugin's human-only
 purge page.
+
+The sweep result always carries `skipped_reason` (`None` when it ran). It skips
+entirely, without any PATCH or marker-tag creation, when `vm_stage_failed` is set
+(a live VM that failed to reconcile was not stamped with the run), when the
+sidecar API is unavailable (`sidecar_unavailable`), when the sidecar read failed
+(`sidecar_read_failed`), when no in-scope sidecar carries the `run_id`
+(`run_not_found`, so a bogus run cannot sweep anything), or when the setting is
+off (`disabled`). Right before each PATCH the sweep re-reads the VM's sidecar
+(`_no_longer_stale_reason`) and skips a VM that was restamped or changed; NetBox
+has no compare-and-set, so this narrows but does not close the race.
+`clear_soft_delete_marker(restored_status=...)` also restores the status of a
+still-`decommissioning` VM in the same PATCH (used by the bulk VM stage and both
+individual paths, `vm_create.py` and `individual/vm_sync.py`, through
+`reappeared_vm_status`). `run_orphan_vm_sweep(live_vm_keys=...)` is the
+backend-verified guard: `build_live_vm_keys` turns cluster resources into
+`(casefolded cluster, vmid, type)` keys and a candidate is marked only if absent
+from them (`still_present_in_proxmox` / `identity_incomplete` skips, identity read
+from the sidecar by `scan_vm_sidecar_orphan_candidates`);
+`live_inventory_unavailable=True` skips the whole sweep. Full-update fetches fresh keys at the sweep boundary via
+`_fresh_sweep_inventory` (fail closed to `live_inventory_unavailable`).
+`build_live_vm_keys` raises `LiveInventoryError` for an unidentifiable guest row
+(type/vmid derived from `id` when missing). Before each PATCH the tag list is rebuilt
+from a fresh VM read (`vm_unreadable` / `already_swept` skips); NetBox has no atomic
+tag add, so a tiny window remains.
+`find_orphan_vms` returns an `OrphanCandidateList` (a list carrying the scan's
+`skipped_reason`), so an empty result can be told apart from "could not verify".
+`endpoint_ids` on `scan_vm_sidecar_orphan_candidates`, `find_orphan_vms` and
+`run_orphan_vm_sweep` limits candidates to sidecars whose
+`proxmox_endpoint_raw_id` is in the set: `None` is unscoped, an empty set matches
+nothing, and a sidecar without a valid endpoint id is never a candidate when
+scoped. Never widen an empty scope into an unscoped sweep.
+
+`is_soft_deleted_vm()` is the single predicate for a decommissioned or
+soft-deleted VM (status `decommissioning`, or the `proxbox-soft-deleted` tag; it
+accepts nested `{"value": ...}` statuses, plain strings, and dict or string
+tags). The virtual disk, snapshot, VM interface and VM IP stages drop such VMs
+through `exclude_soft_deleted_vms()` and log one INFO line with the count. The
+sweep itself and the VM stage must not filter them, so re-adoption still works.
+
+## Cross-cluster guard and stale endpoint self-heal
+
+- **What.** `(proxmox_endpoint_id, vmid)` is not a unique key across NetBox
+  clusters. Every lookup keyed on it now requires the matched VM to live in the
+  cluster being synchronized (`vm_cluster_guard.vm_record_in_cluster`: cluster id
+  when both sides know it, else casefolded name; an unknown cluster keeps the
+  match). It is applied in `reconciliation/vm_queue.select_existing_vm_record`
+  (which also feeds sidecar hydration and the name pre-pass), in
+  `sync_vm._resolve_vm_from_index_or_unique_vmid` (interfaces and IPs), in
+  `snapshots._snapshot_sessions_for_vm` (only sessions of the VM's cluster), and
+  as a post-pass over Rust-engine operations (re-resolved against the full snapshot). A dropped match logs a warning and
+  is never written; the live cluster's own VM is still located when the first-wins
+  index was shadowed by another cluster's record.
+- **Stale-id self-heal.** The sidecar endpoint id is a database id (or a plugin
+  primary key with `source=netbox`); those id spaces are independent and are
+  reassigned when the proxbox-api database is recreated. When the
+  `(endpoint, cluster, vmid)` sidecar lookup finds nothing,
+  `sync_vm._resolve_vm_sidecar_identity` (only when that lookup proved the VM
+  absent, never when it was ambiguous or unverifiable) calls
+  `sync_state_reader.adopt_vm_with_stale_endpoint_id`, which retries by `(vmid, cluster)` and
+  adopts the VM only if there is exactly one candidate, its sidecar type
+  equals the live type, its sidecar cluster name is blank or equal, and its
+  stored endpoint id is missing or not the id of any **configured** endpoint
+  (database and NetBox plugin endpoints, enabled or not, loaded lazily once per run
+  by `_ConfiguredEndpointIds`; a load failure means no adoption), and the live
+  Proxmox name equals (casefolded) the NetBox VM name or the sidecar's
+  `proxmox_vm_name`. The name match is a best-effort heuristic against a
+  replacement VM reusing the VMID; a VM recreated under the same name is an
+  accepted residual risk. It then
+  rewrites the sidecar with `sync_state_writer.write_vm_endpoint_raw_id`; an
+  unpersisted rewrite means no adoption. Anything ambiguous keeps the previous
+  behavior. It is wired into sidecar hydration, so the name pre-pass and queue find the existing VM and neither add
+  a ` (2)` suffix nor create a duplicate.
+- **Why / downstream.** Before this, a stale or colliding endpoint id made the
+  sidecar lookup reject or miss the VM, producing a half-populated duplicate VM,
+  NICs/IPs on another cluster's VM, and skipped snapshot sync. The endpoint id
+  space itself remains an operator/plugin concern. Individual-sync callers of
+  `resolve_virtual_machine_by_sync_state` do not self-heal yet. The Rust engine
+  still matches by endpoint key only; its output is filtered by the guard.
+  Coverage: `tests/test_vm_stale_endpoint_adoption.py`,
+  `tests/test_vm_cross_cluster_vmid.py`, `tests/test_vm_sync_reconciliation_queue.py`,
+  `tests/test_snapshots_sync.py`.
 
 ## Extension Guidance
 

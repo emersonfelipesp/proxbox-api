@@ -17,6 +17,11 @@ from proxbox_api.services.sync.reconciliation.rust_bridge import (
     rust_available,
 )
 from proxbox_api.services.sync.reconciliation.types import NetBoxVMOperation, PreparedVMState
+from proxbox_api.services.sync.vm_cluster_guard import (
+    filter_vm_records_in_cluster,
+    log_cross_cluster_rejection,
+    vm_record_in_cluster,
+)
 from proxbox_api.services.sync.vm_helpers import (
     normalize_current_virtual_machine_payload,
 )
@@ -141,7 +146,7 @@ def build_vm_snapshot_identity_indexes(
     )
 
 
-def select_existing_vm_record(
+def _select_scoped_vm_record(
     *,
     prepared: PreparedVMState,
     endpoint_id: int | None,
@@ -152,7 +157,7 @@ def select_existing_vm_record(
     cluster_typed_index: _TypedSnapshotIndex,
     cluster_untyped_candidates: _UntypedSnapshotIndex,
 ) -> dict[str, object] | None:
-    """Find the NetBox VM record for prepared state without guessing on type collisions."""
+    """Look up a VM by endpoint (or cluster) scope without checking its cluster."""
 
     if proxmox_vmid is None:
         return None
@@ -183,6 +188,90 @@ def select_existing_vm_record(
     if len(candidates) == 1:
         return candidates[0]
     return None
+
+
+def _select_cluster_scoped_endpoint_record(
+    *,
+    prepared: PreparedVMState,
+    endpoint_id: int,
+    cluster_id: int | None,
+    proxmox_vmid: int,
+    endpoint_untyped_candidates: _UntypedSnapshotIndex,
+) -> dict[str, object] | None:
+    """Pick the endpoint-keyed candidate that lives in the cluster being synced.
+
+    The endpoint indexes keep only the first record per key, so when two
+    clusters expose the same ``(endpoint id, vmid)`` pair the first one can
+    shadow the record that actually belongs to the live cluster. Scan the full
+    candidate list restricted to the live cluster instead.
+    """
+
+    candidates = filter_vm_records_in_cluster(
+        endpoint_untyped_candidates.get((endpoint_id, proxmox_vmid), []),
+        cluster_id=cluster_id,
+        cluster_name=prepared.cluster_name,
+    )
+    prepared_vm_type = normalize_proxmox_vm_type(prepared.vm_type)
+    if prepared_vm_type is None:
+        return candidates[0] if len(candidates) == 1 else None
+    typed = [c for c in candidates if extract_proxmox_vm_type(c) == prepared_vm_type]
+    if len(typed) == 1:
+        return typed[0]
+    untyped = [c for c in candidates if extract_proxmox_vm_type(c) is None]
+    return untyped[0] if len(candidates) == 1 and len(untyped) == 1 else None
+
+
+def select_existing_vm_record(
+    *,
+    prepared: PreparedVMState,
+    endpoint_id: int | None,
+    cluster_id: int | None,
+    proxmox_vmid: int | None,
+    endpoint_typed_index: _TypedSnapshotIndex,
+    endpoint_untyped_candidates: _UntypedSnapshotIndex,
+    cluster_typed_index: _TypedSnapshotIndex,
+    cluster_untyped_candidates: _UntypedSnapshotIndex,
+) -> dict[str, object] | None:
+    """Find the NetBox VM record for prepared state without guessing on type collisions.
+
+    An endpoint-keyed match is only honoured when the record lives in the
+    cluster being synchronized. Endpoint ids are not unique across clusters
+    (stale or colliding ids), so a match from a different cluster is dropped,
+    logged, and replaced by the live cluster's own candidate when one exists.
+    """
+
+    record = _select_scoped_vm_record(
+        prepared=prepared,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        proxmox_vmid=proxmox_vmid,
+        endpoint_typed_index=endpoint_typed_index,
+        endpoint_untyped_candidates=endpoint_untyped_candidates,
+        cluster_typed_index=cluster_typed_index,
+        cluster_untyped_candidates=cluster_untyped_candidates,
+    )
+    if endpoint_id is None or proxmox_vmid is None:
+        return record
+    if record is not None and vm_record_in_cluster(
+        record, cluster_id=cluster_id, cluster_name=prepared.cluster_name
+    ):
+        return record
+    if record is not None:
+        log_cross_cluster_rejection(
+            record,
+            vmid=proxmox_vmid,
+            endpoint_id=endpoint_id,
+            cluster_id=cluster_id,
+            cluster_name=prepared.cluster_name,
+            context="endpoint-scoped",
+        )
+    return _select_cluster_scoped_endpoint_record(
+        prepared=prepared,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        proxmox_vmid=proxmox_vmid,
+        endpoint_untyped_candidates=endpoint_untyped_candidates,
+    )
 
 
 def prepared_vm_result_key(prepared: PreparedVMState) -> tuple[str, int, str]:
@@ -430,7 +519,46 @@ def _build_vm_operation_queue_with_rust(
         netbox_snapshot=netbox_snapshot,
         flags=flags,
     )
-    return _adapt_to_dataclasses(raw_ops, prepared_vms)
+    return _reject_cross_cluster_operations(
+        _adapt_to_dataclasses(raw_ops, prepared_vms), netbox_snapshot, flags
+    )
+
+
+def _reject_cross_cluster_operations(
+    operations: list[NetBoxVMOperation],
+    netbox_snapshot: list[dict[str, object]],
+    flags: dict[str, bool],
+) -> list[NetBoxVMOperation]:
+    """Re-resolve Rust GET/UPDATE operations that target another cluster's VM.
+
+    The Rust engine matches on the endpoint-scoped key only and may pick a VM
+    from a different cluster when several clusters collide on the same
+    ``(endpoint id, vmid)``. Apply the same cluster guard as
+    :func:`select_existing_vm_record`: the offending operation is rebuilt by
+    the Python selector over the full NetBox snapshot, so the live cluster's
+    own record is still updated, and a CREATE is queued only when the live
+    cluster has no candidate at all.
+    """
+
+    guarded: list[NetBoxVMOperation] = []
+    for operation in operations:
+        record = operation.existing_record
+        prepared = operation.prepared
+        cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+        if record is not None and not vm_record_in_cluster(
+            record, cluster_id=cluster_id, cluster_name=prepared.cluster_name
+        ):
+            log_cross_cluster_rejection(
+                record,
+                vmid=_relation_id(prepared.resource.get("vmid")),
+                endpoint_id=extract_proxmox_endpoint_id(prepared.sync_state_fields),
+                cluster_id=cluster_id,
+                cluster_name=prepared.cluster_name,
+                context="reconciliation",
+            )
+            operation = build_vm_operation_queue_python([prepared], netbox_snapshot, **flags)[0]
+        guarded.append(operation)
+    return guarded
 
 
 def _reconciliation_engine() -> Literal["python", "compare", "rust"]:

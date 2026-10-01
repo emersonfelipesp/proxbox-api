@@ -16,14 +16,20 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
 from proxbox_api.runtime_settings import get_int
-from proxbox_api.services.proxmox.config import resolve_vm_config
+from proxbox_api.services.proxmox.config import is_guest_not_found_error, resolve_vm_config
+from proxbox_api.services.sync.orphan_sweep import exclude_soft_deleted_vms
+from proxbox_api.services.sync.stage_result import attach_skips_to_dict
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
     storage_name_from_volume_id,
 )
 from proxbox_api.services.sync.sync_state_writer import write_virtual_disk_sync_state
-from proxbox_api.services.sync.vm_filter import hydrate_vm_identities_from_sidecars
+from proxbox_api.services.sync.vm_filter import (
+    SelectionMode,
+    hydrate_vm_identities_from_sidecars,
+    selection_skips,
+)
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     relation_id,
@@ -433,7 +439,10 @@ async def _fetch_virtual_disk_vm_config(
             vmid=vmid,
         )
     except Exception as error:
-        logger.error(
+        guest_missing = is_guest_not_found_error(error)
+        # A guest that no longer exists in Proxmox is an expected skip, not an error.
+        log_config_failure = logger.warning if guest_missing else logger.error
+        log_config_failure(
             "Error getting VM config for %s (vmid=%s type=%s cluster=%s node=%s source=%s): %s",
             vm_name,
             vmid,
@@ -450,7 +459,7 @@ async def _fetch_virtual_disk_vm_config(
             cluster_name=cluster_name,
             target=target,
             vm_config=None,
-            failure_message="Config not available",
+            failure_message="VM not found in Proxmox" if guest_missing else "Config not available",
         )
 
     if not vm_config:
@@ -649,6 +658,7 @@ async def create_virtual_disks(  # noqa: C901
     netbox_vm_id: int | None = None,
     netbox_vm_ids: list[int] | None = None,
     fetch_max_concurrency: int | None = None,
+    selection_mode: SelectionMode = SelectionMode.LENIENT,
 ) -> dict[str, object]:
     """
     Sync virtual disks for existing Virtual Machines in NetBox.
@@ -658,6 +668,11 @@ async def create_virtual_disks(  # noqa: C901
 
     When ``netbox_vm_id`` is provided only that single VM is processed.
     When ``netbox_vm_ids`` is provided only those VMs are processed.
+
+    ``selection_mode`` decides what a VM with incomplete or duplicated sidecar
+    ownership does: ``LENIENT`` (default, for estate and list runs) drops it with a
+    warning and reports the result ``degraded``; ``STRICT`` (single-VM route)
+    fails the run.
     """
     nb = netbox_session
     undefined_html = return_status_html("undefined", use_css)
@@ -701,7 +716,9 @@ async def create_virtual_disks(  # noqa: C901
             nb,
             [to_mapping(vm) for vm in vms],
             require_all=target_vm_ids is not None,
+            mode=selection_mode,
         )
+        selection_skipped = selection_skips(vms)
     except Exception as e:
         if target_vm_ids is not None:
             raise
@@ -720,6 +737,7 @@ async def create_virtual_disks(  # noqa: C901
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
     vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
+    vms = exclude_soft_deleted_vms(vms, stage="virtual disk")
 
     storage_index: dict[tuple[str, str], dict] = {}
     try:
@@ -741,7 +759,9 @@ async def create_virtual_disks(  # noqa: C901
                     },
                 }
             )
-        return {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+        return attach_skips_to_dict(
+            {"count": 0, "created": 0, "updated": 0, "skipped": 0}, selection_skipped
+        )
 
     total_vms = len(vms)
     created = 0
@@ -831,12 +851,15 @@ async def create_virtual_disks(  # noqa: C901
         else:
             skipped += 1
 
-    result = {
-        "count": total_vms,
-        "created": created,
-        "updated": updated,
-        "skipped": skipped,
-    }
+    result = attach_skips_to_dict(
+        {
+            "count": total_vms,
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+        },
+        selection_skipped,
+    )
 
     logger.info(f"Virtual disks sync complete: {result}")
 

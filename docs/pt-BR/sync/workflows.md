@@ -33,6 +33,14 @@ sempre registra os nomes curtos originais do node e do cluster, mantendo VMs e
 interfaces ligadas ao Device correto quando clusters reutilizam um nome ou um
 Device gerenciado e renomeado.
 
+A flag de comportamento `sync_node_interfaces` (`GET /full-update?sync_node_interfaces=true`
+e o mesmo parametro de query em `GET /full-update/stream`) e repassada a etapa de
+interfaces de node nas execucoes com e sem streaming. Quando ativa, a etapa
+reconcilia a topologia completa de `/nodes/{node}/network`, incluindo a opcao
+`hwaddress` fixada em uma bridge como endereco MAC primario, exatamente como
+`GET /dcim/devices/interfaces/create?sync_node_interfaces=true`. Sem ela, a
+etapa mantem o comportamento legado por interface, que nao define MAC.
+
 ## Fluxo de Sync de VM
 
 Endpoint principal:
@@ -98,6 +106,78 @@ usam lotes limitados de valores repetidos e falham de forma fechada se qualquer
 lote nao puder ser lido. Veja
 [Sincronizacao de Task History](./task-history.md).
 
+### Selecao em execucoes por etapa: propriedade estrita versus tolerante
+
+As etapas por VM (`virtual-machines`, `virtual-disks`, `backups`, `snapshots`,
+`vm-interfaces` e `vm-ip-addresses`) resolvem o dono Proxmox de cada VM a partir
+do sidecar tipado de estado de sync (endpoint, cluster, VMID e tipo de VM) e,
+nas rotas com lista selecionada, contra os recursos Proxmox ativos. Uma VM cujo
+dono nao pode ser resolvido e tratada por um modo de selecao explicito escolhido
+pela rota:
+
+| Modo | Usado por | Comportamento |
+|---|---|---|
+| Estrito | Rotas que enderecam uma VM pelo caminho: `/{netbox_vm_id}/create`, `/{netbox_vm_id}/backups/create/stream`, `/{netbox_vm_id}/snapshots/create/stream`, `/{netbox_vm_id}/virtual-disks/create/stream` | Falha de forma fechada na primeira VM com propriedade inutilizavel (HTTP 502 ou um `complete` SSE com `ok=false`). Nao ha outra VM para avancar e um dono errado nunca deve ser adivinhado. |
+| Tolerante | Execucoes por etapa e de todo o ambiente: rotas com lista `netbox_vm_ids`, `/all/create`, as etapas `interfaces/create` e `interfaces/ip-address/create` de todo o ambiente, o cache de propriedade do backup completo e as duas variantes de full-update | Descarta a VM com um `WARNING` que nomeia o ID da VM no NetBox e o motivo, processa normalmente as demais VMs e reporta o descarte. |
+
+Rotas que nao dizem escolhem pelo enderecamento: rotas de lista e de todo o
+ambiente sao tolerantes e rotas de VM unica por caminho sao estritas, de modo que
+um plugin orquestrador antigo, que nao envia nenhum parametro novo, continua
+funcionando sem mudanca.
+
+No modo tolerante uma VM e descartada quando o sidecar esta incompleto (sem ID de
+endpoint, cluster, VMID positivo ou tipo de VM), quando ha mais de um sidecar,
+quando uma VM explicitamente selecionada nao tem sidecar, quando o cluster nao
+tem fonte Proxmox disponivel ou e ambiguo entre endpoints, quando o endpoint do
+sidecar discorda do dono do cluster, quando nenhum recurso Proxmox ativo
+corresponde (por exemplo um guest apagado no Proxmox mas ainda no NetBox) ou
+varios correspondem, e quando duas VMs selecionadas reivindicam o mesmo
+endpoint/cluster/VMID/tipo. Todos os que reivindicam um dono compartilhado sao
+descartados, pois nao e possivel saber qual esta certo. Em uma varredura de todo
+o ambiente, uma VM sem nenhum sidecar e nao gerenciada e e ignorada em silencio,
+sem aviso.
+
+Permanecem fatais nos dois modos por nao serem problemas de propriedade por VM:
+uma varredura de sidecar ilegivel ou indisponivel, um ID de VM invalido e uma
+selecao que o NetBox nao devolve por completo.
+
+Uma VM descartada nunca e tocada pela etapa. Ela fica fora do cache de
+propriedade; portanto nao e reconciliada nem coberta pela limpeza de backups ou
+snapshots obsoletos, e suas linhas existentes no NetBox permanecem como estao.
+
+As VMs descartadas sao reportadas como avisos estruturados,
+`[{"netbox_vm_id": <int>, "reason": "<texto>"}]`, e o resultado da etapa fica
+`degraded=true`; a execucao nao falha e, se todas as VMs selecionadas forem
+descartadas, a etapa devolve um resultado vazio com os avisos em vez de lancar
+erro:
+
+- Resultados em dict (`snapshots`, `virtual-disks`) carregam as chaves `degraded`
+  e `warnings`. Os eventos SSE `complete` e `step` da etapa carregam o mesmo
+  resultado.
+- Resultados em lista (`backups`, `vm-interfaces`, `vm-ip-addresses`) carregam os
+  avisos no resultado. O resultado SSE ganha `warnings` e `degraded` ao lado de
+  `count`. A resposta REST continua sendo uma lista simples quando limpa e vira
+  `{"<etapa>": [...], "count": n, "warnings": [...], "degraded": true}` quando
+  degradada.
+- O stream de `virtual-machines` reporta os mesmos `warnings` e `degraded` no
+  resultado de `complete`. A rota REST `/create` continua devolvendo uma lista
+  simples quando limpa e, quando uma VM selecionada foi descartada, devolve
+  `{"virtual_machines": [...], "count": n, "warnings": [...], "degraded": true}`.
+  As rotas por ID `/{netbox_vm_id}/create` permanecem estritas e nunca degradam.
+- O full-update (REST e SSE) agrega os avisos de todas as etapas, cada um com sua
+  `phase`, em `warnings` no nivel superior e define `degraded=true`.
+
+O task-history mantem seu proprio contrato e nao faz parte deste modo: uma VM
+explicitamente selecionada sem identidade continua fatal ali, e seu agregado
+degradado continua gerando HTTP 502 no REST standalone. Veja
+[Sincronizacao de Task History](./task-history.md).
+
+Um sidecar fica incompleto quando o sync da VM grava sua identidade somente com
+`overwrite_vm_custom_fields` habilitado e descarta um ID de endpoint ausente. O
+gravador registra um aviso que nomeia a VM sempre que o endpoint, o cluster, o
+VMID ou o tipo de VM ao vivo estiver ausente ou o tipo for `unknown`, tornando a
+causa visivel onde ocorre; o que e persistido nao muda.
+
 ### Regras de Paralelismo
 
 Permitido em paralelo:
@@ -152,6 +232,98 @@ A filtragem e aplicada **na origem**, antes da descoberta e do precompute de
 dependencias, entao um modo `disabled` nao cria nem atualiza objetos
 dependentes no NetBox (manufacturer, device type, cluster, site, devices de
 node, roles de VM) para VMs que nunca serao sincronizadas.
+
+## Tratamento de VMs orfas
+
+A configuracao `delete_orphans` e a variavel `PROXBOX_DELETE_ORPHANS`
+controlam a varredura de orfas no fim da execucao. Quando desabilitada, a
+varredura nao consulta nem altera o NetBox. Quando habilitada, uma VM QEMU ou um
+container LXC descoberto pelo Proxbox mas nao tocado pela execucao atual nunca e
+removido: o backend define `status=decommissioning` e adiciona a tag
+`proxbox-soft-deleted`, preservando as tags existentes. Um dry-run apenas
+relata os candidatos, sem enviar PATCH. Se o guest reaparecer no Proxmox, a
+reconciliacao normal remove o marcador e preserva as demais tags.
+
+### Executando a varredura em um sync por etapas
+
+As rotas de full-update executam a varredura sozinhas. Um chamador que dispara
+cada etapa separadamente, como o plugin NetBox, deve chamar a varredura
+independente depois das suas etapas:
+
+- `GET /virtualization/virtual-machines/orphans/sweep`
+- `GET /virtualization/virtual-machines/orphans/sweep/stream`
+
+`run_id` e obrigatorio e deve ser o mesmo valor enviado a etapa de VMs, pois e o
+identificador gravado no sidecar de estado de cada VM reconciliada; uma VM com
+outro `run_id` e candidata a orfa. `dry_run=true` apenas simula.
+`endpoint_ids` ou `proxmox_endpoint_ids` (separados por virgula; o alias tem
+precedencia) limitam a varredura as VMs dos endpoints Proxmox informados, e
+`vm_stage_failed=true` pula a varredura. Uma varredura real (sem `dry_run`)
+precisa informar o escopo de endpoints: sem ele a rota responde HTTP 422, porque
+`run_id` e `vm_stage_failed` nao sao verificados e uma varredura real sem escopo
+poderia marcar todas as VMs gerenciadas. Um dry-run pode ficar sem escopo. A rota le `delete_orphans` como o
+full-update: com a configuracao desabilitada retorna `enabled=false` sem
+consultar nem alterar nada.
+
+Todo resultado inclui `skipped_reason` (`null` quando a varredura foi
+executada):
+
+| `skipped_reason` | Significado |
+|---|---|
+| `disabled` | `delete_orphans` esta desabilitado e a chamada nao era dry-run. |
+| `vm_stage_failed` | A etapa de VMs relatou falhas. Uma VM ativa que falhou ao reconciliar nao recebe o `run_id` e pareceria orfa. |
+| `sidecar_unavailable` | A API de sidecar de estado nao existe (plugin antigo); nao ha como verificar. |
+| `sidecar_read_failed` | A leitura do sidecar falhou de forma transitoria; nao ha como verificar. |
+| `run_not_found` | Nenhum sidecar no escopo possui o `run_id` informado, entao a execucao nao esta comprovada. Verificado antes de qualquer PATCH ou criacao de tag, na rota independente e no full-update. |
+| `live_inventory_unavailable` | A varredura real independente nao conseguiu obter o inventario vivo de convidados do Proxmox para todos os endpoints no escopo (uma sessao falhou, um endpoint do escopo ficou sem sessao ou a consulta deu erro); a ausencia no Proxmox nao pode ser confirmada. |
+
+Como `vm_stage_failed` e `run_id` sao informados pelo chamador, a varredura
+tambem verifica no proprio Proxmox: uma candidata so recebe soft-delete quando o
+convidado (nome do cluster, vmid e tipo) esta confirmado como ausente dos
+recursos vivos do cluster nas sessoes do escopo. A varredura real independente
+busca esse inventario nas sessoes selecionadas por `endpoint_ids` e falha de forma
+fechada com `live_inventory_unavailable` quando falta algum; o full-update busca um
+inventario novo na fronteira da varredura (nao o instantaneo do inicio da chamada, de
+modo que um convidado criado durante a execucao e visto) e falha de forma fechada do
+mesmo jeito. Uma linha de recurso de convidado cujo tipo ou vmid nao pode ser
+determinado (derivado de ids como `qemu/123` quando faltam campos) tambem torna o
+inventario indisponivel. Uma candidata ainda presente e ignorada e
+registrada (`still_present_in_proxmox`), assim como uma cujo sidecar nao tem nome
+do cluster, vmid ou tipo (`identity_incomplete`). Dry-runs nao buscam o inventario.
+
+Logo antes de cada PATCH a varredura le a VM novamente e monta a lista de tags a partir
+das tags atuais mais o marcador, preservando tags adicionadas depois da descoberta. Ela
+ignora a VM com `vm_unreadable` quando nao pode le-la e com `already_swept` quando o
+marcador ja existe. O NetBox nao oferece adicao atomica de tag, entao resta uma janela
+muito pequena entre essa leitura e o PATCH.
+
+Uma varredura pulada nao envia PATCH e nao cria a tag marcadora. Imediatamente
+antes de cada PATCH a varredura le novamente o sidecar da VM e a pula (contada
+como ignorada, reportada como `restamped`) quando o sidecar ja traz o `run_id`
+desta execucao ou mudou desde a descoberta; o NetBox nao oferece
+compare-and-set, entao isso reduz a janela de corrida sem eliminá-la. Uma VM que
+reaparece e readotada pela etapa de VMs em lote, que remove a marca e restaura o
+status em um unico PATCH. Quando ha
+escopo, um sidecar sem `proxmox_endpoint_raw_id` valido nunca e candidato. Por
+isso a varredura real independente exige os mesmos IDs de endpoint usados na
+execucao do chamador (apenas um full-update sem restricao varre sem escopo). Um full-update
+restrito por `endpoint_ids`, `proxmox_endpoint_ids`, `name`, `domain` ou
+`ip_address` deriva o escopo das sessoes Proxmox realmente usadas.
+
+Os IDs de endpoint sao os mesmos gravados pela etapa de VMs em cada sidecar (o
+ID do endpoint da sessao Proxmox); use os valores das requisicoes das etapas. O
+resultado `complete` SSE da etapa de VMs traz apenas `count`; um chamador por
+etapas le a contagem de falhas no campo `failed` do resumo de fase
+`virtual-machines`.
+
+### VMs desativadas nas etapas seguintes
+
+As etapas de discos virtuais, snapshots, interfaces de VM e IPs de VM ignoram
+VMs com status `decommissioning` ou com a tag `proxbox-soft-deleted`, registrando
+uma linha INFO com a quantidade ignorada. A etapa de VMs continua processando
+essas VMs, de modo que um guest que reaparece seja readotado. Quando a etapa de
+discos nao encontra o guest no Proxmox, registra um aviso (nao um erro) e conta
+a VM como ignorada.
 
 ### Reflexao das chaves do cloud-init
 

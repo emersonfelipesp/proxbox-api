@@ -24,6 +24,7 @@ from proxbox_api.schemas.virtualization import (  # Schemas
     Snapshot,
     VirtualMachineSummary,
 )
+from proxbox_api.services.sync.stage_result import response_with_stage_warnings
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
 router = APIRouter()
@@ -34,17 +35,7 @@ def _response_with_sync_warnings(
     *,
     result_key: str,
 ) -> list[dict] | dict[str, object]:
-    warnings = getattr(result, "warnings", None)
-    if not isinstance(warnings, list) or not warnings:
-        return result
-    warning_payloads = [warning for warning in warnings if isinstance(warning, dict)]
-    if not warning_payloads:
-        return result
-    return {
-        result_key: list(result),
-        "count": len(result),
-        "warnings": warning_payloads,
-    }
+    return response_with_stage_warnings(result, result_key=result_key)
 
 
 @router.get(
@@ -384,7 +375,7 @@ async def create_virtual_machines_interfaces_ip_address(
         primary_ip_preference=primary_ip_preference,
         overwrite_flags=overwrite_flags,
     )
-    return results
+    return _response_with_sync_warnings(results, result_key="vm_ip_addresses")
 
 
 @router.get("/interfaces/ip-address/create/stream", response_model=None)

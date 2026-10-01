@@ -644,3 +644,159 @@ async def test_create_or_update_vm_accepts_typed_resource_and_writes_live_sideca
     assert custom_fields["proxmox_node"] == "pve-a"
     assert custom_fields["proxmox_cluster"] == "cluster-a"
     assert custom_fields["proxmox_endpoint_id"] == 55
+
+
+@pytest.fixture
+def proxbox_caplog(caplog: pytest.LogCaptureFixture):
+    """Capture the non-propagating application logger."""
+
+    import logging
+
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="proxbox"):
+            yield caplog
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
+
+
+_COMPLETE_IDENTITY = {
+    "proxmox_vm_id": 101,
+    "proxmox_vm_type": "qemu",
+    "proxmox_cluster": "cluster-a",
+    "proxmox_endpoint_id": 44,
+}
+
+
+def _identity_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if "incomplete Proxmox ownership identity" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_fields", "missing"),
+    [
+        ({**_COMPLETE_IDENTITY, "proxmox_endpoint_id": None}, "proxmox_endpoint_id"),
+        ({**_COMPLETE_IDENTITY, "proxmox_cluster": ""}, "proxmox_cluster"),
+        ({k: v for k, v in _COMPLETE_IDENTITY.items() if k != "proxmox_vm_id"}, "proxmox_vm_id"),
+        ({**_COMPLETE_IDENTITY, "proxmox_vm_type": "unknown"}, "proxmox_vm_type"),
+    ],
+    ids=("endpoint-dropped", "cluster-blank", "vmid-absent", "type-unknown"),
+)
+@pytest.mark.parametrize("overwrite", [False, True])
+async def test_vm_sidecar_writer_warns_when_identity_is_incomplete(
+    recorder: _Recorder,
+    proxbox_caplog: pytest.LogCaptureFixture,
+    custom_fields: dict[str, object],
+    missing: str,
+    overwrite: bool,
+) -> None:
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=321,
+        custom_fields=custom_fields,
+        overwrite_custom_fields=overwrite,
+        proxmox_vm_name="vm-321",
+    )
+
+    warnings = _identity_warnings(proxbox_caplog)
+    assert len(warnings) == 1
+    assert "virtual_machine_id=321" in warnings[0]
+    assert missing in warnings[0]
+    assert f"overwrite_custom_fields={overwrite}" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_vm_sidecar_writer_incomplete_identity_warning_changes_nothing_persisted(
+    recorder: _Recorder,
+    proxbox_caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The warning only reports: overwrite off still writes just name/role evidence."""
+
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=321,
+        custom_fields={**_COMPLETE_IDENTITY, "proxmox_endpoint_id": None},
+        overwrite_custom_fields=False,
+        proxmox_vm_name="vm-321",
+    )
+
+    assert _identity_warnings(proxbox_caplog)
+    post = recorder.calls[-1]
+    assert post["method"] == "POST"
+    assert post["payload"] == {"virtual_machine": {"id": 321}, "proxmox_vm_name": "vm-321"}
+
+    recorder.calls.clear()
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=322,
+        custom_fields={**_COMPLETE_IDENTITY, "proxmox_endpoint_id": None},
+        overwrite_custom_fields=True,
+    )
+    payload = recorder.calls[-1]["payload"]
+    # A null endpoint id is still dropped rather than written, exactly as before.
+    assert "proxmox_endpoint_raw_id" not in payload
+    assert payload["proxmox_cluster_name"] == "cluster-a"
+
+
+@pytest.mark.asyncio
+async def test_vm_sidecar_writer_is_quiet_for_complete_identity_or_no_custom_fields(
+    recorder: _Recorder,
+    proxbox_caplog: pytest.LogCaptureFixture,
+) -> None:
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=1,
+        custom_fields=dict(_COMPLETE_IDENTITY),
+        overwrite_custom_fields=True,
+    )
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=2,
+        custom_fields=None,
+        overwrite_custom_fields=False,
+        proxmox_vm_name="vm-2",
+    )
+
+    assert _identity_warnings(proxbox_caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_write_vm_endpoint_raw_id_patches_only_the_endpoint_id(
+    recorder: _Recorder,
+) -> None:
+    recorder.existing = RestRecord(
+        object(),
+        "/api/plugins/proxbox/sync-state/virtual-machines/",
+        {"id": 55, "virtual_machine": {"id": 960}, "proxmox_endpoint_raw_id": 1},
+    )
+
+    result = await writer.write_vm_endpoint_raw_id(object(), virtual_machine_id=960, endpoint_id=2)
+
+    assert result is not None
+    patches = [call for call in recorder.calls if call["method"] == "PATCH"]
+    assert [(p["record_id"], p["payload"]) for p in patches] == [
+        (55, {"proxmox_endpoint_raw_id": 2})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_write_vm_endpoint_raw_id_returns_none_when_the_write_fails(
+    recorder: _Recorder,
+) -> None:
+    recorder.existing = RestRecord(
+        object(),
+        "/api/plugins/proxbox/sync-state/virtual-machines/",
+        {"id": 55, "virtual_machine": {"id": 960}},
+    )
+    recorder.patch_error = RuntimeError("boom")
+
+    assert (
+        await writer.write_vm_endpoint_raw_id(object(), virtual_machine_id=960, endpoint_id=2)
+        is None
+    )

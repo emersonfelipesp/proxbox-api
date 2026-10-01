@@ -1173,7 +1173,7 @@ def test_create_virtual_machine_by_netbox_id_filters_exact_owned_resource(monkey
     )
 
     assert result == [{"id": 248, "name": "vm-248"}]
-    assert captured["cluster_resources"] == [{"CLUSTER-A": [selected]}]
+    assert captured["cluster_resources"] == [{"CLUSTER-A": [selected]}, {"cluster-b": []}]
     assert captured["netbox_vm_ids"] == "248"
 
 

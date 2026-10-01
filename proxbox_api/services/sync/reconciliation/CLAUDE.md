@@ -70,6 +70,24 @@ plugin-settings only; backend environment variables must not override it.
   adapters must carry `sync_state_fields`; dropping them silently benchmarks
   cluster fallback instead of endpoint-first identity.
 
+## Cluster guard (Python and Rust)
+
+`select_existing_vm_record` drops an endpoint-keyed match whose NetBox VM lives
+in a different cluster than the prepared VM (endpoint ids are not unique across
+clusters) and falls back to the endpoint candidate that belongs to the live
+cluster, so a shadowed first-wins index entry cannot hide the right VM or cause a
+write to another cluster's VM. The Rust engine (`proxbox-reconcile-rs/src/vm.rs`)
+was **not** changed and still matches on the endpoint key alone. To keep the
+`rust` and `compare` engines from queuing writes against another cluster's VM,
+`_build_vm_operation_queue_with_rust` post-filters its operations
+(`_reject_cross_cluster_operations`): a cross-cluster GET/UPDATE is rebuilt with
+`build_vm_operation_queue_python` for that one prepared VM over the full NetBox
+snapshot, so the live cluster's own record is selected (same selector and patch
+computation as the Python engine) and a CREATE is queued only when the live
+cluster has no candidate. Both snapshot orders therefore agree with the Python
+engine, including in `compare` mode. Tests fake the Rust output, so the native
+package is not required.
+
 ## Checks
 
 Run these for this directory:

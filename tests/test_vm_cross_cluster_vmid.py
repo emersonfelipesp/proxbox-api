@@ -8,6 +8,7 @@ VirtualMachine and dropped duplicate vmids.
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -85,7 +86,7 @@ def _install_duplicate_vmid_caller_stubs(monkeypatch, config_factory) -> None:
     async def _fake_load_snapshot(_nb):
         return [dict(VM_IN_ALPHA), dict(VM_IN_BETA)]
 
-    async def _fake_hydrate(_nb, vms, *, require_all):
+    async def _fake_hydrate(_nb, vms, *, require_all, **_kwargs):
         assert require_all is False
         return vms
 
@@ -397,3 +398,163 @@ async def test_resolve_netbox_virtual_machine_by_proxmox_id_scopes_by_endpoint(m
         ENDPOINT_ALPHA_ID,
         ENDPOINT_BETA_ID,
     }
+
+
+# ---------------------------------------------------------------------------
+# Colliding endpoint ids: the same (endpoint id, vmid) key in two clusters.
+# ---------------------------------------------------------------------------
+
+COLLIDING_ENDPOINT_ID = 5
+COLLIDING_ALPHA = {
+    "id": 1101,
+    "name": "collide-alpha",
+    "cluster": {"id": CLUSTER_ALPHA_ID, "name": "alpha"},
+    "proxmox_endpoint_id": COLLIDING_ENDPOINT_ID,
+    "proxmox_vm_id": SHARED_VMID,
+}
+COLLIDING_BETA = {
+    "id": 2202,
+    "name": "collide-beta",
+    "cluster": {"id": CLUSTER_BETA_ID, "name": "beta"},
+    "proxmox_endpoint_id": COLLIDING_ENDPOINT_ID,
+    "proxmox_vm_id": SHARED_VMID,
+}
+
+
+@pytest.fixture
+def proxbox_caplog(caplog):
+    """Attach caplog to the non-propagating ``proxbox`` logger."""
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        proxbox_logger.removeHandler(caplog.handler)
+
+
+def _resolve_colliding(snapshot, cluster_name, cluster_id):
+    return _resolve_vm_from_index_or_unique_vmid(
+        _build_vm_index_by_proxmox_id(snapshot),
+        _build_vm_candidates_by_proxmox_id(snapshot),
+        endpoint_id=COLLIDING_ENDPOINT_ID,
+        raw_vmid=SHARED_VMID,
+        cluster_name=cluster_name,
+        sync_context="IP address",
+        cluster_id=cluster_id,
+    )
+
+
+@pytest.mark.parametrize("order", ["alpha-first", "beta-first"])
+def test_colliding_endpoint_resolution_returns_each_clusters_own_vm(order) -> None:
+    snapshot = (
+        [COLLIDING_ALPHA, COLLIDING_BETA]
+        if order == "alpha-first"
+        else [COLLIDING_BETA, COLLIDING_ALPHA]
+    )
+
+    assert _resolve_colliding(snapshot, "alpha", CLUSTER_ALPHA_ID) is COLLIDING_ALPHA
+    assert _resolve_colliding(snapshot, "beta", CLUSTER_BETA_ID) is COLLIDING_BETA
+
+
+def test_colliding_endpoint_resolution_never_returns_another_clusters_vm(
+    proxbox_caplog,
+) -> None:
+    proxbox_caplog.set_level(logging.WARNING)
+
+    # Only alpha's VM exists; syncing beta must not fall onto it.
+    assert _resolve_colliding([COLLIDING_ALPHA], "beta", CLUSTER_BETA_ID) is None
+    assert "belongs to cluster (id=11 name=alpha)" in proxbox_caplog.text
+    assert "expected cluster id=22 name=beta" in proxbox_caplog.text
+    assert "vmid=100" in proxbox_caplog.text
+
+
+def test_colliding_endpoint_resolution_falls_back_to_cluster_name() -> None:
+    # Unknown live cluster id: the casefolded cluster name still separates them.
+    snapshot = [COLLIDING_ALPHA, COLLIDING_BETA]
+
+    assert _resolve_colliding(snapshot, "Beta", None) is COLLIDING_BETA
+    assert _resolve_colliding([COLLIDING_ALPHA], "beta", None) is None
+
+
+def test_unknown_cluster_keeps_the_endpoint_scoped_match() -> None:
+    assert _resolve_colliding([COLLIDING_ALPHA], "", None) is COLLIDING_ALPHA
+
+
+def _colliding_caller_inputs() -> dict[str, object]:
+    inputs = _duplicate_vmid_caller_inputs()
+    for session in inputs["pxs"]:
+        session.db_endpoint_id = COLLIDING_ENDPOINT_ID
+    return inputs
+
+
+def _install_colliding_stubs(monkeypatch, config_factory) -> None:
+    _install_duplicate_vmid_caller_stubs(monkeypatch, config_factory)
+
+    async def _fake_load_snapshot(_nb):
+        return [dict(COLLIDING_ALPHA), dict(COLLIDING_BETA)]
+
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+
+
+@pytest.mark.asyncio
+async def test_create_only_vm_interfaces_never_writes_to_another_clusters_vm(
+    monkeypatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    _install_colliding_stubs(monkeypatch, lambda _e: {"net0": "virtio=AA:BB:CC:DD:EE:FF"})
+
+    async def _fake_bulk_reconcile(_nb, payloads, **_kwargs):
+        captured.extend(dict(payload) for payload in payloads)
+        return (
+            [{"id": 3000 + index, **payload} for index, payload in enumerate(payloads, start=1)],
+            {("net0", payload["virtual_machine"]): 3000 + i for i, payload in enumerate(payloads)},
+        )
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _fake_bulk_reconcile,
+    )
+
+    await sync_vm.create_only_vm_interfaces(**_colliding_caller_inputs(), sync_mac=False)
+
+    assert sorted(payload["virtual_machine"] for payload in captured) == [1101, 2202]
+
+
+@pytest.mark.asyncio
+async def test_create_only_vm_ip_addresses_never_writes_to_another_clusters_vm(
+    monkeypatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+    interface_ids = {1101: 3101, 2202: 3202}
+    _install_colliding_stubs(
+        monkeypatch, lambda _e: {"net0": "virtio=AA:BB:CC:DD:EE:FF,ip=192.0.2.10/24"}
+    )
+
+    async def _fake_rest_list(_nb, path, *, query=None):
+        vm_id = int(query["virtual_machine_id"])
+        return [{"id": interface_ids[vm_id], "name": "net0", "virtual_machine": vm_id}]
+
+    async def _fake_rest_first(*_args, **_kwargs):
+        return None
+
+    async def _fake_bulk_reconcile(_nb, payloads, **_kwargs):
+        captured.extend(dict(payload) for payload in payloads)
+        return [{"id": index, **payload} for index, payload in enumerate(payloads, start=4001)]
+
+    async def _fake_cleanup(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_first_async", _fake_rest_first)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.cleanup_stale_ips_for_interface",
+        _fake_cleanup,
+    )
+
+    await sync_vm.create_only_vm_ip_addresses(**_colliding_caller_inputs())
+
+    assert sorted(payload["assigned_object_id"] for payload in captured) == [3101, 3202]

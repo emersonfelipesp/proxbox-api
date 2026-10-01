@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.telemetry import TelemetryConfig
 
 from proxbox_api.schemas.firecracker import (
     FirecrackerAssetPrepareRequest,
@@ -16,14 +17,16 @@ from proxbox_api.schemas.firecracker import (
     FirecrackerMicroVMMetrics,
     FirecrackerMicroVMState,
 )
+from proxbox_api.telemetry import configure_telemetry_privacy
 
 _MICROVMS: dict[UUID, FirecrackerMicroVMState] = {}
 _LOGS: dict[UUID, list[str]] = {}
 
 
-def create_firecracker_agent_app() -> FastAPI:  # noqa: C901
+def create_firecracker_agent_app(*, telemetry: TelemetryConfig | None = None) -> FastAPI:  # noqa: C901
     """Create a local host-agent app with the production HTTP contract."""
-    app = FastAPI(title="Firecracker Host Agent", version="0.1.0")
+    configure_telemetry_privacy(telemetry)
+    app = FastAPI(title="Firecracker Host Agent", version="0.1.0", telemetry=telemetry)
 
     @app.get("/health", response_model=FirecrackerHostAgentHealth)
     async def health() -> FirecrackerHostAgentHealth:

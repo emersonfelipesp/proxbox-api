@@ -19,12 +19,21 @@ from proxbox_api.proxmox_to_netbox.models import NetBoxSnapshotSyncState
 from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox_helpers import get_vm_snapshots
 from proxbox_api.services.sync._helpers import _extract_fk_id
+from proxbox_api.services.sync.orphan_sweep import exclude_soft_deleted_vms
+from proxbox_api.services.sync.stage_result import (
+    attach_skips_to_dict,
+    degraded_suffix,
+)
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
     storage_name_from_volume_id,
 )
-from proxbox_api.services.sync.vm_filter import hydrate_vm_identities_from_sidecars
+from proxbox_api.services.sync.vm_filter import (
+    SelectionMode,
+    hydrate_vm_identities_from_sidecars,
+    selection_skips,
+)
 from proxbox_api.services.sync.vm_helpers import (
     list_netbox_virtual_machines_by_ids,
     relation_id,
@@ -33,6 +42,7 @@ from proxbox_api.services.sync.vm_helpers import (
 from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_endpoint_id,
     extract_proxmox_node,
+    extract_proxmox_session_endpoint_id,
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
     normalize_vmid,
@@ -556,6 +566,36 @@ def _normalize_snapshot_vm_type(proxmox_type: object) -> str:
     return "qemu"
 
 
+def _session_cluster_names(session: object) -> set[str]:
+    """Casefolded names a session is known by: cluster, node and connection name."""
+    names = (getattr(session, attr, None) for attr in ("cluster_name", "name", "node_name"))
+    return {str(name).strip().casefold() for name in names if name and str(name).strip()}
+
+
+def _sessions_in_cluster(sessions: list, cluster_name: str | None) -> list:
+    """Keep sessions of ``cluster_name``; sessions with no known name are kept.
+
+    An unknown VM cluster keeps today's behaviour, and a session that exposes
+    no name at all cannot be proven to belong elsewhere.
+    """
+    wanted = str(cluster_name or "").strip().casefold()
+    if not wanted:
+        return sessions
+    kept = []
+    for session in sessions:
+        names = _session_cluster_names(session)
+        if not names or wanted in names:
+            kept.append(session)
+        else:
+            logger.warning(
+                "Ignoring Proxmox session %s for cluster=%s: it belongs to cluster(s) %s",
+                extract_proxmox_session_endpoint_id(session),
+                cluster_name,
+                sorted(names),
+            )
+    return kept
+
+
 def _snapshot_sessions_for_vm(
     pxs: list,
     *,
@@ -564,10 +604,15 @@ def _snapshot_sessions_for_vm(
     node_name: str | None,
     require_unique_match: bool = False,
 ) -> list:
-    """Select the Proxmox session that can own this VM's snapshot calls."""
+    """Select the Proxmox session that can own this VM's snapshot calls.
+
+    Endpoint ids are not unique across clusters, so once the VM's cluster is
+    known only sessions that belong to that cluster are eligible; a colliding
+    endpoint id must never send snapshot calls to another cluster's Proxmox.
+    """
     effective_pxs = select_proxmox_sessions_by_endpoint(pxs, endpoint_id)
     if endpoint_id is not None:
-        return effective_pxs
+        return _sessions_in_cluster(effective_pxs, cluster_name)
     matched_pxs = [
         px for px in pxs if px.name and (px.name == cluster_name or px.name == node_name)
     ]
@@ -602,12 +647,19 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     use_css: bool = False,
     fetch_max_concurrency: int | None = None,
     delete_nonexistent_snapshot: bool = False,
+    selection_mode: SelectionMode = SelectionMode.LENIENT,
 ) -> dict[str, object]:
     """
     Sync snapshots for existing Virtual Machines in NetBox.
 
     Resolves NetBox VMs through typed sync-state sidecars, fetches their
     snapshots from Proxmox, and creates or updates VMSnapshot objects.
+
+    ``selection_mode`` decides what a VM with incomplete or duplicated sidecar
+    ownership does: ``LENIENT`` (default, for estate and list runs) drops it with a
+    warning and reports the result ``degraded``; ``STRICT`` (single-VM routes)
+    fails the run. Dropped VMs are never scanned, so snapshot cleanup cannot
+    touch their NetBox rows.
     """
     nb = netbox_session
     undefined_html = return_status_html("undefined", use_css)
@@ -676,7 +728,9 @@ async def create_virtual_machine_snapshots(  # noqa: C901
         nb,
         [to_mapping(vm) for vm in vms],
         require_all=netbox_vm_ids is not None,
+        mode=selection_mode,
     )
+    selection_skipped = selection_skips(vms)
 
     if netbox_vm_ids is not None:
         selected_netbox_ids = set(netbox_vm_ids)
@@ -689,6 +743,8 @@ async def create_virtual_machine_snapshots(  # noqa: C901
         vms = [vm for vm in vms if extract_proxmox_vmid(vm) in selected_vmids]
     else:
         vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
+
+    vms = exclude_soft_deleted_vms(vms, stage="snapshot")
 
     logger.info("After proxmox_vm_id filtering: %d VMs remain for snapshot sync", len(vms))
 
@@ -708,7 +764,9 @@ async def create_virtual_machine_snapshots(  # noqa: C901
                     },
                 }
             )
-        return {"count": 0, "created": 0, "updated": 0, "skipped": 0}
+        return attach_skips_to_dict(
+            {"count": 0, "created": 0, "updated": 0, "skipped": 0}, selection_skipped
+        )
 
     logger.info("cluster_resources provided: %s", cluster_resources is not None)
     if cluster_resources:
@@ -897,14 +955,17 @@ async def create_virtual_machine_snapshots(  # noqa: C901
             skipped=skipped,
             message=(
                 f"Snapshot sync completed: {created} created, {updated} updated, "
-                f"{deleted} deleted, {skipped} skipped"
+                f"{deleted} deleted, {skipped} skipped{degraded_suffix(selection_skipped)}"
             ),
         )
 
-    return {
-        "count": total_vms,
-        "created": created,
-        "updated": updated,
-        "skipped": skipped,
-        "deleted": deleted,
-    }
+    return attach_skips_to_dict(
+        {
+            "count": total_vms,
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "deleted": deleted,
+        },
+        selection_skipped,
+    )

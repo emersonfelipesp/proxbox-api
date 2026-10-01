@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.telemetry import TelemetryConfig
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from starlette.types import ASGIApp
@@ -93,6 +94,7 @@ from proxbox_api.session.netbox import (
     acquire_netbox_api_cache_owner,
     release_netbox_api_cache_owner,
 )
+from proxbox_api.telemetry import configure_telemetry_privacy
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -596,10 +598,12 @@ def _include_selected_routes(app: FastAPI) -> None:
     _include_pdm_routes(app, not features or "pdm" in features)
 
 
-def create_app() -> FastAPI:
+def create_app(*, telemetry: TelemetryConfig | None = None) -> FastAPI:
     """Build and configure the Proxbox FastAPI application."""
     auth_lockout_policy = AuthLockoutPolicy.from_env()
+    configure_telemetry_privacy(telemetry)
     app = FastAPI(
+        telemetry=telemetry,
         title="Proxbox Backend",
         description="## Proxbox Backend made in FastAPI framework",
         version=__version__,

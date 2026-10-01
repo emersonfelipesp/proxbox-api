@@ -362,6 +362,55 @@ def vm_sidecar_payload_from_custom_fields(
     return payload
 
 
+_VM_IDENTITY_FIELDS = (
+    "proxmox_endpoint_id",
+    "proxmox_cluster",
+    "proxmox_vm_id",
+    "proxmox_vm_type",
+)
+
+
+def _missing_vm_identity_fields(custom_fields: Mapping[str, object]) -> list[str]:
+    """Name the live identity fields a VM sidecar cannot be owned through."""
+
+    missing = [name for name in _VM_IDENTITY_FIELDS if custom_fields.get(name) in (None, "")]
+    vm_type = str(custom_fields.get("proxmox_vm_type") or "").strip().lower()
+    if vm_type == "unknown":
+        missing.append("proxmox_vm_type")
+    return missing
+
+
+def _warn_incomplete_vm_identity(
+    virtual_machine_id: object,
+    custom_fields: Mapping[str, object] | None,
+    *,
+    overwrite_custom_fields: bool,
+) -> None:
+    """Make an incomplete VM ownership sidecar visible where it is created.
+
+    Staged synchronization resolves a VM's Proxmox owner from this sidecar's
+    endpoint, cluster, VMID, and type. A missing endpoint id is dropped rather than
+    written, an ``unknown`` type is not an owner, and with
+    ``overwrite_custom_fields`` off none of these values are persisted at all, so
+    the sidecar can be left unusable for ownership. This only reports; what is
+    persisted is unchanged.
+    """
+
+    if custom_fields is None:
+        return
+    missing = _missing_vm_identity_fields(custom_fields)
+    if not missing:
+        return
+    logger.warning(
+        "VM sync-state for NetBox virtual_machine_id=%s has incomplete Proxmox ownership "
+        "identity (missing or unknown: %s; overwrite_custom_fields=%s); staged sync stages "
+        "will skip this VM until endpoint, cluster, VMID, and VM type are all stored.",
+        virtual_machine_id,
+        ", ".join(missing),
+        overwrite_custom_fields,
+    )
+
+
 async def write_virtual_machine_sync_state(
     nb: object,
     *,
@@ -385,6 +434,11 @@ async def write_virtual_machine_sync_state(
     operator-managed reflection field. Callers provide it only after the
     corresponding VM reconciliation succeeds.
     """
+    _warn_incomplete_vm_identity(
+        virtual_machine_id,
+        custom_fields,
+        overwrite_custom_fields=overwrite_custom_fields,
+    )
     should_write_custom_field_state = overwrite_custom_fields and custom_fields is not None
     payload = (
         vm_sidecar_payload_from_custom_fields(custom_fields)
@@ -495,6 +549,26 @@ async def write_vm_role_snapshot_exact(
     raise RuntimeError(
         f"Could not restore VM {normalized_vm_id} role ownership snapshot"
     ) from last_error
+
+
+async def write_vm_endpoint_raw_id(
+    nb: object,
+    *,
+    virtual_machine_id: object,
+    endpoint_id: int,
+) -> dict[str, object] | None:
+    """Rewrite one VM sidecar's ``proxmox_endpoint_raw_id`` to the live endpoint id.
+
+    Returns ``None`` when the optional sidecar API is unavailable or the write
+    failed, so callers can refuse to act on an unpersisted re-binding.
+    """
+    return await _upsert_parent_sidecar(
+        nb,
+        path=VM_SYNC_STATE_PATH,
+        parent_field="virtual_machine",
+        parent_id=virtual_machine_id,
+        payload={"proxmox_endpoint_raw_id": endpoint_id},
+    )
 
 
 async def write_vm_last_run_sync_state(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from typing import cast
 
@@ -14,6 +14,7 @@ from proxbox_api.services.sync.sync_state_writer import (
     _is_sidecar_unavailable,
     _record_id,
     _record_to_dict,
+    write_vm_endpoint_raw_id,
 )
 
 VIRTUAL_MACHINES_PATH = "/api/virtualization/virtual-machines/"
@@ -35,6 +36,18 @@ class _VMIdentityCandidate:
     record_id: int
     source: str
     record: object | None = None
+    sidecar: dict[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StaleEndpointAdoption:
+    """Live-run facts needed to safely re-bind a VM stored under a stale endpoint id."""
+
+    vm_type: str
+    cluster_name: str
+    vm_name: str
+    configured_endpoint_ids: frozenset[int]
+    """Every configured endpoint id (a superset of this run's sessions)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +58,8 @@ class SidecarVMOrphanScan:
     current_vm_ids: set[int]
     sidecar_unavailable: bool = False
     sidecar_read_failed: bool = False
+    run_seen_in_scope: bool = False
+    """True when at least one in-scope sidecar carries the scanned ``run_id``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,7 +299,9 @@ async def _list_sidecar_vm_identity_candidates(
                     cluster_id,
                 )
                 continue
-        candidates.append(_VMIdentityCandidate(record_id=vm_id, source="sidecar", record=record))
+        candidates.append(
+            _VMIdentityCandidate(record_id=vm_id, source="sidecar", record=record, sidecar=data)
+        )
     return candidates, refused
 
 
@@ -358,6 +375,127 @@ async def _resolve_unique_vm_identity_candidate(
     if record is None:
         return None, False
     return SyncStateVMResolution(record=record, record_id=record_id, source=source), False
+
+
+def _sidecar_choice_text(value: object) -> str:
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("slug") or value.get("label")
+    return _sidecar_text(value).casefold()
+
+
+def _record_name(record: object) -> str:
+    name = record.get("name") if isinstance(record, dict) else getattr(record, "name", None)
+    return _sidecar_text(name)
+
+
+def _stale_adoption_name_rejection(
+    sidecar: dict[str, object],
+    record: object,
+    adoption: StaleEndpointAdoption,
+) -> str | None:
+    """Best-effort guard against a replacement VM that reuses the VMID.
+
+    The live Proxmox name must equal (casefolded) the NetBox VM name or the name
+    stored on the sidecar. A VM renamed or recreated under the same name is an
+    accepted residual risk of this heuristic.
+    """
+    live_name = adoption.vm_name.strip().casefold()
+    known = {
+        name.casefold()
+        for name in (_record_name(record), _sidecar_text(sidecar.get("proxmox_vm_name")))
+        if name
+    }
+    if not live_name or live_name not in known:
+        return "live VM name does not match the stored NetBox or sidecar name"
+    return None
+
+
+def _stale_adoption_rejection(
+    sidecar: dict[str, object],
+    record: object,
+    adoption: StaleEndpointAdoption,
+) -> str | None:
+    """Return why a sidecar may not be re-bound to the live endpoint, or ``None``."""
+    if _sidecar_choice_text(sidecar.get("proxmox_vm_type")) != adoption.vm_type.strip().casefold():
+        return "sidecar VM type differs from the live VM type"
+    stored_cluster = _sidecar_text(sidecar.get("proxmox_cluster_name")).casefold()
+    if stored_cluster and stored_cluster != adoption.cluster_name.strip().casefold():
+        return f"sidecar cluster name {stored_cluster!r} differs from the live cluster"
+    raw_endpoint_id = _as_positive_int(sidecar.get("proxmox_endpoint_raw_id"))
+    if raw_endpoint_id is not None and raw_endpoint_id in adoption.configured_endpoint_ids:
+        return f"sidecar endpoint id {raw_endpoint_id} identifies a configured endpoint"
+    return _stale_adoption_name_rejection(sidecar, record, adoption)
+
+
+async def adopt_vm_with_stale_endpoint_id(
+    nb: object,
+    *,
+    proxmox_vm_id: int,
+    endpoint_id: int,
+    cluster_id: int,
+    adoption: StaleEndpointAdoption,
+) -> SyncStateVMResolution | None:
+    """Re-bind a VM whose sidecar carries a stale endpoint id to the live endpoint.
+
+    The sidecar endpoint id comes from an id space that is independent per
+    deployment, so a recreated or re-registered endpoint leaves stored ids
+    pointing at nothing (or at an unrelated endpoint). When the endpoint-keyed
+    lookup finds nothing, look the VM up by ``(vmid, NetBox cluster)`` alone
+    and adopt it only when the match is unambiguous: exactly one candidate in
+    the cluster, the same VM type, a blank or identical stored cluster name,
+    a stored endpoint id that is not the id of any configured endpoint (not
+    only this run's sessions), and a live VM name equal to the NetBox VM name
+    or the sidecar's stored Proxmox name. Adoption is best-effort: a VM
+    recreated under the same name and VMID cannot be told apart. The sidecar is rewritten to the live endpoint id before the record is
+    returned; if that write cannot be persisted nothing is adopted.
+    """
+    candidates, refused = await _list_sidecar_vm_identity_candidates(
+        nb,
+        proxmox_vm_id=proxmox_vm_id,
+        endpoint_id=None,
+        cluster_id=cluster_id,
+    )
+    if not candidates or refused or len({c.record_id for c in candidates}) != 1:
+        return None
+    candidate = candidates[0]
+    record = candidate.record or await _fetch_vm_by_id(nb, candidate.record_id)
+    if record is None:
+        return None
+    rejection = _stale_adoption_rejection(candidate.sidecar or {}, record, adoption)
+    if rejection is not None:
+        logger.debug(
+            "Not adopting NetBox VM id=%s for vmid=%s endpoint_id=%s cluster_id=%s: %s",
+            candidate.record_id,
+            proxmox_vm_id,
+            endpoint_id,
+            cluster_id,
+            rejection,
+        )
+        return None
+    if (
+        await write_vm_endpoint_raw_id(
+            nb, virtual_machine_id=candidate.record_id, endpoint_id=endpoint_id
+        )
+        is None
+    ):
+        logger.warning(
+            "Could not persist endpoint id %s on the sidecar of NetBox VM id=%s; "
+            "leaving vmid=%s unadopted",
+            endpoint_id,
+            candidate.record_id,
+            proxmox_vm_id,
+        )
+        return None
+    logger.info(
+        "Adopted NetBox VM id=%s for vmid=%s cluster_id=%s: re-bound stale sidecar "
+        "endpoint id %s to live endpoint id %s",
+        candidate.record_id,
+        proxmox_vm_id,
+        cluster_id,
+        (candidate.sidecar or {}).get("proxmox_endpoint_raw_id"),
+        endpoint_id,
+    )
+    return SyncStateVMResolution(record=record, record_id=candidate.record_id, source="sidecar")
 
 
 async def resolve_virtual_machine_by_sync_state(
@@ -674,20 +812,42 @@ async def read_vm_last_synced_role(
     return typed_read
 
 
+def _sidecar_in_endpoint_scope(
+    sidecar: dict[str, object],
+    endpoint_scope: frozenset[int] | None,
+) -> bool:
+    """Return whether a VM sidecar belongs to the requested Proxmox endpoints.
+
+    ``None`` means unscoped. When scoped, a sidecar with a missing or invalid
+    ``proxmox_endpoint_raw_id`` cannot be attributed to an endpoint and is excluded.
+    """
+    if endpoint_scope is None:
+        return True
+    endpoint_id = _as_positive_int(sidecar.get("proxmox_endpoint_raw_id"))
+    return endpoint_id is not None and endpoint_id in endpoint_scope
+
+
 async def scan_vm_sidecar_orphan_candidates(
     nb: object,
     *,
     run_id: str,
     vm_slugs: Iterable[str],
+    endpoint_ids: Collection[int] | None = None,
 ) -> SidecarVMOrphanScan | None:
     """Return stale VM records and first-pass-current VM ids from sidecars.
 
     ``last_run_id`` is serialized by netbox-proxbox but is not exposed by the
     VM sync-state filterset, so this deliberately fetches sidecar rows without
     unsupported filters and applies the stale/current decision client-side.
+
+    ``endpoint_ids`` limits stale candidates to sidecars whose
+    ``proxmox_endpoint_raw_id`` is in the set. ``None`` is unscoped; an empty
+    collection matches no sidecar.
     """
+    endpoint_scope = frozenset(endpoint_ids) if endpoint_ids is not None else None
     candidates_by_id: dict[int, dict[str, object]] = {}
     current_vm_ids: set[int] = set()
+    run_seen_in_scope = False
     sidecars, sidecar_read_failed = await _scan_sidecars(nb, query={}, page_size=200)
     if sidecars is None:
         return SidecarVMOrphanScan(
@@ -705,8 +865,11 @@ async def scan_vm_sidecar_orphan_candidates(
             continue
         if _sidecar_text(data.get("last_run_id")) == run_id:
             current_vm_ids.add(vm_id)
+            run_seen_in_scope = run_seen_in_scope or _sidecar_in_endpoint_scope(
+                data, endpoint_scope
+            )
             continue
-        if vm_id in candidates_by_id:
+        if vm_id in candidates_by_id or not _sidecar_in_endpoint_scope(data, endpoint_scope):
             continue
         vm_record = await _fetch_vm_by_id(nb, vm_id)
         vm_data = _record_to_dict(vm_record) if vm_record is not None else None
@@ -716,10 +879,13 @@ async def scan_vm_sidecar_orphan_candidates(
             continue
         vm_data["_proxbox_last_run_id"] = data.get("last_run_id")
         vm_data["_proxmox_vm_id"] = data.get("proxmox_vm_id")
+        vm_data["_proxmox_vm_type"] = data.get("proxmox_vm_type")
+        vm_data["_proxmox_cluster_name"] = data.get("proxmox_cluster_name")
         candidates_by_id[vm_id] = vm_data
     return SidecarVMOrphanScan(
         stale_candidates=list(candidates_by_id.values()),
         current_vm_ids=current_vm_ids,
+        run_seen_in_scope=run_seen_in_scope,
     )
 
 
@@ -728,12 +894,14 @@ async def list_stale_vm_sidecar_candidates(
     *,
     run_id: str,
     vm_slugs: Iterable[str],
+    endpoint_ids: Collection[int] | None = None,
 ) -> list[dict[str, object]] | None:
     """Return stale VM records selected from sidecar last_run_id values."""
     scan = await scan_vm_sidecar_orphan_candidates(
         nb,
         run_id=run_id,
         vm_slugs=vm_slugs,
+        endpoint_ids=endpoint_ids,
     )
     return scan.stale_candidates if scan is not None else None
 

@@ -78,6 +78,63 @@ snapshot does not produce duplicates. If the sidecar API is unavailable or its
 identity is ambiguous, dispatch fails closed.
 The VM type segment prevents QEMU VM 100 and LXC CT 100 in the same cluster from colliding.
 
+#### Cross-cluster guard and stale endpoint ids
+
+The `proxmox_endpoint_id` stored on a VM's sync-state sidecar is the identifier
+of the endpoint session that last synchronized the VM. It comes from an id space
+that is independent per deployment: proxbox-api database ids when the endpoint
+source is the database (the default), or NetBox plugin endpoint primary keys when
+the source is NetBox. Managing that id space is an operator and plugin concern:
+recreating the proxbox-api database, or re-registering endpoints, reassigns ids,
+so stored ids can become stale or collide with the ids of unrelated endpoints.
+proxbox-api therefore never treats an endpoint-keyed match as sufficient on its own.
+
+**Cluster guard.** Every lookup keyed on `(endpoint id, vmid)` must confirm that
+the matched NetBox VM lives in the cluster being synchronized before it is used:
+
+- reconciliation queue selection (`select_existing_vm_record`), which is also
+  used by the sidecar hydration step and the name-collision pre-pass;
+- interface and IP address sync (`_resolve_vm_from_index_or_unique_vmid`), so
+  NICs and IPs are never written onto another cluster's VM when ids collide;
+- snapshot sync (`_snapshot_sessions_for_vm`), which only queries Proxmox
+  sessions belonging to the VM's cluster once that cluster is known;
+- operations returned by the optional Rust engine: one that points at another
+  cluster's VM is rebuilt by the Python selector over the full NetBox snapshot,
+  so the live cluster's own VM is still updated, and it becomes a `CREATE` only
+  when the live cluster has no candidate at all.
+
+The cluster comparison uses the NetBox cluster id when both sides know it and
+falls back to the case-folded cluster name. A record is dropped only on a
+positive mismatch; an unknown cluster keeps the match. A dropped match is logged
+as a warning that names the NetBox VM id, the vmid, the endpoint id and both
+clusters, and the record is never written. When two clusters expose the same
+`(endpoint id, vmid)` key, the VM of the live cluster is still found.
+
+**Stale-id self-heal.** When the `(endpoint, cluster, vmid, type)` sidecar lookup
+finds nothing, the hydration step retries by `(vmid, NetBox cluster)` without the
+endpoint id and adopts the VM only when every condition below holds:
+
+1. exactly one candidate exists in the cluster;
+2. its sidecar VM type equals the live type;
+3. its sidecar cluster name is blank or equals the live cluster (case-insensitive);
+4. its sidecar endpoint id is missing, or is not the id of any configured
+   endpoint. The complete configured inventory is checked (database endpoints
+   and NetBox plugin endpoints, enabled or not), not only this run's sessions, so
+   a run scoped to one endpoint cannot take a VM owned by another configured
+   endpoint. If the inventory cannot be loaded, nothing is adopted;
+5. the live Proxmox VM name equals, case-insensitively, the NetBox VM name or the
+   Proxmox name stored on the sidecar. This is a best-effort guard against a
+   replacement VM that reuses the VMID: a VM recreated under the same name and
+   VMID is an accepted residual risk.
+
+The sidecar's endpoint id is then rewritten to the live endpoint id, an
+informational line is logged, and the VM is reconciled as the existing record: no
+` (2)` suffix is applied and no duplicate VM is created. If the rewrite cannot be
+persisted, nothing is adopted. Anything ambiguous (zero or several candidates, a
+type, cluster or name mismatch, an id owned by a configured endpoint) keeps the
+previous behavior, and operators must correct such ids in NetBox or the plugin.
+Name-collision suffixing for genuinely distinct VMs (different vmid) is unchanged.
+
 ### Phase 4: Queue Reconciliation
 
 The default reconciliation engine is Python. For each prepared VM:

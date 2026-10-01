@@ -19,6 +19,7 @@ from proxbox_api.services.sync.sync_state_reader import (
     VM_SYNC_STATE_PATH,
     list_stale_vm_sidecar_candidates,
     resolve_virtual_machine_by_sync_state,
+    scan_vm_sidecar_orphan_candidates,
 )
 from proxbox_api.services.sync.sync_state_writer import _is_sidecar_unavailable
 
@@ -307,6 +308,119 @@ async def test_stale_sidecar_candidates_filter_last_run_client_side(
 
     assert calls == [{}]
     assert [candidate["id"] for candidate in candidates or []] == [11, 12]
+
+
+def _install_two_endpoint_sidecars(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Serve stale sidecars for two endpoints; return the VM ids that get fetched."""
+    fetched_vm_ids: list[int] = []
+
+    async def _fake_paginated(_nb: object, path: str, **_: Any):
+        assert path == VM_SYNC_STATE_PATH
+        return [
+            {
+                "virtual_machine": {"id": 10},
+                "last_run_id": "old-run",
+                "proxmox_endpoint_raw_id": 1,
+            },
+            {
+                "virtual_machine": {"id": 11},
+                "last_run_id": "old-run",
+                "proxmox_endpoint_raw_id": 2,
+            },
+            {"virtual_machine": {"id": 12}, "last_run_id": "old-run"},
+            {
+                "virtual_machine": {"id": 13},
+                "last_run_id": "old-run",
+                "proxmox_endpoint_raw_id": "not-an-id",
+            },
+            {
+                "virtual_machine": {"id": 14},
+                "last_run_id": "current-run",
+                "proxmox_endpoint_raw_id": 2,
+            },
+        ]
+
+    async def _fake_first(_nb: object, path: str, *, query: dict[str, object] | None = None):
+        assert path == VIRTUAL_MACHINES_PATH
+        vm_id = int(query["id"]) if query is not None else 0
+        fetched_vm_ids.append(vm_id)
+        return {"id": vm_id, "name": f"vm-{vm_id}", "tags": [{"slug": DISCOVERY_TAG_VM_QEMU}]}
+
+    monkeypatch.setattr(sync_state_reader, "rest_list_paginated_async", _fake_paginated)
+    monkeypatch.setattr(sync_state_reader, "rest_first_async", _fake_first)
+    sync_state_reader.reset_sidecar_reader_availability_cache()
+    return fetched_vm_ids
+
+
+@pytest.mark.asyncio
+async def test_orphan_scan_limits_candidates_to_the_requested_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_vm_ids = _install_two_endpoint_sidecars(monkeypatch)
+
+    scan = await scan_vm_sidecar_orphan_candidates(
+        object(),
+        run_id="current-run",
+        vm_slugs=(DISCOVERY_TAG_VM_QEMU,),
+        endpoint_ids={1},
+    )
+
+    assert scan is not None
+    # Endpoint 2's stale VM, the sidecar without an endpoint id and the one with an
+    # invalid endpoint id are all out of scope and are never even fetched.
+    assert [candidate["id"] for candidate in scan.stale_candidates] == [10]
+    assert fetched_vm_ids == [10]
+    assert scan.current_vm_ids == {14}
+
+
+@pytest.mark.asyncio
+async def test_orphan_scan_without_scope_keeps_scanning_every_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_two_endpoint_sidecars(monkeypatch)
+
+    scan = await scan_vm_sidecar_orphan_candidates(
+        object(),
+        run_id="current-run",
+        vm_slugs=(DISCOVERY_TAG_VM_QEMU,),
+    )
+
+    assert scan is not None
+    assert [candidate["id"] for candidate in scan.stale_candidates] == [10, 11, 12, 13]
+
+
+@pytest.mark.asyncio
+async def test_orphan_scan_with_empty_scope_matches_nothing_instead_of_everything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fetched_vm_ids = _install_two_endpoint_sidecars(monkeypatch)
+
+    scan = await scan_vm_sidecar_orphan_candidates(
+        object(),
+        run_id="current-run",
+        vm_slugs=(DISCOVERY_TAG_VM_QEMU,),
+        endpoint_ids=frozenset(),
+    )
+
+    assert scan is not None
+    assert scan.stale_candidates == []
+    assert fetched_vm_ids == []
+
+
+@pytest.mark.asyncio
+async def test_stale_sidecar_candidates_helper_forwards_the_endpoint_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_two_endpoint_sidecars(monkeypatch)
+
+    candidates = await list_stale_vm_sidecar_candidates(
+        object(),
+        run_id="current-run",
+        vm_slugs=(DISCOVERY_TAG_VM_QEMU,),
+        endpoint_ids=[2],
+    )
+
+    assert [candidate["id"] for candidate in candidates or []] == [11]
 
 
 @pytest.mark.asyncio

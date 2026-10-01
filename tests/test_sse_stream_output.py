@@ -317,7 +317,7 @@ async def test_vms_create_stream_filters_selected_vm_to_exact_owner(monkeypatch)
     async for _chunk in response.body_iterator:
         pass
 
-    assert captured["cluster_resources"] == [{"cluster-a": [requested]}]
+    assert captured["cluster_resources"] == [{"cluster-a": [requested]}, {"cluster-b": []}]
 
 
 async def test_vms_create_stream_reports_owned_task_history_fatal_error(monkeypatch):
@@ -443,7 +443,10 @@ async def test_vm_by_id_create_stream_filters_exact_owned_resource(monkeypatch):
     body = "".join([chunk async for chunk in response.body_iterator])
 
     assert '"ok": true' in body
-    assert captured["cluster_resources"] == [{"CLUSTER-A": [selected]}]
+    assert captured["cluster_resources"] == [
+        {"CLUSTER-A": [selected]},
+        {"cluster-b": []},
+    ]
     assert captured["netbox_vm_ids"] == "248"
 
 

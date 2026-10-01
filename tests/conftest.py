@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import tempfile
@@ -173,6 +174,41 @@ def reset_fastapi_state():
     _reset_netbox_globals()
     invalidate_settings_cache()
     reset_sidecar_reader_availability_cache()
+
+
+class ProxboxLogCapture(logging.Handler):
+    """Collect records from the non-propagating ``proxbox`` application logger."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+    def messages(self, *levelnos: int) -> list[str]:
+        """Return formatted messages, optionally restricted to the given ``logging`` levels.
+
+        Filtering uses ``levelno`` because the console formatter rewrites ``levelname``
+        with color codes on the shared record.
+        """
+        return [
+            record.getMessage()
+            for record in self.records
+            if not levelnos or record.levelno in levelnos
+        ]
+
+
+@pytest.fixture
+def proxbox_log_capture():
+    """Attach a recording handler to the ``proxbox`` logger (it does not propagate)."""
+    capture = ProxboxLogCapture()
+    proxbox_logger = logging.getLogger("proxbox")
+    proxbox_logger.addHandler(capture)
+    try:
+        yield capture
+    finally:
+        proxbox_logger.removeHandler(capture)
 
 
 @pytest.fixture

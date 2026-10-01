@@ -42,7 +42,7 @@ from tests.fixtures import PROXMOX_VM_CONFIG, PROXMOX_VM_RESOURCE
 
 @pytest.fixture(autouse=True)
 def _preserve_hydrated_vm_test_fixtures(monkeypatch):
-    async def _passthrough(_nb, virtual_machines, *, require_all=False):
+    async def _passthrough(_nb, virtual_machines, *, require_all=False, **_kwargs):
         del require_all
         return virtual_machines
 
@@ -459,7 +459,7 @@ def test_selected_vm_filter_matches_exact_endpoint_cluster_vmid_and_type(monkeyp
         )
     )
 
-    assert filtered == [{"cluster-a": [requested]}]
+    assert filtered == [{"cluster-a": [requested]}, {"cluster-b": []}]
 
 
 def test_selected_vm_filter_uses_sidecar_only_identity_by_default(monkeypatch):
@@ -1511,7 +1511,12 @@ def test_standalone_vm_interfaces_response_surfaces_warnings(monkeypatch):
         )
     )
 
-    assert body == {"vm_interfaces": [{"id": 66}], "count": 1, "warnings": [warning]}
+    assert body == {
+        "vm_interfaces": [{"id": 66}],
+        "count": 1,
+        "warnings": [warning],
+        "degraded": True,
+    }
 
 
 def test_standalone_vm_interfaces_stream_complete_surfaces_warnings(monkeypatch):
@@ -1559,7 +1564,11 @@ def test_standalone_vm_interfaces_stream_complete_surfaces_warnings(monkeypatch)
         data_line = next(line for line in lines if line.startswith("data: "))
         complete_payloads.append(json.loads(data_line.removeprefix("data: ")))
 
-    assert complete_payloads[-1]["result"] == {"count": 1, "warnings": [warning]}
+    assert complete_payloads[-1]["result"] == {
+        "count": 1,
+        "warnings": [warning],
+        "degraded": True,
+    }
 
 
 def test_full_update_continues_to_ip_stage_after_vm_interface_warning(monkeypatch):

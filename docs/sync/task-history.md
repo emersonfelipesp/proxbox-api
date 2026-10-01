@@ -51,8 +51,12 @@ VM relevant to the run fails closed; a selected request is not aborted by
 corrupt sidecars that belong only to an unrelated VM.
 
 When an estate-wide sidecar scan succeeds, a NetBox VM without a sidecar is
-treated as unmanaged and skipped. An explicitly selected VM without identity
-remains fatal. An unavailable or transient sidecar read is also fatal because
+treated as unmanaged and skipped. Task history has no lenient mode: an
+explicitly selected VM without identity remains fatal here, unlike the other
+VM-scoped stages, which drop such a VM with a warning and report `degraded=true`
+in staged and estate runs (see
+[Staged-run selection](./workflows.md#staged-run-selection-strict-versus-lenient-ownership)).
+An unavailable or transient sidecar read is also fatal because
 ownership cannot be verified. A task from endpoint 11 therefore cannot map to a
 VM pinned to endpoint 22. Ownership collisions and duplicate cluster sources are
 skipped and mark the run degraded; unrelated archive VMIDs are ordinary skips
