@@ -74,6 +74,12 @@ async def test_run_lease_tunable_resolves_env_then_plugin_settings(
     assert (await ceph_timing.resolve_ceph_timing_settings()).run_lease_seconds == 720.0
 
 
+# Upper bound for an engine checkpoint to be reached. The waits return as soon as
+# the checkpoint is entered, so a generous bound costs nothing on a fast host but
+# keeps the tests deterministic when the shared CI runner is heavily loaded.
+_CHECKPOINT_WAIT_SECONDS = 60
+
+
 async def _cancel_repeatedly_while_inner_task_is_blocked(
     task: asyncio.Task[Any],
     count: int,
@@ -1109,7 +1115,7 @@ async def test_cancellation_during_atomic_task_claim_retains_submitted_upid(
                     session,
                 )
             )
-            await asyncio.wait_for(entered.wait(), timeout=2)
+            await asyncio.wait_for(entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS)
             await _cancel_repeatedly_while_inner_task_is_blocked(task, cancel_count)
             release.set()
             with pytest.raises(asyncio.CancelledError):
@@ -1197,10 +1203,12 @@ async def test_repeated_cancellation_cannot_interrupt_cancellation_checkpoint(
                     session,
                 )
             )
-            await asyncio.wait_for(claim_entered.wait(), timeout=2)
+            await asyncio.wait_for(claim_entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS)
             await _cancel_repeatedly_while_inner_task_is_blocked(task, 1)
             claim_release.set()
-            await asyncio.wait_for(cancel_checkpoint_entered.wait(), timeout=2)
+            await asyncio.wait_for(
+                cancel_checkpoint_entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS
+            )
             await _cancel_repeatedly_while_inner_task_is_blocked(task, cancel_count - 1)
             cancel_checkpoint_release.set()
             with pytest.raises(asyncio.CancelledError):
@@ -1282,7 +1290,7 @@ async def test_cancellation_while_sdk_returns_task_is_deferred_until_claim(
                     session,
                 )
             )
-            await asyncio.wait_for(entered.wait(), timeout=2)
+            await asyncio.wait_for(entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS)
             await _cancel_repeatedly_while_inner_task_is_blocked(task, cancel_count)
             release.set()
             with pytest.raises(asyncio.CancelledError):
@@ -1376,7 +1384,7 @@ async def test_cancellation_while_sdk_returns_sync_is_deferred_until_checkpoint(
                     session,
                 )
             )
-            await asyncio.wait_for(entered.wait(), timeout=2)
+            await asyncio.wait_for(entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS)
             await _cancel_repeatedly_while_inner_task_is_blocked(task, cancel_count)
             release.set()
             with pytest.raises(asyncio.CancelledError):
@@ -1487,7 +1495,7 @@ async def test_cancellation_during_synchronous_checkpoint_retains_completion(
                     session,
                 )
             )
-            await asyncio.wait_for(entered.wait(), timeout=2)
+            await asyncio.wait_for(entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS)
             await _cancel_repeatedly_while_inner_task_is_blocked(task, cancel_count)
             release.set()
             with pytest.raises(asyncio.CancelledError):
@@ -1564,7 +1572,7 @@ async def test_repeated_cancellation_waits_for_provider_task_completion_checkpoi
                     session,
                 )
             )
-            await asyncio.wait_for(completion_entered.wait(), timeout=2)
+            await asyncio.wait_for(completion_entered.wait(), timeout=_CHECKPOINT_WAIT_SECONDS)
             await _cancel_repeatedly_while_inner_task_is_blocked(task, cancel_count)
             completion_release.set()
             with pytest.raises(asyncio.CancelledError):
