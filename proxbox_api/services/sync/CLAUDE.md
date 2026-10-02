@@ -301,6 +301,25 @@ NetBox rows. A failed/unavailable sidecar scan, an invalid id, and a selection
 NetBox does not return in full stay fatal in every mode. Do not add branches to
 the noqa-C901 stage orchestrators for this; extend the helpers instead.
 
+**Shared-owner check after hydration.** `hydrate_vm_identities_from_sidecars`
+(and so `hydrate_selected_vm_identities`) finishes with
+`_reject_shared_hydrated_owners`: two hydrated VMs whose valid sidecars name the
+same endpoint raw id, casefolded cluster name, VMID, and VM type are a shared
+owner. Detection uses an owner index built from every complete sidecar row of
+the scan before it is narrowed to the selection, so a selected VM that shares its
+owner with an unselected NetBox VM is also caught (rows with an incomplete
+identity are not claimants). Lenient mode warns once per selected claimant and
+records it in `.skipped` with a reason naming all claimants (unselected
+claimants are not processed or skipped), so snapshot, disk, and backup stages exclude them from writes and
+stale cleanup exactly like other lenient drops; strict mode raises before any
+stage writes. The same endpoint and VMID in different clusters is not shared.
+Every join of a selection to the scan goes through one internal helper,
+`_hydrate_scanned_selection`, used by both public hydration functions and by
+`_hydrate_selected_sidecar_identities` (so `filter_cluster_resources_for_selected_vm`
+and `filter_cluster_resources_by_netbox_vm_ids` also reject a selected VM sharing
+its owner with an unselected claimant, before any live-resource matching).
+Mirror of `_reject_conflicting_owners`, which covers the owner-matching path.
+
 ## Orphan VM sweep
 
 `orphan_sweep.py` is the only owner of end-of-run orphan handling. Its enabled

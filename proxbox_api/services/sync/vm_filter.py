@@ -273,6 +273,112 @@ def _hydrate_selection(
     return hydrated
 
 
+def _hydrated_owner_key(vm: dict[str, object]) -> tuple[int, str, int, str] | None:
+    endpoint_id = normalize_positive_int(vm.get("proxmox_endpoint_id"))
+    vmid = normalize_positive_int(vm.get("proxmox_vm_id"))
+    cluster_name = _normalize_cluster_name(relation_name(vm.get("cluster")))
+    vm_type = str(vm.get("proxmox_vm_type") or "")
+    if endpoint_id is None or vmid is None or not cluster_name or not vm_type:
+        return None
+    return (endpoint_id, cluster_name, vmid, vm_type)
+
+
+def _sidecar_owner_key(row: dict[str, object]) -> tuple[int, str, int, str] | None:
+    """Return the normalized Proxmox owner key of one complete sidecar row."""
+
+    endpoint_id = normalize_positive_int(row.get("proxmox_endpoint_raw_id"))
+    vmid = normalize_positive_int(extract_proxmox_vmid(row))
+    cluster_name = _selected_sidecar_cluster_name(row)
+    vm_type = extract_proxmox_vm_type(row)
+    if endpoint_id is None or vmid is None or not cluster_name or not vm_type:
+        return None
+    return (endpoint_id, cluster_name, vmid, str(vm_type))
+
+
+def _owner_claimants_index(
+    rows: Iterable[dict[str, object]],
+) -> dict[tuple[int, str, int, str], list[int]]:
+    """Index every NetBox VM claiming each owner across the whole sidecar scan.
+
+    The index deliberately covers rows of VMs that are not selected, so a
+    selected VM is recognised as sharing its owner with an unselected one.
+    Rows with an incomplete identity cannot name an owner and are ignored.
+    """
+
+    claimants: dict[tuple[int, str, int, str], set[int]] = {}
+    for row in rows:
+        parent_id = relation_id(row.get("virtual_machine"))
+        key = _sidecar_owner_key(row)
+        if parent_id is not None and key is not None:
+            claimants.setdefault(key, set()).add(parent_id)
+    return {key: sorted(ids) for key, ids in claimants.items()}
+
+
+def _reject_shared_hydrated_owners(
+    hydrated: list[dict[str, object]],
+    *,
+    claimants_by_owner: dict[tuple[int, str, int, str], list[int]],
+    mode: SelectionMode,
+    skipped: list[SelectionSkip] | None,
+) -> list[dict[str, object]]:
+    """Drop every selected VM whose Proxmox owner is claimed by several NetBox VMs.
+
+    Each sidecar is valid on its own, but two NetBox VMs naming the same
+    endpoint/cluster/VMID/type would make later stages write one guest's data
+    under either NetBox VM. Which claimant is right cannot be known, so lenient
+    mode drops every selected claimant and strict mode raises before any stage
+    writes. Claimants outside the selection count as claimants but are not
+    themselves processed or reported.
+    """
+
+    shared_ids: set[int] = set()
+    for vm in hydrated:
+        key = _hydrated_owner_key(vm)
+        netbox_id = relation_id(vm.get("id"))
+        claimant_ids = claimants_by_owner.get(key, []) if key is not None else []
+        if key is None or netbox_id is None or len(claimant_ids) < 2:
+            continue
+        error = _selection_error(
+            f"NetBox VM ids {_join_ids(claimant_ids)} claim the same Proxmox "
+            f"endpoint/cluster/VMID/type owner (endpoint {key[0]}, cluster "
+            f"{key[1]!r}, VMID {key[2]}, type {key[3]})."
+        )
+        skip_or_raise(error, mode=mode, netbox_vm_id=netbox_id, skipped=skipped)
+        shared_ids.add(netbox_id)
+    return [vm for vm in hydrated if relation_id(vm.get("id")) not in shared_ids]
+
+
+def _hydrate_scanned_selection(
+    vms: list[dict[str, object]],
+    *,
+    scan_rows: list[dict[str, object]],
+    selected_ids: set[int],
+    require_all: bool,
+    mode: SelectionMode,
+    skipped: list[SelectionSkip] | None,
+) -> list[dict[str, object]]:
+    """Hydrate a selection from a full sidecar scan and reject shared owners.
+
+    Every entry point that joins a selection to the scan goes through here, so
+    the owner-claimant index always covers the whole scan, including rows of
+    VMs outside the selection, and none of them can skip the shared-owner check.
+    """
+
+    hydrated = _hydrate_selection(
+        vms,
+        sidecars_by_vm_id=_group_sidecars_by_vm_id(scan_rows, selected_ids),
+        require_all=require_all,
+        mode=mode,
+        skipped=skipped,
+    )
+    return _reject_shared_hydrated_owners(
+        hydrated,
+        claimants_by_owner=_owner_claimants_index(scan_rows),
+        mode=mode,
+        skipped=skipped,
+    )
+
+
 async def _hydrate_selected_sidecar_identities(
     netbox_session: NetBoxSessionDep,
     vms: list[dict[str, object]],
@@ -296,9 +402,10 @@ async def _hydrate_selected_sidecar_identities(
             + "."
         )
 
-    return _hydrate_selection(
+    return _hydrate_scanned_selection(
         vms,
-        sidecars_by_vm_id=_group_sidecars_by_vm_id(scan.rows, selected_ids),
+        scan_rows=scan.rows,
+        selected_ids=selected_ids,
         require_all=True,
         mode=mode,
         skipped=skipped,
@@ -329,9 +436,10 @@ async def hydrate_vm_identities_from_sidecars(
         raise _selection_error(f"Typed Proxbox VM sync-state lookup {outcome}.")
 
     skipped: list[SelectionSkip] = []
-    hydrated = _hydrate_selection(
+    hydrated = _hydrate_scanned_selection(
         vms,
-        sidecars_by_vm_id=_group_sidecars_by_vm_id(scan.rows, selected_ids),
+        scan_rows=scan.rows,
+        selected_ids=selected_ids,
         require_all=require_all,
         mode=mode,
         skipped=skipped,

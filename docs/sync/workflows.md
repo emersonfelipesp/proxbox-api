@@ -154,7 +154,17 @@ source or is ambiguous across endpoints, when its sidecar endpoint disagrees
 with the owner of the cluster, when no live Proxmox resource matches (for
 example a guest deleted in Proxmox but still in NetBox) or several do, and when
 two selected VMs claim the same endpoint/cluster/VMID/type. Every claimant of a
-shared owner is dropped, because which one is right cannot be known. In an
+shared owner is dropped, because which one is right cannot be known. This
+check runs in the owner-matching path and again after sidecar hydration, so the
+snapshot, virtual-disk, and backup stages also drop every NetBox VM whose valid
+sidecars name the same endpoint, cluster (compared case-insensitively), VMID, and
+VM type. Detection covers every NetBox VM with a complete sidecar, including
+claimants that are not part of the selection: a selected VM is dropped (or, in
+strict mode, rejected) when another NetBox VM claims the same owner, and the
+reason names all claimants. Unselected claimants are not processed themselves,
+and a sidecar with an incomplete identity is not a claimant. Strict mode raises
+before any stage writes. The same endpoint and VMID in
+different clusters is not a shared owner. In an
 estate scan a VM with no sidecar at all is unmanaged and is skipped silently,
 without a warning.
 

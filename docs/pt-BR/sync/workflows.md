@@ -150,7 +150,18 @@ sidecar discorda do dono do cluster, quando nenhum recurso Proxmox ativo
 corresponde (por exemplo um guest apagado no Proxmox mas ainda no NetBox) ou
 varios correspondem, e quando duas VMs selecionadas reivindicam o mesmo
 endpoint/cluster/VMID/tipo. Todos os que reivindicam um dono compartilhado sao
-descartados, pois nao e possivel saber qual esta certo. Em uma varredura de todo
+descartados, pois nao e possivel saber qual esta certo. Essa verificacao ocorre
+no caminho de correspondencia de dono e novamente apos a hidratacao dos sidecars,
+de modo que os estagios de snapshots, discos virtuais e backups tambem descartam
+toda VM do NetBox cujos sidecars validos apontam para o mesmo endpoint, cluster
+(comparado sem diferenciar maiusculas), VMID e tipo de VM. A deteccao cobre toda
+VM do NetBox com sidecar completo, inclusive reivindicantes que nao fazem parte da
+selecao: uma VM selecionada e descartada (ou, no modo estrito, rejeitada) quando
+outra VM do NetBox reivindica o mesmo dono, e o motivo cita todos os
+reivindicantes. Reivindicantes nao selecionados nao sao processados e um sidecar
+com identidade incompleta nao e reivindicante. O modo estrito levanta
+erro antes de qualquer escrita. O mesmo endpoint e VMID em clusters diferentes
+nao e um dono compartilhado. Em uma varredura de todo
 o ambiente, uma VM sem nenhum sidecar e nao gerenciada e e ignorada em silencio,
 sem aviso.
 
