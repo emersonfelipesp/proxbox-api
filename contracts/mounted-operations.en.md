@@ -3790,7 +3790,7 @@
 | 3758 | http | GET | /cache/metrics/prometheus | proxbox&#95;api/app/cache&#95;routes.py:55 get&#95;cache&#95;metrics&#95;prometheus | - |
 | 3759 | http | GET | /clear-cache | proxbox&#95;api/app/cache&#95;routes.py:67 clear&#95;cache | - |
 | 3760 | http | GET | /full-update | proxbox&#95;api/app/full&#95;update.py:190 full&#95;update&#95;sync | - |
-| 3761 | http | GET | /full-update/stream | proxbox&#95;api/app/full&#95;update.py:601 full&#95;update&#95;sync&#95;stream | - |
+| 3761 | http | GET | /full-update/stream | proxbox&#95;api/app/full&#95;update.py:602 full&#95;update&#95;sync&#95;stream | - |
 | 3762 | websocket |  | / | proxbox&#95;api/app/websockets.py:64 base&#95;websocket | - |
 | 3763 | websocket |  | /ws/virtual-machines | proxbox&#95;api/app/websockets.py:120 websocket&#95;virtual&#95;machines | - |
 | 3764 | websocket |  | /ws | proxbox&#95;api/app/websockets.py:156 websocket&#95;sync&#95;commands | - |
@@ -3945,12 +3945,12 @@
 | 3913 | http | GET | /proxmox/{node}/{type}/{vmid}/config | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:398 get&#95;vm&#95;config | - |
 | 3914 | http | GET | /proxmox/viewer/openapi | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:269 proxmox&#95;viewer&#95;bundled&#95;openapi | - |
 | 3915 | http | GET | /proxmox/viewer/pydantic | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:480 proxmox&#95;viewer&#95;bundled&#95;pydantic&#95;models | - |
-| 3916 | http | GET | /dcim/devices | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:38 get&#95;devices | - |
-| 3917 | http | GET | /dcim/devices/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:43 create&#95;devices | - |
-| 3918 | http | GET | /dcim/devices/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:62 create&#95;devices&#95;stream | - |
-| 3919 | http | GET | /dcim/devices/{node}/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:367 create&#95;proxmox&#95;device&#95;interfaces | - |
-| 3920 | http | GET | /dcim/devices/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:799 create&#95;all&#95;devices&#95;interfaces | - |
-| 3921 | http | GET | /dcim/devices/interfaces/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:824 create&#95;all&#95;devices&#95;interfaces&#95;stream | - |
+| 3916 | http | GET | /dcim/devices | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:43 get&#95;devices | - |
+| 3917 | http | GET | /dcim/devices/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:48 create&#95;devices | - |
+| 3918 | http | GET | /dcim/devices/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:67 create&#95;devices&#95;stream | - |
+| 3919 | http | GET | /dcim/devices/{node}/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:372 create&#95;proxmox&#95;device&#95;interfaces | - |
+| 3920 | http | GET | /dcim/devices/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:814 create&#95;all&#95;devices&#95;interfaces | - |
+| 3921 | http | GET | /dcim/devices/interfaces/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:839 create&#95;all&#95;devices&#95;interfaces&#95;stream | - |
 | 3922 | http | GET | /virtualization/cluster-types/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:15 create&#95;cluster&#95;types | - |
 | 3923 | http | GET | /virtualization/clusters/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:20 create&#95;clusters | - |
 | 3924 | http | GET | /virtualization/virtual-machines/ | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:41 get&#95;virtual&#95;machines | - |

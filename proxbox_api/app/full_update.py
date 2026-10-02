@@ -461,6 +461,7 @@ async def _full_update_sync_impl(  # noqa: C901
                 use_websocket=False,
                 behavior_flags=behavior_flags,
             )
+            sync_warnings.extend(_stage_warnings(sync_node_interfaces, "node-interfaces"))
         except ProxboxException:
             raise
         except Exception as error:  # noqa: BLE001
@@ -1056,6 +1057,7 @@ async def full_update_sync_stream(  # noqa: C901
                 async for frame in node_interfaces_bridge.iter_sse():
                     yield frame
                 sync_node_interfaces = await node_interfaces_task
+                sync_warnings.extend(_stage_warnings(sync_node_interfaces, "node-interfaces"))
 
                 yield sse_event(
                     "step",
@@ -1063,7 +1065,9 @@ async def full_update_sync_stream(  # noqa: C901
                         "step": "node-interfaces",
                         "status": "completed",
                         "message": "Node interfaces synchronization finished.",
-                        "result": {"count": len(sync_node_interfaces)},
+                        "result": _stage_result(
+                            len(sync_node_interfaces), sync_node_interfaces, "node-interfaces"
+                        ),
                         "duration_seconds": round(time.monotonic() - _node_interfaces_start, 3),
                     },
                 )

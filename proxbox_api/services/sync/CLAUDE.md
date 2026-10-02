@@ -148,6 +148,16 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   normalizers in `proxmox_to_netbox/models.py` unwrap enum members themselves
   (see that package's notes). Keep passing it anyway — it states the intent at
   the call site — but a call site that forgets is now correct rather than broken.
+- **Node-interface failures are reported, never swallowed.** In
+  `network.py::sync_node_network` a failed VLAN, IP, or MAC write is collected
+  as `{"device", "interface", "kind", "reason"}` and the result becomes a
+  `WarningList` (clean runs stay a plain list). `create_all_device_interfaces`
+  aggregates the per-node warnings; REST wraps them as `{"interfaces", "count",
+  "warnings", "degraded"}`, SSE and `full_update` surface `warnings` plus
+  `degraded` (phase `node-interfaces`). A VLAN interface whose VLAN
+  reconciliation failed is passed to the topology patch as `vlan_failed`, which
+  omits `mode` and `tagged_vlans` so the existing NetBox assignment is preserved
+  rather than cleared; "no VLAN configured" is different and still clears.
 - **Cluster/site placement invariant.** After cluster reconciliation, dependent
   device and VM writes use `device_ensure._effective_cluster_site_id()` so a
   cluster's actual `dcim.site` scope wins over a stale endpoint/default site.

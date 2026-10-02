@@ -41,6 +41,23 @@ reconcilia a topologia completa de `/nodes/{node}/network`, incluindo a opcao
 `GET /dcim/devices/interfaces/create?sync_node_interfaces=true`. Sem ela, a
 etapa mantem o comportamento legado por interface, que nao define MAC.
 
+No caminho de topologia completa, uma escrita de VLAN, endereco IP ou MAC que
+falha nao interrompe o node e nunca e relatada como uma execucao limpa. Cada
+escrita ignorada vira um aviso `{"device", "interface", "kind", "reason"}`, onde
+`kind` e `vlan`, `ip` ou `mac`, e a etapa termina degradada (HTTP 200,
+`ok=true`). Os avisos seguem o mesmo formato das demais etapas degradadas:
+`GET /dcim/devices/interfaces/create` retorna
+`{"interfaces": [...], "count", "warnings", "degraded": true}` em vez da lista
+simples, o resultado do stream e o evento de conclusao por node trazem
+`warnings` e `degraded`, e o `full_update` os adiciona (marcados com
+`"phase": "node-interfaces"`) a `warnings` e `degraded` de nivel superior. Uma
+execucao limpa retorna exatamente a lista simples, como antes. Quando a VLAN de
+uma subinterface VLAN nao pode ser reconciliada, a interface mantem o `mode` e
+as `tagged_vlans` existentes no NetBox; eles ficam fora do patch de topologia em
+vez de serem limpos, entao uma falha transitoria nao apaga atribuicoes de VLAN.
+As demais interfaces continuam tendo a topologia obsoleta limpa quando o Proxmox
+a remove.
+
 ## Fluxo de Sync de VM
 
 Endpoint principal:

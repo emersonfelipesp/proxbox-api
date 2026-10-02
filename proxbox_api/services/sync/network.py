@@ -35,6 +35,7 @@ from proxbox_api.services.sync.ip_ownership import (
     _ip_address_current_normalizer,
     _reconcile_interface_ip,
 )
+from proxbox_api.services.sync.stage_result import attach_skips_to_list
 from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
 from proxbox_api.services.sync.vm_helpers import (
     _is_skippable_ip,
@@ -542,8 +543,21 @@ async def _reconcile_node_interface_scalar(
     )
 
 
+def _node_failure(
+    device: dict, iface: str, kind: str, exc: Exception, **extra: object
+) -> dict[str, object]:
+    """Structured warning for a node-interface sub-sync that failed and was skipped."""
+    return {
+        "device": device.get("name") or device.get("id"),
+        "interface": iface,
+        "kind": kind,
+        "reason": f"{type(exc).__name__}: {getattr(exc, 'detail', None) or exc}",
+        **extra,
+    }
+
+
 async def _sync_node_interface_vlan(
-    nb: object, entry: dict, iface: str, tag_refs: list[dict]
+    nb: object, device: dict, entry: dict, iface: str, tag_refs: list[dict], failures: list[dict]
 ) -> int | None:
     if entry.get("type") != "vlan" or not entry.get("vlan-id"):
         return None
@@ -562,14 +576,23 @@ async def _sync_node_interface_vlan(
                 "tags": row.get("tags"),
             },
         )
-        return _record_id(record)
+        vlan_id = _record_id(record)
+        if vlan_id is None:
+            raise ProxboxException(
+                message="VLAN reconciliation returned no persisted record",
+                detail=f"VLAN {vid} on node interface {iface}",
+            )
+        return vlan_id
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to sync VLAN for node interface %s: %s", iface, exc)
+        failures.append(_node_failure(device, iface, "vlan", exc))
         return None
 
 
 async def _sync_node_interface_addresses(
     nb: object,
+    device: dict,
+    failures: list[dict],
     entry: dict,
     iface: str,
     iface_id: int | None,
@@ -584,7 +607,7 @@ async def _sync_node_interface_addresses(
         if not cidr or _is_network_id(cidr):
             continue
         try:
-            await _reconcile_interface_ip(
+            ip_id = await _reconcile_interface_ip(
                 nb,
                 ip_addr=cidr,
                 interface_id=iface_id,
@@ -595,14 +618,26 @@ async def _sync_node_interface_addresses(
                 assigned_object_type="dcim.interface",
                 interface_lookup_field="interface_id",
             )
+            if ip_id is None:
+                raise ProxboxException(
+                    message="IP address reconciliation returned no persisted record",
+                    detail=f"IP {cidr} on node interface {iface}",
+                )
             addresses.append(cidr)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to sync IP %s on node interface %s: %s", cidr, iface, exc)
+            failures.append(_node_failure(device, iface, "ip", exc, address=cidr))
     return addresses
 
 
 async def _sync_node_interface_mac(
-    nb: object, entry: dict, iface: str, iface_id: int | None, tag_refs: list[dict]
+    nb: object,
+    device: dict,
+    failures: list[dict],
+    entry: dict,
+    iface: str,
+    iface_id: int | None,
+    tag_refs: list[dict],
 ) -> str | None:
     from proxbox_api.services.sync.mac_address import normalize_mac, reconcile_mac_for_interface
 
@@ -610,7 +645,7 @@ async def _sync_node_interface_mac(
     if not mac or iface_id is None:
         return None
     try:
-        await reconcile_mac_for_interface(
+        mac_id, _status = await reconcile_mac_for_interface(
             nb,
             mac=mac,
             assigned_object_type="dcim.interface",
@@ -618,9 +653,15 @@ async def _sync_node_interface_mac(
             interface_list_path="/api/dcim/interfaces/",
             tag_refs=tag_refs,
         )
+        if mac_id is None:
+            raise ProxboxException(
+                message="MAC address reconciliation returned no persisted record",
+                detail=f"MAC {mac} on node interface {iface}",
+            )
         return mac
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to sync MAC %s on node interface %s: %s", mac, iface, exc)
+        failures.append(_node_failure(device, iface, "mac", exc, mac=mac))
         return None
 
 
@@ -630,10 +671,11 @@ async def _sync_node_network_phase_one(
     entries: list[dict],
     tag_refs: list[dict],
     now: datetime,
-) -> tuple[dict[str, int], dict[str, int], list[dict]]:
+) -> tuple[dict[str, int], dict[str, int], list[dict], list[dict]]:
     name_to_id: dict[str, int] = {}
     vlan_ids: dict[str, int] = {}
     results: list[dict] = []
+    failures: list[dict] = []
     for entry in entries:
         iface = entry["iface"]
         interface = await _reconcile_node_interface_scalar(
@@ -647,17 +689,24 @@ async def _sync_node_network_phase_one(
             )
         name_to_id[iface] = iface_id
         result: dict = {"id": iface_id, "name": iface}
-        vlan_id = await _sync_node_interface_vlan(nb, entry, iface, tag_refs)
+        vlan_id = await _sync_node_interface_vlan(nb, device, entry, iface, tag_refs, failures)
         if vlan_id is not None:
             vlan_ids[iface] = vlan_id
-        addresses = await _sync_node_interface_addresses(nb, entry, iface, iface_id, tag_refs, now)
+        addresses = await _sync_node_interface_addresses(
+            nb, device, failures, entry, iface, iface_id, tag_refs, now
+        )
         if addresses:
             result["ip_addresses"] = addresses
-        mac = await _sync_node_interface_mac(nb, entry, iface, iface_id, tag_refs)
+        mac = await _sync_node_interface_mac(nb, device, failures, entry, iface, iface_id, tag_refs)
         if mac:
             result["mac_address"] = mac
         results.append(result)
-    return name_to_id, vlan_ids, results
+    return name_to_id, vlan_ids, results, failures
+
+
+def _failed_vlan_interfaces(failures: list[dict]) -> frozenset[str]:
+    """Interfaces whose VLAN reconciliation failed, as opposed to having no VLAN."""
+    return frozenset(str(f["interface"]) for f in failures if f["kind"] == "vlan")
 
 
 def _node_interface_topology_patch(
@@ -666,6 +715,7 @@ def _node_interface_topology_patch(
     vlan_ids: dict[str, int],
     member_bridge: dict[str, str],
     member_bond: dict[str, str],
+    vlan_failed: frozenset[str] = frozenset(),
 ) -> dict:
     iface = entry["iface"]
     patch: dict = {
@@ -686,7 +736,12 @@ def _node_interface_topology_patch(
     parent = entry.get("vlan-raw-device")
     if parent in name_to_id:
         patch["parent"] = name_to_id[parent]
-    if iface in vlan_ids:
+    if iface in vlan_failed:
+        # The VLAN lookup or write failed, so its id is unknown. Omitting the keys
+        # keeps the existing NetBox assignment instead of erasing it.
+        patch.pop("mode")
+        patch.pop("tagged_vlans")
+    elif iface in vlan_ids:
         patch.update(mode="tagged", tagged_vlans=[vlan_ids[iface]])
     return patch
 
@@ -697,6 +752,7 @@ async def _sync_node_network_topology(
     entries: list[dict],
     name_to_id: dict[str, int],
     vlan_ids: dict[str, int],
+    vlan_failed: frozenset[str] = frozenset(),
 ) -> None:
     member_bridge, member_bond = _node_network_membership(entries)
     for entry in entries:
@@ -704,7 +760,7 @@ async def _sync_node_network_topology(
         if iface not in name_to_id:
             continue
         patch = _node_interface_topology_patch(
-            entry, name_to_id, vlan_ids, member_bridge, member_bond
+            entry, name_to_id, vlan_ids, member_bridge, member_bond, vlan_failed
         )
         await rest_reconcile_async(
             nb,
@@ -754,6 +810,12 @@ async def sync_node_network(
     sub-interface carrying that single VID on its parent — distinct from the
     legacy per-interface path (``sync_node_interface_and_ip``), which models a
     bridge's ``untagged_vlan`` as ``mode=access``.
+
+    A VLAN, IP, or MAC write that fails does not abort the node. The failure is
+    reported as a ``{"device", "interface", "kind", "reason"}`` warning and the
+    result is a ``WarningList`` (``degraded``); a clean run returns a plain list.
+    A VLAN interface whose VLAN reconciliation failed keeps its existing
+    ``mode``/``tagged_vlans`` in NetBox rather than having them cleared.
     """
     now = now or datetime.now(timezone.utc)
     device_id = device.get("id")
@@ -762,11 +824,13 @@ async def sync_node_network(
         for e in (network_entries or [])
         if e.get("iface") and e.get("iface") != "lo" and e.get("type") not in _NODE_IFACE_SKIP_TYPES
     ]
-    name_to_id, vlan_ids, results = await _sync_node_network_phase_one(
+    name_to_id, vlan_ids, results, failures = await _sync_node_network_phase_one(
         nb, device, entries, tag_refs, now
     )
-    await _sync_node_network_topology(nb, device_id, entries, name_to_id, vlan_ids)
-    return results
+    await _sync_node_network_topology(
+        nb, device_id, entries, name_to_id, vlan_ids, _failed_vlan_interfaces(failures)
+    )
+    return attach_skips_to_list(results, failures)
 
 
 def _resolve_vm_interface_identity(

@@ -28,6 +28,11 @@ from proxbox_api.services.sync.network import (
     sync_node_interface_and_ip,
 )
 from proxbox_api.services.sync.node_device_name import render_node_device_name
+from proxbox_api.services.sync.stage_result import (
+    attach_skips_to_list,
+    response_with_stage_warnings,
+    result_warnings,
+)
 from proxbox_api.session.netbox import NetBoxAsyncSessionDep, NetBoxSessionDep
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
@@ -545,6 +550,12 @@ async def _sync_node_network_topology(
     return results
 
 
+def _degraded_event_fields(results: list) -> dict[str, object]:
+    """Completion-event fields for a node sync that finished degraded; empty when clean."""
+    warnings = result_warnings(results)
+    return {"degraded": True, "warnings": warnings} if warnings else {}
+
+
 async def _sync_node_interfaces_for_node(
     netbox_session: NetBoxAsyncSessionDep,
     tag_refs: list[dict[str, object]],
@@ -602,6 +613,7 @@ async def _sync_node_interfaces_for_node(
                     "rowid": node_name,
                     "name": node_name,
                     "count": len(results),
+                    **_degraded_event_fields(results),
                 },
             },
         )
@@ -743,10 +755,13 @@ async def create_all_device_interfaces(
             selects the full-topology reconcile.
 
     Returns:
-        List of all synced interface records.
+        List of all synced interface records. When the full-topology reconcile
+        skipped a VLAN, IP, or MAC write, the list is a ``WarningList`` carrying
+        those ``warnings`` (``degraded``); a clean run returns a plain list.
     """
     tag_refs = nested_tag_payload(tag)
     all_results: list[dict] = []
+    stage_warnings: list[dict[str, object]] = []
 
     if not clusters_status:
         return all_results
@@ -776,24 +791,24 @@ async def create_all_device_interfaces(
                 if sync_full_topology
                 else await load_proxmox_node_network(proxmox_session, node_name)
             )
-            all_results.extend(
-                await _sync_node_interfaces_for_node(
-                    netbox_session,
-                    tag_refs,
-                    node_name=node_name,
-                    device_record=device_record,
-                    node_networks=node_networks,
-                    websocket=websocket,
-                    use_websocket=use_websocket,
-                    proxmox_session=proxmox_session,
-                    sync_full_topology=sync_full_topology,
-                )
+            node_results = await _sync_node_interfaces_for_node(
+                netbox_session,
+                tag_refs,
+                node_name=node_name,
+                device_record=device_record,
+                node_networks=node_networks,
+                websocket=websocket,
+                use_websocket=use_websocket,
+                proxmox_session=proxmox_session,
+                sync_full_topology=sync_full_topology,
             )
+            all_results.extend(node_results)
+            stage_warnings.extend(result_warnings(node_results))
 
     if use_websocket and websocket:
         await websocket.send_json({"object": "node_interface", "end": True})
 
-    return all_results
+    return attach_skips_to_list(all_results, stage_warnings)
 
 
 @router.get("/devices/interfaces/create")
@@ -818,7 +833,7 @@ async def create_all_devices_interfaces(
         pxs=pxs,
         behavior_flags=behavior_flags,
     )
-    return results
+    return response_with_stage_warnings(results, result_key="interfaces")
 
 
 @router.get("/devices/interfaces/create/stream", response_model=None)
