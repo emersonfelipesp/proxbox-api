@@ -374,8 +374,16 @@ sweep itself and the VM stage must not filter them, so re-adoption still works.
 - **What.** `(proxmox_endpoint_id, vmid)` is not a unique key across NetBox
   clusters. Every lookup keyed on it now requires the matched VM to live in the
   cluster being synchronized (`vm_cluster_guard.vm_record_in_cluster`: cluster id
-  when both sides know it, else casefolded name; an unknown cluster keeps the
-  match). It is applied in `reconciliation/vm_queue.select_existing_vm_record`
+  when both sides know it, else casefolded name; `vm_cluster_verdict` returns
+  `match|mismatch|unassigned|unknown`. Explicit `cluster: null` rows
+  (`unassigned`, legacy) and rows with no cluster data (`unknown`) are both
+  rejected while the live cluster is known, and
+  `vm_queue.skip_unverifiable_vm_candidates` (run before either engine by
+  `build_vm_operation_queue`) skips the prepared VM instead of creating a
+  duplicate unless a `(cluster id, vmid)` candidate exists; each skip is a
+  structured stage warning from `vm_queue.unverifiable_vm_warnings`.
+  `_load_netbox_virtual_machine_snapshot` completes every row missing `cluster`
+  with at most 8 concurrent reads). It is applied in `reconciliation/vm_queue.select_existing_vm_record`
   (which also feeds sidecar hydration and the name pre-pass), in
   `sync_vm._resolve_vm_from_index_or_unique_vmid` (interfaces and IPs), in
   `snapshots._snapshot_sessions_for_vm` (only sessions of the VM's cluster), and

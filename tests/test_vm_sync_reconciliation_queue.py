@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -928,7 +929,7 @@ async def test_load_netbox_virtual_machine_snapshot_can_bypass_stale_cache(monke
 
     async def _fake_list(nb, path, *, page_size=None):
         page_sizes.append(page_size)
-        return [{"id": 55, "name": "vm01"}]
+        return [{"id": 55, "name": "vm01", "cluster": None}]
 
     monkeypatch.setattr(sync_vm, "clear_rest_get_cache_for_path", _fake_clear)
     monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _fake_list)
@@ -937,7 +938,7 @@ async def test_load_netbox_virtual_machine_snapshot_can_bypass_stale_cache(monke
 
     assert cleared_paths == ["/api/virtualization/virtual-machines/"]
     assert page_sizes == [200]
-    assert snapshot == [{"id": 55, "name": "vm01"}]
+    assert snapshot == [{"id": 55, "name": "vm01", "cluster": None}]
 
 
 @pytest.mark.asyncio
@@ -1240,3 +1241,289 @@ def test_rust_engine_pick_of_foreign_vm_resolves_live_cluster_record(
     queue = vm_queue.build_vm_operation_queue([prepared], snapshot)
 
     assert [(op.method, op.existing_record["id"]) for op in queue] == [("UPDATE", 7002)]
+
+
+# ---------------------------------------------------------------------------
+# Cluster guard: records whose cluster cannot be verified.
+# ---------------------------------------------------------------------------
+
+
+def _cluster_less_vm(vm_id: int, **extra) -> dict[str, object]:
+    record = _colliding_vm(vm_id, 1, "cluster-a", **extra)
+    record.pop("cluster")
+    return record
+
+
+def test_queue_skips_unverifiable_endpoint_candidate_instead_of_updating_or_creating(
+    proxbox_caplog,
+):
+    proxbox_caplog.set_level(logging.WARNING)
+    unverifiable = _cluster_less_vm(7001)
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [unverifiable]
+    )
+
+    assert queue == []
+    assert "Skipping VM write for vmid=401 endpoint_id=500" in proxbox_caplog.text
+    assert "cannot be verified" in proxbox_caplog.text
+
+
+def test_queue_prefers_the_live_clusters_verified_record_over_an_unverifiable_one():
+    unverifiable = _cluster_less_vm(7001)
+    beta = _colliding_vm(7002, 2, "cluster-b")
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [unverifiable, beta]
+    )
+
+    assert [(op.method, op.existing_record["id"]) for op in queue] == [("UPDATE", 7002)]
+
+
+def _null_cluster_vm(vm_id: int, **extra) -> dict[str, object]:
+    record = _colliding_vm(vm_id, 1, "cluster-a", **extra)
+    record["cluster"] = None
+    return record
+
+
+def test_queue_does_not_let_a_foreign_cluster_adopt_an_unassigned_legacy_vm(proxbox_caplog):
+    proxbox_caplog.set_level(logging.WARNING)
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [_null_cluster_vm(7001)]
+    )
+
+    assert queue == []
+    assert "cannot be verified" in proxbox_caplog.text
+
+
+@pytest.mark.parametrize("engine", ["python", "rust", "compare"])
+@pytest.mark.parametrize("blocker_factory", [_cluster_less_vm, _null_cluster_vm])
+@pytest.mark.parametrize("keyed_endpoint", [None, 500])
+def test_unverifiable_endpoint_candidate_with_verified_cluster_row_never_creates(
+    monkeypatch, engine, blocker_factory, keyed_endpoint
+):
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    blocker = blocker_factory(7001)
+    keyed = _colliding_vm(7002, 2, "cluster-b", proxmox_endpoint_id=keyed_endpoint)
+
+    def _fake_rust(*, prepared_vms, netbox_snapshot, flags):
+        # Rust matches on the endpoint key only: with an endpoint-less verified
+        # row it asks for a CREATE, otherwise it picks the unverifiable row.
+        pick = None if keyed_endpoint is None else blocker
+        return [
+            {
+                "method": "CREATE" if pick is None else "UPDATE",
+                "cluster_name": prepared.cluster_name,
+                "vmid": 401,
+                "vm_type": "qemu",
+                "existing_record": pick,
+                "patch_payload": {} if pick is None else {"memory": 2048},
+            }
+            for prepared in prepared_vms
+        ]
+
+    monkeypatch.setattr(vm_queue, "build_vm_operation_queue_rust", _fake_rust)
+    monkeypatch.setattr(vm_queue, "rust_available", lambda: True)
+    monkeypatch.setattr(vm_queue, "_reconciliation_engine", lambda: engine)
+    monkeypatch.setattr(vm_queue, "_reconciliation_compare_strict", lambda: True)
+
+    queue = vm_queue.build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [blocker, keyed]
+    )
+
+    assert all(op.method != "CREATE" for op in queue)
+    assert [(op.existing_record or {}).get("id") for op in queue] == [7002]
+
+
+def test_verified_cluster_row_naming_another_endpoint_is_not_adopted():
+    blocker = _cluster_less_vm(7001)
+    other_endpoint = _colliding_vm(7002, 2, "cluster-b", proxmox_endpoint_id=900)
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [blocker, other_endpoint]
+    )
+
+    assert all((op.existing_record or {}).get("id") != 7002 for op in queue)
+
+
+def test_queue_prefers_the_verified_record_over_an_unassigned_one():
+    legacy = _null_cluster_vm(7001)
+    beta = _colliding_vm(7002, 2, "cluster-b")
+
+    queue = sync_vm._build_vm_operation_queue(
+        [_prepared_for_cluster(2, "cluster-b")], [legacy, beta]
+    )
+
+    assert [(op.method, op.existing_record["id"]) for op in queue] == [("UPDATE", 7002)]
+
+
+@pytest.mark.parametrize("record_factory", [_cluster_less_vm, _null_cluster_vm])
+def test_unverifiable_vm_warnings_name_the_blocking_netbox_vm(record_factory):
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    warnings = vm_queue.unverifiable_vm_warnings(
+        [_prepared_for_cluster(2, "cluster-b")], [record_factory(7001)]
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0]["netbox_vm_id"] == 7001
+    assert warnings[0]["vmid"] == 401
+    assert "cannot be verified" in str(warnings[0]["reason"])
+
+
+def test_unverifiable_vm_warnings_are_empty_for_verified_records():
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    assert (
+        vm_queue.unverifiable_vm_warnings(
+            [_prepared_for_cluster(2, "cluster-b")], [_colliding_vm(7002, 2, "cluster-b")]
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("engine", ["rust", "compare"])
+@pytest.mark.parametrize("record_factory", [_cluster_less_vm, _null_cluster_vm])
+def test_unverifiable_candidate_never_becomes_a_rust_create(monkeypatch, engine, record_factory):
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    # The candidate has a different explicit VM type, so the Rust engine would
+    # emit a CREATE for every prepared VM it receives.
+    candidate = record_factory(7001, proxmox_vm_type="lxc")
+
+    def _fake_rust(*, prepared_vms, netbox_snapshot, flags):
+        return [
+            {
+                "method": "CREATE",
+                "cluster_name": prepared.cluster_name,
+                "vmid": 401,
+                "vm_type": "qemu",
+            }
+            for prepared in prepared_vms
+        ]
+
+    monkeypatch.setattr(vm_queue, "build_vm_operation_queue_rust", _fake_rust)
+    monkeypatch.setattr(vm_queue, "rust_available", lambda: True)
+    monkeypatch.setattr(vm_queue, "_reconciliation_engine", lambda: engine)
+    monkeypatch.setattr(vm_queue, "_reconciliation_compare_strict", lambda: True)
+
+    queue = vm_queue.build_vm_operation_queue([_prepared_for_cluster(2, "cluster-b")], [candidate])
+
+    assert queue == []
+
+
+def test_select_existing_vm_record_refuses_unverifiable_endpoint_match():
+    unverifiable = _cluster_less_vm(7001, proxmox_vm_type=None)
+    indexes = sync_vm._build_vm_snapshot_identity_indexes([unverifiable])
+
+    selected = sync_vm._select_existing_vm_record(
+        prepared=_prepared_for_cluster(2, "cluster-b"),
+        endpoint_id=500,
+        cluster_id=2,
+        proxmox_vmid=401,
+        endpoint_typed_index=indexes[0],
+        endpoint_untyped_candidates=indexes[1],
+        cluster_typed_index=indexes[2],
+        cluster_untyped_candidates=indexes[3],
+    )
+
+    assert selected is None
+
+
+def test_rust_pick_of_unverifiable_vm_is_dropped_not_updated():
+    from proxbox_api.services.sync.reconciliation import vm_queue
+
+    unverifiable = _cluster_less_vm(7001)
+    operations = [
+        sync_vm._NetBoxVMOperation(
+            method="UPDATE",
+            prepared=_prepared_for_cluster(2, "cluster-b"),
+            existing_record=unverifiable,
+            patch_payload={"memory": 2048, "cluster": 2},
+        )
+    ]
+
+    assert vm_queue._reject_cross_cluster_operations(operations, [unverifiable], {}) == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_loader_completes_rows_missing_cluster(monkeypatch):
+    rows = [
+        {"id": 1, "name": "a", "cluster": {"id": 3, "name": "c"}},
+        {"id": 2, "name": "b"},
+        {"id": 4, "name": "d", "cluster": None},
+    ]
+    reads: list[dict[str, object]] = []
+
+    async def _fake_list(_nb, _path, **_kwargs):
+        return [dict(row) for row in rows]
+
+    async def _fake_first(_nb, _path, *, query):
+        reads.append(query)
+        return {"id": 2, "cluster": {"id": 9, "name": "nine"}}
+
+    monkeypatch.setattr(sync_vm, "rest_list_paginated_async", _fake_list)
+    monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
+
+    snapshot = await sync_vm._load_netbox_virtual_machine_snapshot(object())
+
+    assert reads == [{"id": 2, "limit": 2}]
+    assert snapshot[1]["cluster"] == {"id": 9, "name": "nine"}
+    assert snapshot[2]["cluster"] is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_cluster_completion_covers_every_row_with_bounded_concurrency(monkeypatch):
+    snapshot = [{"id": index} for index in range(1, 41)]
+    in_flight = 0
+    peak = 0
+    reads: list[object] = []
+
+    async def _fake_first(_nb, _path, *, query):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0)
+        in_flight -= 1
+        reads.append(query["id"])
+        return {"id": query["id"], "cluster": {"id": 3, "name": "c"}}
+
+    monkeypatch.setattr(sync_vm, "rest_first_async", _fake_first)
+
+    completed = await sync_vm._complete_vm_snapshot_clusters(object(), snapshot, concurrency=4)
+
+    assert completed == 40 and sorted(reads) == list(range(1, 41))
+    assert 1 < peak <= 4
+    assert all(row["cluster"] == {"id": 3, "name": "c"} for row in snapshot)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_cluster_completion_failures_do_not_starve_later_rows(monkeypatch):
+    snapshot = [{"id": index} for index in range(1, 31)]
+
+    async def _first_ten_fail(_nb, _path, *, query):
+        if query["id"] <= 10:
+            raise RuntimeError("netbox down")
+        return {"id": query["id"], "cluster": {"id": 3, "name": "c"}}
+
+    monkeypatch.setattr(sync_vm, "rest_first_async", _first_ten_fail)
+
+    await sync_vm._complete_vm_snapshot_clusters(object(), snapshot)
+
+    assert all("cluster" not in row for row in snapshot[:10])
+    assert all(row["cluster"] == {"id": 3, "name": "c"} for row in snapshot[10:])
+
+
+@pytest.mark.asyncio
+async def test_snapshot_cluster_completion_survives_read_failures(monkeypatch):
+    snapshot = [{"id": 1}]
+
+    async def _boom(_nb, _path, *, query):
+        raise RuntimeError("netbox down")
+
+    monkeypatch.setattr(sync_vm, "rest_first_async", _boom)
+
+    assert await sync_vm._complete_vm_snapshot_clusters(object(), snapshot) == 1
+    assert "cluster" not in snapshot[0]

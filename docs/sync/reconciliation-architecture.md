@@ -104,8 +104,30 @@ the matched NetBox VM lives in the cluster being synchronized before it is used:
   when the live cluster has no candidate at all.
 
 The cluster comparison uses the NetBox cluster id when both sides know it and
-falls back to the case-folded cluster name. A record is dropped only on a
-positive mismatch; an unknown cluster keeps the match. A dropped match is logged
+falls back to the case-folded cluster name. A record is used only when it is
+verifiable for the live cluster:
+
+- a positive mismatch drops the record;
+- a record with an explicit `null` cluster (a legacy VM that predates cluster
+  relations) or no cluster data at all (field absent, or neither id nor name)
+  while the live cluster is known is **unverifiable**: any cluster that collides
+  on `(endpoint id, vmid)` could otherwise adopt it: it is never updated (a patch could
+  reassign another cluster's VM) and the prepared VM is **skipped with a warning
+  instead of creating**, because the unknown cluster could be the live one and a
+  CREATE would duplicate it. The exception is when the selector can resolve a verified
+  cluster-keyed record for `(cluster id, vmid)` (one that names no other
+  endpoint), in which case that record is adopted and nothing is skipped. With an unknown
+  live cluster there is nothing to verify and the match is kept.
+
+The VM snapshot loader requests full rows (no `fields=`/`brief=`), so `cluster`
+is present. Rows lacking the field (anomalous or trimmed rows only) are all
+completed by id, with at most eight reads in flight and failed reads tolerated,
+before the guard runs. Every VM that is skipped because its candidate stays
+unverifiable is reported as a structured stage warning (NetBox VM id, vmid,
+cluster, reason), so the stage finishes degraded instead of logging only. The
+unverifiable-candidate skip runs before either reconciliation engine, so Python
+and Rust always receive the same prepared set and Rust cannot emit a `CREATE`
+for a VM Python skips. A dropped match is logged
 as a warning that names the NetBox VM id, the vmid, the endpoint id and both
 clusters, and the record is never written. When two clusters expose the same
 `(endpoint id, vmid)` key, the VM of the live cluster is still found.

@@ -44,7 +44,9 @@ def _rust_output(method: str = "CREATE", vmid: int = 100, vm_type: str = "qemu")
                 "vmid": vmid,
                 "vm_type": vm_type,
                 "desired_payload": {},
-                "existing_record": {"id": 9000} if method != "CREATE" else None,
+                "existing_record": {"id": 9000, "cluster": {"id": 1, "name": "cluster-a"}}
+                if method != "CREATE"
+                else None,
                 "patch_payload": {"memory": 4096} if method == "UPDATE" else {},
             }
         ]
