@@ -17,12 +17,12 @@ from proxbox_api.schemas.sync import SyncBehaviorFlags
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 
 
-def _stub_stages(monkeypatch, node_interface_calls: list[dict]) -> None:
+def _stub_stages(monkeypatch, node_interface_calls: list[dict], node_interface_result=None) -> None:
     """Stub every full-update stage; record the node-interface call kwargs."""
 
     async def _node_interfaces(**kwargs):
         node_interface_calls.append(kwargs)
-        return []
+        return [] if node_interface_result is None else node_interface_result
 
     empty_list = {
         name: (lambda **kw: asyncio.sleep(0, result=[]))
@@ -162,3 +162,98 @@ def test_full_update_query_param_reaches_node_interfaces(auth_test_client, monke
         assert response.status_code == 200
         assert len(calls) == 1
         assert calls[0]["behavior_flags"].sync_node_interfaces is expected
+
+
+def _degraded_node_interfaces():
+    from proxbox_api.services.sync.stage_result import WarningList
+
+    return WarningList(
+        [{"id": 1, "name": "vmbr0"}],
+        warnings=[{"device": "pve01", "interface": "vmbr0", "kind": "mac", "reason": "boom"}],
+    )
+
+
+def test_full_update_aggregates_node_interface_warnings(monkeypatch):
+    from proxbox_api.app.full_update import full_update_sync
+
+    _stub_stages(monkeypatch, [], _degraded_node_interfaces())
+    result = asyncio.run(
+        full_update_sync(
+            netbox_session=object(),
+            _sync_deps=BootstrapStatus(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=_TAG,
+            behavior_flags=SyncBehaviorFlags(sync_node_interfaces=True),
+        )
+    )
+
+    assert result["degraded"] is True
+    assert result["warnings"] == [
+        {
+            "phase": "node-interfaces",
+            "device": "pve01",
+            "interface": "vmbr0",
+            "kind": "mac",
+            "reason": "boom",
+        }
+    ]
+
+
+def test_full_update_clean_node_interfaces_stay_unflagged(monkeypatch):
+    from proxbox_api.app.full_update import full_update_sync
+
+    _stub_stages(monkeypatch, [])
+    result = asyncio.run(
+        full_update_sync(
+            netbox_session=object(),
+            _sync_deps=BootstrapStatus(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=_TAG,
+            behavior_flags=SyncBehaviorFlags(sync_node_interfaces=True),
+        )
+    )
+
+    assert "degraded" not in result
+    assert "warnings" not in result
+
+
+def test_full_update_stream_reports_node_interface_warnings(monkeypatch):
+    from proxbox_api.main import full_update_sync_stream
+
+    _stub_stages(monkeypatch, [], _degraded_node_interfaces())
+
+    async def _run() -> str:
+        response = await full_update_sync_stream(
+            _sync_deps=BootstrapStatus(),
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=_TAG,
+            behavior_flags=SyncBehaviorFlags(sync_node_interfaces=True),
+            dry_run=False,
+        )
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk if isinstance(chunk, str) else chunk.decode())
+        return "".join(chunks)
+
+    events = _decode_sse_events(asyncio.run(_run()))
+    done = [
+        data
+        for event, data in events
+        if event == "step"
+        and data.get("step") == "node-interfaces"
+        and data.get("status") == "completed"
+    ]
+    assert done[0]["result"]["degraded"] is True
+    assert done[0]["result"]["warnings"][0]["kind"] == "mac"
+    assert done[0]["result"]["warnings"][0]["phase"] == "node-interfaces"
+    final = [d for e, d in events if e == "complete"][-1]["result"]
+    assert final["degraded"] is True
+    assert [w["kind"] for w in final["warnings"]] == ["mac"]
+    assert final["warnings"][0]["phase"] == "node-interfaces"

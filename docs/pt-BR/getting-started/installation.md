@@ -110,6 +110,18 @@ docker run -d -p 8443:8000 --name proxbox-api-granian \
   emersonfelipesp/proxbox-api:latest-granian
 ```
 
+!!! note "Versao fixada do Granian"
+    As imagens Granian instalam uma versao exata, escolhida de forma
+    deliberada, pelo argumento de build `GRANIAN_VERSION` no `Dockerfile` (a
+    imagem NetBox do CI fixa a mesma versao em `.github/workflows/ci.yml`).
+    Para atualizar: teste primeiro o Granian mais recente, altere o valor
+    padrao de `GRANIAN_VERSION` nos dois estagios Granian e a versao
+    correspondente no `ci.yml`, e execute o smoke test de bind IPv6.
+    `tests/test_granian_pin.py` falha se algum pin estiver ausente ou se as
+    versoes divergirem. A verificacao cobre apenas containers e CI (todo
+    `Dockerfile*`, `docker/`, workflows e arquivos requirements/constraints);
+    o intervalo no `pyproject.toml` e o `uv.lock` ficam deliberadamente fora.
+
 URL do servico:
 
 - <https://127.0.0.1:8443>

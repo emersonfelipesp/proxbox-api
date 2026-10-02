@@ -1518,3 +1518,28 @@ def test_selected_vm_batch_drops_unowned_vm_and_reports_it_as_degraded(monkeypat
     assert result["count"] == 1
     assert [record["id"] for record in result["virtual_machines"]] == [501]
     assert [warning["netbox_vm_id"] for warning in result["warnings"]] == [502]
+
+
+def test_full_update_reports_cluster_verification_skips_as_degraded(monkeypatch) -> None:
+    _install_full_update_stubs(monkeypatch)
+    warning = {"netbox_vm_id": 7001, "vmid": 101, "reason": "cluster cannot be verified"}
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(sync_vm, "unverifiable_vm_warnings", lambda *_args: [warning])
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(101)]}],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+        )
+    )
+
+    assert isinstance(result, dict) and result["degraded"] is True
+    assert warning in result["warnings"]

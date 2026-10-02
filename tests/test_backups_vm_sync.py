@@ -1288,7 +1288,7 @@ async def test_selected_backups_lenient_drops_every_claimant_of_one_identity(mon
     assert reconciled == []
     assert sorted(warning["netbox_vm_id"] for warning in result.warnings) == [5, 6]
 
-    with pytest.raises(ProxboxException, match="selected backup VM ownership"):
+    with pytest.raises(ProxboxException, match="claim the same Proxmox"):
         await _run_selected_backups([5, 6, 7], selection_mode=SelectionMode.STRICT)
 
 

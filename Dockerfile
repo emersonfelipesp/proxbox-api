@@ -160,6 +160,8 @@ CMD []
 # Smaller than the nginx image; single process handles TLS + HTTP/2 + WebSockets.
 FROM runtime-base AS granian
 
+# Exact granian pin, bumped deliberately (see docs). Keep in sync with ci.yml.
+ARG GRANIAN_VERSION=2.8.4
 ARG MKCERT_VERSION=1.4.4
 ARG TARGETARCH
 
@@ -170,7 +172,7 @@ RUN apk add --no-cache \
     curl \
     nss-tools \
     openssl \
-  && uv pip install --python /app/.venv/bin/python 'granian>=2.7.0' \
+  && uv pip install --python /app/.venv/bin/python "granian==${GRANIAN_VERSION}" \
   && curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
   && chmod +x /usr/local/bin/mkcert
@@ -186,6 +188,8 @@ CMD []
 # Experimental granian image: granian plus the PyO3/Rust reconciliation engine.
 FROM runtime-base-pyo3-rust AS granian-pyo3-rust
 
+# Exact granian pin, bumped deliberately (see docs). Keep in sync with ci.yml.
+ARG GRANIAN_VERSION=2.8.4
 ARG MKCERT_VERSION=1.4.4
 ARG TARGETARCH
 
@@ -196,7 +200,7 @@ RUN apk add --no-cache \
     curl \
     nss-tools \
     openssl \
-  && uv pip install --python /app/.venv/bin/python 'granian>=2.7.0' \
+  && uv pip install --python /app/.venv/bin/python "granian==${GRANIAN_VERSION}" \
   && curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /usr/local/bin/mkcert \
      "https://github.com/FiloSottile/mkcert/releases/download/v${MKCERT_VERSION}/mkcert-v${MKCERT_VERSION}-linux-${TARGETARCH}" \
   && chmod +x /usr/local/bin/mkcert

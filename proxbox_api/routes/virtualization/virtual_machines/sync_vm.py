@@ -30,6 +30,7 @@ from proxbox_api.netbox_compat import VirtualMachine
 from proxbox_api.netbox_rest import (
     clear_rest_get_cache_for_path,
     rest_create_async,
+    rest_first_async,
     rest_list_async,
     rest_list_paginated_async,
     rest_patch_async,
@@ -118,6 +119,9 @@ from proxbox_api.services.sync.reconciliation.vm_queue import (
 )
 from proxbox_api.services.sync.reconciliation.vm_queue import (
     select_existing_vm_record as _select_existing_vm_record,
+)
+from proxbox_api.services.sync.reconciliation.vm_queue import (
+    unverifiable_vm_warnings,
 )
 from proxbox_api.services.sync.role_resolution import (
     RoleSnapshotDecision,
@@ -454,6 +458,23 @@ def _vm_stage_result(
     if isinstance(wrapped, dict) and failed_count:
         wrapped["failed_count"] = failed_count
     return wrapped
+
+
+def _stream_stage_payload(
+    result: object,
+    selection_skipped: list[dict[str, object]],
+) -> dict[str, object]:
+    """Build the SSE completion payload from the completed VM stage result.
+
+    ``result`` is the stage wrapper: a plain list when clean, or a dict carrying
+    ``virtual_machines``, ``warnings`` and ``degraded`` when degraded. Warnings
+    raised while the stage ran (for example cluster verification skips) are kept
+    alongside the earlier selection skips, without duplicates.
+    """
+    rows = result.get("virtual_machines", []) if isinstance(result, dict) else result
+    stage_warnings = result_warnings(result)
+    extra = [item for item in selection_skipped if item not in stage_warnings]
+    return attach_skips_to_dict({"count": len(rows)}, [*stage_warnings, *extra])
 
 
 @dataclass(slots=True)
@@ -1034,7 +1055,60 @@ async def _load_netbox_virtual_machine_snapshot(
         "/api/virtualization/virtual-machines/",
         page_size=200,
     )
-    return [serialized for record in records if (serialized := _to_mapping(record))]
+    snapshot = [serialized for record in records if (serialized := _to_mapping(record))]
+    await _complete_vm_snapshot_clusters(nb, snapshot)
+    return snapshot
+
+
+_VM_CLUSTER_COMPLETION_CONCURRENCY = 8
+
+
+async def _read_vm_cluster_field(
+    nb: object,
+    record: dict[str, object],
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """Re-read one NetBox VM by id and copy its ``cluster`` field, tolerating failures."""
+    record_id = _relation_id(record.get("id"))
+    async with semaphore:
+        try:
+            fetched = _to_mapping(
+                await rest_first_async(
+                    nb,
+                    "/api/virtualization/virtual-machines/",
+                    query={"id": record_id, "limit": 2},
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort completion, guard skips the row
+            logger.debug("Could not complete cluster for NetBox VM id=%s: %s", record_id, exc)
+            return
+    if fetched and "cluster" in fetched:
+        record["cluster"] = fetched["cluster"]
+
+
+async def _complete_vm_snapshot_clusters(
+    nb: object,
+    snapshot: list[dict[str, object]],
+    *,
+    concurrency: int = _VM_CLUSTER_COMPLETION_CONCURRENCY,
+) -> int:
+    """Fill ``cluster`` on every snapshot row that lacks the field.
+
+    Real NetBox list rows always carry ``cluster`` (an explicit ``null`` is a
+    real unassigned VM and is left alone), so this only triggers for anomalous
+    or trimmed rows. Every such row is re-read by id, with at most
+    ``concurrency`` reads in flight, so no row is starved by an arbitrary
+    allowance. A failed read leaves the row incomplete; the queue then skips
+    the affected VM and reports it as a stage warning.
+    """
+    pending = [
+        record
+        for record in snapshot
+        if "cluster" not in record and _relation_id(record.get("id")) is not None
+    ]
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    await asyncio.gather(*(_read_vm_cluster_field(nb, record, semaphore) for record in pending))
+    return len(pending)
 
 
 def _prepared_proxmox_vmid(prepared: _PreparedVMState) -> int | None:
@@ -3392,6 +3466,7 @@ async def create_virtual_machines(  # noqa: C901
         canonicalization_ms = (time.perf_counter() - canonicalization_t0) * 1000
         full_update_telemetry.canonicalization_ms = canonicalization_ms
         reconciliation_t0 = time.perf_counter()
+        selection_skipped.extend(unverifiable_vm_warnings(prepared_vms, netbox_snapshot))
         operation_queue = _build_vm_operation_queue(
             prepared_vms,
             netbox_snapshot,
@@ -6001,7 +6076,7 @@ async def create_virtual_machines_stream(
                 yield frame
 
             result = await sync_task
-            result_payload = attach_skips_to_dict({"count": len(result)}, selection_skipped)
+            result_payload = _stream_stage_payload(result, selection_skipped)
             yield sse_event(
                 "step",
                 {

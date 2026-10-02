@@ -41,6 +41,23 @@ reconcilia a topologia completa de `/nodes/{node}/network`, incluindo a opcao
 `GET /dcim/devices/interfaces/create?sync_node_interfaces=true`. Sem ela, a
 etapa mantem o comportamento legado por interface, que nao define MAC.
 
+No caminho de topologia completa, uma escrita de VLAN, endereco IP ou MAC que
+falha nao interrompe o node e nunca e relatada como uma execucao limpa. Cada
+escrita ignorada vira um aviso `{"device", "interface", "kind", "reason"}`, onde
+`kind` e `vlan`, `ip` ou `mac`, e a etapa termina degradada (HTTP 200,
+`ok=true`). Os avisos seguem o mesmo formato das demais etapas degradadas:
+`GET /dcim/devices/interfaces/create` retorna
+`{"interfaces": [...], "count", "warnings", "degraded": true}` em vez da lista
+simples, o resultado do stream e o evento de conclusao por node trazem
+`warnings` e `degraded`, e o `full_update` os adiciona (marcados com
+`"phase": "node-interfaces"`) a `warnings` e `degraded` de nivel superior. Uma
+execucao limpa retorna exatamente a lista simples, como antes. Quando a VLAN de
+uma subinterface VLAN nao pode ser reconciliada, a interface mantem o `mode` e
+as `tagged_vlans` existentes no NetBox; eles ficam fora do patch de topologia em
+vez de serem limpos, entao uma falha transitoria nao apaga atribuicoes de VLAN.
+As demais interfaces continuam tendo a topologia obsoleta limpa quando o Proxmox
+a remove.
+
 ## Fluxo de Sync de VM
 
 Endpoint principal:
@@ -133,7 +150,18 @@ sidecar discorda do dono do cluster, quando nenhum recurso Proxmox ativo
 corresponde (por exemplo um guest apagado no Proxmox mas ainda no NetBox) ou
 varios correspondem, e quando duas VMs selecionadas reivindicam o mesmo
 endpoint/cluster/VMID/tipo. Todos os que reivindicam um dono compartilhado sao
-descartados, pois nao e possivel saber qual esta certo. Em uma varredura de todo
+descartados, pois nao e possivel saber qual esta certo. Essa verificacao ocorre
+no caminho de correspondencia de dono e novamente apos a hidratacao dos sidecars,
+de modo que os estagios de snapshots, discos virtuais e backups tambem descartam
+toda VM do NetBox cujos sidecars validos apontam para o mesmo endpoint, cluster
+(comparado sem diferenciar maiusculas), VMID e tipo de VM. A deteccao cobre toda
+VM do NetBox com sidecar completo, inclusive reivindicantes que nao fazem parte da
+selecao: uma VM selecionada e descartada (ou, no modo estrito, rejeitada) quando
+outra VM do NetBox reivindica o mesmo dono, e o motivo cita todos os
+reivindicantes. Reivindicantes nao selecionados nao sao processados e um sidecar
+com identidade incompleta nao e reivindicante. O modo estrito levanta
+erro antes de qualquer escrita. O mesmo endpoint e VMID em clusters diferentes
+nao e um dono compartilhado. Em uma varredura de todo
 o ambiente, uma VM sem nenhum sidecar e nao gerenciada e e ignorada em silencio,
 sem aviso.
 

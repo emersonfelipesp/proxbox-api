@@ -613,3 +613,193 @@ async def test_sync_node_network_skips_when_no_entries(monkeypatch):
         nb=object(), device={"id": 1}, network_entries=[], tag_refs=[]
     )
     assert result == []
+
+
+def _fail_on(monkeypatch, path):
+    """Make the mocked reconcile raise for one NetBox path, keeping the rest."""
+    inner = network.rest_reconcile_async
+
+    async def flaky(nb, req_path, **kwargs):
+        if req_path == path:
+            raise RuntimeError("transient netbox failure")
+        return await inner(nb, req_path, **kwargs)
+
+    monkeypatch.setattr(network, "rest_reconcile_async", flaky)
+
+
+async def test_vlan_failure_preserves_existing_assignment_and_reports_degraded(monkeypatch):
+    _iface_ids, iface_calls, _ip_calls, _mac_calls = _install_mocks(monkeypatch)
+    _fail_on(monkeypatch, "/api/ipam/vlans/")
+
+    results = await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+    _phase1, patches = _calls_by_phase(iface_calls)
+    # The failed VLAN interface must neither clear nor set its VLAN assignment.
+    assert "mode" not in patches["vmbr1.200"]
+    assert "tagged_vlans" not in patches["vmbr1.200"]
+    vlan_call = [c for c in iface_calls if c["name"] == "vmbr1.200"][-1]
+    assert "mode" not in vlan_call["patchable"]
+    assert "tagged_vlans" not in vlan_call["patchable"]
+    # Other interfaces still clear stale membership explicitly.
+    assert patches["eno1"]["mode"] is None
+    assert patches["eno1"]["tagged_vlans"] == []
+    # The topology references that did resolve are still patched.
+    assert patches["vmbr1.200"]["parent"] is not None
+
+    assert results.degraded is True
+    assert [(w["interface"], w["kind"]) for w in results.warnings] == [("vmbr1.200", "vlan")]
+    assert "transient netbox failure" in results.warnings[0]["reason"]
+    assert results.warnings[0]["device"] == "pve-a"
+    # Interfaces are still reported.
+    assert {r["name"] for r in results} >= {"vmbr1.200", "vmbr0"}
+
+
+async def test_vlan_record_without_id_is_a_failure_not_a_clear(monkeypatch):
+    """A partial NetBox success (no record id) must not erase the VLAN assignment."""
+    _iface_ids, iface_calls, _ip_calls, _mac_calls = _install_mocks(monkeypatch)
+    inner = network.rest_reconcile_async
+
+    async def idless(nb, req_path, **kwargs):
+        if req_path == "/api/ipam/vlans/":
+            return {}
+        return await inner(nb, req_path, **kwargs)
+
+    monkeypatch.setattr(network, "rest_reconcile_async", idless)
+
+    results = await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+    _phase1, patches = _calls_by_phase(iface_calls)
+    assert "mode" not in patches["vmbr1.200"]
+    assert "tagged_vlans" not in patches["vmbr1.200"]
+    assert results.degraded is True
+    assert [(w["interface"], w["kind"]) for w in results.warnings] == [("vmbr1.200", "vlan")]
+    assert "VLAN 200" in results.warnings[0]["reason"]
+
+
+async def test_ip_failure_reports_degraded_warning(monkeypatch):
+    _install_mocks(monkeypatch)
+
+    async def failing_ip(nb, *, ip_addr, **kw):
+        raise RuntimeError("ip write failed")
+
+    monkeypatch.setattr(network, "_reconcile_interface_ip", failing_ip)
+
+    results = await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+    assert results.degraded is True
+    kinds = {(w["interface"], w["kind"]) for w in results.warnings}
+    assert kinds == {("vmbr0", "ip"), ("vmbr1.200", "ip")}
+    assert all("ip write failed" in w["reason"] for w in results.warnings)
+    assert all("ip_addresses" not in r for r in results)
+
+
+async def test_mac_failure_reports_degraded_warning(monkeypatch):
+    _install_mocks(monkeypatch)
+
+    async def failing_mac(nb, **kw):
+        raise RuntimeError("mac write failed")
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.mac_address.reconcile_mac_for_interface", failing_mac
+    )
+
+    results = await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+    assert results.degraded is True
+    assert [(w["interface"], w["kind"]) for w in results.warnings] == [("vmbr0", "mac")]
+    assert "mac write failed" in results.warnings[0]["reason"]
+
+
+async def _run_with_real_ip_helper(monkeypatch, reconcile):
+    from proxbox_api.services.sync import ip_ownership
+
+    _install_mocks(monkeypatch)
+
+    async def no_existing(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(network, "_reconcile_interface_ip", ip_ownership._reconcile_interface_ip)
+    monkeypatch.setattr(ip_ownership, "rest_list_async", no_existing)
+    monkeypatch.setattr(ip_ownership, "rest_reconcile_async", reconcile)
+    return await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+
+async def test_real_ip_helper_write_failure_reports_degraded(monkeypatch):
+    async def failing(nb, req_path, **kwargs):
+        raise RuntimeError("netbox ip write failed")
+
+    results = await _run_with_real_ip_helper(monkeypatch, failing)
+
+    assert results.degraded is True
+    ip_warnings = [w for w in results.warnings if w["kind"] == "ip"]
+    assert {w["interface"] for w in ip_warnings} == {"vmbr0", "vmbr1.200"}
+    assert all(w["reason"] for w in ip_warnings)
+    assert all("ip_addresses" not in r for r in results)
+
+
+async def test_real_ip_helper_idless_record_reports_degraded(monkeypatch):
+    async def idless(nb, req_path, **kwargs):
+        return {}
+
+    results = await _run_with_real_ip_helper(monkeypatch, idless)
+
+    assert results.degraded is True
+    assert {w["kind"] for w in results.warnings if w["kind"] == "ip"} == {"ip"}
+    assert all("ip_addresses" not in r for r in results)
+
+
+async def test_real_ip_helper_success_is_unchanged(monkeypatch):
+    async def ok(nb, req_path, **kwargs):
+        return {"id": 99}
+
+    results = await _run_with_real_ip_helper(monkeypatch, ok)
+
+    assert not [w for w in getattr(results, "warnings", []) if w["kind"] == "ip"]
+
+
+async def test_mac_without_persisted_id_reports_degraded(monkeypatch):
+    _install_mocks(monkeypatch)
+
+    async def idless_mac(nb, **kw):
+        return None, "skipped"
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.mac_address.reconcile_mac_for_interface", idless_mac
+    )
+
+    results = await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+    assert results.degraded is True
+    assert [(w["interface"], w["kind"]) for w in results.warnings] == [("vmbr0", "mac")]
+
+
+async def test_clean_run_returns_plain_list_without_warnings(monkeypatch):
+    _install_mocks(monkeypatch)
+
+    results = await network.sync_node_network(
+        nb=object(), device={"id": 1, "name": "pve-a"}, network_entries=NETWORK, tag_refs=[]
+    )
+
+    assert type(results) is list
+    assert not hasattr(results, "warnings")
+
+
+def test_topology_patch_keeps_vlan_fields_only_when_not_failed():
+    entry = {"iface": "v.5", "type": "vlan", "vlan-raw-device": "b"}
+    args = (entry, {"v.5": 1, "b": 2}, {"v.5": 77}, {}, {})
+    assert network._node_interface_topology_patch(*args)["mode"] == "tagged"
+    preserved = network._node_interface_topology_patch(*args, vlan_failed=frozenset({"v.5"}))
+    assert "mode" not in preserved and "tagged_vlans" not in preserved
+    assert preserved["parent"] == 2

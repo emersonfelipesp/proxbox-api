@@ -558,3 +558,15 @@ async def test_create_only_vm_ip_addresses_never_writes_to_another_clusters_vm(
     await sync_vm.create_only_vm_ip_addresses(**_colliding_caller_inputs())
 
     assert sorted(payload["assigned_object_id"] for payload in captured) == [3101, 3202]
+
+
+def test_unverifiable_record_never_resolves_for_a_known_live_cluster() -> None:
+    cluster_less = {k: v for k, v in COLLIDING_ALPHA.items() if k != "cluster"}
+
+    assert _resolve_colliding([cluster_less], "beta", CLUSTER_BETA_ID) is None
+
+
+def test_explicitly_unassigned_record_is_not_adopted_by_a_known_live_cluster() -> None:
+    legacy = {**COLLIDING_ALPHA, "cluster": None}
+
+    assert _resolve_colliding([legacy], "beta", CLUSTER_BETA_ID) is None

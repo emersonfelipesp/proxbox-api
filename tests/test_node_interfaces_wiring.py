@@ -163,3 +163,91 @@ async def test_flag_on_topology_failure_raises_and_emits_error_event(monkeypatch
     ]
     assert error_events, "expected a completed:False node_interface error event"
     assert error_events[-1]["data"]["error"] == "netbox exploded"
+
+
+async def _run_flag_on(monkeypatch, sync_result, websocket=None):
+    async def fake_resolve_device(nb, node_name, *, clusters_status, cluster_name):
+        return {"id": 42, "name": node_name}
+
+    async def fake_sync_node_network(nb, device, network_entries, tag_refs, **kw):
+        return sync_result(device["name"])
+
+    monkeypatch.setattr(dcim, "_resolve_netbox_device_by_name", fake_resolve_device)
+    monkeypatch.setattr(network, "sync_node_network", fake_sync_node_network)
+    monkeypatch.setattr(dcim, "nested_tag_payload", lambda tag: [])
+
+    return await dcim.create_all_device_interfaces(
+        netbox_session=object(),
+        tag=object(),
+        clusters_status=_cluster_status(),
+        pxs=[_fake_proxmox_session({})],
+        websocket=websocket,
+        use_websocket=websocket is not None,
+        behavior_flags=SimpleNamespace(sync_node_interfaces=True),
+    )
+
+
+def _degraded_result(node):
+    from proxbox_api.services.sync.stage_result import WarningList
+
+    return WarningList(
+        [{"id": 10, "name": "vmbr0"}],
+        warnings=[{"device": node, "interface": "vmbr0", "kind": "mac", "reason": "boom"}],
+    )
+
+
+async def test_degraded_node_sync_propagates_warnings_through_create_all(monkeypatch):
+    results = await _run_flag_on(monkeypatch, _degraded_result)
+
+    assert results.degraded is True
+    assert results.warnings == [
+        {"device": "pve01", "interface": "vmbr0", "kind": "mac", "reason": "boom"}
+    ]
+    assert [r["name"] for r in results] == ["vmbr0"]
+
+
+async def test_clean_node_sync_returns_plain_list(monkeypatch):
+    results = await _run_flag_on(monkeypatch, lambda node: [{"id": 10, "name": "vmbr0"}])
+
+    assert type(results) is list
+    assert not hasattr(results, "warnings")
+
+
+async def test_degraded_node_sync_marks_completion_event(monkeypatch):
+    websocket = _CapturingWebSocket()
+    await _run_flag_on(monkeypatch, _degraded_result, websocket)
+
+    done = [
+        e["data"]
+        for e in websocket.events
+        if e.get("object") == "node_interface" and e.get("data", {}).get("count") == 1
+    ]
+    assert done and done[-1]["degraded"] is True
+    assert done[-1]["warnings"][0]["kind"] == "mac"
+
+
+def test_rest_route_wraps_only_degraded_results(monkeypatch):
+    import asyncio
+
+    async def fake_create_all(**kwargs):
+        return _degraded_result("pve01") if kwargs["tag"] == "bad" else [{"id": 1}]
+
+    monkeypatch.setattr(dcim, "create_all_device_interfaces", fake_create_all)
+
+    def call(tag):
+        return asyncio.run(
+            dcim.create_all_devices_interfaces(
+                netbox_session=object(),
+                clusters_status=[],
+                pxs=[],
+                tag=tag,
+                behavior_flags=None,
+            )
+        )
+
+    assert call("ok") == [{"id": 1}]
+    wrapped = call("bad")
+    assert wrapped["degraded"] is True
+    assert wrapped["count"] == 1
+    assert wrapped["interfaces"] == [{"id": 10, "name": "vmbr0"}]
+    assert wrapped["warnings"][0]["kind"] == "mac"

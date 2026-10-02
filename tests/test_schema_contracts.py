@@ -26,12 +26,24 @@ REPRESENTATIVE_PUBLIC_PATHS = (
     "/api/dcim/devices/",
     "/api/ipam/prefixes/",
 )
-VIRTUAL_MACHINE_SCHEMA_REFS = frozenset(
-    {
-        "#/components/schemas/PaginatedVirtualMachineWithConfigContextList",
-        "#/components/schemas/VirtualMachineWithConfigContext",
-        "#/components/schemas/WritableVirtualMachineWithConfigContextRequest",
-    }
+# NetBox 4.6 exposes VM operations through the *WithConfigContext schemas;
+# NetBox 4.7 renamed them to the plain VirtualMachine names. Either complete
+# set satisfies the contract, so a refresh against newer upstream stays valid.
+VIRTUAL_MACHINE_SCHEMA_REF_SETS = (
+    frozenset(
+        {
+            "#/components/schemas/PaginatedVirtualMachineWithConfigContextList",
+            "#/components/schemas/VirtualMachineWithConfigContext",
+            "#/components/schemas/WritableVirtualMachineWithConfigContextRequest",
+        }
+    ),
+    frozenset(
+        {
+            "#/components/schemas/PaginatedVirtualMachineList",
+            "#/components/schemas/VirtualMachine",
+            "#/components/schemas/WritableVirtualMachineRequest",
+        }
+    ),
 )
 
 
@@ -117,11 +129,15 @@ def _assert_virtual_machine_operation_schemas(document: OpenAPIDocument) -> None
     assert isinstance(vm_path, dict)
 
     refs = set(_iter_local_json_pointers(vm_path))
-    missing = VIRTUAL_MACHINE_SCHEMA_REFS - refs
-    assert not missing, f"missing VM schema refs: {sorted(missing)}"
-
-    for ref in VIRTUAL_MACHINE_SCHEMA_REFS:
-        assert _resolve_local_json_pointer(document, ref) is not None
+    candidates = [ref_set for ref_set in VIRTUAL_MACHINE_SCHEMA_REF_SETS if ref_set <= refs]
+    assert candidates, (
+        "VM path references no complete schema set; missing per set: "
+        f"{[sorted(ref_set - refs) for ref_set in VIRTUAL_MACHINE_SCHEMA_REF_SETS]}"
+    )
+    assert any(
+        all(_resolve_local_json_pointer(document, ref) is not None for ref in ref_set)
+        for ref_set in candidates
+    ), "VM schema refs do not resolve in components"
 
 
 def _assert_all_local_json_pointers_resolve(document: OpenAPIDocument) -> None:
@@ -310,3 +326,33 @@ def test_netbox_openapi_persistence_resolves_env_over_plugin_setting(monkeypatch
     monkeypatch.delenv("PROXBOX_NETBOX_OPENAPI_PERSIST", raising=False)
     monkeypatch.setattr(netbox_schema.runtime_settings, "_load_settings", lambda: None)
     assert netbox_schema.netbox_openapi_persistence_enabled() is True
+
+
+def _vm_document(refs: Iterable[str], resolvable: bool = True) -> OpenAPIDocument:
+    refs = list(refs)
+    schemas = {ref.rsplit("/", 1)[1]: {} for ref in refs} if resolvable else {}
+    return {
+        "paths": {
+            "/api/virtualization/virtual-machines/": {
+                "get": {"responses": {str(i): {"$ref": ref} for i, ref in enumerate(refs)}}
+            }
+        },
+        "components": {"schemas": schemas},
+    }
+
+
+@pytest.mark.parametrize("ref_set", VIRTUAL_MACHINE_SCHEMA_REF_SETS)
+def test_vm_operation_schema_assertion_accepts_either_naming(ref_set: frozenset[str]) -> None:
+    _assert_virtual_machine_operation_schemas(_vm_document(ref_set))
+
+
+def test_vm_operation_schema_assertion_rejects_broken_documents() -> None:
+    partial = sorted(VIRTUAL_MACHINE_SCHEMA_REF_SETS[1])[:2]
+    with pytest.raises(AssertionError):
+        _assert_virtual_machine_operation_schemas(_vm_document(partial))
+    with pytest.raises(AssertionError):
+        _assert_virtual_machine_operation_schemas(_vm_document([]))
+    with pytest.raises(AssertionError):
+        _assert_virtual_machine_operation_schemas(
+            _vm_document(VIRTUAL_MACHINE_SCHEMA_REF_SETS[1], resolvable=False)
+        )

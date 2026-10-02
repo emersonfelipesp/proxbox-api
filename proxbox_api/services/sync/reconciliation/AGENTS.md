@@ -72,6 +72,8 @@ plugin-settings only; backend environment variables must not override it.
 
 ## Cluster guard (Python and Rust)
 
+Rows with no cluster data (verdict `unknown`) and explicit `cluster: null` rows (verdict `unassigned`) are never selected while the live cluster is known; `skip_unverifiable_vm_candidates` skips such a prepared VM rather than creating a duplicate or letting a colliding cluster adopt it. It runs in `build_vm_operation_queue` before either engine (so Rust cannot emit a CREATE Python skips) and again first in `build_vm_operation_queue_python`; `unverifiable_vm_warnings` reports each skip as a stage warning. A Rust pick that fails the guard and yields no Python operation is dropped.
+
 `select_existing_vm_record` drops an endpoint-keyed match whose NetBox VM lives
 in a different cluster than the prepared VM (endpoint ids are not unique across
 clusters) and falls back to the endpoint candidate that belongs to the live

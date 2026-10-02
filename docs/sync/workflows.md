@@ -45,6 +45,22 @@ bridge's pinned `hwaddress` option as its primary MAC address, exactly as
 `GET /dcim/devices/interfaces/create?sync_node_interfaces=true` does. Without
 it, the stage keeps the legacy per-interface behavior, which sets no MAC.
 
+In the full-topology path a VLAN, IP address, or MAC write that fails does not
+abort the node, and it is never reported as a clean run. Each skipped write is
+reported as a warning `{"device", "interface", "kind", "reason"}` where `kind`
+is `vlan`, `ip`, or `mac`, and the stage finishes degraded (HTTP 200,
+`ok=true`). The warnings follow the same shape as the other degraded stages:
+`GET /dcim/devices/interfaces/create` returns
+`{"interfaces": [...], "count", "warnings", "degraded": true}` instead of the
+plain list, the stream result and the per-node completion event carry
+`warnings` plus `degraded`, and `full_update` adds them (tagged with
+`"phase": "node-interfaces"`) to its top-level `warnings` and `degraded`. A
+clean run returns exactly the plain list as before. When the VLAN of a VLAN
+sub-interface cannot be reconciled, the interface keeps its existing NetBox
+`mode` and `tagged_vlans`; they are left out of the topology patch instead of
+being cleared, so a transient failure cannot erase VLAN assignments. Other
+interfaces still have stale topology cleared when Proxmox removes it.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:
@@ -138,7 +154,17 @@ source or is ambiguous across endpoints, when its sidecar endpoint disagrees
 with the owner of the cluster, when no live Proxmox resource matches (for
 example a guest deleted in Proxmox but still in NetBox) or several do, and when
 two selected VMs claim the same endpoint/cluster/VMID/type. Every claimant of a
-shared owner is dropped, because which one is right cannot be known. In an
+shared owner is dropped, because which one is right cannot be known. This
+check runs in the owner-matching path and again after sidecar hydration, so the
+snapshot, virtual-disk, and backup stages also drop every NetBox VM whose valid
+sidecars name the same endpoint, cluster (compared case-insensitively), VMID, and
+VM type. Detection covers every NetBox VM with a complete sidecar, including
+claimants that are not part of the selection: a selected VM is dropped (or, in
+strict mode, rejected) when another NetBox VM claims the same owner, and the
+reason names all claimants. Unselected claimants are not processed themselves,
+and a sidecar with an incomplete identity is not a claimant. Strict mode raises
+before any stage writes. The same endpoint and VMID in
+different clusters is not a shared owner. In an
 estate scan a VM with no sidecar at all is unmanaged and is skipped silently,
 without a warning.
 

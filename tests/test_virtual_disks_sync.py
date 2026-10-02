@@ -1283,6 +1283,53 @@ def test_selected_virtual_disks_lenient_with_every_vm_bad_is_degraded_not_error(
     assert sorted(w["netbox_vm_id"] for w in result["warnings"]) == [8, 9]
 
 
+def _install_shared_disk_owner(monkeypatch, claimants):
+    from proxbox_api.services.sync import vm_filter
+
+    vms = [_selection_vm(7, 101)] + [_selection_vm(c, 102) for c in claimants]
+    sidecars = [_disk_sidecar(7, 101)] + [_disk_sidecar(c, 102) for c in claimants]
+
+    async def _lookup(_nb, path, *, query=None):
+        requested = {int(vm_id) for vm_id in (query or {}).get("id", [])}
+        return [vm for vm in vms if vm["id"] in requested]
+
+    async def _scan(_nb):
+        return SimpleNamespace(
+            rows=tuple(sidecars), sidecar_unavailable=False, sidecar_read_failed=False
+        )
+
+    monkeypatch.setattr("proxbox_api.netbox_rest.rest_list_async", _lookup)
+    monkeypatch.setattr(vm_filter, "load_vm_sync_state_identities", _scan)
+    return [7, *claimants]
+
+
+@pytest.mark.parametrize("claimants", [[8, 9], [8, 9, 10]])
+def test_selected_virtual_disks_lenient_drops_every_shared_owner_claimant(
+    monkeypatch, mixed_disk_selection, claimants
+):
+    ids = _install_shared_disk_owner(monkeypatch, claimants)
+
+    result = _run_disks(netbox_vm_ids=ids)
+
+    assert mixed_disk_selection == [7]
+    assert result["count"] == 1
+    assert result["degraded"] is True
+    assert sorted(w["netbox_vm_id"] for w in result["warnings"]) == claimants
+
+
+def test_selected_virtual_disks_strict_fails_before_any_write_on_a_shared_owner(
+    monkeypatch, mixed_disk_selection
+):
+    from proxbox_api.services.sync.vm_filter import SelectionMode
+
+    ids = _install_shared_disk_owner(monkeypatch, [8, 9])
+
+    with pytest.raises(ProxboxException, match="claim the same Proxmox"):
+        _run_disks(netbox_vm_ids=ids, selection_mode=SelectionMode.STRICT)
+
+    assert mixed_disk_selection == []
+
+
 def test_single_vm_virtual_disks_stays_strict_when_the_route_says_so(mixed_disk_selection):
     from proxbox_api.services.sync.vm_filter import SelectionMode
 

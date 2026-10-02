@@ -985,7 +985,9 @@ def test_vm_only_interface_sync_uses_resolved_netbox_vm_id(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1049,7 +1051,9 @@ def test_vm_only_interface_sync_uses_vm_id_for_bridge_lookup(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1130,7 +1134,9 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1272,7 +1278,9 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
@@ -1412,8 +1420,8 @@ def test_vm_only_ip_sync_guest_links_same_address_by_interface_scope(monkeypatch
 
     async def _fake_load_snapshot(nb):
         return [
-            {"id": 55, "name": "vm01", "proxmox_vm_id": 101},
-            {"id": 56, "name": "vm02", "proxmox_vm_id": 102},
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}},
+            {"id": 56, "name": "vm02", "proxmox_vm_id": 102, "cluster": {"id": 11, "name": "lab"}},
         ]
 
     async def _fake_guest_plugin_first(*args, **kwargs):
@@ -1516,7 +1524,9 @@ def _install_ip_only_patches(monkeypatch, *, vm_config: dict, primary_ip_calls: 
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
 
     for attr, val in [
         ("get_vm_config", _fake_get_vm_config),
@@ -1645,7 +1655,9 @@ def test_vm_only_ip_sync_surfaces_missing_interface_skip(monkeypatch):
         return {"id": 55, "name": "vm01"}
 
     async def _fake_load_snapshot(nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
 
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",

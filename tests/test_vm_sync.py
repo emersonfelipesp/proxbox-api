@@ -1090,6 +1090,7 @@ def test_create_only_vm_interfaces_mirrors_bridge_sidecar_with_overwrite_gate(mo
                 "id": 55,
                 "name": "vm01",
                 "proxmox_vm_id": 101,
+                "cluster": {"id": 10, "name": "lab"},
             }
         ]
 
@@ -1218,8 +1219,8 @@ def test_create_only_vm_interfaces_reports_partial_bulk_warning(monkeypatch):
 
     async def _fake_load_snapshot(_nb):
         return [
-            {"id": 55, "name": "vm01", "proxmox_vm_id": 101},
-            {"id": 56, "name": "vm02", "proxmox_vm_id": 102},
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 10, "name": "lab"}},
+            {"id": 56, "name": "vm02", "proxmox_vm_id": 102, "cluster": {"id": 10, "name": "lab"}},
         ]
 
     async def _fake_resolve_cluster_id(*_args, **_kwargs):
@@ -1315,7 +1316,9 @@ def test_create_only_vm_interfaces_truncates_guest_interface_name(monkeypatch):
         return [{"name": long_guest_name, "mac_address": "aa:bb:cc:dd:ee:ff"}]
 
     async def _fake_load_snapshot(_nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 10, "name": "lab"}}
+        ]
 
     async def _fake_resolve_cluster_id(*_args, **_kwargs):
         return None
@@ -1402,7 +1405,9 @@ def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch)
         ]
 
     async def _fake_load_snapshot(_nb):
-        return [{"id": 55, "name": "vm01", "proxmox_vm_id": 101}]
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 10, "name": "lab"}}
+        ]
 
     async def _fake_resolve_cluster_id(*_args, **_kwargs):
         return None

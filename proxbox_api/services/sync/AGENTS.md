@@ -148,6 +148,16 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   normalizers in `proxmox_to_netbox/models.py` unwrap enum members themselves
   (see that package's notes). Keep passing it anyway — it states the intent at
   the call site — but a call site that forgets is now correct rather than broken.
+- **Node-interface failures are reported, never swallowed.** In
+  `network.py::sync_node_network` a failed VLAN, IP, or MAC write is collected
+  as `{"device", "interface", "kind", "reason"}` and the result becomes a
+  `WarningList` (clean runs stay a plain list). `create_all_device_interfaces`
+  aggregates the per-node warnings; REST wraps them as `{"interfaces", "count",
+  "warnings", "degraded"}`, SSE and `full_update` surface `warnings` plus
+  `degraded` (phase `node-interfaces`). A VLAN interface whose VLAN
+  reconciliation failed is passed to the topology patch as `vlan_failed`, which
+  omits `mode` and `tagged_vlans` so the existing NetBox assignment is preserved
+  rather than cleared; "no VLAN configured" is different and still clears.
 - **Cluster/site placement invariant.** After cluster reconciliation, dependent
   device and VM writes use `device_ensure._effective_cluster_site_id()` so a
   cluster's actual `dcim.site` scope wins over a stale endpoint/default site.
@@ -291,6 +301,25 @@ NetBox rows. A failed/unavailable sidecar scan, an invalid id, and a selection
 NetBox does not return in full stay fatal in every mode. Do not add branches to
 the noqa-C901 stage orchestrators for this; extend the helpers instead.
 
+**Shared-owner check after hydration.** `hydrate_vm_identities_from_sidecars`
+(and so `hydrate_selected_vm_identities`) finishes with
+`_reject_shared_hydrated_owners`: two hydrated VMs whose valid sidecars name the
+same endpoint raw id, casefolded cluster name, VMID, and VM type are a shared
+owner. Detection uses an owner index built from every complete sidecar row of
+the scan before it is narrowed to the selection, so a selected VM that shares its
+owner with an unselected NetBox VM is also caught (rows with an incomplete
+identity are not claimants). Lenient mode warns once per selected claimant and
+records it in `.skipped` with a reason naming all claimants (unselected
+claimants are not processed or skipped), so snapshot, disk, and backup stages exclude them from writes and
+stale cleanup exactly like other lenient drops; strict mode raises before any
+stage writes. The same endpoint and VMID in different clusters is not shared.
+Every join of a selection to the scan goes through one internal helper,
+`_hydrate_scanned_selection`, used by both public hydration functions and by
+`_hydrate_selected_sidecar_identities` (so `filter_cluster_resources_for_selected_vm`
+and `filter_cluster_resources_by_netbox_vm_ids` also reject a selected VM sharing
+its owner with an unselected claimant, before any live-resource matching).
+Mirror of `_reject_conflicting_owners`, which covers the owner-matching path.
+
 ## Orphan VM sweep
 
 `orphan_sweep.py` is the only owner of end-of-run orphan handling. Its enabled
@@ -345,8 +374,16 @@ sweep itself and the VM stage must not filter them, so re-adoption still works.
 - **What.** `(proxmox_endpoint_id, vmid)` is not a unique key across NetBox
   clusters. Every lookup keyed on it now requires the matched VM to live in the
   cluster being synchronized (`vm_cluster_guard.vm_record_in_cluster`: cluster id
-  when both sides know it, else casefolded name; an unknown cluster keeps the
-  match). It is applied in `reconciliation/vm_queue.select_existing_vm_record`
+  when both sides know it, else casefolded name; `vm_cluster_verdict` returns
+  `match|mismatch|unassigned|unknown`. Explicit `cluster: null` rows
+  (`unassigned`, legacy) and rows with no cluster data (`unknown`) are both
+  rejected while the live cluster is known, and
+  `vm_queue.skip_unverifiable_vm_candidates` (run before either engine by
+  `build_vm_operation_queue`) skips the prepared VM instead of creating a
+  duplicate unless a `(cluster id, vmid)` candidate exists; each skip is a
+  structured stage warning from `vm_queue.unverifiable_vm_warnings`.
+  `_load_netbox_virtual_machine_snapshot` completes every row missing `cluster`
+  with at most 8 concurrent reads). It is applied in `reconciliation/vm_queue.select_existing_vm_record`
   (which also feeds sidecar hydration and the name pre-pass), in
   `sync_vm._resolve_vm_from_index_or_unique_vmid` (interfaces and IPs), in
   `snapshots._snapshot_sessions_for_vm` (only sessions of the VM's cluster), and

@@ -77,7 +77,7 @@ def _snapshot_vm(
         "id": record_id,
         "name": name,
         "status": "active",
-        "cluster": cluster if isinstance(cluster, dict) else {"id": cluster},
+        "cluster": cluster if isinstance(cluster, dict) else {"id": cluster, "name": "cluster-a"},
         "device": {"id": 10},
         "role": {"id": role} if isinstance(role, int) else role,
         "vcpus": 2,

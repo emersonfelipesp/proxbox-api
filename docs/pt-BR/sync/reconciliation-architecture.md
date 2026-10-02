@@ -100,8 +100,32 @@ a VM NetBox encontrada pertence ao cluster em sincronizacao antes de ser usada:
 
 A comparacao usa o id do cluster NetBox quando os dois lados o conhecem e, caso
 contrario, o nome do cluster sem diferenciar maiusculas de minusculas. Um
-registro so e descartado diante de divergencia positiva; cluster desconhecido
-mantem a correspondencia. A correspondencia descartada gera um aviso com o id da
+registro e usado apenas quando e verificavel para o cluster em sincronizacao:
+
+- divergencia positiva descarta o registro;
+- registro com cluster explicitamente `null` (VM legada, anterior as relacoes de
+  cluster) ou sem dado de cluster (campo ausente ou sem id nem nome) enquanto o
+  cluster em sincronizacao e conhecido e **nao verificavel**: qualquer cluster
+  com a mesma chave `(id do endpoint, vmid)` poderia adota-lo: nao e atualizado
+  (um PATCH poderia reatribuir o cluster de outra VM) e a VM preparada e
+  **ignorada com aviso em vez de gerar `CREATE`**, porque o cluster desconhecido
+  pode ser o proprio cluster e criar duplicaria a VM. A excecao e quando o seletor consegue resolver um registro verificado
+  indexado por `(id do cluster, vmid)` (que nao cite outro endpoint); nesse
+  caso esse registro e adotado e nada e ignorado. Com o cluster em sincronizacao desconhecido nao ha o que
+  verificar e a correspondencia e mantida.
+
+O carregador do snapshot de VMs pede linhas completas (sem `fields=`/`brief=`),
+entao `cluster` esta presente. Linhas sem o campo (apenas linhas anomalas ou
+reduzidas) sao todas completadas por id, com no maximo oito leituras
+simultaneas e falhas toleradas, antes da guarda. Toda VM ignorada porque seu
+candidato continua nao verificavel e reportada como aviso estruturado da etapa
+(id da VM NetBox, vmid, cluster, motivo), e a etapa termina degradada em vez de
+apenas registrar em log. A omissao por candidato nao verificavel roda antes de
+qualquer motor de reconciliacao, entao Python e Rust recebem sempre o mesmo
+conjunto preparado e o Rust nao pode gerar um `CREATE` para uma VM que o Python
+ignora.
+
+A correspondencia descartada gera um aviso com o id da
 VM NetBox, o vmid, o id do endpoint e ambos os clusters, e o registro nunca e
 gravado. Quando dois clusters expoem a mesma chave `(id do endpoint, vmid)`, a
 VM do cluster em sincronizacao ainda e encontrada.

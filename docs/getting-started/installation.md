@@ -113,6 +113,17 @@ docker run -d -p 8443:8000 --name proxbox-api-granian \
   emersonfelipesp/proxbox-api:latest-granian
 ```
 
+!!! note "Granian version pin"
+    The Granian images install an exact, deliberately chosen version through
+    the `GRANIAN_VERSION` build argument in `Dockerfile` (the CI NetBox image
+    pins the same version in `.github/workflows/ci.yml`). To bump it: test the
+    newest Granian first, update the `GRANIAN_VERSION` default in both
+    Granian stages and the matching pin in `ci.yml`, then run the IPv6 bind
+    smoke test. `tests/test_granian_pin.py` fails if any pin is missing or
+    the versions disagree. The check covers containers and CI only (every
+    `Dockerfile*`, `docker/`, workflows, and requirements/constraints files);
+    the `pyproject.toml` range and `uv.lock` are intentionally out of scope.
+
 Service URL:
 
 - <https://127.0.0.1:8443>

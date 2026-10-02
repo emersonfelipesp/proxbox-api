@@ -20,6 +20,9 @@ from proxbox_api.services.sync.reconciliation.types import NetBoxVMOperation, Pr
 from proxbox_api.services.sync.vm_cluster_guard import (
     filter_vm_records_in_cluster,
     log_cross_cluster_rejection,
+    log_unverifiable_vm_skip,
+    vm_cluster_verdict,
+    vm_record_cluster_label,
     vm_record_in_cluster,
 )
 from proxbox_api.services.sync.vm_helpers import (
@@ -221,6 +224,186 @@ def _select_cluster_scoped_endpoint_record(
     return untyped[0] if len(candidates) == 1 and len(untyped) == 1 else None
 
 
+def _select_verified_cluster_record(
+    *,
+    prepared: PreparedVMState,
+    cluster_id: int | None,
+    proxmox_vmid: int,
+    cluster_typed_index: _TypedSnapshotIndex,
+    cluster_untyped_candidates: _UntypedSnapshotIndex,
+) -> dict[str, object] | None:
+    """Pick the cluster-keyed record for the live cluster, only when it is verified.
+
+    A record that already names a different Proxmox endpoint belongs to that
+    endpoint's VM and is never adopted here.
+    """
+    if cluster_id is None:
+        return None
+    record = _select_scoped_vm_record(
+        prepared=prepared,
+        endpoint_id=None,
+        cluster_id=cluster_id,
+        proxmox_vmid=proxmox_vmid,
+        endpoint_typed_index={},
+        endpoint_untyped_candidates={},
+        cluster_typed_index=cluster_typed_index,
+        cluster_untyped_candidates=cluster_untyped_candidates,
+    )
+    if record is None or not vm_record_in_cluster(
+        record, cluster_id=cluster_id, cluster_name=prepared.cluster_name
+    ):
+        return None
+    record_endpoint = extract_proxmox_endpoint_id(record)
+    prepared_endpoint = extract_proxmox_endpoint_id(prepared.sync_state_fields)
+    if record_endpoint is not None and record_endpoint != prepared_endpoint:
+        return None
+    return record
+
+
+def _unverifiable_endpoint_candidate(
+    prepared: PreparedVMState,
+    *,
+    endpoint_untyped_candidates: _UntypedSnapshotIndex,
+    cluster_typed_index: _TypedSnapshotIndex,
+    cluster_untyped_candidates: _UntypedSnapshotIndex,
+) -> dict[str, object] | None:
+    """Return the endpoint-keyed record that blocks a write because its cluster is unknown.
+
+    A prepared VM is blocked only when the live cluster is known, the
+    endpoint-keyed candidates hold no verified ``match`` for it and the
+    selector cannot resolve a verified cluster-keyed record for
+    ``(cluster id, vmid)`` (the same fallback ``select_existing_vm_record``
+    uses), yet at least one
+    candidate is ``unknown`` or ``unassigned`` (explicit ``null`` cluster): that
+    row could be the live cluster's own VM, so creating would duplicate it and
+    updating could let a colliding cluster adopt or rewrite another cluster's VM.
+    """
+    endpoint_id = extract_proxmox_endpoint_id(prepared.sync_state_fields)
+    vmid = _relation_id(prepared.resource.get("vmid"))
+    cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+    if endpoint_id is None or vmid is None:
+        return None
+    if (
+        _select_verified_cluster_record(
+            prepared=prepared,
+            cluster_id=cluster_id,
+            proxmox_vmid=vmid,
+            cluster_typed_index=cluster_typed_index,
+            cluster_untyped_candidates=cluster_untyped_candidates,
+        )
+        is not None
+    ):
+        return None
+    verdicts = [
+        (
+            record,
+            vm_cluster_verdict(record, cluster_id=cluster_id, cluster_name=prepared.cluster_name),
+        )
+        for record in endpoint_untyped_candidates.get((endpoint_id, vmid), [])
+    ]
+    if any(verdict == "match" for _, verdict in verdicts):
+        return None
+    return next((record for record, verdict in verdicts if verdict != "mismatch"), None)
+
+
+def _partition_unverifiable_vm_candidates(
+    prepared_vms: list[PreparedVMState],
+    *,
+    endpoint_untyped_candidates: _UntypedSnapshotIndex,
+    cluster_typed_index: _TypedSnapshotIndex,
+    cluster_untyped_candidates: _UntypedSnapshotIndex,
+) -> tuple[list[PreparedVMState], list[tuple[PreparedVMState, dict[str, object]]]]:
+    """Split prepared VMs into writable ones and ``(prepared, blocking record)`` skips."""
+    kept: list[PreparedVMState] = []
+    skipped: list[tuple[PreparedVMState, dict[str, object]]] = []
+    for prepared in prepared_vms:
+        blocker = _unverifiable_endpoint_candidate(
+            prepared,
+            endpoint_untyped_candidates=endpoint_untyped_candidates,
+            cluster_typed_index=cluster_typed_index,
+            cluster_untyped_candidates=cluster_untyped_candidates,
+        )
+        if blocker is None:
+            kept.append(prepared)
+        else:
+            skipped.append((prepared, blocker))
+    return kept, skipped
+
+
+def skip_unverifiable_vm_candidates(
+    prepared_vms: list[PreparedVMState],
+    *,
+    endpoint_untyped_candidates: _UntypedSnapshotIndex,
+    cluster_typed_index: _TypedSnapshotIndex,
+    cluster_untyped_candidates: _UntypedSnapshotIndex,
+) -> list[PreparedVMState]:
+    """Drop prepared VMs whose only endpoint-keyed candidate is not cluster-verifiable.
+
+    Skipping with a warning is preferred over a CREATE because the candidate's
+    unknown or unassigned cluster could be the live one; the next sync retries
+    once the NetBox row carries cluster data.
+    """
+    kept, skipped = _partition_unverifiable_vm_candidates(
+        prepared_vms,
+        endpoint_untyped_candidates=endpoint_untyped_candidates,
+        cluster_typed_index=cluster_typed_index,
+        cluster_untyped_candidates=cluster_untyped_candidates,
+    )
+    for prepared, blocker in skipped:
+        log_unverifiable_vm_skip(
+            blocker,
+            vmid=_relation_id(prepared.resource.get("vmid")),
+            endpoint_id=extract_proxmox_endpoint_id(prepared.sync_state_fields),
+            cluster_id=_relation_id(prepared.desired_payload.get("cluster")),
+            cluster_name=prepared.cluster_name,
+        )
+    return kept
+
+
+def drop_unverifiable_vm_candidates(
+    prepared_vms: list[PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+) -> list[PreparedVMState]:
+    """Apply :func:`skip_unverifiable_vm_candidates` over a raw NetBox snapshot.
+
+    Run before any engine so Python and Rust receive the same prepared set.
+    """
+    indexes = build_vm_snapshot_identity_indexes(netbox_snapshot)
+    return skip_unverifiable_vm_candidates(
+        prepared_vms,
+        endpoint_untyped_candidates=indexes[1],
+        cluster_typed_index=indexes[2],
+        cluster_untyped_candidates=indexes[3],
+    )
+
+
+def unverifiable_vm_warnings(
+    prepared_vms: list[PreparedVMState],
+    netbox_snapshot: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Describe every VM the queue will skip as a structured stage warning."""
+    indexes = build_vm_snapshot_identity_indexes(netbox_snapshot)
+    _, skipped = _partition_unverifiable_vm_candidates(
+        prepared_vms,
+        endpoint_untyped_candidates=indexes[1],
+        cluster_typed_index=indexes[2],
+        cluster_untyped_candidates=indexes[3],
+    )
+    return [
+        {
+            "netbox_vm_id": blocker.get("id"),
+            "vmid": _relation_id(prepared.resource.get("vmid")),
+            "cluster": prepared.cluster_name,
+            "reason": (
+                "NetBox VM matches the Proxmox endpoint key but its cluster "
+                f"({vm_record_cluster_label(blocker)}) cannot be verified; "
+                "the VM was neither updated nor created"
+            ),
+        }
+        for prepared, blocker in skipped
+    ]
+
+
 def select_existing_vm_record(
     *,
     prepared: PreparedVMState,
@@ -271,6 +454,12 @@ def select_existing_vm_record(
         cluster_id=cluster_id,
         proxmox_vmid=proxmox_vmid,
         endpoint_untyped_candidates=endpoint_untyped_candidates,
+    ) or _select_verified_cluster_record(
+        prepared=prepared,
+        cluster_id=cluster_id,
+        proxmox_vmid=proxmox_vmid,
+        cluster_typed_index=cluster_typed_index,
+        cluster_untyped_candidates=cluster_untyped_candidates,
     )
 
 
@@ -350,6 +539,12 @@ def build_vm_operation_queue_python(  # noqa: C901
         cluster_typed_vm_index,
         cluster_untyped_vm_candidates,
     ) = build_vm_snapshot_identity_indexes(netbox_snapshot)
+    prepared_vms = skip_unverifiable_vm_candidates(
+        prepared_vms,
+        endpoint_untyped_candidates=endpoint_untyped_vm_candidates,
+        cluster_typed_index=cluster_typed_vm_index,
+        cluster_untyped_candidates=cluster_untyped_vm_candidates,
+    )
 
     operation_queue: list[NetBoxVMOperation] = []
 
@@ -464,6 +659,9 @@ def build_vm_operation_queue(
     # Validate the creation-only relation before engine selection so malformed or
     # schema-drifted NetBox values fail identically in python, compare, and rust modes.
     validate_vm_platform_relations(prepared_vms, netbox_snapshot)
+    # Both engines must see the same prepared set: an unverifiable endpoint
+    # candidate would otherwise surface as a Rust CREATE the Python path skips.
+    prepared_vms = drop_unverifiable_vm_candidates(prepared_vms, netbox_snapshot)
 
     flags = {
         "overwrite_vm_role": overwrite_vm_role,
@@ -524,6 +722,33 @@ def _build_vm_operation_queue_with_rust(
     )
 
 
+def _python_selector_finds_record(
+    prepared: PreparedVMState,
+    indexes: tuple[
+        _TypedSnapshotIndex, _UntypedSnapshotIndex, _TypedSnapshotIndex, _UntypedSnapshotIndex
+    ],
+) -> bool:
+    """Return whether the selector adopts an endpoint-less cluster-keyed record.
+
+    Rust can never match a record without an endpoint id, so only that case is
+    corrected here; any other Rust/Python difference stays visible to compare mode.
+    """
+    vmid = _relation_id(prepared.resource.get("vmid"))
+    if vmid is None:
+        return False
+    record = select_existing_vm_record(
+        prepared=prepared,
+        endpoint_id=extract_proxmox_endpoint_id(prepared.sync_state_fields),
+        cluster_id=_relation_id(prepared.desired_payload.get("cluster")),
+        proxmox_vmid=vmid,
+        endpoint_typed_index=indexes[0],
+        endpoint_untyped_candidates=indexes[1],
+        cluster_typed_index=indexes[2],
+        cluster_untyped_candidates=indexes[3],
+    )
+    return record is not None and extract_proxmox_endpoint_id(record) is None
+
+
 def _reject_cross_cluster_operations(
     operations: list[NetBoxVMOperation],
     netbox_snapshot: list[dict[str, object]],
@@ -541,10 +766,18 @@ def _reject_cross_cluster_operations(
     """
 
     guarded: list[NetBoxVMOperation] = []
+    indexes = build_vm_snapshot_identity_indexes(netbox_snapshot)
     for operation in operations:
         record = operation.existing_record
         prepared = operation.prepared
         cluster_id = _relation_id(prepared.desired_payload.get("cluster"))
+        if record is None and _python_selector_finds_record(prepared, indexes):
+            # Rust matches on the endpoint key only; the Python selector also
+            # resolves a verified cluster-keyed record, so a CREATE would duplicate it.
+            guarded.extend(
+                build_vm_operation_queue_python([prepared], netbox_snapshot, **flags)[:1]
+            )
+            continue
         if record is not None and not vm_record_in_cluster(
             record, cluster_id=cluster_id, cluster_name=prepared.cluster_name
         ):
@@ -556,7 +789,10 @@ def _reject_cross_cluster_operations(
                 cluster_name=prepared.cluster_name,
                 context="reconciliation",
             )
-            operation = build_vm_operation_queue_python([prepared], netbox_snapshot, **flags)[0]
+            guarded.extend(
+                build_vm_operation_queue_python([prepared], netbox_snapshot, **flags)[:1]
+            )
+            continue
         guarded.append(operation)
     return guarded
 

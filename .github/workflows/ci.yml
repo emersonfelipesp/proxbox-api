@@ -785,7 +785,7 @@ jobs:
               -e MAX_DB_WAIT_TIME=120 \
               -e DB_WAIT_DEBUG=1 \
               --entrypoint /bin/bash \
-              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' netboxlabs-netbox-branching granian && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host '${NETBOX_GRANIAN_HOST}' --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
+              "${NETBOX_IMAGE}" -ec "uv pip install --no-cache-dir '${{ steps.proxbox_pkg.outputs.target }}' netboxlabs-netbox-branching granian==2.8.4 && /opt/netbox/docker-entrypoint.sh /opt/netbox/venv/bin/granian --interface wsgi --host '${NETBOX_GRANIAN_HOST}' --port 8443 --ssl-certificate /certs/netbox.crt --ssl-keyfile /certs/netbox-pkcs8.key netbox.wsgi:application"
           fi
 
       - name: Trust E2E NetBox CA on runner

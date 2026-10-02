@@ -7,6 +7,7 @@ for the plugin to consume. These tests ensure the SSE contract is maintained.
 
 import asyncio
 import inspect
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -758,3 +759,37 @@ async def test_vm_by_id_create_stream_forwards_run_id(monkeypatch):
 
     assert captured["netbox_vm_id"] == 248
     assert captured["run_id"] == "issue-519-run"
+
+
+@pytest.mark.parametrize("rows", [[], [{"id": 1}, {"id": 2}]])
+async def test_vms_create_stream_reports_stage_warnings_and_row_count(monkeypatch, rows):
+    warning = {"netbox_vm_id": 7001, "vmid": 101, "reason": "cluster cannot be verified"}
+
+    async def _fake_create_virtual_machines(**_kwargs):
+        # The stage wrapper REST callers receive when the stage is degraded.
+        return {
+            "virtual_machines": rows,
+            "count": len(rows),
+            "warnings": [warning],
+            "degraded": True,
+        }
+
+    monkeypatch.setattr(sync_vm, "create_virtual_machines", _fake_create_virtual_machines)
+
+    response = await sync_vm.create_virtual_machines_stream(
+        netbox_session=SimpleNamespace(),
+        pxs=[],
+        cluster_status=[],
+        cluster_resources=[],
+        tag=SimpleNamespace(id=7),
+        sync_vm_network=False,
+        sync_task_history=False,
+        overwrite_flags=SyncOverwriteFlags(),
+    )
+    body = "".join([chunk async for chunk in response.body_iterator])
+    complete = body.split("event: complete", 1)[1]
+    payload = json.loads(complete.split("data: ", 1)[1].split("\n", 1)[0])
+
+    assert payload["result"]["count"] == len(rows)
+    assert payload["result"]["degraded"] is True
+    assert payload["result"]["warnings"] == [warning]

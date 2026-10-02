@@ -17,6 +17,7 @@ from proxbox_api.exception import ProxboxException
 from proxbox_api.services.sync.vm_filter import (
     SelectionMode,
     filter_cluster_resources_by_netbox_vm_ids,
+    filter_cluster_resources_for_selected_vm,
     hydrate_selected_vm_identities,
     hydrate_vm_identities_from_sidecars,
     selection_skips,
@@ -469,3 +470,272 @@ def test_vm_create_endpoint_pairing_follows_source_after_lenient_drop(monkeypatc
         for resource in rows
     ]
     assert paired == [(22, "cluster-b", 122)]
+
+
+def _shared_owner_setup(monkeypatch, claimants: list[int]):
+    vms = [_vm(netbox_id) for netbox_id in [*claimants, GOOD]]
+    sidecars = [_sidecar(netbox_id, vmid=500) for netbox_id in claimants]
+    sidecars.append(_sidecar(GOOD))
+    _patch_netbox(monkeypatch, vms, sidecars)
+    return vms
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+@pytest.mark.parametrize("claimants", [[20, 21], [20, 21, 22]])
+def test_hydrate_lenient_drops_every_claimant_of_a_shared_owner(
+    monkeypatch, proxbox_caplog, hydrate, claimants
+):
+    vms = _shared_owner_setup(monkeypatch, claimants)
+
+    if hydrate == "selected":
+        result = asyncio.run(
+            hydrate_selected_vm_identities(object(), vms, mode=SelectionMode.LENIENT)
+        )
+    else:
+        result = asyncio.run(
+            hydrate_vm_identities_from_sidecars(
+                object(), vms, require_all=False, mode=SelectionMode.LENIENT
+            )
+        )
+
+    assert [vm["id"] for vm in result] == [GOOD]
+    assert sorted(skip["netbox_vm_id"] for skip in selection_skips(result)) == claimants
+    reasons = {skip["reason"] for skip in selection_skips(result)}
+    assert len(reasons) == 1
+    reason = reasons.pop()
+    assert all(str(netbox_id) in reason for netbox_id in claimants)
+    assert "VMID 500" in reason
+    for netbox_id in claimants:
+        assert any(
+            f"NetBox VM id {netbox_id} " in record.getMessage() for record in proxbox_caplog.records
+        )
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+def test_hydrate_strict_raises_on_a_shared_owner(monkeypatch, hydrate):
+    vms = _shared_owner_setup(monkeypatch, [20, 21])
+
+    with pytest.raises(ProxboxException, match="claim the same Proxmox"):
+        if hydrate == "selected":
+            asyncio.run(hydrate_selected_vm_identities(object(), vms))
+        else:
+            asyncio.run(hydrate_vm_identities_from_sidecars(object(), vms, require_all=True))
+
+
+def test_hydrate_same_endpoint_and_vmid_in_different_clusters_is_not_shared(monkeypatch):
+    vms = [_vm(20, "cluster-a"), _vm(21, "cluster-b")]
+    sidecars = [
+        _sidecar(20, cluster_name="cluster-a", vmid=500),
+        _sidecar(21, cluster_name="cluster-b", vmid=500),
+    ]
+    _patch_netbox(monkeypatch, vms, sidecars)
+
+    result = asyncio.run(hydrate_selected_vm_identities(object(), vms))
+
+    assert [vm["id"] for vm in result] == [20, 21]
+    assert selection_skips(result) == []
+
+
+def test_hydrate_cluster_name_case_does_not_hide_a_shared_owner(monkeypatch):
+    vms = [_vm(20, "Cluster-A"), _vm(21, "cluster-a")]
+    sidecars = [
+        _sidecar(20, cluster_name="Cluster-A", vmid=500),
+        _sidecar(21, cluster_name="cluster-a", vmid=500),
+    ]
+    _patch_netbox(monkeypatch, vms, sidecars)
+
+    result = asyncio.run(hydrate_selected_vm_identities(object(), vms, mode=SelectionMode.LENIENT))
+
+    assert list(result) == []
+    assert sorted(skip["netbox_vm_id"] for skip in selection_skips(result)) == [20, 21]
+
+
+def test_hydrate_different_vm_type_or_endpoint_is_not_shared(monkeypatch):
+    vms = [_vm(20), _vm(21), _vm(22)]
+    sidecars = [
+        _sidecar(20, vmid=500),
+        _sidecar(21, vmid=500, vm_type="lxc"),
+        _sidecar(22, vmid=500, endpoint_id=99),
+    ]
+    _patch_netbox(monkeypatch, vms, sidecars)
+
+    result = asyncio.run(hydrate_selected_vm_identities(object(), vms))
+
+    assert [vm["id"] for vm in result] == [20, 21, 22]
+
+
+def _run_hydrate(hydrate: str, vms, *, mode: SelectionMode):
+    if hydrate == "selected":
+        return asyncio.run(hydrate_selected_vm_identities(object(), vms, mode=mode))
+    return asyncio.run(
+        hydrate_vm_identities_from_sidecars(object(), vms, require_all=True, mode=mode)
+    )
+
+
+def _unselected_claimant_setup(monkeypatch, *, selected: list[int], sidecars):
+    """Patch NetBox so every VM with a sidecar exists but only ``selected`` is requested."""
+
+    all_vms = [_vm(sidecar["virtual_machine"]["id"]) for sidecar in sidecars]
+    _patch_netbox(monkeypatch, all_vms, sidecars)
+    return [vm for vm in all_vms if vm["id"] in selected]
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+def test_hydrate_lenient_skips_selected_vm_sharing_owner_with_unselected_claimant(
+    monkeypatch, proxbox_caplog, hydrate
+):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500)],
+    )
+
+    result = _run_hydrate(hydrate, vms, mode=SelectionMode.LENIENT)
+
+    assert list(result) == []
+    skips = selection_skips(result)
+    # Only the selected claimant is reported; the unselected one is not processed.
+    assert [skip["netbox_vm_id"] for skip in skips] == [20]
+    assert "NetBox VM ids 20 and 21 claim the same" in skips[0]["reason"]
+    assert any("NetBox VM id 20 " in record.getMessage() for record in proxbox_caplog.records)
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+def test_hydrate_strict_raises_when_unselected_claimant_shares_owner(monkeypatch, hydrate):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500)],
+    )
+
+    with pytest.raises(ProxboxException, match="NetBox VM ids 20 and 21 claim the same"):
+        _run_hydrate(hydrate, vms, mode=SelectionMode.STRICT)
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+def test_hydrate_three_claimants_two_selected_names_all_claimants(monkeypatch, hydrate):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20, 21],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500), _sidecar(22, vmid=500)],
+    )
+
+    result = _run_hydrate(hydrate, vms, mode=SelectionMode.LENIENT)
+
+    assert list(result) == []
+    skips = selection_skips(result)
+    assert sorted(skip["netbox_vm_id"] for skip in skips) == [20, 21]
+    assert all("NetBox VM ids 20, 21, 22" in skip["reason"] for skip in skips)
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+def test_hydrate_unselected_claimant_with_incomplete_identity_does_not_count(monkeypatch, hydrate):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500, endpoint_id=None)],
+    )
+
+    result = _run_hydrate(hydrate, vms, mode=SelectionMode.STRICT)
+
+    assert [vm["id"] for vm in result] == [20]
+    assert selection_skips(result) == []
+
+
+@pytest.mark.parametrize("hydrate", ["selected", "sidecars"])
+@pytest.mark.parametrize(
+    "other",
+    [
+        {"cluster_name": "cluster-b"},
+        {"vm_type": "lxc"},
+        {"endpoint_id": 99},
+    ],
+)
+def test_hydrate_unselected_claimant_with_different_owner_is_not_shared(
+    monkeypatch, hydrate, other
+):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500, **other)],
+    )
+
+    result = _run_hydrate(hydrate, vms, mode=SelectionMode.STRICT)
+
+    assert [vm["id"] for vm in result] == [20]
+    assert selection_skips(result) == []
+
+
+def _run_selected_vm_filter(vm, resources):
+    pxs, statuses = _sources(("cluster-a", 11))
+    return asyncio.run(
+        filter_cluster_resources_for_selected_vm(
+            vm,
+            resources,
+            netbox_session=object(),
+            netbox_vm_id=vm["id"],
+            pxs=pxs,
+            cluster_status=statuses,
+        )
+    )
+
+
+_SHARED_RESOURCES = [{"cluster-a": [{"type": "qemu", "vmid": 500, "name": "shared"}]}]
+
+
+@pytest.mark.parametrize("mode", [SelectionMode.STRICT, SelectionMode.LENIENT])
+def test_filter_by_ids_rejects_selected_vm_sharing_owner_with_unselected_claimant(
+    monkeypatch, mode
+):
+    _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500)],
+    )
+
+    if mode is SelectionMode.STRICT:
+        with pytest.raises(ProxboxException) as exc_info:
+            _run_filter(_SHARED_RESOURCES, [20], mode)
+        assert "NetBox VM ids 20 and 21 claim the same" in str(exc_info.value.detail)
+        return
+
+    result = _run_filter(_SHARED_RESOURCES, [20], mode)
+    assert list(result) == [{"cluster-a": []}]
+    assert [skip["netbox_vm_id"] for skip in selection_skips(result)] == [20]
+
+
+@pytest.mark.parametrize("mode", [SelectionMode.STRICT, SelectionMode.LENIENT])
+def test_filter_by_ids_keeps_vm_when_other_sidecar_is_not_a_claimant(monkeypatch, mode):
+    _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=501)],
+    )
+
+    result = _run_filter(_SHARED_RESOURCES, [20], mode)
+
+    assert list(result) == _SHARED_RESOURCES
+    assert selection_skips(result) == []
+
+
+def test_single_vm_filter_rejects_owner_shared_with_unselected_claimant(monkeypatch):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=500)],
+    )
+
+    with pytest.raises(ProxboxException) as exc_info:
+        _run_selected_vm_filter(vms[0], _SHARED_RESOURCES)
+
+    assert "NetBox VM ids 20 and 21 claim the same" in str(exc_info.value.detail)
+
+
+def test_single_vm_filter_keeps_vm_when_other_sidecar_is_not_a_claimant(monkeypatch):
+    vms = _unselected_claimant_setup(
+        monkeypatch,
+        selected=[20],
+        sidecars=[_sidecar(20, vmid=500), _sidecar(21, vmid=501)],
+    )
+
+    assert _run_selected_vm_filter(vms[0], _SHARED_RESOURCES) == _SHARED_RESOURCES

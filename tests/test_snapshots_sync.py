@@ -1084,3 +1084,66 @@ def test_snapshot_sessions_ignore_other_endpoints_and_keep_legacy_name_matching(
     assert snapshots_module._snapshot_sessions_for_vm(
         [other_endpoint, matching], endpoint_id=None, cluster_name="alpha", node_name=None
     ) == [other_endpoint, matching]
+
+
+def _shared_owner_snapshot_selection(monkeypatch, real_selection, claimants, *, existing=None):
+    """VM 7 is distinct; every claimant sidecar names the same Proxmox owner."""
+
+    fetched, reconciled, deleted = _mixed_snapshot_selection(
+        monkeypatch, real_selection, existing=existing
+    )
+    ids = [7, *claimants]
+    real_selection(
+        [_snapshot_vm(netbox_id=7, vmid=105)]
+        + [_snapshot_vm(netbox_id=c, vmid=106) for c in claimants],
+        [_sidecar_row(7, vmid=105)] + [_sidecar_row(c, vmid=106) for c in claimants],
+    )
+    return ids, fetched, reconciled, deleted
+
+
+@pytest.mark.parametrize("claimants", [[8, 9], [8, 9, 10]])
+def test_snapshots_lenient_drops_every_shared_owner_claimant(
+    monkeypatch, real_selection, claimants
+):
+    ids, fetched, reconciled, _deleted = _shared_owner_snapshot_selection(
+        monkeypatch, real_selection, claimants
+    )
+
+    result = _run_snapshots(netbox_vm_ids=ids)
+
+    assert fetched == [105]
+    assert [payload["virtual_machine"] for payload in reconciled] == [7]
+    assert result["degraded"] is True
+    assert sorted(w["netbox_vm_id"] for w in result["warnings"]) == claimants
+
+
+def test_snapshots_strict_fails_before_any_write_on_a_shared_owner(monkeypatch, real_selection):
+    from proxbox_api.services.sync.vm_filter import SelectionMode
+
+    ids, fetched, reconciled, deleted = _shared_owner_snapshot_selection(
+        monkeypatch, real_selection, [8, 9]
+    )
+
+    with pytest.raises(ProxboxException, match="claim the same Proxmox"):
+        _run_snapshots(netbox_vm_ids=ids, selection_mode=SelectionMode.STRICT)
+
+    assert fetched == []
+    assert reconciled == []
+    assert deleted == []
+
+
+def test_snapshots_shared_owner_claimants_are_excluded_from_stale_cleanup(
+    monkeypatch, real_selection
+):
+    existing = [
+        {"id": 70, "virtual_machine": {"id": 7}, "name": "stale-7"},
+        {"id": 80, "virtual_machine": {"id": 8}, "name": "stale-8"},
+        {"id": 90, "virtual_machine": {"id": 9}, "name": "stale-9"},
+    ]
+    ids, _fetched, _reconciled, deleted = _shared_owner_snapshot_selection(
+        monkeypatch, real_selection, [8, 9], existing=existing
+    )
+
+    _run_snapshots(netbox_vm_ids=ids, delete_nonexistent_snapshot=True)
+
+    assert 80 not in deleted and 90 not in deleted
