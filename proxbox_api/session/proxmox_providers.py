@@ -665,22 +665,21 @@ def _decrypt_db_secret(
     raw_value: str | None,
     decrypt: object,
 ) -> str | None:
-    """Decrypt ciphertext without consulting settings for legacy plaintext."""
+    """Resolve every nonempty secret under the current encryption-source authority."""
 
-    if raw_value is None or not raw_value.startswith("enc:"):
+    if raw_value is None or raw_value == "":
         return raw_value
 
     if not callable(decrypt):  # pragma: no cover - model contract guard
         decrypted_value = None
     else:
         decrypted_value = decrypt()
-    if not isinstance(decrypted_value, str) or decrypted_value.startswith("enc:"):
+    if not isinstance(decrypted_value, str) or (
+        raw_value.startswith("enc:") and decrypted_value.startswith("enc:")
+    ):
         raise ProxboxException(
             message="Could not decrypt Proxmox endpoint credentials",
-            detail=(
-                f"Endpoint {endpoint.name!r} has encrypted {field} data, but no usable "
-                "encryption key was available within the bounded settings lookup."
-            ),
+            detail="No usable encryption key was available under the current source authorization.",
             http_status_code=503,
         )
     return decrypted_value
@@ -949,14 +948,9 @@ async def _load_database_schemas(
     effective_settings: ProxboxSettingsDict | None = (
         await _load_db_transport_settings() if needs_settings else None
     )
-    if isinstance(database_session, Session):
-        return await asyncio.to_thread(
-            _parse_database_endpoints,
-            db_endpoints,
-            effective_settings,
-            needs_credential_settings,
-        )
-    return _parse_database_endpoints(
+    # Legacy plaintext credentials also require fresh authority for a plugin source.
+    return await asyncio.to_thread(
+        _parse_database_endpoints,
         db_endpoints,
         effective_settings,
         needs_credential_settings,

@@ -7,10 +7,12 @@ import multiprocessing
 import pytest
 
 import proxbox_api.credentials as creds_mod
+from proxbox_api import plugin_key_authority
+from proxbox_api.plugin_key_authority import AuthorizedPluginKey, PluginKeyBinding
 
 
 def _recursive_settings_lookup_worker(queue: multiprocessing.Queue) -> None:
-    """Exercise settings lookup re-entering credential decryption in a child process."""
+    """Prove that root acquisition does not construct a decrypting session."""
     import os
 
     import proxbox_api.credentials as child_creds
@@ -18,32 +20,32 @@ def _recursive_settings_lookup_worker(queue: multiprocessing.Queue) -> None:
     from proxbox_api.app import netbox_session as netbox_session_mod
 
     child_creds.reset_encryption_cache()
+    plugin_key_authority.invalidate_plugin_key_authority()
     settings_client.invalidate_settings_cache()
     os.environ.pop("PROXBOX_ENCRYPTION_KEY", None)
 
+    calls: list[bool] = []
+
     def _raw_session_requiring_decryption() -> None:
+        calls.append(True)
         child_creds.decrypt_value("stored-plaintext-token")
         return None
 
     netbox_session_mod.get_raw_netbox_session = _raw_session_requiring_decryption
-    queue.put(child_creds.is_encryption_enabled())
+    child_creds._resolve_local_key_file = lambda: ""
+    queue.put((child_creds.is_encryption_enabled(), calls))
 
 
 @pytest.fixture(autouse=True)
-def reset_credential_globals():
-    """Reset module-level cache globals before and after every test.
-
-    credentials.py caches the derived key and Fernet instance in module
-    globals so key derivation only happens once per process. Tests that
-    exercise different key scenarios must clear these between runs.
-    """
-    creds_mod._ENCRYPTION_KEY = None
-    creds_mod._FERNET = None
-    creds_mod._ENCRYPTION_WARNING_LOGGED = False
+def reset_credential_globals(monkeypatch):
+    """Reset source provenance and keep these tests away from operator files."""
+    plugin_key_authority.invalidate_plugin_key_authority()
+    creds_mod.reset_encryption_cache()
+    monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(creds_mod, "_resolve_local_key_file", lambda: "")
     yield
-    creds_mod._ENCRYPTION_KEY = None
-    creds_mod._FERNET = None
-    creds_mod._ENCRYPTION_WARNING_LOGGED = False
+    plugin_key_authority.invalidate_plugin_key_authority()
+    creds_mod.reset_encryption_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -54,9 +56,9 @@ def reset_credential_globals():
 def test_is_encryption_disabled_with_no_key(monkeypatch):
     monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(
-        "proxbox_api.credentials.get_settings",
-        lambda: {"encryption_key": ""},
-        raising=False,
+        creds_mod,
+        "get_fresh_plugin_key",
+        lambda: None,
     )
     assert creds_mod.is_encryption_enabled() is False
 
@@ -66,12 +68,12 @@ def test_is_encryption_enabled_with_env_var(monkeypatch):
     assert creds_mod.is_encryption_enabled() is True
 
 
-def test_is_encryption_enabled_with_settings_key(monkeypatch):
+def test_is_encryption_enabled_with_fresh_plugin_key(monkeypatch):
     monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(
-        "proxbox_api.settings_client.get_settings",
-        lambda: {"encryption_key": "from-plugin-settings"},
-        raising=False,
+        creds_mod,
+        "get_fresh_plugin_key",
+        lambda: AuthorizedPluginKey("from-plugin-runtime", PluginKeyBinding(7, "synthetic")),
     )
     assert creds_mod.is_encryption_enabled() is True
 
@@ -81,13 +83,12 @@ def test_env_var_takes_priority_over_settings_key(monkeypatch):
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "env-key")
     called = []
     monkeypatch.setattr(
-        "proxbox_api.settings_client.get_settings",
-        lambda: called.append(True) or {"encryption_key": "settings-key"},
-        raising=False,
+        creds_mod,
+        "get_fresh_plugin_key",
+        lambda: called.append(True),
     )
     assert creds_mod.is_encryption_enabled() is True
-    # settings_client should not have been consulted
-    assert called == [], "env var should short-circuit settings lookup"
+    assert called == [], "env var should short-circuit plugin authority lookup"
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +123,9 @@ def test_encrypt_returns_plaintext_when_disabled(monkeypatch):
     """When no key is configured, encrypt_value is a no-op."""
     monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(
-        "proxbox_api.settings_client.get_settings",
-        lambda: {"encryption_key": ""},
-        raising=False,
+        creds_mod,
+        "get_fresh_plugin_key",
+        lambda: None,
     )
     result = creds_mod.encrypt_value("my-token")
     assert result == "my-token"
@@ -135,9 +136,9 @@ def test_decrypt_returns_ciphertext_when_disabled(monkeypatch):
     """When no key is configured, decrypt_value is a no-op (passthrough)."""
     monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
     monkeypatch.setattr(
-        "proxbox_api.settings_client.get_settings",
-        lambda: {"encryption_key": ""},
-        raising=False,
+        creds_mod,
+        "get_fresh_plugin_key",
+        lambda: None,
     )
     result = creds_mod.decrypt_value("enc:some-ciphertext")
     assert result == "enc:some-ciphertext"
@@ -176,8 +177,7 @@ def test_decrypt_wrong_key_raises_proxbox_exception(monkeypatch):
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "key-a")
     encrypted = creds_mod.encrypt_value("secret")
 
-    creds_mod._ENCRYPTION_KEY = None
-    creds_mod._FERNET = None
+    creds_mod.reset_encryption_cache()
 
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "key-b")
 
@@ -220,11 +220,7 @@ def test_encryption_key_is_cached_after_first_call(monkeypatch):
 
 
 def test_stable_keyed_fingerprint_is_stable_and_domain_separated(monkeypatch):
-    monkeypatch.setattr(
-        creds_mod,
-        "_resolve_raw_key_with_source",
-        lambda: ("binding-root-key", "env"),
-    )
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "binding-root-key")
 
     first = creds_mod.stable_keyed_fingerprint(b"endpoint-schema", purpose="ceph-v2")
     creds_mod.reset_encryption_cache()
@@ -243,14 +239,14 @@ def test_stable_keyed_fingerprint_is_stable_and_domain_separated(monkeypatch):
 def test_stable_keyed_fingerprint_fails_closed_without_server_key(monkeypatch):
     from proxbox_api.exception import ProxboxException
 
-    monkeypatch.setattr(creds_mod, "_resolve_raw_key_with_source", lambda: ("", None))
+    monkeypatch.setattr(creds_mod, "get_fresh_plugin_key", lambda: None)
 
     with pytest.raises(ProxboxException, match="Credential encryption must be configured"):
         creds_mod.stable_keyed_fingerprint(b"endpoint-schema", purpose="ceph-v2")
 
 
-def test_settings_lookup_can_reenter_decryption_without_deadlock():
-    """Missing env key must not deadlock when plugin settings lookup decrypts tokens."""
+def test_key_lookup_does_not_bootstrap_a_decrypting_session():
+    """Missing plugin authority must not construct a recursive session factory."""
     context = multiprocessing.get_context("fork")
     queue = context.Queue()
     process = context.Process(
@@ -268,4 +264,4 @@ def test_settings_lookup_can_reenter_decryption_without_deadlock():
         pytest.fail("encryption key lookup deadlocked during recursive settings lookup")
 
     assert process.exitcode == 0
-    assert queue.get(timeout=1) is False
+    assert queue.get(timeout=1) == (False, [])

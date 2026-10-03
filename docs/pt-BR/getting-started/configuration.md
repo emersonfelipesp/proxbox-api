@@ -121,12 +121,14 @@ Os campos opcionais do endpoint no banco `timeout`, `max_retries` e
 estao nulos. Valores explicitos no endpoint prevalecem, inclusive zero retries
 ou zero retry backoff. Uma carga do banco sem endpoints, ou com valores
 concretos em todos eles, nao faz requisicao de configuracoes ao plugin. Quando
-a heranca e necessaria, uma unica busca compartilhada usa um limite total de
-tempo e retorna aos valores padrao documentados sem armazenar esse fallback
-temporario no cache. Credenciais criptografadas no banco usam a mesma busca
-limitada para obter a chave do plugin; se nenhuma chave de ambiente, plugin ou
-arquivo local puder descriptografa-las, a carga falha com `503` e nunca envia o
-ciphertext como credencial do Proxmox.
+a heranca e necessaria, uma unica busca de metadados limita a espera do chamador
+assincrono a 0,5 segundo. Ela retorna aos valores padrao documentados sem
+armazenar esse fallback temporario no cache. Metadados nunca fornecem a chave.
+Cada aquisicao de credencial vinculada ao plugin usa autoridade privada atual
+separada, inclusive para plaintext legado. O prazo dos metadados nao limita essa
+autorizacao. Autoridade recusada ou ciphertext nao resolvido causa `503`; o
+ciphertext nunca vira uma credencial do Proxmox. Um worker de metadados pode
+continuar depois que o prazo do chamador termina.
 
 ### Template de nome do device de node
 
@@ -355,9 +357,75 @@ O proxbox-api armazena tokens de API do NetBox e senhas/tokens do Proxmox em um 
 O proxbox-api resolve a chave de criptografia na seguinte ordem de prioridade:
 
 1. **Variavel de ambiente `PROXBOX_ENCRYPTION_KEY`** — prioridade maxima, aplicada imediatamente no startup.
-2. **`ProxboxPluginSettings.encryption_key`** — buscada na API de configuracoes do plugin no NetBox (configuravel na pagina `/plugins/proxbox/settings/`). So e consultada quando a env var nao esta definida.
-3. **Arquivo local** — `PROXBOX_ENCRYPTION_KEY_FILE`, ou o padrao `<repo_root>/data/encryption.key`, somente depois que as duas fontes anteriores estiverem vazias.
-4. **Nenhuma** — sem chave configurada. Startup e operacoes sem credencial continuam disponiveis, mas writes de credenciais sao recusados, exceto quando `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` habilita explicitamente armazenamento plaintext apenas para lab. Um log `CRITICAL` e emitido.
+2. **`ProxboxPluginSettings.encryption_key`** — obtida pela autoridade privada de runtime vinculada ao cliente de servico NetBox padrao. Cada aquisicao da raiz exige uma nova resposta autorizada. Metadados comuns nao selecionam essa fonte.
+3. **Arquivo local** — `PROXBOX_ENCRYPTION_KEY_FILE`, ou o padrao `<repo_root>/data/encryption.key`. A selecao inicial pode usar essa chave independente do operador quando a fonte do plugin estiver indisponivel. Ela nao substitui uma fonte do plugin ja selecionada e depois revogada.
+4. **Nenhuma** — nenhuma fonte configurada. Operacoes sem credencial continuam disponiveis, mas writes de credenciais sao recusados, exceto quando `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` habilita explicitamente armazenamento plaintext apenas para lab. Um log `CRITICAL` e emitido. Uma autoridade do plugin recusada e um erro, nao este estado.
+
+### Autorizacao das configuracoes de runtime
+
+O endpoint de runtime do plugin exige um superusuario ativo e autenticado ou
+a autorizacao explicita por usuario `can_access_sensitive_data=True`.
+Essa autorizacao inicia como `False`. Somente superusuarios ativos e
+autenticados podem conceder ou revogar a autorizacao. Permissoes de visualizacao
+ou alteracao de modelos e o atributo staff nao permitem acesso sensivel.
+
+Use uma conta de servico sem privilegios de superusuario, provisionada pelo
+operador e com autorizacao explicita, quando o backend precisar obter a chave
+do plugin. Preserve as permissoes de objetos exigidas, incluindo acesso de
+visualizacao ao registro de configuracoes do plugin. Nao crie tokens pelo
+fluxo de exportacao do navegador nem substitua o token por outro usuario.
+A autorizacao nao concede acesso ao provedor de segredos nem permite alteracoes
+na infraestrutura.
+
+O cliente consulta `/api/plugins/proxbox/settings/runtime/` primeiro.
+Somente HTTP 404 permite compatibilidade com `/api/plugins/proxbox/settings/`.
+Essa resposta de metadados nunca fornece uma chave, mesmo quando um serializer
+antigo a inclui. HTTP 401, 403, falhas de transporte e outros erros de runtime
+retornam nenhum payload e nao acionam o fallback. As duas requisicoes
+compartilham um prazo para distribuir os timeouts. A criacao do cliente consome
+esse prazo, e o fallback recebe somente o tempo restante. Isso nao limita a
+duracao real do trabalho bloqueante: DNS sincrono, criacao e leitura da resposta
+podem levar mais tempo. Todos os resultados comuns de configuracao,
+caches e overrides por thread removem a raiz, inclusive respostas de runtime
+bem-sucedidas.
+
+A autoridade privada usa entradas imutaveis do cliente de servico NetBox padrao.
+Ela nao cria uma nova sessao que precisa descriptografar credenciais para obter
+a propria raiz. Cada criptografia, descriptografia, aquisicao de Fernet e
+assinatura derivada da raiz do plugin exige uma nova resposta HTTP 200 com chave
+nao vazia. A resposta comprova a autorizacao sensivel atual e a visualizacao do
+registro exato de configuracoes. Nao existe cache de autorizacao positiva nem
+compartilhamento da autorizacao por lote. Cada aquisicao usa timeout de socket de
+dois segundos e uma janela separada de dois segundos para aceitar o resultado.
+Uma leitura nao inicia depois desse prazo, e uma resposta concluida depois dele
+e recusada. Essas verificacoes nao interrompem DNS sincrono ou uma leitura em
+andamento. A duracao bloqueante pode ultrapassar dois segundos. Cancelar o
+chamador assincrono nao termina seu worker. Redirecionamentos, respostas comprimidas,
+corpos grandes demais, chaves invalidas e falhas de transporte sao recusados com
+erro fixo. Consumidores assincronos devem executar essa autoridade sincrona fora
+do event loop, sem mover a sessao do banco para o worker.
+
+Invalidacao de clientes, mudancas de conexao e liberacao do ultimo proprietario
+de lifespan aposentam a geracao vinculada e limpam referencias da chave derivada
+e Fernet. Respostas atrasadas nao podem restaurar material aposentado. A fonte
+do plugin fica bloqueada ate um reset explicito do cache de criptografia e nova
+selecao do cliente padrao. Ela nao troca silenciosamente para outro NetBox,
+chave de ambiente ou local, armazenamento plaintext ou seed de desenvolvimento.
+Chaves independentes do operador mantem seu proprio cache.
+
+No startup frio, um token NetBox criptografado sob uma raiz indisponivel do
+plugin nao pode autenticar a requisicao que obteria essa mesma raiz. O backend
+recusa esse bootstrap circular antes de criar o cliente. Provisione uma chave
+independente pelo mecanismo de segredos da implantacao. Nao use uma raiz antiga
+ou o token de outro usuario como excecao de bootstrap.
+
+AVISO: A chave de criptografia e uma credencial administrativa. Proteja-a pelo
+mecanismo de segredos da implantacao. Verificacoes atuais impedem uma nova
+aquisicao da raiz do plugin depois da revogacao. Elas nao recuperam bytes ja
+retornados, nao apagam todas as copias da memoria Python e nao cancelam uma
+operacao criptografica ja admitida. Essa politica de fonte nao estabelece a
+autorizacao do chamador para todas as rotas do backend. Revogacao nao autoriza
+implantacao, rotacao de chaves ou remocao de dados historicos.
 
 ### Definindo a chave
 

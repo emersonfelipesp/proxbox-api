@@ -52,6 +52,31 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 ## Runtime Boundaries
 
+- `settings_client.py` permits metadata compatibility only after runtime HTTP
+  404 and removes encryption_key from that response. Authorization, transport,
+  and other runtime failures must not trigger fallback. Keep one timeout
+  allocation deadline, not a hard blocking-duration guarantee. Runtime key retrieval requires the plugin's active superuser
+  or explicit per-user grant plus view access to the exact settings row.
+  All ordinary settings results, caches, and overrides strip the root.
+
+- `plugin_key_authority.py` owns the private, generation-bound runtime root
+  transport. Capture immutable inputs from the default NetBox service facade.
+  Do not select a root from arbitrary metadata or construct a decrypting facade
+  during authorization. Require a fresh HTTP 200 with a bounded nonempty key for
+  every plugin cryptographic acquisition. Refuse redirects and compressed or
+  oversized responses; expose only fixed errors. Retired generations remain
+  blocked until explicit source reset and default-facade reselection. Delayed
+  responses cannot republish retired material. Operator-selected environment
+  and local roots keep their independent cache. See the configuration guide for
+  the separate two-second result-acceptance window and cold-bootstrap requirements.
+  Synchronous DNS and in-progress reads can exceed that window. Caller
+  cancellation does not terminate a worker.
+
+  `get_settings` separates cache coordination, facade construction, deadline-bound
+  acquisition, and result publication. Release single-flight waiters on failure.
+  Preserve the original absolute deadline during facade construction. Log a
+  fixed classification instead of a raw facade exception.
+
 - `proxbox_api.app.factory.create_app()` is the import-safe application assembly point. It validates auth-lockout policy/trusted-proxy process configuration, registers middleware (including `APIKeyAuthMiddleware`), mounts root/cache/full-update/WebSocket routes, and exposes the `app` object imported by `proxbox_api.main`; database/network bootstrap and default adjacent HMAC-key validation occur only when its lifespan starts.
 - `auth.py` is the thin sync/async bcrypt validation adapter used by HTTP and WebSocket auth. It delegates every lockout transition to `services/auth_lockout.py`.
 - `services/auth_lockout.py` owns validated credential/source policy, per-bucket plus global verification concurrency, trusted-proxy source normalization, server-keyed HMAC bucket identities, and one durable reservation row per bcrypt admission. A live verifier renews its fixed owner lease only until the persisted absolute deadline; capacity is reclaimable at that deadline and late bcrypt results are discarded without lockout mutation, while residual non-preemptible thread CPU may continue. Crash rows support exactly-once late finalization before their deadline and one-hour compaction. Rejected cohorts coalesce only their credential transition; every consumed rejection advances source abuse. Missing keys allocate no credential rows and IPv6 sources aggregate at `/64`. Failure rows use independent bounded credential/source partitions, but saturation never controls admission: every request stays within the same per-source/global verification pool. Saturated partitions evict only safe expired rows; an unpersistable rejection fails closed and advances bounded aggregate accounting. Authenticated key create/reactivate paths serialize against the active-key cap, and each verification scans only the oldest configured number of active hashes so legacy over-limit databases retain a bounded recovery path. Credential isolation applies until the deliberately higher shared source-abuse threshold is exhausted. Runtime identity replacement validates material and its database-bound fingerprint before atomically swapping the pinned key, so a failed replacement cannot erase a serving generation's identity. The service exposes label-free capacity/row/in-flight/orphan/compaction metrics and safe local selectors.
