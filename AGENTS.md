@@ -445,6 +445,25 @@ When adding a new runtime tunable, default to making it a `ProxboxPluginSettings
 resolves **env var (override) → `ProxboxPluginSettings` → built-in default** with a
 5-minute settings cache (`proxbox_api/settings_client.py::get_settings`).
 
+Runtime key disclosure requires the plugin's active superuser or explicit per-user
+sensitive-data grant. Only HTTP 404 permits metadata compatibility; never
+fallback after authorization, transport, or other runtime failures. Metadata
+compatibility must strip encryption_key. Both requests share timeout allocation,
+not a hard blocking-duration bound. Synchronous DNS, construction, and reads can
+exceed it. The grant does not confer object visibility or provider/write authority.
+Ordinary settings, caches, and overrides never retain encryption_key.
+plugin_key_authority.py binds uncached runtime checks to immutable default-client
+inputs and an opaque generation. Every plugin-root or Fernet acquisition checks
+fresh authorization and exact settings-row visibility. Retired generations and
+failed checks cannot use local, plaintext, development-seed, or alternate-client
+fallback. Explicit reset and default-client reselection are required to replace
+a retired source. Independent operator-selected keys retain their own cache.
+Refuse circular encrypted-token bootstrap before creating a client. Keep
+authority I/O outside locks and the event loop. The two-second authority window
+rejects late results; it does not interrupt blocking DNS or reads. Caller
+cancellation does not terminate a worker. See the configuration guide for
+deadlines, transport bounds, compatibility, and memory-erasure limits.
+
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
 `PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_RATE_LIMIT`,

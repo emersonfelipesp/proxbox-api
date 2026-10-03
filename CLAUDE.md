@@ -326,6 +326,25 @@ When adding a new runtime tunable, default to making it a `ProxboxPluginSettings
 resolves **env var (override) → `ProxboxPluginSettings` → built-in default** with a
 5-minute settings cache (`proxbox_api/settings_client.py::get_settings`).
 
+Runtime key disclosure requires the plugin's active superuser or explicit per-user
+sensitive-data grant. Only HTTP 404 permits metadata compatibility; never
+fallback after authorization, transport, or other runtime failures. Metadata
+compatibility must strip encryption_key. Both requests share timeout allocation,
+not a hard blocking-duration bound. Synchronous DNS, construction, and reads can
+exceed it. The grant does not confer object visibility or provider/write authority.
+Ordinary settings, caches, and overrides never retain encryption_key.
+plugin_key_authority.py binds uncached runtime checks to immutable default-client
+inputs and an opaque generation. Every plugin-root or Fernet acquisition checks
+fresh authorization and exact settings-row visibility. Retired generations and
+failed checks cannot use local, plaintext, development-seed, or alternate-client
+fallback. Explicit reset and default-client reselection are required to replace
+a retired source. Independent operator-selected keys retain their own cache.
+Refuse circular encrypted-token bootstrap before creating a client. Keep
+authority I/O outside locks and the event loop. The two-second authority window
+rejects late results; it does not interrupt blocking DNS or reads. Caller
+cancellation does not terminate a worker. See the configuration guide for
+deadlines, transport bounds, compatibility, and memory-erasure limits.
+
 Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
 connection exists or is **operator-only infrastructure** that has no business in the UI:
 `PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, `PROXBOX_RATE_LIMIT`,
@@ -352,7 +371,7 @@ the `netbox-proxbox` side, do all five — the existing fields in
 - `PROXBOX_SKIP_NETBOX_BOOTSTRAP`: skips default NetBox bootstrap at startup.
 - `PROXBOX_GENERATED_DIR`: override output directory for the schema generator CLI (`proxbox-schema`); default is `$XDG_DATA_HOME/proxbox/generated/proxmox` (typically `~/.local/share/proxbox/generated/proxmox`).
 - `PROXBOX_RUNTIME_CODEGEN_ENABLED`: development-only process opt-in for HTTP schema generation, runtime route refresh, user-generated schema discovery, and user-schema source rendering. Defaults to `false`; production must leave it disabled.
-- `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. The raw value is hashed with SHA-256 to derive a Fernet key. Resolution order: env var > `ProxboxPluginSettings.encryption_key` (configurable from the NetBox plugin settings page) > local key file (default `<repo_root>/data/encryption.key`, managed via the `/admin/encryption/*` endpoints) > none. Startup never aborts; instead, when no key is configured, **credential writes are refused at the write sink** (`encrypt_value`) unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` is set — a deny-by-default guard that keeps the service running (reads and non-credential writes work) while preventing silent plaintext secret storage.
+- `PROXBOX_ENCRYPTION_KEY`: secret key used to encrypt credentials (NetBox token, Proxmox password/token) at rest in the local SQLite database. SHA-256 derives the Fernet key. Initial selection uses the environment key, then the private generation-bound plugin runtime root, then an independently configured local file (default `<repo_root>/data/encryption.key`), then no source. Environment and local sources retain their cache. A selected plugin source requires fresh runtime authorization for every cryptographic acquisition; refusal or retirement does not permit fallback. A missing source blocks nonempty credential writes unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` explicitly enables lab-only plaintext storage. An encrypted service token without an independently available bootstrap key is refused before client construction.
 - `PROXBOX_ENCRYPTION_KEY_FILE`: optional override for the local key file path used when neither the env var nor the plugin settings provide a key. Defaults to `<repo_root>/data/encryption.key`.
 - `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS`: explicit opt-in for plaintext credential storage. With no encryption key configured, credential **writes** (endpoint create/update that store a secret) are refused unless this is set to `1`/`true`/`yes`; reads and the rest of the service keep working. Use only in dev/tests.
 - `PROXBOX_SSH_KEY_DIR`: directory prefix for private keys accepted by Cloud Image Build Pipeline remote execution (`ssh_identity_file`). Defaults to `/etc/proxbox/ssh_keys`; request paths must resolve under this directory before `ssh -i` is constructed.

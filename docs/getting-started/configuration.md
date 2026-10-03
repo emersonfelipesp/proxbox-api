@@ -122,11 +122,13 @@ The optional database endpoint fields `timeout`, `max_retries`, and
 are null. Explicit endpoint values take precedence, including zero retries or
 zero retry backoff. A database load with no endpoints, or with concrete values
 for every endpoint, performs no plugin-settings request. When inheritance is
-needed, one shared lookup uses a bounded total request budget and falls back to
-the documented defaults without caching that temporary fallback. Encrypted
-database credentials use the same bounded lookup for the plugin encryption key;
-if no environment, plugin, or local key can decrypt them, endpoint loading fails
-with `503` and never forwards ciphertext as a Proxmox credential.
+needed, one shared metadata lookup limits its async caller to 0.5 seconds and
+falls back to documented defaults without caching that temporary fallback.
+Metadata never supplies the encryption key. Each plugin-backed credential
+acquisition uses separate fresh private authority, including legacy plaintext.
+The metadata deadline does not bound credential authorization. Refused authority
+or unresolved ciphertext fails with `503`; ciphertext never becomes a Proxmox
+credential. A timed-out metadata worker can continue after its caller returns.
 
 ### Node device name template
 
@@ -486,9 +488,72 @@ requests the short-lived upstream Proxmox ticket.
 proxbox-api resolves the encryption key using the following priority chain:
 
 1. **`PROXBOX_ENCRYPTION_KEY` environment variable** — highest priority, takes effect immediately on startup.
-2. **`ProxboxPluginSettings.encryption_key`** — fetched from the NetBox plugin settings API (configurable on the `/plugins/proxbox/settings/` page in NetBox). Checked only if the env var is not set.
-3. **Local key file** — `PROXBOX_ENCRYPTION_KEY_FILE`, or the default `<repo_root>/data/encryption.key`, after the first two sources are empty.
-4. **None** — no key configured. Startup and non-credential operations remain available, but credential writes are refused unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` explicitly opts into lab-only plaintext storage. A `CRITICAL` warning is logged.
+2. **`ProxboxPluginSettings.encryption_key`** — retrieved through the private runtime authority bound to the default NetBox service client. Each plugin-root acquisition requires a new authorized runtime response. Ordinary metadata cannot select this source.
+3. **Local key file** — `PROXBOX_ENCRYPTION_KEY_FILE`, or the default `<repo_root>/data/encryption.key`. Initial source selection may use this independently configured operator key when the plugin source is unavailable. It is not a fallback after a selected plugin source is revoked.
+4. **None** — no source configured. Non-credential operations remain available, but credential writes are refused unless `PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS` explicitly opts into lab-only plaintext storage. A `CRITICAL` warning is logged. A refused plugin authority is an error, not this state.
+
+### Runtime settings authorization
+
+The plugin runtime settings endpoint requires an active authenticated
+superuser or the explicit per-user `can_access_sensitive_data=True` grant.
+The grant defaults to `False`, and only active authenticated superusers can
+grant or revoke it. Existing model view/change permissions and staff status
+do not provide sensitive access.
+
+Use an operator-provisioned, explicitly flagged non-superuser service account
+when the backend must retrieve the plugin encryption key. Preserve its required
+object permissions, including view access to the plugin settings row. Do not
+create tokens through a browser export workflow or
+substitute another user's token to obtain sensitive access. The grant does not
+provide credential-provider reveal permission or infrastructure write authority.
+
+The settings client requests `/api/plugins/proxbox/settings/runtime/` first.
+Only HTTP 404 permits compatibility with `/api/plugins/proxbox/settings/`.
+That metadata response never supplies an encryption key, even if an older
+serializer includes one. HTTP 401, 403, transport failures, and other runtime
+errors return no payload and do not trigger metadata fallback. Both requests
+share one deadline for timeout allocation. Facade construction consumes that
+allocation, and fallback receives only the remaining time. This does not bound
+blocking wall-clock duration: synchronous DNS, construction, and response reads
+can take longer. All ordinary settings results, caches, and
+thread-local overrides remove the root key, including successful runtime results.
+
+The private key authority uses immutable connection inputs from the default
+NetBox service facade. It does not construct a new decrypting session to obtain
+the root. Every plugin-backed encryption, decryption, Fernet acquisition, and
+root-derived signing operation requires a fresh HTTP 200 runtime response with
+a nonempty key. This response proves both the current sensitive-data grant and
+view access to the exact settings row. There is no positive authorization cache
+or batch coalescing. Each acquisition uses a two-second socket timeout and a
+separate two-second result-acceptance window. An already-expired read does not
+start, and a response completed after that window is rejected. These checks do
+not interrupt synchronous DNS or an in-progress read. Blocking duration can
+exceed two seconds. Cancelling an async caller does not terminate its worker.
+Redirects, compressed responses, oversized bodies, malformed keys, and transport
+failures are refused with a fixed error. Async consumers must move synchronous
+authority work outside the event loop while retaining database-session ownership.
+
+Client invalidation, changed connection inputs, and final lifespan-owner release
+retire the bound generation and clear the associated derived key and Fernet
+references. A delayed result cannot restore retired material. The selected
+plugin source remains blocked until an explicit encryption-cache reset and
+default-client reselection; it cannot silently switch to another NetBox endpoint,
+an environment/local key, plaintext storage, or the development signing seed.
+Independent operator-selected environment and local keys keep their own cache.
+
+For cold startup, a NetBox service token encrypted under an unavailable plugin
+root cannot authenticate the request needed to retrieve that same root. The
+backend refuses this circular bootstrap before client construction. Provision an
+independently available operator key through the deployment secret mechanism.
+Do not use a stale root or another user's token as a bootstrap exception.
+
+WARNING: The encryption key is an administrative credential. Protect it with
+the deployment secret mechanism. Fresh checks prevent a new plugin-root
+acquisition after revocation. They do not recall bytes already returned, erase
+all Python memory copies, or cancel a cryptographic operation already admitted.
+This source policy does not establish caller authorization for every backend
+route. Revocation does not authorize deployment, key rotation, or a historical
+data purge.
 
 ### Setting the key
 

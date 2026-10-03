@@ -18,6 +18,11 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api.constants import NETBOX_SCHEMA_VERSION
 from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
 from proxbox_api.exception import ProxboxException
+from proxbox_api.plugin_key_authority import (
+    designate_default_plugin_authority,
+    invalidate_plugin_key_authority,
+    register_plugin_key_candidate,
+)
 from proxbox_api.runtime_settings import get_float
 from proxbox_api.services.interactive_policy import current_interactive_runtime
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
@@ -43,6 +48,18 @@ def _resolve_netbox_timeout() -> float:
     )
 
 
+def _require_decrypted_netbox_secret(raw: str | None, decrypted: str | None) -> str | None:
+    """Never bootstrap service authentication with unresolved stored ciphertext."""
+    if isinstance(raw, str) and raw.startswith("enc:"):
+        if decrypted is None or decrypted.startswith("enc:"):
+            raise ProxboxException(
+                message="NetBox service authentication requires an independently available encryption key.",
+                http_status_code=503,
+                redact_log_details=True,
+            )
+    return decrypted
+
+
 def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
     """Build netbox-sdk Config from a stored NetBox endpoint (v1 or v2 tokens)."""
     tv = (endpoint.token_version or "v1").strip().lower()
@@ -51,11 +68,15 @@ def netbox_config_from_endpoint(endpoint: NetBoxEndpoint) -> Config:
             message="Invalid token version in stored endpoint",
             detail=f"Token version must be 'v1' or 'v2', got '{tv}'",
         )
-    decrypted_key = endpoint.get_decrypted_token_key()
+    decrypted_key = _require_decrypted_netbox_secret(
+        endpoint.token_key, endpoint.get_decrypted_token_key()
+    )
     key = decrypted_key.strip() if decrypted_key else None
     if tv == "v1":
         key = None
-    decrypted_token = endpoint.get_decrypted_token()
+    decrypted_token = _require_decrypted_netbox_secret(
+        endpoint.token, endpoint.get_decrypted_token()
+    )
     return Config(
         base_url=endpoint.url,
         token_version=tv,
@@ -73,6 +94,7 @@ _API_CACHE_LOCK = threading.Lock()
 _API_CACHE: dict[tuple[int, str], Api] = {}
 _RETIRED_APIS: list[Api] = []
 _API_CACHE_OWNERS = 0
+_API_CACHE_GENERATION = 0
 
 
 def _config_fingerprint(cfg: Config, ssl_verify: bool) -> str:
@@ -89,7 +111,10 @@ def _config_fingerprint(cfg: Config, ssl_verify: bool) -> str:
 
 def _detach_cached_apis(endpoint_id: int | None) -> list[Api]:
     """Retire one endpoint or detach every client at the shutdown boundary."""
+    global _API_CACHE_GENERATION
     with _API_CACHE_LOCK:
+        _API_CACHE_GENERATION += 1
+        invalidate_plugin_key_authority(endpoint_id)
         if endpoint_id is None:
             detached = list(_RETIRED_APIS) + list(_API_CACHE.values())
             _RETIRED_APIS.clear()
@@ -159,13 +184,15 @@ def acquire_netbox_api_cache_owner() -> None:
 
 async def release_netbox_api_cache_owner() -> None:
     """Release one lifespan owner and drain clients after the final owner exits."""
-    global _API_CACHE_OWNERS
+    global _API_CACHE_OWNERS, _API_CACHE_GENERATION
     detached: list[Api] = []
     with _API_CACHE_LOCK:
         if _API_CACHE_OWNERS <= 0:
             raise RuntimeError("NetBox API cache owner release without acquisition")
         _API_CACHE_OWNERS -= 1
         if _API_CACHE_OWNERS == 0:
+            _API_CACHE_GENERATION += 1
+            invalidate_plugin_key_authority()
             detached = list(_RETIRED_APIS) + list(_API_CACHE.values())
             _RETIRED_APIS.clear()
             _API_CACHE.clear()
@@ -176,19 +203,34 @@ async def release_netbox_api_cache_owner() -> None:
 def netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     """Instantiate netbox-sdk Api using NetBoxApiClient + Config (no string token shortcut)."""
     current_interactive_runtime()
+    with _API_CACHE_LOCK:
+        generation = _API_CACHE_GENERATION
     cfg = netbox_config_from_endpoint(endpoint)
     fingerprint = _config_fingerprint(cfg, bool(endpoint.verify_ssl))
     cache_key = (endpoint.id or 0, fingerprint)
     with _API_CACHE_LOCK:
+        if generation != _API_CACHE_GENERATION:
+            raise ProxboxException(
+                message="NetBox client generation changed during acquisition.",
+                http_status_code=503,
+            )
         cached = _API_CACHE.get(cache_key)
         if cached is not None:
+            register_plugin_key_candidate(cached, cfg, endpoint_id=cache_key[0])
             return cached
         api = Api(
             client=NetBoxApiClient(cfg),
             schema=build_schema_index(version=NETBOX_SCHEMA_VERSION),
         )
         _API_CACHE[cache_key] = api
+        register_plugin_key_candidate(api, cfg, endpoint_id=cache_key[0])
         return api
+
+
+def _default_netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
+    api = netbox_api_from_endpoint(endpoint)
+    designate_default_plugin_authority(api)
+    return api
 
 
 def get_netbox_session(
@@ -248,7 +290,7 @@ def get_netbox_session(
                 detail="Unable to select endpoint from database",
             )
 
-        return netbox_api_from_endpoint(netbox_endpoint)
+        return _default_netbox_api_from_endpoint(netbox_endpoint)
 
     except ProxboxException:
         raise
@@ -289,7 +331,7 @@ async def get_netbox_async_session(
                     message=f"NetBox endpoint {netbox_id} not found",
                     detail=f"No endpoint with ID {netbox_id}",
                 )
-            return netbox_api_from_endpoint(netbox_endpoint)
+            return await asyncio.to_thread(netbox_api_from_endpoint, netbox_endpoint)
 
         # Fetch all enabled endpoints to determine how many exist
         endpoints = cast(
@@ -328,7 +370,7 @@ async def get_netbox_async_session(
                 detail="Unable to select endpoint from database",
             )
 
-        return netbox_api_from_endpoint(netbox_endpoint)
+        return await asyncio.to_thread(_default_netbox_api_from_endpoint, netbox_endpoint)
 
     except ProxboxException:
         raise

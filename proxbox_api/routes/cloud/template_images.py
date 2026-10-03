@@ -360,7 +360,7 @@ async def _resolve_preflight_target(
     # The loader check preserves the exact-one database-session invariant, but
     # its rows may share this SQLAlchemy identity map. Build credentials from
     # the same explicitly refreshed snapshot used for plan and SSH validation.
-    schema = proxmox_session_schema_from_endpoint(endpoint_snapshot)
+    schema = await asyncio.to_thread(proxmox_session_schema_from_endpoint, endpoint_snapshot)
     try:
         proxmox = await ProxmoxSession.create(schema, initialize_metadata=False)
     except Exception:  # noqa: BLE001 - never expose endpoint credentials upstream
@@ -459,7 +459,8 @@ async def preflight_cloud_image_template(
         )
         if not response.ready or req.recipe_digest is None:
             return response
-        claims, plan_digest, plan_token = issue_packer_plan(
+        claims, plan_digest, plan_token = await asyncio.to_thread(
+            issue_packer_plan,
             endpoint=endpoint,
             target=req.build_target(),
             recipe_digest=req.recipe_digest,

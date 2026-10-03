@@ -14,6 +14,76 @@ from proxbox_api.routes.virtualization.virtual_machines import helpers as vm_hel
 from proxbox_api.services import proxmox_helpers
 
 
+@pytest.mark.parametrize("status", [None, 401, 403, 422, 429, 500, 503])
+def test_runtime_settings_denial_never_uses_metadata_fallback(monkeypatch, status):
+    from unittest.mock import Mock
+
+    transport = Mock(return_value=(None, status))
+    monkeypatch.setattr(settings_client, "_request_settings_json", transport)
+    result = settings_client._fetch_settings_payload(
+        base_url="https://netbox.example.test",
+        auth="Token synthetic-service-token",
+        ssl_verify=True,
+        request_timeout_seconds=2.0,
+    )
+    assert result is None
+    assert transport.call_count == 1
+    assert transport.call_args.kwargs["path"] == "/api/plugins/proxbox/settings/runtime/"
+
+
+def test_legacy_settings_fallback_cannot_reveal_root_key(monkeypatch):
+    from unittest.mock import Mock
+
+    transport = Mock(
+        side_effect=[
+            (None, 404),
+            (
+                {
+                    "results": [
+                        {
+                            "encryption_key": "forbidden-root-key-sentinel",
+                            "interface_batch_size": 17,
+                        }
+                    ]
+                },
+                200,
+            ),
+        ]
+    )
+    monkeypatch.setattr(settings_client, "_request_settings_json", transport)
+    payload = settings_client._fetch_settings_payload(
+        base_url="https://netbox.example.test",
+        auth="Token synthetic-service-token",
+        ssl_verify=True,
+        request_timeout_seconds=2.0,
+    )
+    assert payload["encryption_key"] == ""
+    assert payload["interface_batch_size"] == 17
+    assert "forbidden-root-key-sentinel" not in repr(payload)
+
+
+@pytest.mark.parametrize("key", ["", "flagged-service-root-sentinel"])
+def test_runtime_contract_supports_constrained_service_without_ui_exports(monkeypatch, key):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    config = SimpleNamespace(
+        base_url="https://netbox.example.test",
+        token_version="v1",
+        token_secret="synthetic-service-token",
+        token_key=None,
+        ssl_verify=True,
+    )
+    session = SimpleNamespace(client=SimpleNamespace(config=config))
+    transport = Mock(return_value=({"encryption_key": key, "interface_batch_size": 17}, 200))
+    monkeypatch.setattr(settings_client, "_request_settings_json", transport)
+    result = settings_client.fetch_settings_from_netbox(session)
+    assert result["encryption_key"] == ""
+    assert result["interface_batch_size"] == 17
+    transport.assert_called_once()
+    assert transport.call_args.kwargs["path"] == "/api/plugins/proxbox/settings/runtime/"
+
+
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on", " TRUE "])
 def test_runtime_codegen_process_opt_in_accepts_only_true_values(monkeypatch, value):
     monkeypatch.setenv("PROXBOX_RUNTIME_CODEGEN_ENABLED", value)
@@ -159,7 +229,31 @@ def test_guest_agent_timeout_env_overrides_default(monkeypatch):
     assert proxmox_helpers._resolve_guest_agent_timeout() == 39
 
 
-def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("backend_log_file_path", "/srv/log/proxbox-api.log"),
+        ("primary_ip_preference", "ipv6"),
+        ("encryption_key", ""),
+        ("delete_orphans", True),
+        ("reconciliation_engine", "rust"),
+        ("reconciliation_compare_strict", True),
+        ("hardware_discovery_enabled", True),
+        ("hardware_discovery_sync_nic_macs", True),
+        ("cloud_network_lock_enabled", True),
+        ("cloud_customer_prefix_id", 321),
+        ("cloud_customer_bridge", "vmbr1"),
+        ("cloud_customer_vlan_tag", 2050),
+        ("cloud_customer_gateway", "168.0.98.1"),
+        ("backup_batch_delay_ms", 0),
+        ("bulk_batch_delay_ms", 0),
+        ("ceph_task_timeout", 420.5),
+        ("ceph_task_poll_interval", 2.5),
+        ("ceph_run_lease_seconds", 480.0),
+        ("node_device_name_template", "{node}.{cluster_slug}.example.com"),
+    ],
+)
+def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch, field, expected):
     import json
     from unittest.mock import MagicMock
 
@@ -211,27 +305,11 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch):
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
-    assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
-    assert settings["primary_ip_preference"] == "ipv6"
-    assert settings["encryption_key"] == "my-plugin-key"
-    assert settings["delete_orphans"] is True
-    assert settings["reconciliation_engine"] == "rust"
-    assert settings["reconciliation_compare_strict"] is True
+    assert settings[field] == expected
+    if isinstance(expected, bool):
+        assert settings[field] is expected
     assert "custom_fields_enabled" not in settings
     assert "custom_fields_request_delay" not in settings
-    assert settings["hardware_discovery_enabled"] is True
-    assert settings["hardware_discovery_sync_nic_macs"] is True
-    assert settings["cloud_network_lock_enabled"] is True
-    assert settings["cloud_customer_prefix_id"] == 321
-    assert settings["cloud_customer_bridge"] == "vmbr1"
-    assert settings["cloud_customer_vlan_tag"] == 2050
-    assert settings["cloud_customer_gateway"] == "168.0.98.1"
-    assert settings["backup_batch_delay_ms"] == 0
-    assert settings["bulk_batch_delay_ms"] == 0
-    assert settings["ceph_task_timeout"] == 420.5
-    assert settings["ceph_task_poll_interval"] == 2.5
-    assert settings["ceph_run_lease_seconds"] == 480.0
-    assert settings["node_device_name_template"] == "{node}.{cluster_slug}.example.com"
 
 
 def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatch):
@@ -651,6 +729,105 @@ def test_get_settings_falls_back_when_raw_session_unavailable(monkeypatch):
     settings_client.invalidate_settings_cache()
     result = settings_client.get_settings(netbox_session=None, use_cache=False)
     assert result == {"fallback": True}
+
+
+def test_failed_settings_fetch_releases_single_flight_for_retry(monkeypatch):
+    """An acquisition failure cannot leave later metadata callers blocked."""
+    from unittest.mock import Mock
+
+    session = object()
+    transport = Mock(side_effect=[RuntimeError("synthetic fetch failure"), {"proxmox_timeout": 23}])
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", transport)
+    settings_client.invalidate_settings_cache()
+    with pytest.raises(RuntimeError, match="synthetic fetch failure"):
+        settings_client.get_settings(netbox_session=session, use_cache=False)
+    assert settings_client._SETTINGS_FETCH_IN_PROGRESS is False
+    assert settings_client._SETTINGS_CACHE is None
+    assert not hasattr(settings_client._SETTINGS_THREAD_LOCAL, "fetch_depth")
+    recovered = settings_client.get_settings(netbox_session=session, use_cache=False)
+    assert recovered == {"proxmox_timeout": 23}
+    assert transport.call_count == 2
+
+
+def test_expired_settings_cache_fetches_fresh_metadata(monkeypatch):
+    """An expired metadata result cannot prevent a fresh acquisition."""
+    from unittest.mock import Mock
+
+    transport = Mock(return_value={"proxmox_timeout": 31})
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", transport)
+    monkeypatch.setattr(settings_client, "_SETTINGS_CACHE", {"proxmox_timeout": 13})
+    monkeypatch.setattr(settings_client, "_SETTINGS_CACHE_TIME", 0.0)
+    monkeypatch.setattr(settings_client.time, "time", lambda: 301.0)
+    result = settings_client.get_settings(netbox_session=object())
+    assert result == {"proxmox_timeout": 31}
+    transport.assert_called_once()
+
+
+def test_nested_metadata_overrides_restore_the_previous_scope(monkeypatch):
+    """Metadata overrides end at their scope and do not leak into later calls."""
+    from unittest.mock import Mock
+
+    outer = {**settings_client.get_default_settings(), "proxmox_timeout": 21}
+    inner = {**settings_client.get_default_settings(), "proxmox_timeout": 22}
+    transport = Mock(return_value={"proxmox_timeout": 23})
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", transport)
+    with settings_client.override_settings_for_current_thread(outer):
+        assert settings_client.get_settings()["proxmox_timeout"] == 21
+        with settings_client.override_settings_for_current_thread(inner):
+            assert settings_client.get_settings()["proxmox_timeout"] == 22
+        assert settings_client.get_settings()["proxmox_timeout"] == 21
+    transport.assert_not_called()
+    assert not hasattr(settings_client._SETTINGS_THREAD_LOCAL, "override")
+    result = settings_client.get_settings(netbox_session=object(), use_cache=False)
+    assert result == {"proxmox_timeout": 23}
+
+
+def test_recursive_metadata_lookup_uses_defaults_without_acquiring_facade(monkeypatch):
+    """Same-thread recursion cannot acquire the single-flight owner again."""
+    from unittest.mock import Mock
+
+    session_factory = Mock(side_effect=AssertionError("unexpected recursive facade"))
+    monkeypatch.setattr(settings_client, "_settings_session", session_factory)
+    monkeypatch.setattr(settings_client._SETTINGS_THREAD_LOCAL, "fetch_depth", 1, raising=False)
+    result = settings_client.get_settings()
+    assert result == settings_client.get_default_settings()
+    session_factory.assert_not_called()
+
+
+def test_settings_facade_failure_uses_fixed_secret_free_log(monkeypatch):
+    """Default facade failures must not put exception payloads in metadata logs."""
+    from unittest.mock import Mock
+
+    failure = Mock(side_effect=RuntimeError("credential-bearing-error-sentinel"))
+    log = Mock()
+    monkeypatch.setattr("proxbox_api.app.netbox_session.get_raw_netbox_session", failure)
+    monkeypatch.setattr(settings_client, "logger", log)
+    assert settings_client._settings_session(None) is None
+    log.debug.assert_called_once_with("Could not get NetBox session for settings")
+
+
+def test_expired_settings_budget_never_constructs_facade(monkeypatch):
+    """An already expired request cannot begin facade or transport work."""
+    from unittest.mock import Mock
+
+    session_factory = Mock(side_effect=AssertionError("unexpected facade construction"))
+    monkeypatch.setattr(settings_client, "_settings_session", session_factory)
+    monkeypatch.setattr(settings_client.time, "monotonic", lambda: 10.0)
+    assert settings_client._fetch_settings_with_deadline(None, deadline=9.0) is None
+    session_factory.assert_not_called()
+
+
+def test_facade_construction_consumes_settings_budget(monkeypatch):
+    """Facade construction cannot reset the caller's absolute transport deadline."""
+    from unittest.mock import Mock
+
+    times = iter([1.0, 3.0])
+    transport = Mock(side_effect=AssertionError("unexpected transport after deadline"))
+    monkeypatch.setattr(settings_client.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(settings_client, "_settings_session", lambda _session: object())
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", transport)
+    assert settings_client._fetch_settings_with_deadline(None, deadline=2.0) is None
+    transport.assert_not_called()
 
 
 def test_bounded_settings_fallback_does_not_poison_shared_cache(monkeypatch):

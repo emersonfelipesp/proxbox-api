@@ -25,6 +25,7 @@ import hmac
 import os
 import secrets
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -32,17 +33,27 @@ from cryptography.fernet import Fernet
 
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
+from proxbox_api.plugin_key_authority import (
+    PluginKeyAuthorityError,
+    PluginKeyBinding,
+    get_fresh_plugin_key,
+    reset_plugin_key_selection,
+)
 
 if TYPE_CHECKING:
     pass
 
+KeySource = Literal["env", "plugin", "local"]
+
 _ENCRYPTION_KEY: bytes | None = None
 _FERNET: Fernet | None = None
+_FERNET_KEY: bytes | None = None
+_KEY_SOURCE: KeySource | None = None
+_PLUGIN_KEY_BINDING: PluginKeyBinding | None = None
+_KEY_EPOCH = 0
 _ENCRYPTION_WARNING_LOGGED: bool = False
 _KEY_LOCK = threading.Lock()
 _PROCESS_SERVICE_KEY = secrets.token_bytes(32)
-
-KeySource = Literal["env", "plugin", "local"]
 
 _DEFAULT_KEY_FILE = Path(__file__).resolve().parent.parent / "data" / "encryption.key"
 
@@ -71,82 +82,108 @@ def _resolve_local_key_file() -> str:
         return ""
 
 
-def _resolve_raw_key_with_source() -> tuple[str, KeySource | None]:
+@dataclass(frozen=True, slots=True, repr=False)
+class _ResolvedKey:
+    raw_key: str = field(repr=False)
+    source: KeySource | None
+    binding: PluginKeyBinding | None = None
+
+
+def _resolve_initial_key() -> _ResolvedKey:
     raw_key = os.environ.get("PROXBOX_ENCRYPTION_KEY", "").strip()
     if raw_key:
-        return raw_key, "env"
+        return _ResolvedKey(raw_key, "env")
     try:
-        from proxbox_api.settings_client import get_settings
-
-        settings = get_settings()
-        plugin_key = (settings.get("encryption_key") or "").strip()
-        if plugin_key:
-            return plugin_key, "plugin"
-    except Exception as exc:
-        # Don't silently swallow — surface at WARNING so misconfigured settings
-        # backends are visible. Caller still falls back to local + plaintext checks.
-        logger.warning("Could not load encryption_key from plugin settings: %s", exc)
-
+        material = get_fresh_plugin_key()
+    except PluginKeyAuthorityError:
+        # Initial selection may use an independently configured operator key.
+        local_key = _resolve_local_key_file()
+        if local_key:
+            return _ResolvedKey(local_key, "local")
+        raise
+    if material is not None:
+        return _ResolvedKey(material.raw_key, "plugin", material.binding)
     local_key = _resolve_local_key_file()
     if local_key:
-        return local_key, "local"
-    return "", None
+        return _ResolvedKey(local_key, "local")
+    return _ResolvedKey("", None)
 
 
-def _resolve_raw_key() -> str:
-    return _resolve_raw_key_with_source()[0]
+def _publish_current_key_locked(resolved: _ResolvedKey) -> bytes | None:
+    """The caller owns the key lock and has verified source-generation identity."""
+    global _ENCRYPTION_KEY, _KEY_SOURCE, _PLUGIN_KEY_BINDING, _FERNET, _FERNET_KEY
+    if _ENCRYPTION_KEY is not None and _KEY_SOURCE != "plugin":
+        return _ENCRYPTION_KEY
+    if not resolved.raw_key:
+        return None
+    derived = hashlib.sha256(resolved.raw_key.encode()).digest()
+    if _ENCRYPTION_KEY != derived:
+        _FERNET = None
+        _FERNET_KEY = None
+    _ENCRYPTION_KEY = derived
+    _KEY_SOURCE = resolved.source
+    _PLUGIN_KEY_BINDING = resolved.binding
+    return _ENCRYPTION_KEY
+
+
+def _key_publication_conflicts(resolved: _ResolvedKey, *, epoch: int) -> bool:
+    if epoch != _KEY_EPOCH:
+        return True
+    return _KEY_SOURCE == "plugin" and (
+        resolved.source != "plugin" or resolved.binding != _PLUGIN_KEY_BINDING
+    )
+
+
+def _publish_key_material(resolved: _ResolvedKey, *, epoch: int) -> bytes | None:
+    """Never log, request authority, or publish a retired result under the key lock."""
+    with _KEY_LOCK:
+        if not _key_publication_conflicts(resolved, epoch=epoch):
+            return _publish_current_key_locked(resolved)
+    raise PluginKeyAuthorityError()
 
 
 def _get_encryption_key() -> bytes | None:
-    """Get the encryption key from environment variable or ProxboxPluginSettings.
-
-    The key is derived using SHA-256 to ensure it's exactly 32 bytes
-    (Fernet requirement). Priority: env var > ProxboxPluginSettings > None.
-    Returns None when no key is configured.
-    """
-    global _ENCRYPTION_KEY
+    """Operator keys cache independently; every plugin-root use authorizes afresh."""
     with _KEY_LOCK:
-        if _ENCRYPTION_KEY is not None:
+        source, binding, epoch = _KEY_SOURCE, _PLUGIN_KEY_BINDING, _KEY_EPOCH
+        if _ENCRYPTION_KEY is not None and source != "plugin":
             return _ENCRYPTION_KEY
-
-    # Do not hold _KEY_LOCK while resolving plugin settings. Settings lookup may
-    # need to build a NetBox session, which can decrypt stored endpoint tokens and
-    # re-enter this function before the first lookup completes.
-    raw_key = _resolve_raw_key()
-    if not raw_key:
-        return None
-
-    derived_key = hashlib.sha256(raw_key.encode()).digest()
-    with _KEY_LOCK:
-        if _ENCRYPTION_KEY is None:
-            _ENCRYPTION_KEY = derived_key
-        return _ENCRYPTION_KEY
+    if source == "plugin":
+        if binding is None:
+            raise PluginKeyAuthorityError()
+        material = get_fresh_plugin_key(expected_binding=binding)
+        if material is None:
+            raise PluginKeyAuthorityError()
+        resolved = _ResolvedKey(material.raw_key, "plugin", material.binding)
+    else:
+        resolved = _resolve_initial_key()
+    return _publish_key_material(resolved, epoch=epoch)
 
 
 def _get_fernet() -> Fernet | None:
-    """Get or create the Fernet instance."""
-    global _FERNET, _ENCRYPTION_WARNING_LOGGED
-    with _KEY_LOCK:
-        if _FERNET is not None:
-            return _FERNET
-
+    """Authorize the key before considering a cached Fernet instance."""
+    global _FERNET, _FERNET_KEY, _ENCRYPTION_WARNING_LOGGED
     key = _get_encryption_key()
     if key is None:
         with _KEY_LOCK:
-            if not _ENCRYPTION_WARNING_LOGGED:
-                logger.critical(
-                    "Credential encryption is DISABLED. "
-                    "Set PROXBOX_ENCRYPTION_KEY to encrypt credentials at rest. "
-                    "Credential writes are refused unless the lab-only plaintext opt-in is set."
-                )
-                _ENCRYPTION_WARNING_LOGGED = True
+            warn = not _ENCRYPTION_WARNING_LOGGED
+            _ENCRYPTION_WARNING_LOGGED = True
             _FERNET = None
+        if warn:
+            logger.critical(
+                "Credential encryption is DISABLED. "
+                "Set PROXBOX_ENCRYPTION_KEY to encrypt credentials at rest. "
+                "Credential writes are refused unless the lab-only plaintext opt-in is set."
+            )
         return None
 
     with _KEY_LOCK:
-        if _FERNET is None:
-            _FERNET = Fernet(base64.urlsafe_b64encode(key))
-        return _FERNET
+        if _ENCRYPTION_KEY == key:
+            if _FERNET is None or _FERNET_KEY != key:
+                _FERNET = Fernet(base64.urlsafe_b64encode(key))
+                _FERNET_KEY = key
+            return _FERNET
+    raise PluginKeyAuthorityError()
 
 
 def assert_encryption_configured() -> None:
@@ -154,8 +191,9 @@ def assert_encryption_configured() -> None:
 
     Startup is no longer aborted when no key is configured: the operator can set
     one later via ``PROXBOX_ENCRYPTION_KEY``, ``ProxboxPluginSettings.encryption_key``,
-    or the ``/admin/encryption/*`` endpoints. Without a key, credentials are stored
-    in plaintext and a CRITICAL log is emitted on first encryption attempt.
+    or the ``/admin/encryption/*`` endpoints. Without a source, nonempty credential
+    writes are refused unless lab-only plaintext storage is explicitly enabled.
+    A denied or retired plugin source raises instead of becoming a no-key state.
     """
     if _get_encryption_key() is not None:
         return
@@ -206,17 +244,44 @@ def derive_service_signing_key(context: str) -> bytes:
 
 
 def get_encryption_source() -> KeySource | None:
-    """Return where the active encryption key came from, or None if unset."""
-    return _resolve_raw_key_with_source()[1]
+    """Report selected provenance, not an unrelated fresh source resolution."""
+    with _KEY_LOCK:
+        source = _KEY_SOURCE
+    if source is not None:
+        return source
+    _get_encryption_key()
+    with _KEY_LOCK:
+        return _KEY_SOURCE
+
+
+def retire_plugin_key_material(endpoint_id: int | None = None) -> None:
+    """Release derived material without turning retired plugin authority into fallback."""
+    global _ENCRYPTION_KEY, _FERNET, _FERNET_KEY, _KEY_EPOCH
+    with _KEY_LOCK:
+        # Also reject an initial acquisition that has not published its source yet.
+        _KEY_EPOCH += 1
+        if _KEY_SOURCE != "plugin" or _PLUGIN_KEY_BINDING is None:
+            return
+        if endpoint_id is not None and _PLUGIN_KEY_BINDING.endpoint_id != endpoint_id:
+            return
+        _ENCRYPTION_KEY = None
+        _FERNET = None
+        _FERNET_KEY = None
 
 
 def reset_encryption_cache() -> None:
     """Reset the in-process key + Fernet cache so the next call re-resolves."""
-    global _ENCRYPTION_KEY, _FERNET, _ENCRYPTION_WARNING_LOGGED
+    global _ENCRYPTION_KEY, _FERNET, _FERNET_KEY, _ENCRYPTION_WARNING_LOGGED
+    global _KEY_SOURCE, _PLUGIN_KEY_BINDING, _KEY_EPOCH
     with _KEY_LOCK:
         _ENCRYPTION_KEY = None
         _FERNET = None
+        _FERNET_KEY = None
+        _KEY_SOURCE = None
+        _PLUGIN_KEY_BINDING = None
+        _KEY_EPOCH += 1
         _ENCRYPTION_WARNING_LOGGED = False
+    reset_plugin_key_selection()
 
 
 def set_local_encryption_key(value: str) -> Path:
@@ -327,9 +392,9 @@ def encrypt_value(plaintext: str | None) -> str | None:
 def decrypt_value(ciphertext: str | None) -> str | None:
     """Decrypt a ciphertext string.
 
-    Returns None if encryption is disabled or input is None.
-    Handles both encrypted ('enc:...') and plaintext values for
-    backwards compatibility during migration.
+    Returns None for absent input. A standalone instance without a configured
+    source preserves its historical passthrough behavior. A selected plugin
+    source requires fresh authorization even for legacy plaintext values.
     """
     if ciphertext is None:
         return None
