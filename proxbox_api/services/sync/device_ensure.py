@@ -786,13 +786,7 @@ async def _device_from_identity_sidecar(
         if (device_id := _relation_id_or_none(sidecar.get("device"))) is not None
     }
     if len(device_ids) > 1:
-        raise ProxboxException(
-            message="Ambiguous Proxmox node device identity",
-            detail=(
-                f"Multiple NetBox devices claim node {target.node_name!r} in "
-                f"cluster {target.cluster_name!r}."
-            ),
-        )
+        return await _disambiguate_sidecar_devices(nb, target, sorted(device_ids))
     if not device_ids:
         return None
     return await rest_first_async(
@@ -800,6 +794,61 @@ async def _device_from_identity_sidecar(
         "/api/dcim/devices/",
         query={"id": next(iter(device_ids)), "limit": 2},
     )
+
+
+async def _disambiguate_sidecar_devices(
+    nb: object,
+    target: _DeviceTarget,
+    device_ids: list[int],
+) -> NetBoxRecord | None:
+    """Resolve several identity sidecars that point at different NetBox devices.
+
+    Sidecars for deleted devices are stale and ignored. Device names are not
+    evidence: operators may rename a node device. Among the remaining devices the
+    target cluster decides ownership. A site match counts only for devices that
+    have no cluster, because a site can hold several clusters. Anything still
+    ambiguous fails closed so the wrong device is never adopted.
+    """
+    live: list[NetBoxRecord] = []
+    for device_id in device_ids:
+        record = await rest_first_async(
+            nb,
+            "/api/dcim/devices/",
+            query={"id": device_id, "limit": 2},
+        )
+        if record is not None:
+            live.append(record)
+    if len(live) <= 1:
+        return live[0] if live else None
+    placed = [
+        record
+        for record in live
+        if target.cluster_id is not None
+        and _relation_id_or_none(record.get("cluster")) == target.cluster_id
+    ]
+    if not placed:
+        placed = [
+            record
+            for record in live
+            if target.desired_site_id is not None
+            and _relation_id_or_none(record.get("cluster")) is None
+            and _relation_id_or_none(record.get("site")) == target.desired_site_id
+        ]
+    if len(placed) != 1:
+        raise ProxboxException(
+            message="Ambiguous Proxmox node device identity",
+            detail=(
+                f"Multiple NetBox devices claim node {target.node_name!r} in "
+                f"cluster {target.cluster_name!r}."
+            ),
+        )
+    logger.warning(
+        "Ignored conflicting identity sidecars for node %r in cluster %r (device ids %s)",
+        target.node_name,
+        target.cluster_name,
+        device_ids,
+    )
+    return placed[0]
 
 
 async def _resolve_existing_device_for_target(

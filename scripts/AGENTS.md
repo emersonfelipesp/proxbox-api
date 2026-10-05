@@ -1,0 +1,45 @@
+# scripts/ Directory Guide
+
+## Workspace Context
+
+This file lives at `<repository-root>/scripts/CLAUDE.md` inside the `personal-context` workspace.
+Workspace guidance: `/root/personal-context/CLAUDE.md`.
+Per-repo deep-dive: `/root/personal-context/claude-reference/proxbox-api.md`.
+Submodule layout and cross-repo links: `/root/personal-context/claude-reference/dependency-map.md`.
+
+---
+
+## Purpose
+
+Utility and maintenance scripts for the `proxbox-api` project. These are one-off or periodic scripts run by developers or CI, not part of the application runtime.
+
+## Files
+
+| File | Role |
+|------|------|
+| `check_public_boundary.py` | Fail-closed public-tree scanner for protected integration identities, bounded encoded forms, and nested archive members. Run with `--mutation-test` to prove the hostile corpus before publication. |
+| `release_artifacts.py` | Creates and verifies immutable package manifests, downloads the exact source-bound Gitea artifacts selected for deployment, validates the pinned Ed25519 host receipt, and publishes only independently re-read completion evidence. |
+| `mounted_operation_inventory.py` | Explicit isolated `generate`, `verify`, and `readiness` commands for the maintained mounted-operation contracts. The child denies sockets, database access and external writes before importing the application; it never runs lifespan or handlers. |
+| `check_promotion_ancestor_blobs.py` | Base-owned promotion guard that exhaustively traverses merge history and rejects a changed path when its proposed blob matches a strictly older state superseded on the exact base branch. |
+| `operation_inventory_docs.py` | Standard-library-only MkDocs pre-build integrity and source check. It does not import the application and fails on missing, stale or symlinked inventory evidence before restricted snippets render. |
+| `refresh_schemas.py` | Regenerates the backend's Proxmox proxy/viewer artifacts and NetBox OpenAPI snapshot in `proxbox_api/generated/`. Runtime Proxmox response validation is owned by the generated models packaged in the pinned `proxmox-sdk`; this script does not replace that authority. |
+| `prepare_offline_release.py` | Converts the reviewed `Dockerfile.release` plus a CI-populated wheelhouse into the canonical schema-2 offline context embedded only in release sdists. Its restricted Dockerfile reader keeps stage/order state in `_DockerfileState`, delegates each instruction type to a small reader, and checks complete image/cache/install invariants only after parsing. The `uv-source` and `raw` aliases, uv copy, wheel-cache copy, dependency sync, and project install are bound to their exact images and the actual `--target raw` stage. A final canonical-plan comparison rejects added, removed, reordered, or modified instructions so later writes cannot invalidate an already validated install. |
+| `verify_offline_release_sdist.py` | Streams a bounded release sdist into a new context, rehashes its exact offline wheelhouse/lock, and permits only the two literal pinned base images plus declared-stage `COPY --from` sources before the network-disabled CI Docker build. Its Dockerfile reader mirrors the preparer's state, instruction boundaries, and complete canonical plan so both sides enforce the same rule and error contract without a monolithic validator, including the exact `uv-source`/`raw` target binding and rejection of post-install mutations. The release gate separately binds that required GitHub job to the reviewed source-SHA workflow bytes. |
+
+## Running
+
+```bash
+uv run python scripts/refresh_schemas.py
+```
+
+After running, review diffs in `proxbox_api/generated/` before committing. The nightly schema refresh CI job (`.github/workflows/nightly-schema-refresh.yml`) runs this automatically.
+
+Do not copy these backend proxy/viewer models into sync validation. Sync helpers
+must import response models from the exactly pinned `proxmox-sdk` package so its
+generator constraints and runtime payload handling remain one reviewed contract.
+
+## Adding New Scripts
+
+- Name scripts descriptively: `<verb>_<noun>.py` (e.g., `seed_test_data.py`).
+- Keep scripts standalone — they should be runnable with `uv run python scripts/<name>.py` without additional setup.
+- Add an entry to this file when adding a new script.

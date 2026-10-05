@@ -1142,25 +1142,34 @@ def test_mounted_query_token_form_is_rejected_before_upstream_access(
     created = _create_browser_ticket(monkeypatch, auth_test_client, db_engine)
     consumer = AsyncMock(wraps=console_relay.consume_relay_session)
     opener = AsyncMock()
+    closer = AsyncMock(wraps=console._close_browser_socket)
     monkeypatch.setattr(console_relay, "consume_relay_session", consumer)
     monkeypatch.setattr(console_relay, "open_upstream", opener)
+    monkeypatch.setattr(console, "_close_browser_socket", closer)
 
-    with pytest.raises(WebSocketDisconnect) as rejected:
-        with auth_test_client.websocket_connect(
-            f"{created['websocket_path']}?token={created['stream_token']}",
-            headers={"origin": ORIGIN},
-            subprotocols=_browser_protocols(created),
-        ):
-            pass
+    # Starlette can mask the handshake rejection with a portal cancellation while
+    # unwinding under load, so the rejection itself is proven by the close call
+    # below, not by the helper's exception handling.
+    with rejected_websocket_session(
+        auth_test_client,
+        f"{created['websocket_path']}?token={created['stream_token']}",
+        headers={"origin": ORIGIN},
+        subprotocols=_browser_protocols(created),
+        expected_code=1008,
+    ):
+        consumer.assert_not_awaited()
+        opener.assert_not_awaited()
 
-    assert rejected.value.code == 1008
+    closer.assert_awaited_once()
+    assert closer.await_args.kwargs["code"] == 1008
     consumer.assert_not_awaited()
     opener.assert_not_awaited()
 
     upstream = _FakeUpstream()
     opener.return_value = upstream
     monkeypatch.setattr(console_relay, "relay_frames", AsyncMock())
-    with auth_test_client.websocket_connect(
+    with websocket_session(
+        auth_test_client,
         created["websocket_path"],
         headers={"origin": ORIGIN},
         subprotocols=_browser_protocols(created),
@@ -1188,19 +1197,25 @@ def test_mounted_invalid_protocol_offers_stop_before_consume_or_upstream(
     ]
     consumer = AsyncMock()
     opener = AsyncMock()
+    closer = AsyncMock(wraps=console._close_browser_socket)
     monkeypatch.setattr(console_relay, "consume_relay_session", consumer)
     monkeypatch.setattr(console_relay, "open_upstream", opener)
+    monkeypatch.setattr(console, "_close_browser_socket", closer)
 
     for subprotocols in offers:
-        with pytest.raises(WebSocketDisconnect) as rejected:
-            with auth_test_client.websocket_connect(
-                "/proxmox/console/browser-stream",
-                headers={"origin": ORIGIN},
-                subprotocols=subprotocols,
-            ):
-                pass
-        assert rejected.value.code == 1008
+        with rejected_websocket_session(
+            auth_test_client,
+            "/proxmox/console/browser-stream",
+            headers={"origin": ORIGIN},
+            subprotocols=subprotocols,
+            expected_code=1008,
+        ):
+            pass
 
+    # The rejection is proven by the server-side close, not by the client-side
+    # exception, which Starlette can replace with a portal cancellation.
+    assert closer.await_count == len(offers)
+    assert {call.kwargs["code"] for call in closer.await_args_list} == {1008}
     consumer.assert_not_awaited()
     opener.assert_not_awaited()
 
@@ -1291,14 +1306,18 @@ def test_policy_seam_can_deny_create_and_consume(
         raise console_relay_policy.ConsoleRelayPolicyDenied
 
     monkeypatch.setattr(console_relay_policy, "require_console_relay_policy", deny_consume)
-    with pytest.raises(WebSocketDisconnect) as rejected:
-        with auth_test_client.websocket_connect(
-            created["websocket_path"],
-            headers={"origin": ORIGIN},
-            subprotocols=_browser_protocols(created),
-        ):
-            pass
-    assert rejected.value.code == 1008
+    closer = AsyncMock(wraps=console._close_browser_socket)
+    monkeypatch.setattr(console, "_close_browser_socket", closer)
+    with rejected_websocket_session(
+        auth_test_client,
+        created["websocket_path"],
+        headers={"origin": ORIGIN},
+        subprotocols=_browser_protocols(created),
+        expected_code=1008,
+    ):
+        pass
+    closer.assert_awaited_once()
+    assert closer.await_args.kwargs["code"] == 1008
 
 
 def test_mounted_consume_rechecks_disabled_endpoint(
@@ -1313,15 +1332,19 @@ def test_mounted_consume_rechecks_disabled_endpoint(
         session.add(endpoint)
         session.commit()
     opener = AsyncMock()
+    closer = AsyncMock(wraps=console._close_browser_socket)
     monkeypatch.setattr(console_relay, "open_upstream", opener)
+    monkeypatch.setattr(console, "_close_browser_socket", closer)
 
-    with pytest.raises(WebSocketDisconnect) as rejected:
-        with auth_test_client.websocket_connect(
-            created["websocket_path"],
-            headers={"origin": ORIGIN},
-            subprotocols=_browser_protocols(created),
-        ):
-            pass
+    with rejected_websocket_session(
+        auth_test_client,
+        created["websocket_path"],
+        headers={"origin": ORIGIN},
+        subprotocols=_browser_protocols(created),
+        expected_code=1008,
+    ):
+        pass
 
-    assert rejected.value.code == 1008
+    closer.assert_awaited_once()
+    assert closer.await_args.kwargs["code"] == 1008
     opener.assert_not_awaited()

@@ -454,7 +454,7 @@ def test_documentation_does_not_claim_the_platform_upsert_patches_tags() -> None
     import pathlib
 
     repo_root = pathlib.Path(__file__).resolve().parent.parent
-    for name in ("CLAUDE.md", "AGENTS.md", "docs/sync/overwrite-flags.md"):
+    for name in ("AGENTS.md", "docs/sync/overwrite-flags.md"):
         text = (repo_root / name).read_text(encoding="utf-8")
         assert 'patchable_fields={"tags"}' not in text, (
             f"{name} still describes the platform upsert as patching tags; it is create-only"

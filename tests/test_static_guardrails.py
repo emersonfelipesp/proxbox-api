@@ -97,14 +97,14 @@ def test_readme_contains_llm_agent_safety_pointer():
 
 
 def test_claude_md_contains_safety_blockquote():
-    content = _read("CLAUDE.md")
+    content = _read("AGENTS.md")
     assert "LLM Agent Safety" in content, (
         "CLAUDE.md must contain an LLM Agent Safety blockquote at or near the top"
     )
 
 
 def test_claude_md_references_agents_md_guardrails():
-    content = _read("CLAUDE.md")
+    content = _read("AGENTS.md")
     assert "AGENTS.md" in content and "Guardrails" in content, (
         "CLAUDE.md safety blockquote must reference AGENTS.md §'LLM Agent Safety Guardrails'"
     )
