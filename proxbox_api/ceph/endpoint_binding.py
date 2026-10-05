@@ -231,6 +231,16 @@ class BoundProxmoxSession:
                 "endpoint_writes_disabled",
                 "The selected Proxmox endpoint has allow_writes=false.",
             )
+        # Copy loaded columns on the session's event loop. The worker only
+        # performs credential authorization and constant-time comparisons.
+        snapshot = ProxmoxEndpoint.model_validate(endpoint.model_dump())
+        await asyncio.to_thread(self._verify_configuration, snapshot, expected_revision)
+
+    def _verify_configuration(
+        self,
+        endpoint: ProxmoxEndpoint,
+        expected_revision: str | None,
+    ) -> None:
         current_revision = endpoint_configuration_revision(endpoint)
         expected_matches = expected_revision is None or hmac.compare_digest(
             expected_revision,
@@ -301,14 +311,19 @@ async def create_bound_proxmox_session(
                 "endpoint_disabled",
                 "The selected Proxmox endpoint is disabled.",
             )
-        schema = _parse_db_endpoint(endpoint)
+        snapshot = ProxmoxEndpoint.model_validate(endpoint.model_dump())
+        schema = await asyncio.to_thread(_parse_db_endpoint, snapshot)
         factory = session_factory or ProxmoxSession.create
         proxmox_session = await factory(schema)
-        bound = BoundProxmoxSession(
-            endpoint=endpoint,
+        bound = await asyncio.to_thread(
+            BoundProxmoxSession,
+            endpoint=snapshot,
             session=proxmox_session,
             binding_key=secrets.token_bytes(_SESSION_KEY_BYTES),
         )
+    except asyncio.CancelledError:
+        await _close_unbound_session(proxmox_session)
+        raise
     except CephWriteGateDenied:
         await _close_unbound_session(proxmox_session)
         raise

@@ -12,38 +12,34 @@ from __future__ import annotations
 import pytest
 
 import proxbox_api.credentials as creds_mod
+from proxbox_api import plugin_key_authority
 from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException
 
 
 @pytest.fixture(autouse=True)
-def reset_credential_globals():
-    """Clear the module-level key/Fernet cache before and after each test."""
-    creds_mod._ENCRYPTION_KEY = None
-    creds_mod._FERNET = None
-    creds_mod._ENCRYPTION_WARNING_LOGGED = False
+def reset_credential_globals(monkeypatch):
+    """Clear source provenance and isolate operator keys before and after each test."""
+    plugin_key_authority.invalidate_plugin_key_authority()
+    creds_mod.reset_encryption_cache()
+    monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(creds_mod, "_resolve_local_key_file", lambda: "")
     yield
-    creds_mod._ENCRYPTION_KEY = None
-    creds_mod._FERNET = None
-    creds_mod._ENCRYPTION_WARNING_LOGGED = False
+    plugin_key_authority.invalidate_plugin_key_authority()
+    creds_mod.reset_encryption_cache()
 
 
 @pytest.fixture
 def no_encryption_key(monkeypatch):
     """Force 'no key configured' deterministically (env, plugin settings, file)."""
     monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY", raising=False)
-    monkeypatch.setattr(creds_mod, "_resolve_raw_key_with_source", lambda: ("", None), raising=True)
+    monkeypatch.setattr(creds_mod, "get_fresh_plugin_key", lambda: None)
 
 
 @pytest.fixture
 def with_encryption_key(monkeypatch):
     """Force a resolvable key so encryption is active."""
-    monkeypatch.setattr(
-        creds_mod,
-        "_resolve_raw_key_with_source",
-        lambda: ("unit-test-secret-key", "env"),
-        raising=True,
-    )
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "unit-test-secret-key")
 
 
 def _deny_plaintext(monkeypatch):

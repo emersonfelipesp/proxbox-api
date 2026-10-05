@@ -2974,10 +2974,13 @@ def test_database_proxmox_encrypted_credential_timeout_stays_bounded_and_fails_c
     assert settings_calls == 1
 
 
-def test_database_proxmox_encrypted_credentials_use_single_bounded_settings_result(
+def test_database_proxmox_encrypted_credentials_require_separate_fresh_authority(
     monkeypatch,
 ):
+    from netbox_sdk.config import Config
+
     from proxbox_api import credentials as credentials_module
+    from proxbox_api import plugin_key_authority as authority
     from proxbox_api import settings_client as settings_client_module
 
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "provider-bounded-key")
@@ -3027,14 +3030,40 @@ def test_database_proxmox_encrypted_credentials_use_single_bounded_settings_resu
         ),
     )
     credentials_module.reset_encryption_cache()
+    authority.invalidate_plugin_key_authority()
+    config = Config(
+        base_url="https://synthetic-authority.example.test",
+        token_version="v1",
+        token_secret="synthetic-service-token",
+    )
+    facade = object()
+    authority.register_plugin_key_candidate(facade, config, endpoint_id=7)
+    authority.designate_default_plugin_authority(facade)
+    authority_calls: list[bool] = []
+
+    def _fresh_authority(_candidate):
+        authority_calls.append(True)
+        return "provider-bounded-key"
+
+    monkeypatch.setattr(authority, "_request_runtime_key", _fresh_authority)
     try:
         schemas = asyncio.run(
             proxmox_providers_module.load_proxmox_session_schemas(_AsyncDatabaseSession())
         )
     finally:
+        authority.invalidate_plugin_key_authority()
         credentials_module.reset_encryption_cache()
 
     assert settings_calls == 1
+    _assert_fresh_provider_credentials(
+        schemas, authority_calls, encrypted_password, encrypted_token
+    )
+
+
+def _assert_fresh_provider_credentials(
+    schemas, authority_calls, encrypted_password, encrypted_token
+):
+    assert authority_calls == [True, True]
     assert len(schemas) == 1
     assert schemas[0].password == "decrypted-password"
     assert schemas[0].token.value == "decrypted-token"

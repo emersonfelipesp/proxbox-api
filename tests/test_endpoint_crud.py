@@ -7,8 +7,11 @@ and DB persistence via the overridden get_session dependency.
 
 from __future__ import annotations
 
+import socket
 import threading
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -24,6 +27,51 @@ from proxbox_api.routes.proxmox.endpoints import (
     _endpoint_update_changes,
     update_proxmox_endpoint,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_endpoint_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep endpoint CRUD and bootstrap probes inside synthetic I/O boundaries."""
+    from proxbox_api import settings_client
+    from proxbox_api.netbox_probe import NetBoxProbeResult
+    from proxbox_api.routes import netbox as netbox_routes
+
+    monkeypatch.setattr(
+        netbox_routes,
+        "probe_netbox_endpoint",
+        AsyncMock(
+            return_value=NetBoxProbeResult(reachable=True, status="reachable", api_version="test")
+        ),
+    )
+    monkeypatch.setattr(settings_client, "_request_settings_json", Mock(return_value=(None, 403)))
+
+    attempted_io: list[str] = []
+
+    def guard(method: str) -> Callable[..., Any]:
+        original = getattr(socket.socket, method)
+
+        def guarded(sock: socket.socket, *args: Any, **kwargs: Any) -> Any:
+            if sock.family in (socket.AF_INET, socket.AF_INET6):
+                attempted_io.append(method)
+                raise AssertionError(
+                    "External network is forbidden in isolated endpoint CRUD tests."
+                )
+            return original(sock, *args, **kwargs)
+
+        return guarded
+
+    for method in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, method, guard(method))
+
+    def block_name_resolution(*args: Any, **kwargs: Any) -> None:
+        attempted_io.append("name_resolution")
+        raise AssertionError("DNS is forbidden in isolated endpoint CRUD tests.")
+
+    for method in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr"):
+        monkeypatch.setattr(socket, method, block_name_resolution)
+    yield
+    assert not attempted_io, "An isolated endpoint test attempted external network I/O."
+
 
 _PERSISTED_UPDATE_VALUES = {
     "name": "pve-complete",
@@ -180,7 +228,8 @@ async def test_credential_noop_resolves_cold_key_off_event_loop(
     )
 
     assert result.id == 1
-    assert settings_threads
+    # Identical credential payloads are a true no-op: no settings fetch or crypto work.
+    assert settings_threads == []
     credentials.reset_encryption_cache()
 
 

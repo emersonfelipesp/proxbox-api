@@ -161,7 +161,7 @@ async def create_relay_session(
 ) -> tuple[str, float]:
     """Encrypt and persist a bounded one-use token under an atomic count cap."""
 
-    encrypted = _encrypt_relay_payload(payload)
+    encrypted = await asyncio.to_thread(_encrypt_relay_payload, payload)
     timestamp = time.time() if now is None else now
     return await _store_relay_session(session, encrypted, timestamp)
 
@@ -237,7 +237,7 @@ async def consume_relay_session(
         raise ConsoleRelayRejected("Browser console session is invalid.")
     timestamp = time.time() if now is None else now
     row = await _consume_relay_row(session, token)
-    return _decrypt_relay_row(row, timestamp)
+    return await asyncio.to_thread(_decrypt_relay_row, row, timestamp)
 
 
 async def _consume_relay_row(

@@ -1171,6 +1171,48 @@ Violating these invariants breaks production cloud provisioning.
 
 ## Configuration policy
 
+**Prefer DB-backed plugin settings over `.env` variables.**
+When adding a new runtime tunable, default to making it a `ProxboxPluginSettings` field
+(NetBox-UI-editable, persisted in the NetBox database) and read it via
+`proxbox_api.runtime_settings.get_int / get_float / get_bool / get_str`, which already
+resolves **env var (override) → `ProxboxPluginSettings` → built-in default** with a
+5-minute settings cache (`proxbox_api/settings_client.py::get_settings`).
+
+Runtime key disclosure requires the plugin's active superuser or explicit per-user
+sensitive-data grant. Only HTTP 404 permits metadata compatibility; never
+fallback after authorization, transport, or other runtime failures. Metadata
+compatibility must strip encryption_key. Both requests share timeout allocation,
+not a hard blocking-duration bound. Synchronous DNS, construction, and reads can
+exceed it. The grant does not confer object visibility or provider/write authority.
+Ordinary settings, caches, and overrides never retain encryption_key.
+plugin_key_authority.py binds uncached runtime checks to immutable default-client
+inputs and an opaque generation. Every plugin-root or Fernet acquisition checks
+fresh authorization and exact settings-row visibility. Retired generations and
+failed checks cannot use local, plaintext, development-seed, or alternate-client
+fallback. Explicit reset and default-client reselection are required to replace
+a retired source. Independent operator-selected keys retain their own cache.
+Refuse circular encrypted-token bootstrap before creating a client. Keep
+authority I/O outside locks and the event loop. The two-second authority window
+rejects late results; it does not interrupt blocking DNS or reads. Caller
+cancellation does not terminate a worker. See the configuration guide for
+deadlines, transport bounds, compatibility, and memory-erasure limits.
+
+Only fall back to a pure `.env` variable when the value is needed **before** the NetBox
+connection exists or is **operator-only infrastructure** that has no business in the UI:
+`PROXBOX_BIND_HOST`, `PROXBOX_DATABASE_PATH`, SQLite `DATABASE_URL`, `PROXBOX_RATE_LIMIT`,
+`PROXBOX_ENCRYPTION_KEY` / `PROXBOX_ENCRYPTION_KEY_FILE`, `PROXBOX_STRICT_STARTUP`,
+`PROXBOX_SKIP_NETBOX_BOOTSTRAP`, `PROXBOX_GENERATED_DIR`,
+`PROXBOX_RUNTIME_CODEGEN_ENABLED`,
+`PROXBOX_CORS_EXTRA_ORIGINS`. Anything that controls sync behavior, batching,
+concurrency, caching, or feature toggles belongs in `ProxboxPluginSettings`.
+
+Do **not** invent shadow config layers (parallel JSON/YAML files, ad-hoc dotenv
+sections, module-level constants meant as overrides) to dodge the migration cost.
+If the new field needs the model + migration + form + serializer + template wiring on
+the `netbox-proxbox` side, do all five — the existing fields in
+`netbox-proxbox/netbox_proxbox/models/plugin_settings.py` and migration
+`0037_pluginsettings_runtime_tunables.py` show the pattern.
+
 See `CLAUDE.md → Environment Variables → Adding a new tunable` for the full keep-list
 and resolution-order details.
 

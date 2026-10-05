@@ -201,6 +201,13 @@ retains failed closures for a later retry. NetBox transport failures keep non-em
 secret-safe operation and exception detail so backend retries and plugin stage retries
 remain observable.
 
+Plugin encryption roots use a separate private authority, not the five-minute
+metadata cache. Each plugin-backed key or Fernet acquisition checks current
+sensitive-data authorization and settings-row visibility. Client retirement
+blocks the old source without local or plaintext fallback. See
+[credential encryption configuration](docs/getting-started/configuration.md#runtime-settings-authorization)
+for service-account provisioning, cold-bootstrap requirements, and reset rules.
+
 ### VM interface sync strategy
 
 VM network sync accepts `vm_interface_sync_strategy` on the VM sync and

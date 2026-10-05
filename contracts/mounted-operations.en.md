@@ -4005,9 +4005,9 @@
 | 3973 | http | POST | /cloud/image-factory/builds/{build&#95;id}/cancel | proxbox&#95;api/routes/cloud/image&#95;factory.py:464 cancel&#95;image&#95;factory&#95;build | - |
 | 3974 | http | POST | /cloud/image-factory/validate | proxbox&#95;api/routes/cloud/image&#95;factory.py:488 validate&#95;image&#95;factory&#95;build | - |
 | 3975 | http | POST | /cloud/templates/images/preflight | proxbox&#95;api/routes/cloud/template&#95;images.py:442 preflight&#95;cloud&#95;image&#95;template | - |
-| 3976 | http | GET | /cloud/templates/images/operations/{operation&#95;id} | proxbox&#95;api/routes/cloud/template&#95;images.py:479 get&#95;cloud&#95;image&#95;build&#95;operation | - |
-| 3977 | http | POST | /cloud/templates/images/operations/{operation&#95;id}/cancel | proxbox&#95;api/routes/cloud/template&#95;images.py:502 cancel&#95;cloud&#95;image&#95;build&#95;operation | - |
-| 3978 | http | POST | /cloud/templates/images | proxbox&#95;api/routes/cloud/template&#95;images.py:889 build&#95;cloud&#95;image&#95;template | - |
+| 3976 | http | GET | /cloud/templates/images/operations/{operation&#95;id} | proxbox&#95;api/routes/cloud/template&#95;images.py:480 get&#95;cloud&#95;image&#95;build&#95;operation | - |
+| 3977 | http | POST | /cloud/templates/images/operations/{operation&#95;id}/cancel | proxbox&#95;api/routes/cloud/template&#95;images.py:503 cancel&#95;cloud&#95;image&#95;build&#95;operation | - |
+| 3978 | http | POST | /cloud/templates/images | proxbox&#95;api/routes/cloud/template&#95;images.py:890 build&#95;cloud&#95;image&#95;template | - |
 | 3979 | http | POST | /cloud/templates/pve | proxbox&#95;api/routes/cloud/pve&#95;template.py:144 build&#95;pve&#95;template | - |
 | 3980 | http | GET | /cloud/vm/templates | proxbox&#95;api/routes/cloud/qemu&#95;templates.py:204 qemu&#95;cloud&#95;init&#95;templates | - |
 | 3981 | http | GET | /cloud/templates | proxbox&#95;api/routes/cloud/templates.py:91 list&#95;cloud&#95;templates | - |

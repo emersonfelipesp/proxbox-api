@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import clear_rest_get_cache, rest_bulk_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxDeviceSyncState
 from proxbox_api.schemas.sync import SyncOverwriteFlags
@@ -1110,3 +1111,125 @@ async def test_bulk_device_reconcile_omits_reported_fields_when_flags_disabled()
 
     assert patchable == {"name", "cluster"}
     assert nb.client.patch_payloads == [[{"id": 1, "cluster": 11}]]
+
+
+def _sidecar_target() -> device_ensure._DeviceTarget:
+    return device_ensure._DeviceTarget(
+        cluster_name="lab",
+        node_name="pve2",
+        desired_name="pve2",
+        effective_name="pve2",
+        desired_site_id=7,
+        site_id=7,
+        cluster_id=3,
+    )
+
+
+def _patch_sidecar_lookup(monkeypatch: pytest.MonkeyPatch, devices: dict[int, dict]) -> None:
+    async def _sidecars(
+        _nb: object, _path: str, *, query: dict[str, object]
+    ) -> list[dict[str, object]]:
+        return [{"device": device_id} for device_id in devices]
+
+    async def _device(_nb: object, _path: str, *, query: dict[str, object]):
+        record = devices.get(int(query["id"]))
+        return _FakeExistingDevice(record) if record is not None else None
+
+    monkeypatch.setattr(device_ensure, "rest_list_async", _sidecars)
+    monkeypatch.setattr(device_ensure, "rest_first_async", _device)
+
+
+@pytest.mark.asyncio
+async def test_sidecar_ignores_deleted_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {10: {"id": 10, "name": "pve2", "cluster": {"id": 3}}, 12: None},
+    )
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+    assert resolved is not None and resolved.get("id") == 10
+
+
+@pytest.mark.asyncio
+async def test_sidecar_keeps_manually_renamed_owner(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: {"id": 10, "name": "custom-name", "cluster": {"id": 3}, "site": {"id": 7}},
+            11: {"id": 11, "name": "pve2", "cluster": {"id": 9}, "site": {"id": 8}},
+        },
+    )
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+    assert resolved is not None and resolved.get("id") == 10
+
+
+@pytest.mark.asyncio
+async def test_sidecar_same_site_other_cluster_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: {"id": 10, "name": "pve2", "cluster": {"id": 9}, "site": {"id": 7}},
+            11: {"id": 11, "name": "pve2", "cluster": {"id": 8}, "site": {"id": 5}},
+        },
+    )
+    with pytest.raises(ProxboxException, match="Ambiguous Proxmox node device identity"):
+        await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+
+@pytest.mark.asyncio
+async def test_sidecar_site_match_accepted_only_for_clusterless_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: {"id": 10, "name": "pve2", "cluster": {"id": 9}, "site": {"id": 7}},
+            11: {"id": 11, "name": "pve2", "site": {"id": 7}},
+        },
+    )
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+    assert resolved is not None and resolved.get("id") == 11
+
+
+@pytest.mark.asyncio
+async def test_sidecar_prefers_device_in_target_placement(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: {"id": 10, "name": "pve2", "cluster": {"id": 9}, "site": {"id": 8}},
+            11: {"id": 11, "name": "pve2", "cluster": {"id": 3}, "site": {"id": 7}},
+        },
+    )
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+    assert resolved is not None and resolved.get("id") == 11
+
+
+@pytest.mark.asyncio
+async def test_sidecar_still_fails_when_live_devices_equally_valid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: {"id": 10, "name": "pve2", "cluster": {"id": 9}, "site": {"id": 8}},
+            11: {"id": 11, "name": "pve2", "cluster": {"id": 9}, "site": {"id": 8}},
+        },
+    )
+    with pytest.raises(ProxboxException, match="Ambiguous Proxmox node device identity"):
+        await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+
+@pytest.mark.asyncio
+async def test_sidecar_unset_placement_does_not_match_unset_devices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {10: {"id": 10, "name": "pve2"}, 11: {"id": 11, "name": "pve2"}},
+    )
+    target = _sidecar_target()
+    target.cluster_id = None
+    target.desired_site_id = None
+    with pytest.raises(ProxboxException, match="Ambiguous Proxmox node device identity"):
+        await device_ensure._device_from_identity_sidecar(object(), target)

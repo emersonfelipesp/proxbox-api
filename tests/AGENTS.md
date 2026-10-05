@@ -55,7 +55,10 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_backups_vm_sync.py` | VM backup discovery and sync workflow, including strict vs lenient selection: lenient estate/list runs drop VMs with incomplete, duplicated, shared-owner, or unavailable-owner ownership with warnings and `degraded`, never delete a dropped VM's NetBox backups, and strict single-VM routes fail closed |
 | `test_bridge_interfaces.py` | VM bridge interface mapping and reconciliation |
 | `test_bulk_sync_error_accounting.py` | Per-batch error tallies for bulk VM sync paths |
-| `test_credentials.py` | Credential encryption/decryption round-trip and Fernet key resolution |
+| `test_credentials.py` | Credential encryption/decryption round-trip, independent operator-key caching, and refusal to bootstrap a decrypting session during root acquisition |
+| `test_plugin_key_authority.py` | Actual private authority transport and generation registry with synthetic in-memory responses: warm-cache revocation, no fallback or metadata poisoning, response and deadline bounds, rotation, source retirement, delayed publication, and cancellation |
+| `test_sensitive_provider_authority.py` | Actual database credential parser with synthetic endpoints: separate fresh root authority, legacy plaintext revocation, no metadata-root substitution, and off-event-loop parsing |
+| `test_netbox_api_cache_lifecycle.py` | Actual facade cache ownership, credential rotation, invalidation, late construction, root retirement, and cold encrypted-token bootstrap refusal |
 | `ceph/test_v2_orchestration.py` | Ceph v2 HTTP safety contract: exact endpoint/session/node, real mapped `netbox-ceph` request, strict per-pair payloads, durable plan, actor/approval binding, recursive persistence/API/SSE exception/non-JSON redaction, unique node-consistent UPIDs, expiry/tamper/replay, audit recovery, and read-only reconcile |
 | `ceph/test_v2_proxmox_writer.py` | Proxmox Ceph writer mapping, exact no-fallback node binding, typed live node-membership refresh and secret-safe failure boundary, post-gate owner CAS before dispatch, immutable timing normalization, deadline-bounded status calls/sleeps, strict payload rejection, SDK-proven synchronous completion typing, independent gate/heartbeat sessions, and exhaustive common per-mutation gate coverage |
 | `ceph/test_v2_approval_concurrency.py` | Atomic approval race, same/cross-endpoint sequential/concurrent provider-global task-claim uniqueness, dedicated real AsyncSession gate/audit failure matrix, double/triple-cancellation-safe dispatch/task/synchronous/cancellation evidence, persisted lease-duration heartbeat behavior, database-clock delayed-CAS rejection, inherited custom/duck adapter dispatch compatibility, expiry recovery, and stale-worker rejection; exact AsyncSession path runs on CI Python 3.12 and has a narrow local Python 3.14 aiosqlite skip |
@@ -110,6 +113,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_schema_contracts.py` | Pydantic schema validation and contract checks |
 | `test_session_and_helpers.py` | Session factory creation and dependency wiring |
 | `test_settings_client.py` | Settings/plugin-config client (`ProxboxPluginSettings`) accessors |
+
 | `test_snapshots_sync.py` | VM snapshot sync workflow, including skipping decommissioned or soft-deleted VMs (also when explicitly selected) and lenient (degraded, warnings, no cleanup of dropped VMs) vs strict selection with the per-route mode choice |
 
 | `test_snapshots_sync.py` | VM snapshot sync workflow, including the cluster-aware `_snapshot_sessions_for_vm` matrix when an endpoint id collides across clusters |
@@ -145,6 +149,30 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `e2e/test_demo_auth.py` | Demo auth happy-path and failure modes |
 | `e2e/test_devices_sync.py` | Device sync end-to-end against mock backend / HTTP mock |
 | `e2e/test_vm_sync.py` | VM sync end-to-end including overwrite flags and tag preservation |
+
+## Network Isolation
+
+The settings client tests verify runtime-denial no-fallback behavior, metadata
+key exclusion, explicit service-role retrieval, and shared timeout allocation.
+Do not confuse allocation or late-result refusal with bounded blocking duration.
+They also verify failed-fetch recovery, expired-cache replacement, nested
+metadata override cleanup, recursion refusal, fixed facade-failure logs, and
+deadline consumption during facade construction. Preserve the real condition
+and cross-thread single-flight tests when changing cache coordination.
+Endpoint CRUD tests must isolate request-private NetBox probes as well as the
+injected session dependency. Their autouse fixture replaces the probe and
+runtime settings transport and rejects outbound Internet-family socket calls
+and DNS. Teardown fails even when application code catches that rejection.
+Use synthetic credentials only. A fake session does not isolate network I/O
+performed by a separately constructed client.
+
+Private root tests must use the actual registry and crypto acquisition paths.
+Warm derived-key and Fernet caches before revocation. Do not substitute a
+permanent positive grant, a generic settings override, or an obsolete resolver
+mock. Provider tests distinguish the single bounded metadata fetch from fresh
+authority per secret. Exercise legacy plaintext as well as ciphertext. Keep
+operator key files and live service credentials outside all fixtures. Retain
+actual lifecycle invalidation and post-I/O generation checks.
 
 ## Markers
 

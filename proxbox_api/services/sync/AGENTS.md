@@ -19,7 +19,11 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `cluster_links.py`: repairs netbox-proxbox `ProxmoxCluster.netbox_cluster`
   links by exact NetBox cluster-name resolution after cluster reconciliation.
 - `clusters.py`: cluster synchronization helpers.
-- `device_ensure.py`: device creation and reconciliation helpers.
+- `device_ensure.py`: device creation and reconciliation helpers. When several
+  identity sidecars claim different devices for one node, deleted devices are
+  ignored, the target cluster decides ownership (a site match counts only for
+  clusterless devices), and anything still ambiguous fails closed. Device names
+  are never evidence.
 - `guest_vm_interface.py`: best-effort netbox-proxbox plugin reconciliation for
   guest OS VM interfaces and guest-interface-to-core-IP links.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
