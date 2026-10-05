@@ -53,9 +53,19 @@ class RequestPrivacyProcessor(SpanProcessor):
         return True
 
 
+def prepare_telemetry_config(config: TelemetryConfig | None = None) -> TelemetryConfig:
+    """Copy caller controls and honor SDK disabling before native app creation."""
+    settings: TelemetryConfig = {**(config or {})}
+    if os.getenv("OTEL_SDK_DISABLED", "").lower() == "true":
+        settings.update(auto_configure=False, tracing=False, metrics=False, logs=False)
+    return settings
+
+
 def _environment_export(config: TelemetryConfig, signal: str) -> bool:
     return (
-        config.get("auto_configure", True)
+        os.getenv("OTEL_SDK_DISABLED", "").lower() != "true"
+        and config.get("auto_configure", True)
+        and config.get("logs" if signal == "LOGS" else "tracing", True)
         and (os.getenv(f"OTEL_{signal}_EXPORTER") or "otlp").strip().lower() != "none"
         and bool(
             os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -88,11 +98,7 @@ def _configure_traces(config: TelemetryConfig) -> None:
 
 def configure_telemetry_privacy(config: TelemetryConfig | None = None) -> None:
     """Register before native lifespan setup without replacing caller providers."""
-    if os.getenv("OTEL_SDK_DISABLED", "").lower() == "true":
-        return
     settings: TelemetryConfig = config if config is not None else {}
     with _lock:
-        if settings.get("logs", True):
-            _configure_logs(settings)
-        if settings.get("tracing", True):
-            _configure_traces(settings)
+        _configure_logs(settings)
+        _configure_traces(settings)

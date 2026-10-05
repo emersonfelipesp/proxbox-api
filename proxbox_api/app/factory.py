@@ -94,7 +94,7 @@ from proxbox_api.session.netbox import (
     acquire_netbox_api_cache_owner,
     release_netbox_api_cache_owner,
 )
-from proxbox_api.telemetry import configure_telemetry_privacy
+from proxbox_api.telemetry import configure_telemetry_privacy, prepare_telemetry_config
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -601,6 +601,7 @@ def _include_selected_routes(app: FastAPI) -> None:
 def create_app(*, telemetry: TelemetryConfig | None = None) -> FastAPI:
     """Build and configure the Proxbox FastAPI application."""
     auth_lockout_policy = AuthLockoutPolicy.from_env()
+    telemetry = prepare_telemetry_config(telemetry)
     configure_telemetry_privacy(telemetry)
     app = FastAPI(
         telemetry=telemetry,
