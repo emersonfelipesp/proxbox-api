@@ -17,7 +17,7 @@ from proxbox_api.schemas.firecracker import (
     FirecrackerMicroVMMetrics,
     FirecrackerMicroVMState,
 )
-from proxbox_api.telemetry import configure_telemetry_privacy
+from proxbox_api.telemetry import configure_telemetry_privacy, prepare_telemetry_config
 
 _MICROVMS: dict[UUID, FirecrackerMicroVMState] = {}
 _LOGS: dict[UUID, list[str]] = {}
@@ -25,6 +25,7 @@ _LOGS: dict[UUID, list[str]] = {}
 
 def create_firecracker_agent_app(*, telemetry: TelemetryConfig | None = None) -> FastAPI:  # noqa: C901
     """Create a local host-agent app with the production HTTP contract."""
+    telemetry = prepare_telemetry_config(telemetry)
     configure_telemetry_privacy(telemetry)
     app = FastAPI(title="Firecracker Host Agent", version="0.1.0", telemetry=telemetry)
 

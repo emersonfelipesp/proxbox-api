@@ -10,12 +10,13 @@ from fastapi.telemetry import TelemetryConfig
 from proxmox_mock import __version__
 from proxmox_mock.openapi import DEFAULT_PROXMOX_OPENAPI_TAG
 from proxmox_mock.routes import register_generated_proxmox_mock_routes
-from proxmox_mock.telemetry import configure_telemetry_privacy
+from proxmox_mock.telemetry import configure_telemetry_privacy, prepare_telemetry_config
 
 
 def create_mock_app(*, telemetry: TelemetryConfig | None = None) -> FastAPI:
     """Build the standalone Proxmox mock API app."""
 
+    telemetry = prepare_telemetry_config(telemetry)
     version_tag = os.environ.get("PROXMOX_MOCK_SCHEMA_VERSION", DEFAULT_PROXMOX_OPENAPI_TAG)
     service = os.environ.get("PROXMOX_MOCK_SERVICE", "pve").strip().lower() or "pve"
 

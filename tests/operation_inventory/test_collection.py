@@ -42,7 +42,7 @@ RAW_INPUTS = [
     " cOrE, PBS,pbs,, ",
 ]
 COUNTS = [
-    4055,
+    4056,
     3767,
     3789,
     3767,
@@ -50,20 +50,20 @@ COUNTS = [
     3778,
     3800,
     3811,
-    4000,
-    4011,
-    4033,
-    4011,
-    4044,
-    4022,
-    4044,
-    4055,
-    4055,
+    4001,
+    4012,
+    4034,
+    4012,
+    4045,
+    4023,
+    4045,
+    4056,
+    4056,
     3767,
     3800,
     3811,
-    4000,
-    4011,
+    4001,
+    4012,
 ]
 
 
@@ -211,7 +211,7 @@ def assert_all_modes(inventory):
         _assert_mode_rows(inventory, mode, default, generated)
     opt_in = _registered_rows(inventory, inventory.runtime_codegen_opt_in.registrations)
     _assert_generated_sequence(opt_in)
-    assert len(inventory.runtime_codegen_opt_in.registrations) == 4057
+    assert len(inventory.runtime_codegen_opt_in.registrations) == 4058
 
 
 def test_committed_real_inventory_all_mode_oracles():
