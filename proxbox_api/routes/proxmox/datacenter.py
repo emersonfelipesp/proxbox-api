@@ -13,16 +13,30 @@ to a single cluster via the ``cluster_name`` query parameter.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from proxmox_sdk.sdk.exceptions import ResourceException
 from pydantic import BaseModel
 
+from proxbox_api.database import AsyncDatabaseSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.routes.proxmox.write_gate import (
+    require_actor,
+    session_writes_allowed,
+    writes_disabled_response,
+)
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
 from proxbox_api.session.proxmox import ProxmoxSessionsDep, ProxmoxSessionsPartialDep
 
 router = APIRouter()
+
+_UPSTREAM_ERROR_DETAIL = {
+    "reason": "proxmox_upstream_error",
+    "detail": "Proxmox rejected or failed the custom CPU model write.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -134,17 +148,23 @@ class CustomCpuModelCreateSchema(BaseModel):
 async def create_custom_cpu_model(
     pxs: ProxmoxSessionsDep,
     payload: CustomCpuModelCreateSchema,
+    database_session: AsyncDatabaseSessionDep,
     cluster_name: str | None = Query(None, description="Target cluster name"),
-) -> CustomCpuModelSchema:
+    actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
+) -> CustomCpuModelSchema | JSONResponse:
     """Create a custom CPU model (PVE 9.2+).
 
     Proxies ``POST /cluster/qemu/custom-cpu-models``.
     Specify ``cluster_name`` to target a specific cluster when more than
     one is configured.
     """
+    actor_value = require_actor(actor)
     px = resolve_proxmox_session_for_request(
         pxs, cluster_name, resource_name="create custom CPU model"
     )
+    if not await session_writes_allowed(database_session, px):
+        return writes_disabled_response(px.name)
+    logger.info("Custom CPU model create attempt: actor=%s cluster=%s", actor_value, px.name)
     body: dict[str, object] = {"cputype": payload.cputype}
     if payload.base_cputype is not None:
         body["base-cputype"] = payload.base_cputype
@@ -162,8 +182,13 @@ async def create_custom_cpu_model(
             return _to_cpu_model(px.name, {"cputype": payload.cputype})
         return _to_cpu_model(px.name, raw)
     except Exception as exc:
-        logger.exception("Error creating custom CPU model on cluster %s", px.name)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning(
+            "Custom CPU model write failed: actor=%s cluster=%s error_type=%s",
+            actor_value,
+            px.name,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail=_UPSTREAM_ERROR_DETAIL) from None
 
 
 class CustomCpuModelUpdateSchema(BaseModel):
@@ -181,15 +206,21 @@ async def update_custom_cpu_model(
     pxs: ProxmoxSessionsDep,
     cputype: str,
     payload: CustomCpuModelUpdateSchema,
+    database_session: AsyncDatabaseSessionDep,
     cluster_name: str | None = Query(None, description="Target cluster name"),
-) -> CustomCpuModelSchema:
+    actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
+) -> CustomCpuModelSchema | JSONResponse:
     """Update a custom CPU model (PVE 9.2+).
 
     Proxies ``PUT /cluster/qemu/custom-cpu-models/{cputype}``.
     """
+    actor_value = require_actor(actor)
     px = resolve_proxmox_session_for_request(
         pxs, cluster_name, resource_name="update custom CPU model"
     )
+    if not await session_writes_allowed(database_session, px):
+        return writes_disabled_response(px.name)
+    logger.info("Custom CPU model update attempt: actor=%s cluster=%s", actor_value, px.name)
     body: dict[str, object] = {}
     if payload.base_cputype is not None:
         body["base-cputype"] = payload.base_cputype
@@ -209,29 +240,45 @@ async def update_custom_cpu_model(
             return _to_cpu_model(px.name, {"cputype": cputype})
         return _to_cpu_model(px.name, raw)
     except Exception as exc:
-        logger.exception("Error updating custom CPU model %s on cluster %s", cputype, px.name)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning(
+            "Custom CPU model write failed: actor=%s cluster=%s error_type=%s",
+            actor_value,
+            px.name,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail=_UPSTREAM_ERROR_DETAIL) from None
 
 
 @router.delete("/datacenter/cpu-models/{cputype}", response_model=CustomCpuModelSchema)
 async def delete_custom_cpu_model(
     pxs: ProxmoxSessionsDep,
     cputype: str,
+    database_session: AsyncDatabaseSessionDep,
     cluster_name: str | None = Query(None, description="Target cluster name"),
-) -> CustomCpuModelSchema:
+    actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
+) -> CustomCpuModelSchema | JSONResponse:
     """Delete a custom CPU model (PVE 9.2+).
 
     Proxies ``DELETE /cluster/qemu/custom-cpu-models/{cputype}``.
     """
+    actor_value = require_actor(actor)
     px = resolve_proxmox_session_for_request(
         pxs, cluster_name, resource_name="delete custom CPU model"
     )
+    if not await session_writes_allowed(database_session, px):
+        return writes_disabled_response(px.name)
+    logger.info("Custom CPU model delete attempt: actor=%s cluster=%s", actor_value, px.name)
     try:
         await resolve_async(px.session(f"cluster/qemu/custom-cpu-models/{cputype}").delete())
         return CustomCpuModelSchema(cluster_name=px.name, cputype=cputype)
     except Exception as exc:
-        logger.exception("Error deleting custom CPU model %s on cluster %s", cputype, px.name)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning(
+            "Custom CPU model write failed: actor=%s cluster=%s error_type=%s",
+            actor_value,
+            px.name,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail=_UPSTREAM_ERROR_DETAIL) from None
 
 
 # ---------------------------------------------------------------------------

@@ -127,9 +127,12 @@ def _detach_cached_apis(endpoint_id: int | None) -> list[Api]:
 
 async def _close_cached_apis(apis: list[Api]) -> None:
     """Close every detached client and retain failures for a later retry."""
+    from proxbox_api.netbox_rest import purge_get_cache_for_api
+
     seen: set[int] = set()
     failed: list[tuple[Api, str]] = []
     for api in apis:
+        purge_get_cache_for_api(api)
         client = api.client
         identity = id(client)
         if identity in seen:

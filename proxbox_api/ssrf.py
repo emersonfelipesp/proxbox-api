@@ -82,8 +82,16 @@ def get_registered_endpoints() -> tuple[set[str], set[str]]:
                 if endpoint.domain:
                     domains.add(endpoint.domain.strip().lower())
 
-    except Exception:
-        pass
+    except Exception as exc:
+        # Do not cache a failed load as authoritative: return an empty result so
+        # the next call retries the database. Log only the exception type, since
+        # the message may embed connection details.
+        logger.warning(
+            "SSRF: could not load registered endpoints from the database (%s); "
+            "registered-endpoint allow-list is unavailable for this check",
+            type(exc).__name__,
+        )
+        return set(), set()
 
     _registered_ips_cache = ips
     _registered_domains_cache = domains
@@ -157,6 +165,25 @@ def is_registered_endpoint(host: str) -> bool:
     return False
 
 
+def _normalize_ip(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Unwrap IPv6 forms that embed an IPv4 address so IPv4 range checks apply."""
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return addr.ipv4_mapped
+        if addr.sixtofour is not None:
+            return addr.sixtofour
+        if addr.teredo is not None:
+            return addr.teredo[1]
+    return addr
+
+
+def _looks_like_ip_literal(host: str) -> bool:
+    """Return True if host is shaped like an IP literal rather than a hostname."""
+    return ":" in host or "%" in host or bool(re.fullmatch(r"[0-9.]+", host))
+
+
 def is_ip_blocked(  # noqa: C901
     ip: str,
     settings: dict | None = None,
@@ -166,9 +193,16 @@ def is_ip_blocked(  # noqa: C901
     Returns (is_blocked, reason).
     """
     try:
-        addr = ipaddress.ip_address(ip)
+        original = ipaddress.ip_address(ip)
     except ValueError:
+        if _looks_like_ip_literal(ip):
+            return True, f"Host '{ip}' looks like an IP address but could not be parsed"
         return False, "OK"
+    # Evaluate both the address as written and the IPv4 it embeds (mapped, 6to4,
+    # Teredo): explicit IPv6 policy keeps applying to the original, and IPv4 policy
+    # applies to the embedded address.
+    addr = _normalize_ip(original)
+    candidates = (original,) if addr == original else (original, addr)
 
     # If IP is already registered, allow it
     if is_registered_endpoint(ip):
@@ -183,12 +217,18 @@ def is_ip_blocked(  # noqa: C901
 
     blocked_ranges = settings.get("blocked_ip_ranges", [])
     for network in blocked_ranges:
-        if addr in network:
+        if any(candidate in network for candidate in candidates):
             return True, f"Host '{ip}' is in explicitly blocked range {network}"
 
+    # Operator allow-lists apply to the address as written and to a true IPv4-mapped
+    # form only. 6to4 and Teredo addresses merely embed an IPv4 and reach it through a
+    # relay, so an IPv4 allow range must not whitelist them.
+    allow_candidates = (original,)
+    if isinstance(original, ipaddress.IPv6Address) and original.ipv4_mapped is not None:
+        allow_candidates = (original, original.ipv4_mapped)
     allowed_ranges = settings.get("allowed_ip_ranges", [])
     for network in allowed_ranges:
-        if addr in network:
+        if any(candidate in network for candidate in allow_candidates):
             return False, "OK"
 
     allow_private = settings.get("allow_private_ips", True)
@@ -198,7 +238,7 @@ def is_ip_blocked(  # noqa: C901
                 return False, "OK"
 
     for network in INTERNAL_IP_RANGES:
-        if addr in network:
+        if any(candidate in network for candidate in candidates):
             return (
                 True,
                 f"Host '{ip}' is a reserved/internal IP address. Either add it to ProxmoxEndpoint first, or adjust SSRF settings in ProxboxPluginSettings.",

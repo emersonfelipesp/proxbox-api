@@ -28,13 +28,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Annotated, TypeVar
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
+from proxbox_api.database import AsyncDatabaseSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.routes.proxmox.write_gate import require_actor, session_writes_allowed
 from proxbox_api.services.proxmox_helpers import (
     get_ha_groups,
     get_ha_resources,
@@ -486,47 +488,72 @@ class HaCrsConfigSchema(BaseModel):
     error: str | None = None
 
 
-@router.post("/ha/disarm", response_model=list[HaDisarmResultSchema])
-async def ha_disarm(pxs: ProxmoxSessionsDep) -> list[HaDisarmResultSchema]:
-    """Disarm the HA stack cluster-wide (PVE 9.2+).
-
-    Calls ``POST /cluster/ha/status/disarm-ha`` on each configured
-    Proxmox cluster.  While disarmed, HA-managed guests are **not**
-    automatically restarted or migrated, and no fencing events are
-    triggered.  Use ``POST /ha/arm`` to re-enable HA after maintenance.
-    """
+async def _run_ha_command(
+    pxs: ProxmoxSessionsDep,
+    database_session: AsyncDatabaseSessionDep,
+    actor: str,
+    command: str,
+) -> list[HaDisarmResultSchema]:
+    """Run one CRM command on every write-enabled cluster; skip the others."""
     results: list[HaDisarmResultSchema] = []
     for px in pxs:
+        if not await session_writes_allowed(database_session, px):
+            logger.warning(
+                "HA %s skipped (endpoint writes disabled): actor=%s cluster=%s",
+                command,
+                actor,
+                px.name,
+            )
+            results.append(
+                HaDisarmResultSchema(
+                    cluster_name=px.name,
+                    status="skipped",
+                    error="endpoint_writes_disabled",
+                )
+            )
+            continue
+        logger.info("HA %s attempt: actor=%s cluster=%s", command, actor, px.name)
         try:
-            await resolve_async(px.session("cluster/ha/status/disarm-ha").post())
+            await resolve_async(px.session(f"cluster/ha/status/{command}").post())
             results.append(HaDisarmResultSchema(cluster_name=px.name))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Error disarming HA for Proxmox cluster %s", px.name)
+            logger.exception("Error running HA %s for Proxmox cluster %s", command, px.name)
             results.append(
                 HaDisarmResultSchema(cluster_name=px.name, status="error", error=str(exc))
             )
     return results
+
+
+@router.post("/ha/disarm", response_model=list[HaDisarmResultSchema])
+async def ha_disarm(
+    pxs: ProxmoxSessionsDep,
+    database_session: AsyncDatabaseSessionDep,
+    actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
+) -> list[HaDisarmResultSchema]:
+    """Disarm the HA stack on write-enabled clusters (PVE 9.2+).
+
+    Calls ``POST /cluster/ha/status/disarm-ha`` on each configured cluster
+    whose endpoint has ``allow_writes`` enabled; other clusters are returned
+    with ``status="skipped"`` and ``error="endpoint_writes_disabled"``.
+    Requires the ``X-Proxbox-Actor`` header. While disarmed, HA-managed
+    guests are **not** automatically restarted or migrated, and no fencing
+    events are triggered. Use ``POST /ha/arm`` to re-enable HA.
+    """
+    return await _run_ha_command(pxs, database_session, require_actor(actor), "disarm-ha")
 
 
 @router.post("/ha/arm", response_model=list[HaDisarmResultSchema])
-async def ha_arm(pxs: ProxmoxSessionsDep) -> list[HaDisarmResultSchema]:
-    """Re-arm the HA stack cluster-wide (PVE 9.2+).
+async def ha_arm(
+    pxs: ProxmoxSessionsDep,
+    database_session: AsyncDatabaseSessionDep,
+    actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
+) -> list[HaDisarmResultSchema]:
+    """Re-arm the HA stack on write-enabled clusters (PVE 9.2+).
 
-    Calls ``POST /cluster/ha/status/arm-ha`` on each configured
-    Proxmox cluster.  HA resources return to their previous state after
-    the maintenance window is completed.
+    Same gate and actor requirement as ``POST /ha/disarm``; calls
+    ``POST /cluster/ha/status/arm-ha``.
     """
-    results: list[HaDisarmResultSchema] = []
-    for px in pxs:
-        try:
-            await resolve_async(px.session("cluster/ha/status/arm-ha").post())
-            results.append(HaDisarmResultSchema(cluster_name=px.name))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Error arming HA for Proxmox cluster %s", px.name)
-            results.append(
-                HaDisarmResultSchema(cluster_name=px.name, status="error", error=str(exc))
-            )
-    return results
+    return await _run_ha_command(pxs, database_session, require_actor(actor), "arm-ha")
 
 
 @router.get("/ha/manager-status", response_model=list[HaManagerStatusSchema])

@@ -28,7 +28,16 @@ from proxbox_api.credentials import (
     is_encryption_enabled,
     set_local_encryption_key,
 )
-from proxbox_api.database import NetBoxEndpoint, ProxmoxEndpoint, get_session
+from proxbox_api.database import (
+    CephDashboardEndpoint,
+    CephExternalCluster,
+    NetBoxEndpoint,
+    PBSEndpoint,
+    PDMEndpoint,
+    PrometheusSource,
+    ProxmoxEndpoint,
+    get_session,
+)
 
 router = APIRouter()
 
@@ -50,19 +59,41 @@ def _build_status() -> EncryptionStatus:
     return EncryptionStatus(configured=is_encryption_enabled(), source=get_encryption_source())
 
 
+# Every table whose secret columns are encrypted with the shared key (``encrypt_value`` in
+# ``proxbox_api.database``). Replacing or deleting the key while any of these still holds
+# ciphertext would make those credentials undecryptable.
+_ENCRYPTED_COLUMNS: tuple[tuple[type, tuple[str, ...]], ...] = (
+    (NetBoxEndpoint, ("token", "token_key")),
+    (ProxmoxEndpoint, ("password", "token_value")),
+    (PBSEndpoint, ("token_secret",)),
+    (PDMEndpoint, ("token_secret",)),
+    (PrometheusSource, ("bearer_token",)),
+    (CephDashboardEndpoint, ("password", "token")),
+    (CephExternalCluster, ("rgw_access_key", "rgw_secret_key")),
+)
+
+
 def _has_encrypted_values(session: Session) -> bool:
     """Return True if any stored credential value is already ciphertext."""
-    netbox_rows = session.exec(select(NetBoxEndpoint)).all()
-    for row in netbox_rows:
-        for value in (row.token, row.token_key):
-            if isinstance(value, str) and value.startswith("enc:"):
-                return True
-    proxmox_rows = session.exec(select(ProxmoxEndpoint)).all()
-    for row in proxmox_rows:
-        for value in (row.password, row.token_value):
-            if isinstance(value, str) and value.startswith("enc:"):
-                return True
+    for model, columns in _ENCRYPTED_COLUMNS:
+        for row in session.exec(select(model)).all():
+            for column in columns:
+                value = getattr(row, column, None)
+                if isinstance(value, str) and value.startswith("enc:"):
+                    return True
     return False
+
+
+def _reject_if_encrypted_values(session: Session) -> None:
+    """Raise 409 when stored ``enc:`` credentials depend on the current key."""
+    if _has_encrypted_values(session):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Encrypted credentials still exist in the database. Remove or rotate "
+                "them before replacing or clearing the encryption key."
+            ),
+        )
 
 
 @router.get("/encryption/status", response_model=EncryptionStatus)
@@ -72,15 +103,29 @@ async def get_encryption_status() -> EncryptionStatus:
 
 
 @router.post("/encryption/key", response_model=EncryptionStatus)
-async def set_encryption_key(payload: EncryptionKeyRequest) -> EncryptionStatus:
-    """Persist a caller-supplied encryption key to the local key file."""
+async def set_encryption_key(
+    payload: EncryptionKeyRequest,
+    session: Annotated[Session, Depends(get_session)],
+) -> EncryptionStatus:
+    """Persist a caller-supplied encryption key to the local key file.
+
+    Returns 409 if any encrypted credential exists, since replacing the key
+    would strand those ciphertexts.
+    """
+    _reject_if_encrypted_values(session)
     set_local_encryption_key(payload.key)
     return _build_status()
 
 
 @router.post("/encryption/generate", response_model=EncryptionKeyResponse)
-async def generate_and_set_encryption_key() -> EncryptionKeyResponse:
-    """Generate a fresh Fernet key, persist it locally, and return it once."""
+async def generate_and_set_encryption_key(
+    session: Annotated[Session, Depends(get_session)],
+) -> EncryptionKeyResponse:
+    """Generate a fresh Fernet key, persist it locally, and return it once.
+
+    Returns 409 if any encrypted credential exists.
+    """
+    _reject_if_encrypted_values(session)
     new_key = generate_encryption_key()
     set_local_encryption_key(new_key)
     status = _build_status()
@@ -96,13 +141,6 @@ async def delete_encryption_key(
     Returns 409 if any encrypted (``enc:``-prefixed) credential value remains in
     the database, since dropping the key would strand those ciphertexts.
     """
-    if _has_encrypted_values(session):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Encrypted credentials still exist in the database. Remove or rotate "
-                "them before clearing the encryption key."
-            ),
-        )
+    _reject_if_encrypted_values(session)
     clear_local_encryption_key()
     return _build_status()

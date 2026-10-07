@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 _SETTINGS_CACHE: ProxboxSettingsDict | None = None
 _SETTINGS_CACHE_TIME: float = 0.0
 _SETTINGS_CACHE_TTL: float = 300.0  # 5 minutes
+_SETTINGS_FAILURE_TTL: float = 10.0  # retry soon after a failed fetch
 _SETTINGS_CONDITION = threading.Condition()
 _SETTINGS_FETCH_IN_PROGRESS = False
 _SETTINGS_FETCH_GENERATION = 0
@@ -489,7 +490,7 @@ def _claim_settings_fetch(
     global _SETTINGS_FETCH_IN_PROGRESS, _SETTINGS_CACHE
     with _SETTINGS_CONDITION:
         while True:
-            now = time.time()
+            now = time.monotonic()
             if use_cache and _SETTINGS_CACHE is not None:
                 if now - _SETTINGS_CACHE_TIME < _SETTINGS_CACHE_TTL:
                     _SETTINGS_CACHE = _metadata_settings(_SETTINGS_CACHE)
@@ -503,7 +504,7 @@ def _claim_settings_fetch(
             if remaining is not None and remaining <= 0:
                 # A bounded availability-preserving caller must never inherit an
                 # unrelated, longer settings lookup already in progress.
-                return False, get_default_settings()
+                return False, _SETTINGS_LAST_RESULT or get_default_settings()
             _SETTINGS_CONDITION.wait(timeout=remaining)
 
 
@@ -550,10 +551,17 @@ def _publish_settings_result(
         if settings is not None:
             settings = _metadata_settings(settings)
             _SETTINGS_FETCH_GENERATION += 1
-            _SETTINGS_LAST_RESULT = settings
-            if fetched or cache_fallback:
+            if fetched:
+                _SETTINGS_LAST_RESULT = settings
                 _SETTINGS_CACHE = settings
-                _SETTINGS_CACHE_TIME = time.time()
+                _SETTINGS_CACHE_TIME = time.monotonic()
+            elif cache_fallback:
+                # Failed fetch: keep the last good result authoritative and let
+                # waiters see this fallback only for a short retry window.
+                _SETTINGS_CACHE = settings
+                _SETTINGS_CACHE_TIME = time.monotonic() - (
+                    _SETTINGS_CACHE_TTL - _SETTINGS_FAILURE_TTL
+                )
         _SETTINGS_FETCH_IN_PROGRESS = False
         _SETTINGS_CONDITION.notify_all()
 
@@ -587,7 +595,14 @@ def get_settings(
     fetched: ProxboxSettingsDict | None = None
     try:
         fetched = _fetch_settings_with_deadline(netbox_session, deadline=deadline)
-        settings = _metadata_settings(fetched if fetched is not None else get_default_settings())
+        if fetched is not None:
+            settings = _metadata_settings(fetched)
+        else:
+            with _SETTINGS_CONDITION:
+                last_good = _SETTINGS_LAST_RESULT
+            settings = _metadata_settings(
+                last_good if last_good is not None else get_default_settings()
+            )
     finally:
         delattr(_SETTINGS_THREAD_LOCAL, "fetch_depth")
         _publish_settings_result(

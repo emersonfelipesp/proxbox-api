@@ -304,6 +304,28 @@ def _build_netbox_vm_payload(
     return payload
 
 
+async def _require_vm_resource(px: object, node: str, vm_type: str, vmid: int) -> dict:
+    """Fetch the cluster resource row or raise so no placeholder values are written."""
+    try:
+        resource = await get_vm_resource_individual(px, node, vm_type, vmid)
+    except Exception as exc:
+        raise ProxboxException(
+            message=(
+                f"Failed to fetch Proxmox resource for {vm_type} vmid={vmid} on node {node}; "
+                "refusing to write placeholder values to NetBox."
+            ),
+            python_exception=str(exc),
+        ) from exc
+    if not resource:
+        raise ProxboxException(
+            message=(
+                f"Proxmox resource for {vm_type} vmid={vmid} on node {node} was not found "
+                "or could not be read; refusing to write placeholder values to NetBox."
+            ),
+        )
+    return dict(resource)
+
+
 async def sync_vm_individual(
     nb: object,
     px: object,
@@ -363,7 +385,7 @@ async def sync_vm_individual(
             python_exception=str(exc),
         )
 
-    proxmox_resource = await get_vm_resource_individual(px, node, vm_type, vmid) or {}
+    proxmox_resource = await _require_vm_resource(px, node, vm_type, vmid)
     proxmox_resource = {
         "vmid": vmid,
         "name": proxmox_resource.get("name") or f"vm-{vmid}",

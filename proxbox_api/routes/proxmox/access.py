@@ -14,11 +14,20 @@ per-cluster.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from proxbox_api.database import AsyncDatabaseSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.proxmox_async import resolve_async
+from proxbox_api.routes.proxmox.write_gate import (
+    require_actor,
+    session_writes_allowed,
+    writes_disabled_response,
+)
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session_for_request
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
 
@@ -103,12 +112,14 @@ class TokenRegenerateResponseSchema(BaseModel):
 )
 async def regenerate_token(
     pxs: ProxmoxSessionsDep,
+    database_session: AsyncDatabaseSessionDep,
     userid: str,
     tokenid: str,
     cluster_name: str | None = Query(
         None, description="Target cluster name (required when multiple clusters are configured)"
     ),
-) -> TokenRegenerateResponseSchema:
+    actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
+) -> TokenRegenerateResponseSchema | JSONResponse:
     """Regenerate the secret of an existing API token in-place (PVE 9.2+).
 
     Proxies ``PUT /access/users/{userid}/token/{tokenid}`` with
@@ -116,10 +127,18 @@ async def regenerate_token(
 
     **Store the returned ``value`` immediately** — it cannot be retrieved
     again after this call.
+
+    Requires ``ProxmoxEndpoint.allow_writes`` on the target cluster and the
+    ``X-Proxbox-Actor`` header. The secret is returned to the caller only and
+    is never logged.
     """
+    actor_value = require_actor(actor)
     px = resolve_proxmox_session_for_request(
         pxs, cluster_name, resource_name="regenerate API token"
     )
+    if not await session_writes_allowed(database_session, px):
+        return writes_disabled_response(px.name)
+    logger.info("Proxmox API token regenerate attempt: actor=%s cluster=%s", actor_value, px.name)
     try:
         raw = await resolve_async(
             px.session(f"access/users/{userid}/token/{tokenid}").put(regenerate=1)
@@ -139,5 +158,16 @@ async def regenerate_token(
             else None,
         )
     except Exception as exc:
-        logger.exception("Error regenerating token %s/%s on cluster %s", userid, tokenid, px.name)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning(
+            "Proxmox API token regenerate failed: actor=%s cluster=%s error_type=%s",
+            actor_value,
+            px.name,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "reason": "proxmox_upstream_error",
+                "detail": "Proxmox rejected or failed the token regeneration.",
+            },
+        ) from None

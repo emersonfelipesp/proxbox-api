@@ -101,6 +101,7 @@ class ProxmoxSession:
         self.tenant_slug: str | None = None
         self.tenant_name: str | None = None
         self.db_endpoint_id: int | None = None
+        self.endpoint_source: str | None = None
 
         if cluster_config is not None:
             try:
@@ -260,6 +261,8 @@ class ProxmoxSession:
             self.db_endpoint_id = (
                 int(config["db_endpoint_id"]) if config.get("db_endpoint_id") is not None else None
             )
+            source = config.get("endpoint_source")
+            self.endpoint_source = source if source in {"database", "netbox"} else None
             self._normalize_token_auth_fields()
         except KeyError:
             raise ProxboxException(

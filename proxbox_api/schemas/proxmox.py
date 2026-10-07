@@ -1,5 +1,7 @@
 """Pydantic schemas for Proxmox sessions and resource payloads."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, RootModel, field_validator
 
 from proxbox_api.enum.proxmox import CgroupMode, NodeStatus, ProxmoxVMStatus, ResourceType
@@ -38,6 +40,9 @@ class ProxmoxSessionSchema(ProxboxBaseModel):
     max_retries: int | None = Field(default=None, ge=0, le=100)
     retry_backoff: float | None = Field(default=None, ge=0.0, le=300.0)
     db_endpoint_id: int | None = None
+    # Which store ``db_endpoint_id`` belongs to: the local database primary key or the
+    # NetBox plugin object id. The two id spaces overlap, so authorization must check this.
+    endpoint_source: Literal["database", "netbox"] | None = None
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None

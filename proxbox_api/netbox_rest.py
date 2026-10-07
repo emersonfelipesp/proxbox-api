@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import itertools
 import json
 import os
 import random
 import time
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -364,8 +367,55 @@ def _serialize_query(query: dict[str, object] | None) -> str:
         return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
 
 
+_api_cache_tokens: weakref.WeakKeyDictionary[object, int] = weakref.WeakKeyDictionary()
+_api_cache_token_counter = itertools.count(1)
+_api_invalidation_generations: dict[int, int] = {}
+
+
+def _api_token(api: object, *, create: bool = True) -> int | None:
+    """Return a monotonic per-Api token that is never reused, unlike ``id()``.
+
+    Returns ``None`` when the object cannot be tracked, in which case callers
+    must neither read nor write the GET cache for it.
+    """
+    try:
+        token = _api_cache_tokens.get(api)
+        if token is None and create:
+            token = next(_api_cache_token_counter)
+            _api_cache_tokens[api] = token
+    except TypeError:
+        return None
+    return token
+
+
+def _get_cache_generation(api: object) -> int:
+    token = _api_token(api, create=False)
+    if token is None:
+        return 0
+    return _api_invalidation_generations.get(token, 0)
+
+
+def _bump_get_cache_generation(api: object) -> None:
+    token = _api_token(api)
+    if token is not None:
+        _api_invalidation_generations[token] = _api_invalidation_generations.get(token, 0) + 1
+
+
+def purge_get_cache_for_api(api: object) -> int:
+    """Drop every cached GET entry for one Api object (client closed or retired)."""
+    token = _api_token(api, create=False)
+    if token is None:
+        return 0
+    _bump_get_cache_generation(api)
+    keys = [key for key in _netbox_get_cache if key[0] == token]
+    for key in keys:
+        _netbox_get_cache.pop(key, None)
+    return len(keys)
+
+
 def _cache_key(api: object, path: str, query: dict[str, object] | None) -> tuple[int, str, str]:
-    return (id(api), _normalize_path(path), _serialize_query(query))
+    token = _api_token(api)
+    return (-1 if token is None else token, _normalize_path(path), _serialize_query(query))
 
 
 def clear_rest_get_cache_for_path(nb: object, path: str) -> None:
@@ -451,6 +501,8 @@ def _read_get_cache(
             logger.debug("Cache DISABLED: TTL=%s path=%s query=%s", ttl, path, query)
         return None
 
+    if _api_token(api) is None:
+        return None
     cache_key = _cache_key(api, path, query)
     entry = _netbox_get_cache.get(cache_key)
     if entry is None:
@@ -468,7 +520,7 @@ def _read_get_cache(
     _cache_metrics_hits += 1
     if _debug_cache_enabled():
         logger.debug("Cache HIT: path=%s query=%s", path, query)
-    return [dict(record) for record in records]
+    return copy.deepcopy(records)
 
 
 def _write_get_cache(
@@ -483,7 +535,7 @@ def _write_get_cache(
         _cache_metrics_evictions_bytes
     now = time.monotonic()
     ttl = _resolve_get_cache_ttl_seconds()
-    if ttl <= 0:
+    if ttl <= 0 or _api_token(api) is None:
         return
 
     entry_size = _calculate_cache_entry_size(records)
@@ -512,7 +564,7 @@ def _write_get_cache(
     _netbox_get_cache[_cache_key(api, path, query)] = (
         now,
         entry_size,
-        [dict(record) for record in records],
+        copy.deepcopy(records),
     )
 
 
@@ -535,7 +587,10 @@ def _invalidate_get_cache_for_path(api: object, path: str) -> None:
     """Invalidate cache entries for an exact path, its parent list, and direct children."""
     global _cache_metrics_invalidations
     normalized = _normalize_path(path)
-    api_id = id(api)
+    _bump_get_cache_generation(api)
+    api_id = _api_token(api)
+    if api_id is None:
+        return
     is_detail = _is_detail_path(normalized)
     list_path = _extract_list_path(normalized) if is_detail else normalized
 
@@ -1066,6 +1121,7 @@ async def _rest_list_traverse_async(
             f"Initial offset {initial_offset} exceeded the explicit maximum {max_offset}",
         )
 
+    cache_generation = _get_cache_generation(api)
     cached = _read_get_cache(api, normalized_path, query)
     if cached is not None:
         if max_records is not None and len(cached) > max_records:
@@ -1322,7 +1378,9 @@ async def _rest_list_traverse_async(
         current_path, current_query = normalized_path, next_query
         current_offset = next_offset
 
-    if exhausted:
+    if exhausted and _get_cache_generation(api) == cache_generation:
+        # A concurrent write invalidated this path while pages were in flight;
+        # caching the pre-write snapshot would serve stale rows.
         _write_get_cache(api, normalized_path, query, aggregated)
     return [RestRecord(api, normalized_path, item) for item in aggregated]
 
@@ -1399,6 +1457,8 @@ async def rest_create_async(
     async def _is_already_created() -> RestRecord | None:
         if not lookup:
             return None
+        # The lost-response POST may have landed after a cached empty lookup.
+        _invalidate_get_cache_for_path(api, normalized_path)
         try:
             return await rest_first_async(nb, path, query={**lookup, "limit": 2})
         except Exception:  # noqa: BLE001

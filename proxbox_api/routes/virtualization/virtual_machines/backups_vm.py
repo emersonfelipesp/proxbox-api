@@ -295,6 +295,13 @@ def _volids_from_proxmox_storage_backup_items(items: list[dict]) -> set[str]:
     return out
 
 
+def _all_volids(items: list[dict]) -> set[str]:
+    """Every volume id a backup listing reported, whether or not the row is classifiable."""
+    return {
+        item["volid"] for item in items if isinstance(item.get("volid"), str) and item.get("volid")
+    }
+
+
 def _relation_id_or_none(value):
     if isinstance(value, dict):
         value = value.get("id")
@@ -574,6 +581,58 @@ def _compute_backup_diff(
     return diff
 
 
+def _split_csv(value: object) -> list[str]:
+    """Split a comma-separated string (or list) into trimmed, non-empty items."""
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple, set)) else str(value).split(",")
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _backup_capable_storages(
+    storage_payload: object,
+) -> tuple[list[dict[str, object]], bool]:
+    """Return backup-capable storages and whether every entry's ``content`` was usable.
+
+    ``False`` means at least one storage had missing or malformed ``content``, so it
+    cannot be ruled out as holding backups.
+    """
+    storages: list[dict[str, object]] = []
+    coverage_known = True
+    for storage_dict in storage_payload if isinstance(storage_payload, list) else []:
+        content = storage_dict.get("content")
+        if not isinstance(content, (str, list, tuple)):
+            coverage_known = False
+            continue
+        if "backup" in _split_csv(content):
+            storages.append(
+                {"storage": storage_dict.get("storage"), "nodes": storage_dict.get("nodes", "all")}
+            )
+    return storages, coverage_known
+
+
+def _unserved_backup_storages(
+    storages: list[dict[str, object]], node_names: list[str]
+) -> list[str]:
+    """Return backup-capable storage names that none of ``node_names`` can read."""
+    return [
+        str(storage.get("storage"))
+        for storage in storages
+        if not any(_storage_serves_node(storage.get("nodes"), name) for name in node_names)
+    ]
+
+
+def _storage_serves_node(nodes: object, node_name: str) -> bool:
+    """Exact-match a node name against a storage ``nodes`` restriction.
+
+    Missing or ``all`` means unrestricted; otherwise compare whole names so that
+    ``pve1`` never matches ``pve10,pve2``.
+    """
+    if nodes is None or nodes == "all":
+        return True
+    return node_name in _split_csv(nodes)
+
+
 def _backup_owner_key(record: dict[str, object]) -> tuple[int, str]:
     virtual_machine_id = _relation_id_or_none(record.get("virtual_machine"))
     volume_id = str(record.get("volume_id") or "").strip()
@@ -631,7 +690,15 @@ async def _bulk_reconcile_backups(  # noqa: C901
     existing_by_owner: dict[tuple[int, str], RestRecord] = {}
     for rec in existing_backups_raw:
         raw = rec.serialize() if isinstance(rec, RestRecord) else to_mapping(rec)
-        owner_key = _backup_owner_key(raw)
+        try:
+            owner_key = _backup_owner_key(raw)
+        except ProxboxException:
+            logger.warning(
+                "Skipping existing NetBox backup id=%s without stable ownership "
+                "(missing virtual_machine or volume_id)",
+                raw.get("id"),
+            )
+            continue
         if owner_key in existing_by_owner:
             raise ProxboxException(
                 message="Duplicate NetBox backups share the same owner identity",
@@ -1255,9 +1322,11 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 return attach_skips_to_list(results, selection_skipped)
 
         all_raw_backups: list[dict] = []
+        observed_volids: set[str] = set()
         discovery_tasks: list[asyncio.Task] = []
         discovery_task_owners: list[tuple[int, str] | None] = []
         owner_discovery_ok: dict[tuple[int, str], bool] = {}
+        owner_discovery_failed: set[tuple[int, str]] = set()
         fetch_semaphore = asyncio.Semaphore(fetch_max_concurrency or _resolve_fetch_concurrency())
 
         async def _discover_backups_for_node_storage(
@@ -1283,13 +1352,15 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                     **_extra,
                 )
                 backups = dump_models(raw_backups)
+                # Record every volid Proxmox reports before any vmid or content filtering,
+                # so rows we cannot classify still protect their NetBox records from cleanup.
+                volids = _all_volids(backups)
                 if effective_vmids is not None:
                     backups = [
                         backup
                         for backup in backups
                         if str(backup.get("vmid", "")).strip() in effective_vmids
                     ]
-                volids = _volids_from_proxmox_storage_backup_items(backups)
                 filtered = []
                 for backup in backups:
                     if backup.get("content") != "backup":
@@ -1318,25 +1389,39 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                     continue
                 allowed_vmids = selected_owner_vmids[owner_key]
             if discovery_owner is not None:
-                owner_discovery_ok.setdefault(discovery_owner, True)
+                # Not complete until a storage read actually succeeds for this owner.
+                owner_discovery_ok.setdefault(discovery_owner, False)
             storage_payload = await resolve_async(proxmox.session.storage.get())
-            storage_list = [
-                {
-                    "storage": storage_dict.get("storage"),
-                    "nodes": storage_dict.get("nodes", "all"),
-                }
-                for storage_dict in storage_payload
-                if "backup" in storage_dict.get("content")
-            ]
+            storage_list, storage_coverage_known = _backup_capable_storages(storage_payload)
+            if not storage_coverage_known and discovery_owner is not None:
+                # A storage with no usable ``content`` may hold backups we cannot see, so
+                # this owner's discovery is incomplete and must never authorize deletes.
+                owner_discovery_failed.add(discovery_owner)
+                logger.warning(
+                    "Backup storage listing for endpoint=%s has entries without usable content; "
+                    "suppressing backup cleanup for this owner",
+                    endpoint_id,
+                )
 
             if discovery_owner is not None and not (cluster and cluster.node_list):
-                owner_discovery_ok[discovery_owner] = False
+                owner_discovery_failed.add(discovery_owner)
+            elif discovery_owner is not None:
+                unserved = _unserved_backup_storages(
+                    storage_list, [node.name for node in cluster.node_list]
+                )
+                if unserved:
+                    # A backup-capable storage that no enumerated node serves is never read,
+                    # so a successful read elsewhere must not authorize owner-wide cleanup.
+                    owner_discovery_failed.add(discovery_owner)
+                    logger.warning(
+                        "Backup storages %s are not served by any enumerated node; "
+                        "suppressing backup cleanup for this owner",
+                        unserved,
+                    )
             if cluster and cluster.node_list:
                 for cluster_node in cluster.node_list:
                     for storage in storage_list:
-                        if storage.get("nodes") == "all" or cluster_node.name in storage.get(
-                            "nodes", []
-                        ):
+                        if _storage_serves_node(storage.get("nodes"), cluster_node.name):
                             discovery_tasks.append(
                                 asyncio.create_task(
                                     _discover_backups_for_node_storage(
@@ -1357,11 +1442,17 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 if isinstance(result, Exception):
                     failure_count += 1
                     if owner is not None:
-                        owner_discovery_ok[owner] = False
+                        owner_discovery_failed.add(owner)
                     logger.warning("Backup discovery failed: %s", result, exc_info=True)
                     continue
-                node_backups, _node_volids = result
+                if owner is not None:
+                    owner_discovery_ok[owner] = True
+                node_backups, node_volids = result
                 all_raw_backups.extend(node_backups)
+                observed_volids.update(node_volids)
+
+        for failed_owner in owner_discovery_failed:
+            owner_discovery_ok[failed_owner] = False
 
         cleanup_covered_vm_ids: set[int] = set()
         if isinstance(vm_cache, _BackupVMCache):
@@ -1393,6 +1484,11 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                 all_payloads.append(payload)
 
         proxmox_backup_owner_keys = {_backup_owner_key(payload) for payload in all_payloads}
+        # Volumes Proxmox lists that never became an owner key (missing vmid or content):
+        # their NetBox records must survive cleanup because we cannot prove them stale.
+        unclassified_volids = observed_volids - {
+            volume for _vm, volume in proxmox_backup_owner_keys
+        }
 
         if not all_payloads:
             warning_msg = "No backups found to process"
@@ -1463,6 +1559,10 @@ async def _create_all_virtual_machine_backups(  # noqa: C901
                     vid = backup.volume_id
                     if not vid:
                         skipped_no_volid += 1
+                        continue
+                    if str(vid) in unclassified_volids:
+                        # Proxmox still reports this volume, even if its row could not be
+                        # classified into an owner key, so the NetBox record is kept.
                         continue
                     if (virtual_machine_id, str(vid)) not in proxmox_backup_owner_keys:
                         backup_id = backup.id

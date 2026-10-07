@@ -15,6 +15,7 @@ from proxbox_api.netbox_rest import (
     rest_patch_async,
 )
 from proxbox_api.proxmox_to_netbox.models import NetBoxVirtualDiskSyncState, ProxmoxVmConfigInput
+from proxbox_api.proxmox_to_netbox.schemas.disks import DISK_KEY_PATTERN
 from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox.config import is_guest_not_found_error, resolve_vm_config
 from proxbox_api.services.sync.orphan_sweep import exclude_soft_deleted_vms
@@ -201,13 +202,71 @@ async def _list_all_vms_with_proxmox_id(
     )
 
 
+PROXBOX_TAG_SLUG = "proxbox"
+
+
+def _is_proxbox_owned(data: dict[str, object]) -> bool:
+    """Return True when a NetBox record carries the Proxbox ownership tag."""
+    tags = data.get("tags")
+    if not isinstance(tags, (list, tuple)):
+        return False
+    for tag in tags:
+        mapping = to_mapping(tag) if not isinstance(tag, str) else {"slug": tag}
+        if str(mapping.get("slug") or "").strip().lower() == PROXBOX_TAG_SLUG:
+            return True
+    return False
+
+
+def _present_disk_names(vm_config_obj: ProxmoxVmConfigInput) -> frozenset[str]:
+    """Return disk keys still present in the raw Proxmox config, parsed or not."""
+    return frozenset(
+        key
+        for key, value in (vm_config_obj.model_extra or {}).items()
+        if DISK_KEY_PATTERN.match(key) and value
+    )
+
+
+def _proxbox_owned_disk_rows(existing_disks: list[object]) -> list[tuple[str, int, int]]:
+    """Return ``(name, record_id, size)`` for Proxbox-owned disk records only."""
+    rows: list[tuple[str, int, int]] = []
+    for record in existing_disks:
+        data = to_mapping(record)
+        name = str(data.get("name") or "").strip()
+        record_id = relation_id(data.get("id"))
+        if not name or record_id is None or not _is_proxbox_owned(data):
+            continue
+        try:
+            size = int(data.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        rows.append((name, record_id, size))
+    return rows
+
+
 async def _delete_stale_virtual_disks(
     nb: object,
     *,
     vm_id: int,
     desired_disks: dict[str, int],
+    present_disk_names: frozenset[str] = frozenset(),
 ) -> int:
-    """Delete VM disk records missing from Proxmox, including duplicate names."""
+    """Delete Proxbox-owned VM disk records missing from Proxmox, including duplicates.
+
+    ``present_disk_names`` are disk keys that still exist in the raw Proxmox config even
+    when they could not be represented (for example passthrough disks with no size).
+    Their records are kept: the disk is attached, only our parser skipped it.
+
+    Ownership signal: the ``proxbox`` tag that every Proxbox-written disk carries.
+    Untagged records (operator-created disks) are never deleted. An empty desired
+    set means Proxmox yielded no parsed disks, which is indistinguishable from a
+    parse failure, so nothing is deleted.
+    """
+
+    if not desired_disks:
+        logger.warning(
+            "Skipping stale virtual disk cleanup for VM id=%s: no desired disks parsed", vm_id
+        )
+        return 0
 
     existing_disks = await rest_list_async(
         nb,
@@ -217,19 +276,11 @@ async def _delete_stale_virtual_disks(
     stale_ids: list[int] = []
     desired_names = set(desired_disks)
     desired_records: dict[str, list[tuple[int, int]]] = {}
-    for record in existing_disks:
-        data = to_mapping(record)
-        name = str(data.get("name") or "").strip()
-        record_id = relation_id(data.get("id"))
-        if not name or record_id is None:
-            continue
+    for name, record_id, size in _proxbox_owned_disk_rows(existing_disks):
         if name not in desired_names:
-            stale_ids.append(record_id)
+            if name not in present_disk_names:
+                stale_ids.append(record_id)
             continue
-        try:
-            size = int(data.get("size") or 0)
-        except (TypeError, ValueError):
-            size = 0
         desired_records.setdefault(name, []).append((record_id, size))
 
     for name, records in desired_records.items():
@@ -539,6 +590,7 @@ async def _sync_virtual_disks_for_vm(
             str(payload.get("name")): int(payload.get("size") or 0) for payload in disk_payloads
         }
         desired_disk_total = sum(int(payload.get("size") or 0) for payload in disk_payloads)
+        raw_disk_names = _present_disk_names(vm_config_obj)
 
         if disk_payloads:
             bulk_result = await rest_bulk_reconcile_async(
@@ -579,6 +631,7 @@ async def _sync_virtual_disks_for_vm(
                 nb,
                 vm_id=vm_id_int,
                 desired_disks=desired_disk_sizes,
+                present_disk_names=raw_disk_names,
             )
             parent_vm_disk_updated = await _sync_parent_vm_disk_total(
                 nb,

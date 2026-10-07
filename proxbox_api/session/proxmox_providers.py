@@ -641,6 +641,7 @@ def _parse_db_endpoint(
             else settings.get("proxmox_retry_backoff")
         ),
         db_endpoint_id=endpoint.id,
+        endpoint_source="database",
         site_id=endpoint.site_id,
         site_slug=endpoint.site_slug,
         site_name=endpoint.site_name,
@@ -831,6 +832,7 @@ def _parse_netbox_endpoint(
         if raw_retry_backoff is not None
         else settings.get("proxmox_retry_backoff"),  # type: ignore[arg-type]
         db_endpoint_id=_netbox_field(endpoint, "id"),
+        endpoint_source="netbox",
         **_relation_metadata(endpoint, "site"),
         **_relation_metadata(endpoint, "tenant"),
     )

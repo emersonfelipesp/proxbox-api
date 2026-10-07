@@ -564,9 +564,27 @@ def test_create_virtual_disks_deletes_stale_disks_and_updates_vm_total(monkeypat
         if _path == "/api/virtualization/virtual-disks/":
             assert query == {"virtual_machine_id": 7, "limit": 500}
             return [
-                {"id": 10, "virtual_machine": {"id": 7}, "name": "scsi0", "size": 2252},
-                {"id": 12, "virtual_machine": {"id": 7}, "name": "scsi0", "size": 2252},
-                {"id": 11, "virtual_machine": {"id": 7}, "name": "efidisk0", "size": 4},
+                {
+                    "id": 10,
+                    "virtual_machine": {"id": 7},
+                    "name": "scsi0",
+                    "size": 2252,
+                    "tags": [{"name": "Proxbox", "slug": "proxbox"}],
+                },
+                {
+                    "id": 12,
+                    "virtual_machine": {"id": 7},
+                    "name": "scsi0",
+                    "size": 2252,
+                    "tags": [{"name": "Proxbox", "slug": "proxbox"}],
+                },
+                {
+                    "id": 11,
+                    "virtual_machine": {"id": 7},
+                    "name": "efidisk0",
+                    "size": 4,
+                    "tags": [{"name": "Proxbox", "slug": "proxbox"}],
+                },
             ]
         return []
 

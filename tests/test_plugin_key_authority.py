@@ -223,7 +223,7 @@ def test_metadata_overrides_and_warm_cache_never_select_a_plugin_root(monkeypatc
     monkeypatch.setenv("PROXBOX_ALLOW_PLAINTEXT_CREDENTIALS", "1")
     metadata = {"encryption_key": "forbidden-metadata-root", "proxmox_timeout": 17}
     monkeypatch.setattr(settings_client, "_SETTINGS_CACHE", metadata)
-    monkeypatch.setattr(settings_client, "_SETTINGS_CACHE_TIME", settings_client.time.time())
+    monkeypatch.setattr(settings_client, "_SETTINGS_CACHE_TIME", settings_client.time.monotonic())
     with settings_client.override_settings_for_current_thread(metadata):
         assert settings_client.get_settings()["encryption_key"] == ""
         assert credentials.is_encryption_enabled() is False
