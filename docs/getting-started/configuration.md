@@ -539,6 +539,10 @@ references. A delayed result cannot restore retired material. The selected
 plugin source remains blocked until an explicit encryption-cache reset and
 default-client reselection; it cannot silently switch to another NetBox endpoint,
 an environment/local key, plaintext storage, or the development signing seed.
+An endpoint update that changes no connection or credential field, such as the
+netbox-proxbox plugin's endpoint push before every sync, is a no-op: it does not
+re-encrypt, commit, or invalidate anything, so it cannot retire the selected
+plugin source.
 Independent operator-selected environment and local keys keep their own cache.
 
 For cold startup, a NetBox service token encrypted under an unavailable plugin

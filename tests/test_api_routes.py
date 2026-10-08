@@ -675,6 +675,26 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
     assert updated.name == "netbox-primary-updated"
     assert len(settings_cache_invalidations) == 2
 
+    # The plugin pushes its unchanged endpoint before every sync. That push must
+    # not retire clients or the selected plugin-key authority.
+    unchanged = asyncio.run(
+        update_netbox_endpoint(
+            endpoint_id,
+            NetBoxEndpoint(
+                name="netbox-primary-updated",
+                ip_address="2001:db8::13",
+                domain="netbox.example.com",
+                port=443,
+                token="token-2",
+                verify_ssl=True,
+            ),
+            db_session,
+        )
+    )
+    assert unchanged.name == "netbox-primary-updated"
+    assert len(settings_cache_invalidations) == 2
+    assert len(invalidate_client_cache.await_args_list) == 2
+
     retrieved = asyncio.run(get_netbox_endpoint(endpoint_id, db_session))
     assert retrieved.name == "netbox-primary-updated"
     assert not hasattr(retrieved, "token") or retrieved.token is None
@@ -687,6 +707,52 @@ def test_netbox_endpoint_crud_and_singleton_rule(db_session, monkeypatch):
         call(endpoint_id),
         call(endpoint_id),
     ]
+
+
+def test_unchanged_endpoint_push_keeps_authority_and_decrypts_off_loop(db_session, monkeypatch):
+    import threading
+
+    invalidate_client_cache = AsyncMock()
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.invalidate_netbox_api_cache", invalidate_client_cache
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.probe_netbox_endpoint",
+        AsyncMock(return_value=NetBoxProbeResult(reachable=True, status="reachable")),
+    )
+    fields = {
+        "name": "netbox-primary",
+        "ip_address": "2001:db8::14",
+        "domain": "netbox.example.com",
+        "port": 443,
+        "token": "token-1",
+        "verify_ssl": True,
+    }
+    endpoint_id = asyncio.run(create_netbox_endpoint(NetBoxEndpoint(**fields), db_session)).id
+    stored_token = db_session.get(NetBoxEndpoint, endpoint_id).token
+    decrypting_threads: list[threading.Thread] = []
+    original = NetBoxEndpoint.get_decrypted_token
+
+    def recording_decrypt(self):
+        decrypting_threads.append(threading.current_thread())
+        return original(self)
+
+    monkeypatch.setattr(NetBoxEndpoint, "get_decrypted_token", recording_decrypt)
+    invalidate_client_cache.reset_mock()
+
+    asyncio.run(update_netbox_endpoint(endpoint_id, NetBoxEndpoint(**fields), db_session))
+
+    invalidate_client_cache.assert_not_awaited()
+    assert db_session.get(NetBoxEndpoint, endpoint_id).token == stored_token
+    assert decrypting_threads
+    assert all(thread is not threading.main_thread() for thread in decrypting_threads)
+
+    asyncio.run(
+        update_netbox_endpoint(
+            endpoint_id, NetBoxEndpoint(**{**fields, "token": "token-2"}), db_session
+        )
+    )
+    invalidate_client_cache.assert_awaited_once_with(endpoint_id)
 
 
 def test_netbox_endpoint_rejects_v1_without_token(db_session):

@@ -65,7 +65,10 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
   during authorization. Require a fresh HTTP 200 with a bounded nonempty key for
   every plugin cryptographic acquisition. Refuse redirects and compressed or
   oversized responses; expose only fixed errors. Retired generations remain
-  blocked until explicit source reset and default-facade reselection. Delayed
+  blocked until explicit source reset and default-facade reselection. An
+  unchanged `PUT /netbox/endpoint/{id}` must stay a no-op (no re-encryption,
+  commit, or invalidation); stored-secret comparison runs in a worker thread
+  because decryption can call the authority. Delayed
   responses cannot republish retired material. Operator-selected environment
   and local roots keep their independent cache. See the configuration guide for
   the separate two-second result-acceptance window and cold-bootstrap requirements.

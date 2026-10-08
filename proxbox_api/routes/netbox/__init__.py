@@ -101,6 +101,44 @@ def _validate_netbox_credentials(nb: NetBoxEndpoint) -> None:
     nb.token_key = key
 
 
+_SECRET_FIELDS = frozenset({"token", "token_key"})
+_CONNECTION_FIELDS = (
+    "name",
+    "ip_address",
+    "domain",
+    "port",
+    "token_version",
+    "verify_ssl",
+    "enabled",
+)
+
+
+def _stored_connection_snapshot(endpoint: NetBoxEndpoint) -> dict[str, object] | None:
+    """Return the persisted connection inputs, or None when secrets are unreadable.
+
+    Stored secrets are decrypted for comparison because encryption is not
+    deterministic. Decryption can perform a plugin-key authority request, so
+    callers run this outside the event loop.
+    """
+    snapshot: dict[str, object] = {field: getattr(endpoint, field) for field in _CONNECTION_FIELDS}
+    try:
+        snapshot["token"] = endpoint.get_decrypted_token() or None
+        snapshot["token_key"] = endpoint.get_decrypted_token_key() or None
+    except Exception:  # noqa: BLE001 - unreadable secrets always count as a change
+        return None
+    return snapshot
+
+
+def _requested_connection_snapshot(
+    endpoint: NetBoxEndpoint, stored: dict[str, object], replaced: set[str]
+) -> dict[str, object]:
+    """Return the connection inputs after an in-memory update, without decryption."""
+    snapshot: dict[str, object] = {field: getattr(endpoint, field) for field in _CONNECTION_FIELDS}
+    for field in _SECRET_FIELDS:
+        snapshot[field] = (getattr(endpoint, field) or None) if field in replaced else stored[field]
+    return snapshot
+
+
 @router.post("/endpoint", response_model=NetBoxEndpointResponse)
 async def create_netbox_endpoint(
     netbox: NetBoxEndpointCreate, session: SessionDep
@@ -225,11 +263,20 @@ async def update_netbox_endpoint(
     if "token" in update_data:
         update_data["token"] = (update_data["token"] or "").strip()
 
+    stored = await asyncio.to_thread(_stored_connection_snapshot, db_netbox)
     for key, value in update_data.items():
         setattr(db_netbox, key, value)
 
     _normalize_netbox_endpoint_fields(db_netbox)
     _validate_netbox_credentials(db_netbox)
+    if stored is not None and stored == _requested_connection_snapshot(
+        db_netbox, stored, set(update_data) & _SECRET_FIELDS
+    ):
+        # The plugin pushes its unchanged endpoint before every sync. Re-encrypting,
+        # committing, or invalidating here would retire the selected plugin-key
+        # authority and fail every later key request until restart.
+        await _maybe_await(session.refresh(db_netbox))
+        return await _endpoint_response_with_probe(db_netbox)
 
     db_netbox.set_encrypted_token(db_netbox.token)
     if db_netbox.token_key:
