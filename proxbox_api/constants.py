@@ -8,7 +8,7 @@ NETBOX_MAX_OFFSET = 10_000
 # Bump alongside the netbox-sdk pin and the OpenAPI snapshots when targeting a new NetBox release.
 NETBOX_SCHEMA_VERSION = "4.6"
 NETBOX_SCHEMA_FLOOR = "4.5"
-SUPPORTED_NETBOX_MAJOR_MINOR = ("4.5", "4.6")
+SUPPORTED_NETBOX_MAJOR_MINOR = ("4.5", "4.6", "4.7")
 
 # VM sync defaults
 DEFAULT_VM_STATUS = "active"
