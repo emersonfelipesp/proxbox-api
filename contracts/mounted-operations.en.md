@@ -3770,7 +3770,7 @@
 | 3738 | http | GET | /proxmox/api2/9.1/storage/{storage} | proxbox&#95;api/routes/proxmox/runtime&#95;generated.py:743 generated&#95;proxmox&#95;route&#95;&#95;get&#95;storage&#95;storage | 9.1:get&#95;storage&#95;storage:alias=False |
 | 3739 | http | PUT | /proxmox/api2/9.1/storage/{storage} | proxbox&#95;api/routes/proxmox/runtime&#95;generated.py:743 generated&#95;proxmox&#95;route&#95;&#95;put&#95;storage&#95;storage | 9.1:put&#95;storage&#95;storage:alias=False |
 | 3740 | http | GET | /proxmox/api2/9.1/version | proxbox&#95;api/routes/proxmox/runtime&#95;generated.py:743 generated&#95;proxmox&#95;route&#95;&#95;get&#95;version | 9.1:get&#95;version:alias=False |
-| 3741 | http | GET,HEAD | /openapi.json | fastapi/applications.py:1144 FastAPI.setup.&lt;locals&gt;.openapi | - |
+| 3741 | http | GET,HEAD | /openapi.json | fastapi/applications.py:1145 FastAPI.setup.&lt;locals&gt;.openapi | - |
 | 3742 | mount |  | /static | starlette/staticfiles.py:87 StaticFiles.&#95;&#95;call&#95;&#95; | - |
 | 3743 | http | GET | /docs | proxbox&#95;api/app/factory.py:631 create&#95;app.&lt;locals&gt;.custom&#95;swagger&#95;ui | - |
 | 3744 | http | GET | /redoc | proxbox&#95;api/app/factory.py:641 create&#95;app.&lt;locals&gt;.custom&#95;redoc | - |
