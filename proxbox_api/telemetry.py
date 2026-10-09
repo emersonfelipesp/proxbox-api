@@ -64,7 +64,9 @@ def prepare_telemetry_config(config: TelemetryConfig | None = None) -> Telemetry
 def _environment_export(config: TelemetryConfig, signal: str) -> bool:
     return (
         os.getenv("OTEL_SDK_DISABLED", "").lower() != "true"
-        and config.get("auto_configure", True)
+        and config.get(
+            "auto_configure", os.getenv("FASTAPI_OTEL_AUTO_CONFIGURE", "").lower() == "true"
+        )
         and config.get("logs" if signal == "LOGS" else "tracing", True)
         and (os.getenv(f"OTEL_{signal}_EXPORTER") or "otlp").strip().lower() != "none"
         and bool(

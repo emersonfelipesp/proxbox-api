@@ -127,6 +127,7 @@ thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 if sys.argv[2] == "enabled":
     os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = f"http://127.0.0.1:{server.server_port}"
+    os.environ["FASTAPI_OTEL_AUTO_CONFIGURE"] = "true"
 os.environ["OTEL_SERVICE_NAME"] = "telemetry-test"
 module = importlib.import_module(sys.argv[1])
 factory = getattr(module, "create_mock_app", None) or module.create_firecracker_agent_app
@@ -191,7 +192,11 @@ else:
 print("OTLP export contract passed")
 """
     )
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("OTEL_")}
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("OTEL_") and key != "FASTAPI_OTEL_AUTO_CONFIGURE"
+    }
     for mode in ("disabled", "enabled"):
         result = subprocess.run(
             [sys.executable, str(probe), module, mode, provider_mode],

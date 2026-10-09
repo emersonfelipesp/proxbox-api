@@ -583,15 +583,16 @@ If the encryption key changes after credentials were already encrypted, proxbox-
 
 ## OpenTelemetry
 
-All Python applications in this repository use `fastapi[standard]==0.142.2`, including the backend, Firecracker host agent, and standalone Proxmox mock. FastAPI records native HTTP traces, request metrics, validation/error logs, and WebSocket traces and logs. No collector endpoint is configured by this public project. Remote export requires an operator-selected OTLP HTTP/protobuf endpoint before startup:
+All Python applications in this repository use `fastapi[standard]==0.143.0`, including the backend, Firecracker host agent, and standalone Proxmox mock. FastAPI records native HTTP traces, request metrics, validation/error logs, and WebSocket traces and logs. No collector endpoint is configured by this public project. Native automatic export is disabled by default. It requires explicit native opt-in and an operator-selected OTLP HTTP/protobuf endpoint before startup:
 
 ```sh
+export FASTAPI_OTEL_AUTO_CONFIGURE=true
 export OTEL_SERVICE_NAME=proxbox-api
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ```
 
-Use a distinct `OTEL_SERVICE_NAME` for separately deployed host-agent and mock processes. The base endpoint receives `/v1/traces`, `/v1/metrics`, and `/v1/logs`; standard signal-specific endpoint variables override the corresponding URL. `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none` disable individual exports. Leaving endpoint variables unset performs no remote export. Protect any `OTEL_EXPORTER_OTLP_HEADERS` credentials with the deployment secret mechanism.
+These are operator-provided examples, not application defaults. Endpoint configuration alone does not enable native automatic export. Alternatively, pass `telemetry={"auto_configure": True}` to the factory; an explicit false overrides `FASTAPI_OTEL_AUTO_CONFIGURE=true`. Existing caller-configured providers continue to support instrumentation without native auto-configuration. Select a distinct `OTEL_SERVICE_NAME` for separately deployed host-agent and mock processes. The base endpoint receives `/v1/traces`, `/v1/metrics`, and `/v1/logs`; standard signal-specific endpoint variables override the corresponding URL. `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none`, and `OTEL_LOGS_EXPORTER=none` disable individual exports. Leaving endpoint variables unset performs no remote export. Protect any `OTEL_EXPORTER_OTLP_HEADERS` credentials with the deployment secret mechanism.
 
 `OTEL_SDK_DISABLED=true` suppresses native automatic configuration and all four native controls (`auto_configure`, `tracing`, `metrics`, and `logs`) on an internal copy before application construction. The caller's mapping is unchanged. An explicitly selected or preexisting global SDK tracer, meter, or logger provider keeps its identity and caller ownership. The application does not emit request telemetry through those providers while the SDK is disabled. Privacy processors are still registered once on selected SDK tracer and logger providers so that later caller emissions use the application's scope-limited privacy policy. This registration does not enable native signals or create an implicit provider.
 

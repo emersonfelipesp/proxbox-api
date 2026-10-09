@@ -146,7 +146,7 @@ def test_actual_locked_environment_matches_selected_source():
     actual = {row.name: row.version for row in records}
     project = Path(__file__).absolute().parents[2] / "pyproject.toml"
     assert actual["proxbox-api"] == tomllib.loads(project.read_text())["project"]["version"]
-    assert actual["fastapi"] == "0.142.2"
+    assert actual["fastapi"] == "0.143.0"
     assert actual["starlette"] == "1.3.1"
     assert actual["netbox-sdk"] == "0.0.13"
 

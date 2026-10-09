@@ -14,7 +14,7 @@ from starlette.routing import Mount as ASGIMount
 from .provenance import callable_identity
 from .schema import InventoryError, Mount, Operation
 
-SUPPORTED = {"fastapi": "0.142.2", "starlette": "1.3.1"}
+SUPPORTED = {"fastapi": "0.143.0", "starlette": "1.3.1"}
 type RouteProtocol = Literal["http", "websocket", "mount"]
 
 

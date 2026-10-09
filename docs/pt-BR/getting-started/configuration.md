@@ -451,15 +451,16 @@ Se a chave de criptografia mudar depois das credenciais ja terem sido criptograf
 
 ## OpenTelemetry
 
-Todas as aplicações Python deste repositório usam `fastapi[standard]==0.142.2`, incluindo o backend, o agente Firecracker e o mock Proxmox independente. O FastAPI registra traces HTTP nativos, métricas de requisições, logs de validação/erros e traces e logs de WebSocket. Este projeto público não configura nenhum endpoint de coletor. A exportação remota exige um endpoint OTLP HTTP/protobuf escolhido pelo operador antes da inicialização:
+Todas as aplicações Python deste repositório usam `fastapi[standard]==0.143.0`, incluindo o backend, o agente Firecracker e o mock Proxmox independente. O FastAPI registra traces HTTP nativos, métricas de requisições, logs de validação/erros e traces e logs de WebSocket. Este projeto público não configura nenhum endpoint de coletor. A exportação automática nativa fica desativada por padrão. Ela exige uma ativação explícita e um endpoint OTLP HTTP/protobuf escolhido pelo operador antes da inicialização:
 
 ```sh
+export FASTAPI_OTEL_AUTO_CONFIGURE=true
 export OTEL_SERVICE_NAME=proxbox-api
 export OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ```
 
-Use um `OTEL_SERVICE_NAME` distinto para processos separados do agente e do mock. O endpoint base recebe `/v1/traces`, `/v1/metrics` e `/v1/logs`; as variáveis de endpoint específicas de cada sinal substituem a URL correspondente. `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none` e `OTEL_LOGS_EXPORTER=none` desativam exportações individuais. Sem variáveis de endpoint, não ocorre exportação remota. Proteja credenciais em `OTEL_EXPORTER_OTLP_HEADERS` pelo mecanismo de segredos da implantação.
+Estes são exemplos escolhidos pelo operador, não valores padrão da aplicação. Configurar somente o endpoint não ativa a exportação automática nativa. Também é possível passar `telemetry={"auto_configure": True}` à fábrica; um valor explícito falso prevalece sobre `FASTAPI_OTEL_AUTO_CONFIGURE=true`. Provedores configurados pelo chamador continuam permitindo instrumentação sem configuração automática nativa. Escolha um `OTEL_SERVICE_NAME` distinto para processos separados do agente e do mock. O endpoint base recebe `/v1/traces`, `/v1/metrics` e `/v1/logs`; as variáveis de endpoint específicas de cada sinal substituem a URL correspondente. `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none` e `OTEL_LOGS_EXPORTER=none` desativam exportações individuais. Sem variáveis de endpoint, não ocorre exportação remota. Proteja credenciais em `OTEL_EXPORTER_OTLP_HEADERS` pelo mecanismo de segredos da implantação.
 
 `OTEL_SDK_DISABLED=true` desativa a configuração automática nativa e os quatro controles nativos (`auto_configure`, `tracing`, `metrics` e `logs`) em uma cópia interna antes da criação da aplicação. O mapeamento do chamador não é alterado. Um provedor SDK de trace, métrica ou log selecionado explicitamente ou já definido globalmente mantém sua identidade e continua sob responsabilidade do chamador. A aplicação não emite telemetria de requisição por esses provedores enquanto o SDK está desativado. Os processadores de privacidade ainda são registrados uma vez nos provedores SDK selecionados de trace e log para que emissões posteriores do chamador usem a política de privacidade limitada por escopo. Esse registro não ativa sinais nativos nem cria um provedor implícito.
 
