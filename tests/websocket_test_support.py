@@ -29,13 +29,17 @@ def rejected_websocket_session(
     **kwargs: Any,
 ) -> Iterator[None]:
     """Accept only an expected handshake rejection or its masked cleanup race."""
+    handshake_accepted = False
     try:
         with client.websocket_connect(*args, **kwargs):
+            handshake_accepted = True
             raise AssertionError("WebSocket handshake unexpectedly succeeded")
     except WebSocketDisconnect as exc:
         if exc.code != expected_code:
             raise
     except FutureCancelledError:
+        if handshake_accepted:
+            raise AssertionError("WebSocket handshake unexpectedly succeeded")
         # Starlette can replace the already-raised handshake rejection while
         # unwinding its portal future. This helper is restricted to callers
         # that independently assert the server-side rejection contract.

@@ -50,6 +50,21 @@ class _CapturingBridge(WebSocketSSEBridge):
         self.phase_summaries.append(kwargs)
 
 
+class _OrderedBridge(WebSocketSSEBridge):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    async def emit_discovery(self, **kwargs) -> None:
+        self.events.append(("discovery", kwargs))
+
+    async def emit_phase_summary(self, **kwargs) -> None:
+        self.events.append(("summary", kwargs))
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        self.events.append(("json", payload))
+
+
 def _resource(vmid: int) -> dict[str, object]:
     return {
         "type": "qemu",
@@ -462,6 +477,79 @@ def _install_full_update_stubs(
     )
 
     return fetch_calls
+
+
+def test_create_virtual_machines_rejects_invalid_selection_before_storage_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_detect_netbox_version(_nb):
+        return (4, 5, 0)
+
+    async def _unexpected_rest_list(*_args, **_kwargs):
+        raise AssertionError("storage lookup must not run for an invalid selector")
+
+    monkeypatch.setattr(sync_vm, "detect_netbox_version", _fake_detect_netbox_version)
+    monkeypatch.setattr(sync_vm, "rest_list_async", _unexpected_rest_list)
+
+    with pytest.raises(sync_vm.HTTPException) as exc_info:
+        asyncio.run(
+            sync_vm.create_virtual_machines(
+                netbox_session=object(),
+                pxs=[],
+                cluster_status=[],
+                cluster_resources=[],
+                tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+                netbox_vm_ids=",",
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail == (
+        "netbox_vm_ids must be a comma-separated list of positive integers"
+    )
+
+
+def test_empty_full_update_stream_preserves_discovery_summary_and_terminal_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_full_update_stubs(monkeypatch)
+    bridge = _OrderedBridge()
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            websocket=bridge,
+            use_websocket=True,
+            sync_vm_network=False,
+        )
+    )
+
+    assert result == []
+    assert bridge.events == [
+        (
+            "discovery",
+            {
+                "phase": "virtual-machines",
+                "items": [],
+                "message": "Discovered 0 virtual machine(s) to synchronize",
+                "metadata": {"sync_vm_network": False},
+            },
+        ),
+        (
+            "summary",
+            {
+                "phase": "virtual-machines",
+                "created": 0,
+                "failed": 0,
+                "message": "Virtual machine sync completed: 0 synchronized",
+            },
+        ),
+        ("json", {"object": "virtual_machine", "end": True}),
+    ]
 
 
 def _run_full_update_name_case(
@@ -1073,6 +1161,52 @@ def test_rest_vm_sync_without_network_raises_502_for_degraded_task_history(monke
 
     assert exc_info.value.http_status_code == 502
     assert exc_info.value.detail == {"errors": 1, "reconciled": 3, "skipped": 2}
+
+
+def test_streaming_vm_sync_logs_degraded_task_history_without_marking_vm_failed(monkeypatch):
+    _install_full_update_stubs(monkeypatch)
+    warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fake_get_vm_config(**_kwargs):
+        return dict(PROXMOX_VM_CONFIG)
+
+    async def _degraded_task_history(**_kwargs):
+        return {"count": 1, "created": 3, "skipped": 2, "degraded": True, "errors": 1}
+
+    class _WebSocket:
+        async def send_json(self, _payload):
+            return None
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _fake_get_vm_config)
+    monkeypatch.setattr(
+        sync_vm,
+        "sync_all_virtual_machine_task_histories",
+        _degraded_task_history,
+    )
+    monkeypatch.setattr(
+        sync_vm.logger,
+        "warning",
+        lambda message, *args: warning_calls.append((message, args)),
+    )
+
+    result = asyncio.run(
+        sync_vm.create_virtual_machines(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[SimpleNamespace(name="cluster-a", mode="cluster")],
+            cluster_resources=[{"cluster-a": [_resource(101)]}],
+            tag=SimpleNamespace(id=5, name="Proxbox", slug="proxbox", color="ff5722"),
+            sync_vm_network=False,
+            websocket=_WebSocket(),
+            use_websocket=True,
+        )
+    )
+
+    assert result.failed_count == 0
+    assert (
+        "VM task-history sync completed with degraded coverage: errors=%s reconciled=%s skipped=%s",
+        (1, 3, 2),
+    ) in warning_calls
 
 
 def test_cancellation_during_canonicalization_never_dispatches(monkeypatch) -> None:

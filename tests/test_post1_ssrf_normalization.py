@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 
 import pytest
 
@@ -64,6 +65,23 @@ def test_hostname_not_treated_as_literal(no_registered):
     assert ssrf.is_ip_blocked("netbox.example.com", SETTINGS) == (False, "OK")
 
 
+def test_request_scoped_endpoint_allow_does_not_seed_registered_cache(no_registered):
+    allowed = ssrf.pre_allow_endpoint_hosts("169.254.169.254", source="test")
+
+    assert ssrf.validate_endpoint_host(
+        "169.254.169.254",
+        SETTINGS,
+        request_allowed_hosts=allowed,
+    ) == (True, "OK")
+    assert ssrf.validate_endpoint_host("169.254.169.254", SETTINGS)[0] is False
+    assert ssrf._registered_ips_cache == set()
+    assert ssrf._registered_domains_cache == set()
+
+
+def test_partial_settings_fail_closed_for_private_targets(no_registered):
+    assert ssrf.is_ip_blocked("10.0.0.5", {})[0] is True
+
+
 def test_loader_logs_and_does_not_cache_on_db_failure(monkeypatch, caplog):
     import proxbox_api.database as database
 
@@ -84,11 +102,7 @@ def test_loader_logs_and_does_not_cache_on_db_failure(monkeypatch, caplog):
     assert ssrf._registered_domains_cache == set()
 
 
-_DENY_CASES = [
-    ("mapped", "::ffff:8.8.8.8", "::ffff:0:0/96"),
-    ("6to4", "2002:0808:0808::1", "2002::/16"),
-    ("teredo", "2001:0:4136:e378:8000:1234:f7f7:f7f7", "2001::/32"),
-]
+_DENY_CASES = [("mapped", "::ffff:8.8.8.8", "::ffff:0:0/96")]
 
 
 @pytest.mark.parametrize(("kind", "ip", "deny"), _DENY_CASES, ids=[c[0] for c in _DENY_CASES])
@@ -101,6 +115,32 @@ def test_explicit_ipv6_deny_rules_still_apply_to_embedded_forms(no_registered, k
     deny_settings = {**open_settings, "blocked_ip_ranges": [ipaddress.ip_network(deny)]}
     blocked, reason = ssrf.is_ip_blocked(ip, deny_settings)
     assert blocked and "explicitly blocked" in reason
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "0.0.0.0",
+        "::",
+        "2002:0808:0808::1",
+        "2001:0:4136:e378:8000:1234:f7f7:f7f7",
+    ],
+)
+def test_unspecified_and_non_global_addresses_fail_closed(no_registered, ip):
+    blocked, reason = ssrf.is_ip_blocked(ip, SETTINGS)
+    assert blocked, reason
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::"])
+def test_unspecified_addresses_cannot_use_request_allow_list(no_registered, host):
+    assert (
+        ssrf.validate_endpoint_host(
+            host,
+            {"ssrf_protection_enabled": False},
+            request_allowed_hosts={host},
+        )[0]
+        is False
+    )
 
 
 def test_ipv4_allow_range_still_covers_mapped_private_address(no_registered):
@@ -124,3 +164,66 @@ def test_ipv4_allow_range_does_not_whitelist_relay_embedded_forms(no_registered)
     }
     assert ssrf.is_ip_blocked("::ffff:10.0.0.5", settings) == (False, "OK")  # true mapped form
     assert ssrf.is_ip_blocked("2002:0a00:0005::", settings)[0]  # 6to4 of 10.0.0.5
+
+
+def test_resolver_preserves_ipv6_scope_and_flowinfo(no_registered, monkeypatch):
+    monkeypatch.setattr(
+        ssrf.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1", 0, 3, 7))
+        ],
+    )
+
+    safe, reason, addresses = ssrf.resolve_endpoint_host(
+        "scoped.example",
+        SETTINGS,
+        request_allowed_hosts={"scoped.example"},
+    )
+
+    assert (safe, reason) == (True, "OK")
+    assert addresses == (
+        ssrf.ResolvedAddress(
+            socket.AF_INET6,
+            "fe80::1",
+            flowinfo=3,
+            scope_id=7,
+        ),
+    )
+    assert addresses[0].socket_address(2222) == ("fe80::1", 2222, 3, 7)
+
+
+def test_resolver_keeps_same_ipv6_address_on_distinct_interfaces(no_registered, monkeypatch):
+    monkeypatch.setattr(
+        ssrf.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1", 0, 0, 7)),
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1", 0, 0, 8)),
+        ],
+    )
+
+    safe, _reason, addresses = ssrf.resolve_endpoint_host(
+        "multi-interface.example",
+        SETTINGS,
+        request_allowed_hosts={"multi-interface.example"},
+    )
+
+    assert safe is True
+    assert [address.scope_id for address in addresses] == [7, 8]
+
+
+def test_scoped_link_local_resolution_remains_blocked_by_default(no_registered, monkeypatch):
+    monkeypatch.setattr(
+        ssrf.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1", 0, 0, 7))
+        ],
+    )
+
+    safe, reason, addresses = ssrf.resolve_endpoint_host("scoped.example", SETTINGS)
+
+    assert safe is False
+    assert "reserved/internal IP address" in reason
+    assert addresses == ()

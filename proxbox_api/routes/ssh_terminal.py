@@ -15,11 +15,13 @@ from proxbox_api.services.interactive_policy import owned_resource, require_inte
 from proxbox_api.services.ssh_terminal import (
     HostKeyScanError,
     OneShotTerminalCredential,
+    SSHHostValidationError,
     TerminalCredential,
     TerminalCredentialError,
     TerminalSession,
     TerminalSessionError,
     connect_and_relay,
+    ensure_ssh_host_allowed,
     fetch_terminal_credential,
     scan_host_key_fingerprint,
     terminal_session_manager,
@@ -57,6 +59,8 @@ async def get_host_key_fingerprint(
     """
     try:
         fingerprint, key_type = await scan_host_key_fingerprint(host, port)
+    except SSHHostValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HostKeyScanError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return HostKeyFingerprintPublic(
@@ -143,6 +147,11 @@ async def create_terminal_session(
     # for its own SQLite-id SSH paths (Cloud Image Build Pipeline / Azure VHD
     # import). See routes/proxmox/access_gate.py and the netbox-proxbox plugin.
     require_interactive()
+    if payload.host:
+        try:
+            await ensure_ssh_host_allowed(payload.host)
+        except SSHHostValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     actor = payload.actor or request.headers.get("X-Proxbox-Actor")
     one_shot = None
     if payload.one_shot_credential is not None:

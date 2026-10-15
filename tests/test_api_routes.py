@@ -15,7 +15,12 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from netbox_sdk.client import ApiResponse
+from netbox_sdk.config import Config
+from sqlalchemy import event
+from sqlalchemy.exc import OperationalError
+from sqlmodel import select
 
+from proxbox_api import credentials, plugin_key_authority
 from proxbox_api.app.full_update import full_update_router
 from proxbox_api.constants import DISCOVERY_TAG_NODE
 from proxbox_api.database import NetBoxEndpoint
@@ -383,6 +388,16 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
             "count": 0,
             "results": [],
         },
+        (
+            "GET",
+            "/api/plugins/proxbox/sync-state/devices/",
+            (("limit", 3), ("proxmox_cluster_name", "lab"), ("proxmox_node_name", "pve01")),
+        ): {"count": 0, "results": []},
+        (
+            "GET",
+            "/api/plugins/proxbox/sync-state/devices/",
+            (("device_id", 17), ("limit", 2)),
+        ): {"count": 0, "results": []},
     }
     create_responses = {
         ("POST", "/api/virtualization/cluster-types/"): {"id": 11, "name": "Cluster"},
@@ -392,6 +407,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
         ("POST", "/api/dcim/device-roles/"): {"id": 15, "name": "Proxmox Node"},
         ("POST", "/api/dcim/sites/"): {"id": 16, "name": "Proxmox Default Site - lab"},
         ("POST", "/api/dcim/devices/"): {"id": 17, "name": "pve01", "site": 16},
+        ("PATCH", "/api/dcim/devices/17/"): {"id": 17, "name": "pve01", "site": 16},
     }
 
     fake_session = SimpleNamespace(
@@ -753,6 +769,219 @@ def test_unchanged_endpoint_push_keeps_authority_and_decrypts_off_loop(db_sessio
         )
     )
     invalidate_client_cache.assert_awaited_once_with(endpoint_id)
+
+
+def test_plugin_key_rejects_netbox_endpoint_create_without_persisting(db_session, monkeypatch):
+    monkeypatch.setattr("proxbox_api.routes.netbox.selected_key_source", lambda: "plugin")
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            create_netbox_endpoint(
+                NetBoxEndpoint(
+                    name="netbox-primary",
+                    ip_address="1.1.1.3",
+                    domain="netbox.example.com",
+                    port=443,
+                    token="synthetic-service-token",
+                    verify_ssl=True,
+                ),
+                db_session,
+            )
+        )
+
+    assert raised.value.status_code == 409
+    assert "PROXBOX_ENCRYPTION_KEY" in raised.value.detail
+    assert "synthetic-service-token" not in raised.value.detail
+    assert db_session.exec(select(NetBoxEndpoint)).all() == []
+
+
+def test_plugin_key_rejects_changed_token_and_accepts_unchanged_push(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.probe_netbox_endpoint",
+        AsyncMock(return_value=NetBoxProbeResult(reachable=True, status="reachable")),
+    )
+    fields = {
+        "name": "netbox-primary",
+        "ip_address": "1.1.1.3",
+        "domain": "netbox.example.com",
+        "port": 443,
+        "token": "synthetic-original-token",
+        "verify_ssl": True,
+    }
+    endpoint_id = asyncio.run(create_netbox_endpoint(NetBoxEndpoint(**fields), db_session)).id
+    stored_token = db_session.get(NetBoxEndpoint, endpoint_id).token
+    monkeypatch.setattr("proxbox_api.routes.netbox.selected_key_source", lambda: "plugin")
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            update_netbox_endpoint(
+                endpoint_id,
+                NetBoxEndpoint(**{**fields, "token": "synthetic-replacement-token"}),
+                db_session,
+            )
+        )
+
+    assert raised.value.status_code == 409
+    assert "synthetic-original-token" not in raised.value.detail
+    assert "synthetic-replacement-token" not in raised.value.detail
+    assert db_session.get(NetBoxEndpoint, endpoint_id).token == stored_token
+
+    unchanged = asyncio.run(
+        update_netbox_endpoint(endpoint_id, NetBoxEndpoint(**fields), db_session)
+    )
+    assert unchanged.id == endpoint_id
+    assert db_session.get(NetBoxEndpoint, endpoint_id).token == stored_token
+
+
+def test_independent_key_allows_changed_netbox_token(db_session, monkeypatch):
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "synthetic-independent-root")
+    credentials.reset_encryption_cache()
+    monkeypatch.setattr(
+        "proxbox_api.routes.netbox.probe_netbox_endpoint",
+        AsyncMock(return_value=NetBoxProbeResult(reachable=True, status="reachable")),
+    )
+    fields = {
+        "name": "netbox-primary",
+        "ip_address": "1.1.1.3",
+        "domain": "netbox.example.com",
+        "port": 443,
+        "token": "synthetic-original-token",
+        "verify_ssl": True,
+    }
+
+    try:
+        endpoint_id = asyncio.run(create_netbox_endpoint(NetBoxEndpoint(**fields), db_session)).id
+        updated = asyncio.run(
+            update_netbox_endpoint(
+                endpoint_id,
+                NetBoxEndpoint(**{**fields, "token": "synthetic-replacement-token"}),
+                db_session,
+            )
+        )
+
+        assert updated.id == endpoint_id
+        stored = db_session.get(NetBoxEndpoint, endpoint_id)
+        assert stored.token.startswith("enc:")
+        assert stored.get_decrypted_token() == "synthetic-replacement-token"
+    finally:
+        credentials.reset_encryption_cache()
+
+
+def test_recovered_plugin_authority_cannot_encrypt_changed_service_token(
+    db_session, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "synthetic-independent-root")
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY_FILE", str(tmp_path / "missing-independent-key"))
+    credentials.reset_encryption_cache()
+    fields = {
+        "name": "netbox-primary",
+        "ip_address": "1.1.1.3",
+        "domain": "netbox.example.com",
+        "port": 443,
+        "token": "synthetic-original-token",
+        "verify_ssl": True,
+    }
+    endpoint_id = asyncio.run(create_netbox_endpoint(NetBoxEndpoint(**fields), db_session)).id
+    stored_token = db_session.get(NetBoxEndpoint, endpoint_id).token
+    monkeypatch.delenv("PROXBOX_ENCRYPTION_KEY")
+    credentials.reset_encryption_cache()
+
+    config = Config(
+        base_url="https://authority.example.test",
+        token_version="v1",
+        token_secret="synthetic-service-token",
+    )
+    facade = SimpleNamespace(client=SimpleNamespace(config=config))
+    plugin_key_authority.register_plugin_key_candidate(facade, config, endpoint_id=endpoint_id)
+    plugin_key_authority.designate_default_plugin_authority(facade)
+    attempts = 0
+
+    def transient_authority(_candidate):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise plugin_key_authority.PluginKeyAuthorityError()
+        return "synthetic-plugin-root"
+
+    monkeypatch.setattr(plugin_key_authority, "_request_runtime_key", transient_authority)
+
+    try:
+        with pytest.raises(HTTPException) as raised:
+            asyncio.run(
+                update_netbox_endpoint(
+                    endpoint_id,
+                    NetBoxEndpoint(**{**fields, "token": "synthetic-replacement-token"}),
+                    db_session,
+                )
+            )
+
+        assert raised.value.status_code == 409
+        assert "PROXBOX_ENCRYPTION_KEY" in raised.value.detail
+        assert "synthetic-replacement-token" not in raised.value.detail
+        db_session.rollback()
+        assert db_session.get(NetBoxEndpoint, endpoint_id).token == stored_token
+        assert attempts == 2
+    finally:
+        plugin_key_authority.invalidate_plugin_key_authority()
+        credentials.reset_encryption_cache()
+
+
+def test_netbox_generation_failure_never_autoflushes_plaintext(db_session, monkeypatch):
+    canary = "synthetic-autoflush-secret-canary"
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "synthetic-autoflush-root")
+    credentials.reset_encryption_cache()
+    endpoint = NetBoxEndpoint(
+        name="netbox-primary",
+        ip_address="1.1.1.3",
+        domain="netbox.example.com",
+        port=443,
+        token="synthetic-original-token",
+        verify_ssl=True,
+    )
+    endpoint.set_encrypted_token(endpoint.token)
+    db_session.add(endpoint)
+    db_session.commit()
+    db_session.refresh(endpoint)
+    statements: list[tuple[str, object]] = []
+
+    def fail_generation_read(_connection, _cursor, statement, parameters, _context, _many):
+        statements.append((statement, parameters))
+        if "credential_encryption_key_state" in statement and statement.lstrip().startswith(
+            "SELECT"
+        ):
+            raise OperationalError(
+                statement, parameters, RuntimeError("synthetic database failure")
+            )
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", fail_generation_read)
+    try:
+        with pytest.raises(HTTPException) as raised:
+            asyncio.run(
+                update_netbox_endpoint(
+                    endpoint.id,
+                    NetBoxEndpoint(
+                        name=endpoint.name,
+                        ip_address=endpoint.ip_address,
+                        domain=endpoint.domain,
+                        port=endpoint.port,
+                        token=canary,
+                        verify_ssl=endpoint.verify_ssl,
+                    ),
+                    db_session,
+                )
+            )
+    finally:
+        event.remove(engine, "before_cursor_execute", fail_generation_read)
+        db_session.rollback()
+        credentials.reset_encryption_cache()
+
+    assert raised.value.status_code == 503
+    assert canary not in raised.value.detail
+    assert all(canary not in repr(item) for item in statements)
+    assert db_session.get(NetBoxEndpoint, endpoint.id).get_decrypted_token() == (
+        "synthetic-original-token"
+    )
 
 
 def test_netbox_endpoint_rejects_v1_without_token(db_session):

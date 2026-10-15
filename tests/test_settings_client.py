@@ -14,7 +14,7 @@ from proxbox_api.routes.virtualization.virtual_machines import helpers as vm_hel
 from proxbox_api.services import proxmox_helpers
 
 
-@pytest.mark.parametrize("status", [None, 401, 403, 422, 429, 500, 503])
+@pytest.mark.parametrize("status", [None, 422, 429, 500, 503])
 def test_runtime_settings_denial_never_uses_metadata_fallback(monkeypatch, status):
     from unittest.mock import Mock
 
@@ -29,6 +29,24 @@ def test_runtime_settings_denial_never_uses_metadata_fallback(monkeypatch, statu
     assert result is None
     assert transport.call_count == 1
     assert transport.call_args.kwargs["path"] == "/api/plugins/proxbox/settings/runtime/"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_runtime_settings_authorization_denial_is_typed(monkeypatch, status):
+    from unittest.mock import Mock
+
+    transport = Mock(return_value=(None, status))
+    monkeypatch.setattr(settings_client, "_request_settings_json", transport)
+
+    with pytest.raises(settings_client.SettingsAuthorizationError):
+        settings_client._fetch_settings_payload(
+            base_url="https://netbox.example.test",
+            auth="Token synthetic-service-token",
+            ssl_verify=True,
+            request_timeout_seconds=2.0,
+        )
+
+    assert transport.call_count == 1
 
 
 def test_legacy_settings_fallback_cannot_reveal_root_key(monkeypatch):
@@ -301,7 +319,9 @@ def test_fetch_settings_from_netbox_reads_backend_log_file_path(monkeypatch, fie
     mock_response.__enter__ = MagicMock(return_value=mock_response)
     mock_response.__exit__ = MagicMock(return_value=None)
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: mock_response)
+    monkeypatch.setattr(
+        settings_client, "_open_settings_request", lambda *args, **kwargs: mock_response
+    )
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
@@ -353,7 +373,9 @@ def test_fetch_settings_from_netbox_reads_paginated_settings_response(monkeypatc
     mock_response.__enter__ = MagicMock(return_value=mock_response)
     mock_response.__exit__ = MagicMock(return_value=None)
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: mock_response)
+    monkeypatch.setattr(
+        settings_client, "_open_settings_request", lambda *args, **kwargs: mock_response
+    )
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
@@ -525,7 +547,7 @@ def test_fetch_settings_prefers_runtime_endpoint_and_falls_back_to_list(monkeypa
             )
         return mock_response
 
-    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(settings_client, "_open_settings_request", _urlopen)
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
@@ -574,6 +596,108 @@ def test_fetch_settings_fallback_paths_share_one_total_timeout_budget(monkeypatc
     assert [round(timeout, 3) for timeout in request_timeouts] == [0.5, 0.2]
 
 
+def test_settings_transport_refuses_redirects() -> None:
+    handler = settings_client._NoSettingsRedirectHandler()
+    assert (
+        handler.redirect_request(
+            object(),
+            None,
+            302,
+            "Found",
+            {},
+            "https://attacker.example.test/settings",
+        )
+        is None
+    )
+
+
+def test_settings_transport_redirect_never_reaches_second_server() -> None:
+    import http.server
+    import threading
+
+    received = {"redirect_auth": None, "target_requests": 0, "target_auth": None}
+
+    class TargetHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            received["target_requests"] += 1
+            received["target_auth"] = self.headers.get("Authorization")
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args):
+            return None
+
+    target = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+
+    class RedirectHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            received["redirect_auth"] = self.headers.get("Authorization")
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{target.server_port}/captured",
+            )
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return None
+
+    redirect = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True) for server in (target, redirect)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        payload, status = settings_client._request_settings_json(
+            base_url=f"http://127.0.0.1:{redirect.server_port}",
+            path="/settings",
+            auth="Token redirect-sentinel",
+            ssl_verify=True,
+            request_timeout_seconds=2.0,
+        )
+    finally:
+        redirect.shutdown()
+        target.shutdown()
+        redirect.server_close()
+        target.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+    assert (payload, status) == (None, 302)
+    assert received == {
+        "redirect_auth": "Token redirect-sentinel",
+        "target_requests": 0,
+        "target_auth": None,
+    }
+
+
+def test_settings_transport_rejects_oversized_response(monkeypatch):
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.status = 200
+    response.read.return_value = b"x" * (settings_client._SETTINGS_RESPONSE_MAX_BYTES + 1)
+    response.__enter__.return_value = response
+    monkeypatch.setattr(
+        settings_client,
+        "_open_settings_request",
+        lambda *_args, **_kwargs: response,
+    )
+
+    payload, status = settings_client._request_settings_json(
+        base_url="https://netbox.example.test",
+        path="/api/plugins/proxbox/settings/runtime/",
+        auth="Token synthetic-service-token",
+        ssl_verify=True,
+        request_timeout_seconds=2.0,
+    )
+
+    assert (payload, status) == (None, None)
+    response.read.assert_called_once_with(settings_client._SETTINGS_RESPONSE_MAX_BYTES + 1)
+
+
 def test_fetch_settings_from_netbox_disables_tls_verification_when_configured(monkeypatch):
     import json
     import ssl
@@ -605,7 +729,7 @@ def test_fetch_settings_from_netbox_disables_tls_verification_when_configured(mo
         urlopen_kwargs.append(kwargs)
         return mock_response
 
-    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(settings_client, "_open_settings_request", _urlopen)
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
@@ -646,12 +770,12 @@ def test_fetch_settings_from_netbox_keeps_default_tls_verification(monkeypatch):
         urlopen_kwargs.append(kwargs)
         return mock_response
 
-    monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+    monkeypatch.setattr(settings_client, "_open_settings_request", _urlopen)
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
     assert settings["backend_log_file_path"] == "/srv/log/proxbox-api.log"
-    assert "context" not in urlopen_kwargs[0]
+    assert urlopen_kwargs[0]["context"] is None
 
 
 def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path(monkeypatch):
@@ -686,7 +810,9 @@ def test_fetch_settings_from_netbox_falls_back_for_invalid_backend_log_file_path
     mock_response.__enter__ = MagicMock(return_value=mock_response)
     mock_response.__exit__ = MagicMock(return_value=None)
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: mock_response)
+    monkeypatch.setattr(
+        settings_client, "_open_settings_request", lambda *args, **kwargs: mock_response
+    )
 
     settings = settings_client.fetch_settings_from_netbox(_Session())
     assert settings is not None
@@ -790,7 +916,8 @@ def test_recursive_metadata_lookup_uses_defaults_without_acquiring_facade(monkey
     monkeypatch.setattr(settings_client, "_settings_session", session_factory)
     monkeypatch.setattr(settings_client._SETTINGS_THREAD_LOCAL, "fetch_depth", 1, raising=False)
     result = settings_client.get_settings()
-    assert result == settings_client.get_default_settings()
+    assert result["allow_private_ips"] is False
+    assert result["allowed_ip_ranges"] == []
     session_factory.assert_not_called()
 
 
@@ -911,6 +1038,7 @@ def test_bounded_settings_wait_does_not_inherit_unbounded_fetch(monkeypatch):
     assert not owner.is_alive()
     assert elapsed < 0.25
     assert fallback["proxmox_timeout"] == 5
+    assert fallback["allow_private_ips"] is False
     assert owner_result[0]["proxmox_timeout"] == 41
     assert fetch_calls == 1
 

@@ -11,6 +11,7 @@ from proxbox_api.constants import DISCOVERY_TAG_CLUSTER, DISCOVERY_TAG_NODE, PRO
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import (
     BulkReconcilePhase,
+    clear_rest_get_cache_for_path,
     rest_bulk_reconcile_phases_async,
     rest_first_async,
     rest_list_async,
@@ -34,6 +35,9 @@ from proxbox_api.services.sync.discovery_tags import (
 )
 from proxbox_api.services.sync.node_device_name import NodeDeviceNameError, render_node_device_name
 from proxbox_api.services.sync.sync_state_writer import (
+    DEVICE_SYNC_STATE_PATH,
+    DeviceSyncStateOwnershipConflict,
+    validate_device_sync_state_owner,
     write_cluster_sync_state,
     write_device_sync_state,
 )
@@ -256,26 +260,57 @@ def _select_existing_device_for_target(
     ``_existing_device_site_pin``) instead of creating a duplicate. Untagged
     same-name devices in a different site/cluster are never silently adopted.
     """
+    candidates = _device_candidates_for_target(
+        records,
+        desired_site_id=desired_site_id,
+        cluster_id=cluster_id,
+    )
+    return candidates[0] if candidates else None
+
+
+def _device_candidates_for_target(
+    records: list[object],
+    *,
+    desired_site_id: int | None,
+    cluster_id: int | None,
+) -> list[NetBoxRecord]:
+    """Order every placement-compatible candidate for ownership checks."""
     candidates = _ordered_device_candidates(records)
     if not candidates:
-        return None
+        return []
+
+    selected: list[NetBoxRecord] = []
 
     if desired_site_id is not None:
         for record in candidates:
             if _relation_id_or_none(record.get("site")) == desired_site_id:
-                return record
+                selected.append(record)
 
     if cluster_id is not None:
         for record in candidates:
             if _relation_id_or_none(record.get("cluster")) == cluster_id:
-                return record
+                selected.append(record)
 
     if desired_site_id is None and cluster_id is None:
-        return candidates[0]
+        return candidates
 
     # Operator opt-in (issue #561): reuse a same-name device whose site/cluster
     # differ from the target only when it carries the ``proxbox`` tag.
-    return _first_proxbox_tagged(candidates)
+    tagged = _first_proxbox_tagged(candidates)
+    if tagged is not None:
+        selected.append(tagged)
+    return _unique_device_records(selected)
+
+
+def _unique_device_records(records: list[NetBoxRecord]) -> list[NetBoxRecord]:
+    unique: list[NetBoxRecord] = []
+    seen: set[int] = set()
+    for record in records:
+        identity = id(record)
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(record)
+    return unique
 
 
 def _existing_device_site_pin(
@@ -464,6 +499,22 @@ class _DeviceTarget:
     existing: NetBoxRecord | None = None
     preserve_manual_name: bool = False
     name_conflict: bool = False
+    ownership_claim_required: bool = False
+
+
+class DeviceSyncStateLookupError(RuntimeError):
+    """A device sidecar lookup failed without proving that the row is absent."""
+
+
+def _is_plain_not_found(error: Exception) -> bool:
+    return any(
+        value == 404
+        for value in (
+            getattr(error, "status", None),
+            getattr(error, "status_code", None),
+            getattr(error, "http_status_code", None),
+        )
+    )
 
 
 def _collect_cluster_metadata(
@@ -733,6 +784,59 @@ def _build_device_targets(
     return targets
 
 
+async def _load_device_sidecars(
+    nb: object,
+    *,
+    query: dict[str, object],
+    target: _DeviceTarget,
+) -> list[NetBoxRecord]:
+    try:
+        clear_rest_get_cache_for_path(nb, DEVICE_SYNC_STATE_PATH)
+        return await rest_list_async(nb, DEVICE_SYNC_STATE_PATH, query=query)
+    except Exception as error:
+        if _is_plain_not_found(error):
+            return []
+        logger.error(
+            "Cannot verify device sync-state ownership for node %r in cluster %r "
+            "(endpoint id=%r; error type=%s)",
+            target.node_name,
+            target.cluster_name,
+            target.endpoint_id,
+            type(error).__name__,
+        )
+        raise DeviceSyncStateLookupError(
+            f"Could not verify device ownership for node {target.node_name!r}"
+        ) from error
+
+
+async def _validate_device_candidate_owner(
+    nb: object,
+    target: _DeviceTarget,
+    candidate: NetBoxRecord | None,
+) -> NetBoxRecord | None:
+    if candidate is None:
+        return candidate
+    device_id = _relation_id_or_none(candidate.get("id"))
+    if device_id is None:
+        raise DeviceSyncStateLookupError("Candidate NetBox device has no usable id")
+    sidecars = await _load_device_sidecars(
+        nb,
+        query={"device_id": device_id, "limit": 2},
+        target=target,
+    )
+    for sidecar in sidecars:
+        validate_device_sync_state_owner(
+            sidecar,
+            expected_endpoint_id=target.endpoint_id,
+            device_id=device_id,
+        )
+    target.ownership_claim_required = target.endpoint_id is not None and not any(
+        _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) == target.endpoint_id
+        for sidecar in sidecars
+    )
+    return candidate
+
+
 async def _device_from_identity_sidecar(
     nb: object,
     target: _DeviceTarget,
@@ -746,54 +850,83 @@ async def _device_from_identity_sidecar(
     }
     if target.endpoint_id is not None:
         query["proxmox_endpoint_raw_id"] = target.endpoint_id
-    try:
-        sidecars = await rest_list_async(
-            nb,
-            "/api/plugins/proxbox/sync-state/devices/",
-            query=query,
-        )
-    except Exception:
-        return None
-    matching_sidecars = sidecars
-    if target.endpoint_id is not None:
-        matching_sidecars = [
-            sidecar
-            for sidecar in sidecars
-            if (
-                _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) is None
-                or _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id"))
-                == target.endpoint_id
-            )
-        ]
-    else:
-        claimed_endpoint_ids = {
-            endpoint_id
-            for sidecar in sidecars
-            if (endpoint_id := _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")))
-            is not None
-        }
-        if len(claimed_endpoint_ids) > 1:
-            raise ProxboxException(
-                message="Ambiguous Proxmox node device identity",
-                detail=(
-                    f"Multiple Proxmox endpoints claim node {target.node_name!r} in "
-                    f"cluster {target.cluster_name!r}."
-                ),
-            )
+    sidecars = await _load_device_sidecars(nb, query=query, target=target)
+    owned_sidecars = [
+        sidecar
+        for sidecar in sidecars
+        if target.endpoint_id is not None
+        and _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) == target.endpoint_id
+    ]
+    unclaimed_sidecars = [
+        sidecar
+        for sidecar in sidecars
+        if _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) is None
+    ]
     device_ids = {
         device_id
-        for sidecar in matching_sidecars
+        for sidecar in owned_sidecars
+        if (device_id := _relation_id_or_none(sidecar.get("device"))) is not None
+    }
+    unclaimed_device_ids = {
+        device_id
+        for sidecar in unclaimed_sidecars
         if (device_id := _relation_id_or_none(sidecar.get("device"))) is not None
     }
     if len(device_ids) > 1:
-        return await _disambiguate_sidecar_devices(nb, target, sorted(device_ids))
-    if not device_ids:
-        return None
-    return await rest_first_async(
+        candidate = await _disambiguate_sidecar_devices(nb, target, sorted(device_ids))
+        return await _validate_device_candidate_owner(nb, target, candidate)
+    if device_ids:
+        candidate = await rest_first_async(
+            nb,
+            "/api/dcim/devices/",
+            query={"id": next(iter(device_ids)), "limit": 2},
+        )
+        return await _validate_device_candidate_owner(nb, target, candidate)
+    candidate = await _corroborate_unclaimed_identity_devices(
         nb,
-        "/api/dcim/devices/",
-        query={"id": next(iter(device_ids)), "limit": 2},
+        target,
+        sorted(unclaimed_device_ids),
     )
+    return await _validate_device_candidate_owner(nb, target, candidate)
+
+
+def _device_corroborates_target_placement(
+    record: NetBoxRecord,
+    target: _DeviceTarget,
+) -> bool:
+    record_cluster_id = _relation_id_or_none(record.get("cluster"))
+    if target.cluster_id is not None and record_cluster_id == target.cluster_id:
+        return True
+    return (
+        record_cluster_id is None
+        and target.desired_site_id is not None
+        and _relation_id_or_none(record.get("site")) == target.desired_site_id
+    )
+
+
+async def _corroborate_unclaimed_identity_devices(
+    nb: object,
+    target: _DeviceTarget,
+    device_ids: list[int],
+) -> NetBoxRecord | None:
+    corroborated: list[NetBoxRecord] = []
+    for device_id in device_ids:
+        record = await rest_first_async(
+            nb,
+            "/api/dcim/devices/",
+            query={"id": device_id, "limit": 2},
+        )
+        if record is not None and _device_corroborates_target_placement(record, target):
+            corroborated.append(record)
+    if len(corroborated) > 1:
+        raise ProxboxException(
+            message="Ambiguous unclaimed Proxmox node device identity",
+            detail=(
+                f"Multiple unclaimed NetBox devices match node {target.node_name!r} in "
+                f"cluster {target.cluster_name!r}."
+            ),
+        )
+    return corroborated[0] if corroborated else None
 
 
 async def _disambiguate_sidecar_devices(
@@ -863,10 +996,11 @@ async def _resolve_existing_device_for_target(
         "/api/dcim/devices/",
         query={"name": target.node_name, "limit": 10},
     )
-    legacy_match = _select_existing_device_for_target(
+    legacy_match = await _first_eligible_device_candidate(
+        nb,
+        target,
         legacy_records,
-        desired_site_id=target.desired_site_id,
-        cluster_id=target.cluster_id,
+        skip_foreign=target.desired_name != target.node_name,
     )
     if legacy_match is not None or target.desired_name == target.node_name:
         return legacy_match
@@ -875,11 +1009,39 @@ async def _resolve_existing_device_for_target(
         "/api/dcim/devices/",
         query={"name": target.desired_name, "limit": 10},
     )
-    return _select_existing_device_for_target(
+    return await _first_eligible_device_candidate(
+        nb,
+        target,
         desired_records,
+        skip_foreign=False,
+    )
+
+
+async def _first_eligible_device_candidate(
+    nb: object,
+    target: _DeviceTarget,
+    records: list[object],
+    *,
+    skip_foreign: bool,
+) -> NetBoxRecord | None:
+    candidates = _device_candidates_for_target(
+        records,
         desired_site_id=target.desired_site_id,
         cluster_id=target.cluster_id,
     )
+    for candidate in candidates:
+        try:
+            return await _validate_device_candidate_owner(nb, target, candidate)
+        except DeviceSyncStateOwnershipConflict:
+            if not skip_foreign:
+                raise
+            logger.warning(
+                "Ignoring foreign-owned short-name device id=%r for node %r in cluster %r",
+                candidate.get("id"),
+                target.node_name,
+                target.cluster_name,
+            )
+    return None
 
 
 def _device_name_is_proxbox_managed(record: NetBoxRecord, node_name: str) -> bool:
@@ -945,7 +1107,7 @@ async def _prepare_device_targets(
 ) -> None:
     pending_renames: list[tuple[NetBoxRecord, str]] = []
     for target in targets:
-        existing = await _resolve_existing_device_for_target(nb, target)
+        existing = await _resolve_device_target_or_mark_conflict(nb, target)
         target.existing = existing
         target.site_id = _existing_device_site_pin(existing, target.desired_site_id)
         if existing is None:
@@ -978,6 +1140,8 @@ async def _prepare_device_targets(
             target.site_id,
         )
 
+    await _claim_unclaimed_device_targets(nb, targets)
+
     conflicting_ids = {
         id(target.existing) for target in targets if target.name_conflict and target.existing
     }
@@ -986,6 +1150,47 @@ async def _prepare_device_targets(
             continue
         setattr(existing, "name", desired_name)
         await existing.save()
+
+
+async def _resolve_device_target_or_mark_conflict(
+    nb: object,
+    target: _DeviceTarget,
+) -> NetBoxRecord | None:
+    try:
+        return await _resolve_existing_device_for_target(nb, target)
+    except (
+        DeviceSyncStateLookupError,
+        DeviceSyncStateOwnershipConflict,
+        ProxboxException,
+    ) as error:
+        target.name_conflict = True
+        logger.error(
+            "Skipping Proxmox node %r in cluster %r: device ownership could not be "
+            "claimed for endpoint id=%r (%s)",
+            target.node_name,
+            target.cluster_name,
+            target.endpoint_id,
+            error,
+        )
+        return None
+
+
+async def _claim_unclaimed_device_targets(
+    nb: object,
+    targets: list[_DeviceTarget],
+) -> None:
+    for target in targets:
+        if target.name_conflict or target.existing is None or not target.ownership_claim_required:
+            continue
+        persisted = await _write_device_target_sync_state(
+            nb,
+            target=target,
+            record=target.existing,
+            payload={},
+            overwrite_custom_fields=False,
+        )
+        if persisted:
+            target.ownership_claim_required = False
 
 
 def _target_device_payload(
@@ -1008,6 +1213,205 @@ def _target_device_payload(
             f"Proxmox node {target.node_name} (operator-managed name)"
         )
     return payload
+
+
+async def _write_device_target_sync_state(
+    nb: object,
+    *,
+    target: _DeviceTarget,
+    record: NetBoxRecord,
+    payload: dict[str, object],
+    overwrite_custom_fields: bool,
+) -> bool:
+    try:
+        result = await write_device_sync_state(
+            nb,
+            device_id=_record_value(record, "id"),
+            proxmox_last_updated=_payload_last_updated(payload),
+            proxmox_node_name=target.node_name,
+            proxmox_cluster_name=target.cluster_name,
+            proxmox_endpoint_raw_id=target.endpoint_id,
+            overwrite_custom_fields=overwrite_custom_fields,
+        )
+    except DeviceSyncStateOwnershipConflict as error:
+        target.name_conflict = True
+        logger.error(
+            "Skipping Proxmox node %r in cluster %r after a concurrent device "
+            "ownership conflict: %s",
+            target.node_name,
+            target.cluster_name,
+            error,
+        )
+        return False
+    if target.endpoint_id is not None and result is None:
+        target.name_conflict = True
+        logger.error(
+            "Skipping Proxmox node %r in cluster %r: endpoint ownership could not be "
+            "persisted for device id=%r",
+            target.node_name,
+            target.cluster_name,
+            _record_value(record, "id"),
+        )
+        return False
+    return True
+
+
+def _device_name_conflict_error(target: _DeviceTarget) -> ProxboxException:
+    return ProxboxException(
+        message=(
+            f"Cannot ensure Proxmox node {target.node_name!r}: rendered device name "
+            f"{target.desired_name!r} is already used in site id={target.site_id!r}"
+        )
+    )
+
+
+async def _write_device_target_sync_state_or_raise(
+    nb: object,
+    *,
+    target: _DeviceTarget,
+    record: NetBoxRecord,
+    payload: dict[str, object],
+    overwrite_custom_fields: bool,
+) -> None:
+    persisted = await _write_device_target_sync_state(
+        nb,
+        target=target,
+        record=record,
+        payload=payload,
+        overwrite_custom_fields=overwrite_custom_fields,
+    )
+    if not persisted:
+        raise _device_name_conflict_error(target)
+
+
+def _device_reconcile_current(record: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": record.get("name"),
+        "status": record.get("status"),
+        "cluster": _relation_id_or_none(record.get("cluster")),
+        "device_type": _relation_id_or_none(record.get("device_type")),
+        "role": _relation_id_or_none(record.get("role")),
+        "site": _relation_id_or_none(record.get("site")),
+        "description": record.get("description"),
+        "tags": record.get("tags"),
+    }
+
+
+def _device_patch_required(
+    record: NetBoxRecord,
+    payload: dict[str, object],
+    patchable_fields: set[str],
+) -> bool:
+    desired = NetBoxDeviceSyncState.model_validate(payload).model_dump(
+        exclude_none=True,
+        by_alias=True,
+    )
+    serialized = record if isinstance(record, dict) else record.serialize()
+    current = NetBoxDeviceSyncState.model_validate(
+        _device_reconcile_current(serialized)
+    ).model_dump(exclude_none=True, by_alias=True)
+    return any(
+        current.get(field) != value for field, value in desired.items() if field in patchable_fields
+    )
+
+
+async def _claim_device_candidate_before_mutation(
+    nb: object,
+    *,
+    target: _DeviceTarget,
+    record: NetBoxRecord,
+) -> bool:
+    try:
+        await _validate_device_candidate_owner(nb, target, record)
+    except (DeviceSyncStateLookupError, DeviceSyncStateOwnershipConflict) as error:
+        target.name_conflict = True
+        logger.error(
+            "Skipping Proxmox node %r in cluster %r: device ownership could not be "
+            "claimed for endpoint id=%r (%s)",
+            target.node_name,
+            target.cluster_name,
+            target.endpoint_id,
+            error,
+        )
+        return False
+    if not target.ownership_claim_required:
+        return True
+    persisted = await _write_device_target_sync_state(
+        nb,
+        target=target,
+        record=record,
+        payload={},
+        overwrite_custom_fields=False,
+    )
+    if persisted:
+        target.ownership_claim_required = False
+    return persisted
+
+
+async def _claim_device_candidate_before_mutation_or_raise(
+    nb: object,
+    *,
+    target: _DeviceTarget,
+    record: NetBoxRecord,
+) -> None:
+    claimed = await _claim_device_candidate_before_mutation(
+        nb,
+        target=target,
+        record=record,
+    )
+    if not claimed:
+        raise _device_name_conflict_error(target)
+
+
+async def _reconcile_claimed_device(
+    nb: object,
+    *,
+    target: _DeviceTarget,
+    record: NetBoxRecord,
+    payload: dict[str, object],
+    patchable_fields: set[str],
+) -> NetBoxRecord | None:
+    if not await _claim_device_candidate_before_mutation(nb, target=target, record=record):
+        return None
+    if not _device_patch_required(record, payload, patchable_fields):
+        return record
+    return await rest_reconcile_async(
+        nb,
+        "/api/dcim/devices/",
+        lookup={"name": target.effective_name, "site_id": target.site_id},
+        payload=payload,
+        schema=NetBoxDeviceSyncState,
+        patchable_fields=frozenset(patchable_fields),
+        current_normalizer=_device_reconcile_current,
+        existing_record=record,
+    )
+
+
+async def _reconcile_device_target_or_mark_conflict(
+    nb: object,
+    *,
+    target: _DeviceTarget,
+    record: NetBoxRecord,
+    payload: dict[str, object],
+    patchable_fields: set[str],
+) -> NetBoxRecord | None:
+    try:
+        return await _reconcile_claimed_device(
+            nb,
+            target=target,
+            record=record,
+            payload=payload,
+            patchable_fields=patchable_fields,
+        )
+    except (ProxboxException, ValueError) as error:
+        target.name_conflict = True
+        logger.error(
+            "Skipping Proxmox node %r in cluster %r after device reconciliation failed: %s",
+            target.node_name,
+            target.cluster_name,
+            error,
+        )
+        return None
 
 
 async def _reconcile_device_targets(
@@ -1041,17 +1445,8 @@ async def _reconcile_device_targets(
                 lookup_fields=["name", "site"],
                 lookup_query_field_map={"site": "site_id"},
                 schema=NetBoxDeviceSyncState,
-                patchable_fields=frozenset(patchable_fields),
-                current_normalizer=lambda record: {
-                    "name": record.get("name"),
-                    "status": record.get("status"),
-                    "cluster": _relation_id_or_none(record.get("cluster")),
-                    "device_type": _relation_id_or_none(record.get("device_type")),
-                    "role": _relation_id_or_none(record.get("role")),
-                    "site": _relation_id_or_none(record.get("site")),
-                    "description": record.get("description"),
-                    "tags": record.get("tags"),
-                },
+                patchable_fields=frozenset(),
+                current_normalizer=_device_reconcile_current,
                 selector=_device_selector,
             )
         ],
@@ -1065,18 +1460,26 @@ async def _reconcile_device_targets(
         record = records_by_lookup.get((target.effective_name, target.site_id))
         if record is None:
             continue
-        devices[(target.endpoint_id, target.cluster_name, target.node_name)] = record
-        await write_device_sync_state(
+        record = await _reconcile_device_target_or_mark_conflict(
             nb,
-            device_id=record.get("id"),
-            proxmox_last_updated=_payload_last_updated(payload),
-            proxmox_node_name=target.node_name,
-            proxmox_cluster_name=target.cluster_name,
-            proxmox_endpoint_raw_id=target.endpoint_id,
+            target=target,
+            record=record,
+            payload=payload,
+            patchable_fields=patchable_fields,
+        )
+        if record is None:
+            continue
+        persisted = await _write_device_target_sync_state(
+            nb,
+            target=target,
+            record=record,
+            payload=payload,
             overwrite_custom_fields=(
                 overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields
             ),
         )
+        if persisted:
+            devices[(target.endpoint_id, target.cluster_name, target.node_name)] = record
     return devices
 
 
@@ -1412,6 +1815,8 @@ async def _ensure_device(
         endpoint_id=endpoint_id,
     )
     await _prepare_device_targets(nb, [target])
+    if target.name_conflict:
+        raise _device_name_conflict_error(target)
     existing_device = target.existing
     # Save the cluster-authoritative site BEFORE the pin.  When the cluster is
     # being reassigned, the device's site must be updated to match the cluster's
@@ -1465,6 +1870,11 @@ async def _ensure_device(
         )
 
     if existing_device is not None:
+        await _claim_device_candidate_before_mutation_or_raise(
+            nb,
+            target=target,
+            record=existing_device,
+        )
         desired_model = NetBoxDeviceSyncState.model_validate(payload)
         desired_payload = desired_model.model_dump(exclude_none=True, by_alias=True)
         current_model = NetBoxDeviceSyncState.model_validate(
@@ -1497,17 +1907,11 @@ async def _ensure_device(
             for field, value in patch_payload.items():
                 setattr(existing_device, field, value)
             await existing_device.save()
-        await write_device_sync_state(
+        await _write_device_target_sync_state_or_raise(
             nb,
-            device_id=(
-                existing_device.get("id")
-                if isinstance(existing_device, dict)
-                else getattr(existing_device, "id", None)
-            ),
-            proxmox_last_updated=_payload_last_updated(payload),
-            proxmox_node_name=device_name,
-            proxmox_cluster_name=cluster_name,
-            proxmox_endpoint_raw_id=endpoint_id,
+            target=target,
+            record=existing_device,
+            payload=payload,
             overwrite_custom_fields=(
                 overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields
             ),
@@ -1520,25 +1924,23 @@ async def _ensure_device(
         lookup={"name": target.effective_name, "site_id": site_id},
         payload=payload,
         schema=NetBoxDeviceSyncState,
-        patchable_fields=frozenset(allowed),
-        current_normalizer=lambda record: {
-            "name": record.get("name"),
-            "status": record.get("status"),
-            "cluster": record.get("cluster"),
-            "device_type": record.get("device_type"),
-            "role": record.get("role"),
-            "site": record.get("site"),
-            "description": record.get("description"),
-            "tags": record.get("tags"),
-        },
+        patchable_fields=frozenset(),
+        current_normalizer=_device_reconcile_current,
     )
-    await write_device_sync_state(
+    device = await _reconcile_claimed_device(
         nb,
-        device_id=device.get("id") if isinstance(device, dict) else getattr(device, "id", None),
-        proxmox_last_updated=_payload_last_updated(payload),
-        proxmox_node_name=device_name,
-        proxmox_cluster_name=cluster_name,
-        proxmox_endpoint_raw_id=endpoint_id,
+        target=target,
+        record=device,
+        payload=payload,
+        patchable_fields=allowed,
+    )
+    if device is None:
+        raise _device_name_conflict_error(target)
+    await _write_device_target_sync_state_or_raise(
+        nb,
+        target=target,
+        record=device,
+        payload=payload,
         overwrite_custom_fields=(
             overwrite_flags is None or overwrite_flags.overwrite_device_custom_fields
         ),

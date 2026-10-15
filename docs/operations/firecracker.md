@@ -28,7 +28,12 @@ The non-streaming endpoint returns one JSON response. The streaming endpoint for
 | `POST` | `/cloud/firecracker/provision` | Provision a micro-VM through one host-agent and return final JSON |
 | `POST` | `/cloud/firecracker/provision/stream` | Provision a micro-VM and stream progress as SSE |
 
-Both routes require the normal `X-Proxbox-API-Key` middleware. `X-Proxbox-Actor` is optional and is forwarded into the host-agent metadata payload.
+Both routes require the normal `X-Proxbox-API-Key` middleware and a nonblank
+`X-Proxbox-Actor` header. The actor is forwarded into the host-agent metadata
+payload. Firecracker hosts do not have a local `ProxmoxEndpoint` row, so these
+routes cannot apply `ProxmoxEndpoint.allow_writes`; the required actor, API key,
+inventory resolution, and outbound-target validation form this route's write
+boundary.
 
 ## Trust Boundary
 
@@ -43,6 +48,30 @@ is forwarded only to that validated host-agent.
 The streaming route emits a generic `An unexpected error occurred.` failure by
 default. Set `PROXBOX_EXPOSE_INTERNAL_ERRORS=true` only in trusted debugging
 contexts when upstream host-agent error details may be exposed to clients.
+The non-streaming route always maps `FirecrackerHostAgentError` to a fixed HTTP
+502 response. Upstream response bodies are not copied into exceptions, logs, or
+client responses. Successful HTTP responses are also untrusted: every typed
+response is validated through one helper which logs only schema field names and
+validation error types. Malformed values and unhealthy upstream status strings
+are replaced with fixed host-agent errors even when internal diagnostics are
+enabled.
+
+The shared SSRF resolver rejects unspecified and non-global addresses unless an
+explicit endpoint or operator policy permits them. The host-agent client stores
+the complete validated address set and its dedicated HTTP transport connects
+only to those addresses, in order, with a two-second per-address timeout and a
+five-second total connection budget. Connection refusal and timeout advance to
+the next validated address. TLS verification or an HTTP protocol failure does
+not advance to another address. IPv6 interface scope is retained in the
+validated address record and encoded numerically for the httpcore connection.
+The URL is canonicalized once through `httpx.URL.raw_host`; its ASCII value is
+used for DNS validation, pinned-transport comparison, the Host header, HTTPS
+SNI, and certificate verification. Unicode, punycode, mixed-case, and
+trailing-dot spellings therefore share one identity without a second DNS lookup.
+This closes the
+validation-to-connection DNS rebinding window. The custom transport translates
+supported request and response-stream failures into the HTTP client's public
+exception types before the route maps them to its fixed, sanitized 502 response.
 
 ## Request Shape
 

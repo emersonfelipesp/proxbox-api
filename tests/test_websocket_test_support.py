@@ -43,6 +43,17 @@ def _accepted_session():
 
 
 @contextmanager
+def _accepted_then_teardown_cancelled_session():
+    # Teardown cancellation replaces the in-flight acceptance assertion, as the
+    # Starlette portal does on a busy runner: raise from finally so it also
+    # runs when the context manager is thrown an exception at the yield.
+    try:
+        yield object()
+    finally:
+        raise FutureCancelledError
+
+
+@contextmanager
 def _other_error_session():
     raise RuntimeError("unexpected failure")
     yield
@@ -86,6 +97,14 @@ def test_rejected_websocket_session_preserves_wrong_disconnect_code() -> None:
 def test_rejected_websocket_session_rejects_successful_handshake() -> None:
     with pytest.raises(AssertionError, match="unexpectedly succeeded"):
         with rejected_websocket_session(_Client(_accepted_session()), "/ws", expected_code=1008):
+            pass
+
+
+def test_rejected_websocket_session_rejects_acceptance_masked_by_teardown_cancellation() -> None:
+    with pytest.raises(AssertionError, match="unexpectedly succeeded"):
+        with rejected_websocket_session(
+            _Client(_accepted_then_teardown_cancelled_session()), "/ws", expected_code=1008
+        ):
             pass
 
 

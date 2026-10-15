@@ -89,6 +89,22 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   `hardware_discovery_enabled` and the separate default-off
   `hardware_discovery_sync_nic_macs` UI setting. A missing setting is false; a
   MAC failure warns and never aborts the run.
+- `ssh_terminal.py`: browser terminal, host-key scan, and fixed-command SSH
+  transport. Resolve each target once through `ssrf.resolve_endpoint_host()` and
+  open a TCP socket against only those validated addresses, in order, with
+  bounded per-address and total timeouts before handing the selected socket to
+  AsyncSSH. Use each `ResolvedAddress.socket_address()` unchanged so IPv6
+  flowinfo and interface scope survive validation and identical link-local
+  addresses on different interfaces are not collapsed. Retain the submitted
+  name in `host_key_alias`. Credential-bearing
+  connections must use the truthy `_empty_known_hosts` callback, `config=[]`,
+  explicit empty X.509 trust, disabled GSS/agent/host-based/keyboard-interactive/
+  PKCS#11/default-key sources, and the fingerprint client callback so a mismatch
+  terminates key exchange before password or signature authentication. Retry
+  only TCP refusal, reachability, and timeout failures; never try another address
+  after host-key or authentication failure. The negotiated key is checked again
+  before PTY or command execution. Only the public fingerprint-discovery endpoint
+  uses a separate credential-free scan.
 - `zfs.py`: tiered ZFS storage retrieval for `netbox-proxbox` consumers. Tier 1 parses only structured Proxmox REST responses from `/nodes/{node}/disks/zfs` and `/nodes/{node}/disks/zfs/{name}`. Tier 2 (InfluxDB) and Tier 3 (JSON-native SSH CLI) are clean fallback seams that currently degrade gracefully; any future SSH implementation must resolve the endpoint row and pass the existing `access_methods="api_ssh"` gate before opening a transport.
 - `influx.py`: independent InfluxDB v2 query client for `/proxmox/metrics/influx/query`. It constructs Flux from validated structured fields, validates and pins the resolved HTTPS destination through the shared SSRF policy, accepts an injected `httpx.AsyncClient` or `AsyncBaseTransport`, bounds upstream and normalized response bytes plus rows, normalizes annotated CSV plus supported JSON, and exposes only secret-safe typed failures. It must not acquire NetBox/control plane state or persist caller credentials.
 - `proxmox_metrics.py`: direct Proxmox pull transport for `/proxmox/metrics/pull/query`. It resolves one existing endpoint, invokes only `cluster/metrics/export`, validates finite canonical samples, applies bounded filters, sorting, truncation, and exact deduplication, and maps provider failures without exposing exception text.

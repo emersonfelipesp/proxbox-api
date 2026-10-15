@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import nullcontext
-from typing import Annotated
+from dataclasses import dataclass, field
+from functools import partial
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
@@ -109,7 +112,7 @@ def _stage_result(count: int, value, phase: str) -> dict[str, object]:
     return result
 
 
-def _empty_if_none(value):
+def _empty_if_none(value: Any) -> Any:
     """Default a missing stage result to an empty list.
 
     Deliberately not ``value or []``: an empty result that carries warnings is
@@ -118,7 +121,7 @@ def _empty_if_none(value):
     return [] if value is None else value
 
 
-def _backup_rows(value):
+def _backup_rows(value: Any) -> Any:
     """Backup rows from a backup stage result, whether bare or degraded-wrapped."""
     if isinstance(value, dict) and isinstance(value.get("backups"), list):
         return value["backups"]
@@ -157,7 +160,7 @@ def orphan_sweep_endpoint_scope(
 OrphanSweepScopeDep = Annotated[frozenset[int] | None, Depends(orphan_sweep_endpoint_scope)]
 
 
-def _vm_stage_rows(vm_result):
+def _vm_stage_rows(vm_result: Any) -> Any:
     """VM rows from the VM stage result, whether bare or degraded-wrapped."""
     if isinstance(vm_result, dict) and isinstance(vm_result.get("virtual_machines"), list):
         return vm_result["virtual_machines"]
@@ -266,337 +269,931 @@ async def _full_update_sync_run(
         )
 
 
-async def _full_update_sync_impl(  # noqa: C901
+StageFunction = Callable[..., Awaitable[Any]]
+StageNormalizer = Callable[[Any], Any]
+StageResultMapper = Callable[[Any], dict[str, object]]
+
+
+def _identity(value: Any) -> Any:
+    return value
+
+
+def _normalize_rest_backups(value: Any) -> Any:
+    return _backup_rows(_empty_if_none(value))
+
+
+def _normalize_stream_backups(value: Any) -> Any:
+    return _empty_if_none(value)
+
+
+def _list_count_result(value: Any) -> dict[str, object]:
+    return {"count": len(value)}
+
+
+def _vm_count_result(value: Any) -> dict[str, object]:
+    return {"count": len(_vm_stage_rows(value))}
+
+
+def _summary_count_result(value: Any) -> dict[str, object]:
+    return {"count": _result_count(value)}
+
+
+def _degraded_summary_result(phase: str, value: Any) -> dict[str, object]:
+    return _stage_result(_result_count(value), value, phase)
+
+
+def _degraded_list_result(phase: str, value: Any) -> dict[str, object]:
+    return _stage_result(len(value), value, phase)
+
+
+def _update_counts_result(value: Any) -> dict[str, object]:
+    return {
+        "created": value.get("created", 0),
+        "updated": value.get("updated", 0),
+    }
+
+
+def _raw_mapping_result(value: Any) -> dict[str, object]:
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class _FullUpdateInputs:
+    netbox_session: Any
+    pxs: Any
+    cluster_status: Any
+    cluster_resources: Any
+    tag: Any
+    overwrite_flags: SyncOverwriteFlags
+    behavior_flags: SyncBehaviorFlags
+    fetch_max_concurrency: int | None
+    sweep_endpoint_ids: frozenset[int] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _FullUpdateContext:
+    inputs: _FullUpdateInputs
+    operation_id: str
+    tag_refs: list[dict[str, object]]
+    dry_run: bool = False
+
+
+@dataclass(slots=True)
+class _StageState:
+    results: dict[str, Any] = field(default_factory=dict)
+    warnings: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class _StageDescriptor:
+    name: str
+    started_message: str
+    completed_message: str
+    error_message: str
+    log_message: str
+    rest_callable: StageFunction
+    rest_kwargs: dict[str, Any]
+    stream_callable: StageFunction
+    stream_kwargs: dict[str, Any]
+    stream_result_mapper: StageResultMapper
+    stream_bridge_keyword: str | None = "websocket"
+    start_metadata: dict[str, object] | None = None
+    warning_phase: str | None = None
+    rest_normalizer: StageNormalizer = _identity
+    stream_normalizer: StageNormalizer = _identity
+
+
+_REST_STAGE_ORDER = (
+    "devices",
+    "storage",
+    "virtual-machines",
+    "task-history",
+    "virtual-disks",
+    "backups",
+    "snapshots",
+    "node-interfaces",
+    "vm-interfaces",
+    "vm-ip-addresses",
+    "replications",
+    "backup-routines",
+)
+
+_STREAM_STAGE_ORDER = (
+    "devices",
+    "storage",
+    "virtual-machines",
+    "virtual-disks",
+    "task-history",
+    "backups",
+    "snapshots",
+    "node-interfaces",
+    "vm-interfaces",
+    "vm-ip-addresses",
+    "replications",
+    "backup-routines",
+)
+
+_DISCOVERY_STAGE_ORDER = (
+    "devices",
+    "storage",
+    "virtual-machines",
+    "virtual-disks",
+    "task-history",
+    "backups",
+    "snapshots",
+    "replications",
+    "backup-routines",
+    "node-interfaces",
+    "vm-interfaces",
+    "vm-ip-addresses",
+)
+
+
+def _build_tag_refs(tag: Any) -> list[dict[str, object]]:
+    tag_ref = {
+        "name": getattr(tag, "name", None),
+        "slug": getattr(tag, "slug", None),
+        "color": getattr(tag, "color", None),
+    }
+    return [tag_ref] if tag_ref.get("name") and tag_ref.get("slug") else []
+
+
+def _stage_descriptors(context: _FullUpdateContext) -> dict[str, _StageDescriptor]:
+    inputs = context.inputs
+    overwrite_flags = inputs.overwrite_flags
+    fetch_concurrency = (
+        inputs.fetch_max_concurrency if inputs.fetch_max_concurrency is not None else 8
+    )
+    return {
+        "devices": _StageDescriptor(
+            name="devices",
+            started_message="Starting devices synchronization.",
+            completed_message="Devices synchronization finished.",
+            error_message="Error while syncing nodes.",
+            log_message="Error while syncing nodes during full-update",
+            rest_callable=create_proxmox_devices,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "clusters_status": inputs.cluster_status,
+                "node": None,
+                "tag": inputs.tag,
+                "use_websocket": False,
+                "overwrite_device_role": overwrite_flags.overwrite_device_role,
+                "overwrite_device_type": overwrite_flags.overwrite_device_type,
+                "overwrite_device_tags": overwrite_flags.overwrite_device_tags,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_callable=create_proxmox_devices,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "clusters_status": inputs.cluster_status,
+                "node": None,
+                "tag": inputs.tag,
+                "use_websocket": True,
+                "overwrite_device_role": overwrite_flags.overwrite_device_role,
+                "overwrite_device_type": overwrite_flags.overwrite_device_type,
+                "overwrite_device_tags": overwrite_flags.overwrite_device_tags,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_result_mapper=_list_count_result,
+        ),
+        "storage": _StageDescriptor(
+            name="storage",
+            started_message="Starting storage synchronization.",
+            completed_message="Storage synchronization finished.",
+            error_message="Error while syncing storages.",
+            log_message="Error while syncing storages during full-update",
+            rest_callable=create_storages,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "tag": inputs.tag,
+                "use_websocket": False,
+                "fetch_concurrency": fetch_concurrency,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_callable=create_storages,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "tag": inputs.tag,
+                "use_websocket": True,
+                "fetch_concurrency": fetch_concurrency,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_result_mapper=_list_count_result,
+        ),
+        "virtual-machines": _StageDescriptor(
+            name="virtual-machines",
+            started_message="Starting virtual machines synchronization.",
+            completed_message="Virtual machines synchronization finished.",
+            error_message="Error while syncing virtual machines.",
+            log_message="Error while syncing virtual machines during full-update",
+            rest_callable=create_virtual_machines,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": False,
+                "sync_vm_network": False,
+                "sync_task_history": False,
+                "overwrite_vm_role": overwrite_flags.overwrite_vm_role,
+                "overwrite_vm_type": overwrite_flags.overwrite_vm_type,
+                "overwrite_vm_tags": overwrite_flags.overwrite_vm_tags,
+                "overwrite_vm_description": overwrite_flags.overwrite_vm_description,
+                "overwrite_vm_custom_fields": overwrite_flags.overwrite_vm_custom_fields,
+                "overwrite_flags": overwrite_flags,
+                "behavior_flags": inputs.behavior_flags,
+                "run_id": context.operation_id,
+            },
+            stream_callable=create_virtual_machines,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": True,
+                "sync_vm_network": False,
+                "sync_task_history": False,
+                "overwrite_vm_role": overwrite_flags.overwrite_vm_role,
+                "overwrite_vm_type": overwrite_flags.overwrite_vm_type,
+                "overwrite_vm_tags": overwrite_flags.overwrite_vm_tags,
+                "overwrite_vm_description": overwrite_flags.overwrite_vm_description,
+                "overwrite_vm_custom_fields": overwrite_flags.overwrite_vm_custom_fields,
+                "overwrite_flags": overwrite_flags,
+                "behavior_flags": inputs.behavior_flags,
+                "run_id": context.operation_id,
+            },
+            stream_result_mapper=_vm_count_result,
+            warning_phase="virtual-machines",
+        ),
+        "virtual-disks": _StageDescriptor(
+            name="virtual-disks",
+            started_message="Starting virtual disks synchronization.",
+            completed_message="Virtual disks synchronization finished.",
+            error_message="Error while syncing virtual disks.",
+            log_message="Error while syncing virtual disks during full-update",
+            rest_callable=create_virtual_disks,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": False,
+                "use_css": False,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+            },
+            stream_callable=create_virtual_disks,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": True,
+                "use_css": False,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+            },
+            stream_result_mapper=partial(_degraded_summary_result, "virtual-disks"),
+            warning_phase="virtual-disks",
+        ),
+        "task-history": _StageDescriptor(
+            name="task-history",
+            started_message="Starting task history synchronization.",
+            completed_message="Task history synchronization finished.",
+            error_message="Error while syncing task history.",
+            log_message="Error while syncing task history during full-update",
+            rest_callable=sync_all_virtual_machine_task_histories,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "tag_refs": context.tag_refs,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+            },
+            stream_callable=sync_all_virtual_machine_task_histories,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "tag_refs": context.tag_refs,
+                "use_websocket": True,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+            },
+            stream_result_mapper=_summary_count_result,
+        ),
+        "backups": _StageDescriptor(
+            name="backups",
+            started_message="Starting backup synchronization.",
+            completed_message="Backup synchronization finished.",
+            error_message="Error while syncing backups.",
+            log_message="Error while syncing backups during full-update",
+            rest_callable=create_all_virtual_machine_backups,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "tag": inputs.tag,
+                "delete_nonexistent_backup": True,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+            },
+            stream_callable=_create_all_virtual_machine_backups,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "tag": inputs.tag,
+                "delete_nonexistent_backup": True,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+                "use_websocket": True,
+            },
+            stream_result_mapper=partial(_degraded_list_result, "backups"),
+            warning_phase="backups",
+            rest_normalizer=_normalize_rest_backups,
+            stream_normalizer=_normalize_stream_backups,
+        ),
+        "snapshots": _StageDescriptor(
+            name="snapshots",
+            started_message="Starting snapshot synchronization.",
+            completed_message="Snapshot synchronization finished.",
+            error_message="Error while syncing snapshots.",
+            log_message="Error while syncing snapshots during full-update",
+            rest_callable=create_all_virtual_machine_snapshots,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+            },
+            stream_callable=_create_all_virtual_machine_snapshots,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "fetch_max_concurrency": inputs.fetch_max_concurrency,
+                "use_websocket": True,
+            },
+            stream_result_mapper=partial(_degraded_summary_result, "snapshots"),
+            warning_phase="snapshots",
+        ),
+        "node-interfaces": _StageDescriptor(
+            name="node-interfaces",
+            started_message="Starting node interfaces synchronization.",
+            completed_message="Node interfaces synchronization finished.",
+            error_message="Error while syncing node interfaces.",
+            log_message="Error while syncing node interfaces during full-update",
+            rest_callable=create_all_device_interfaces,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "tag": inputs.tag,
+                "clusters_status": inputs.cluster_status,
+                "pxs": inputs.pxs,
+                "use_websocket": False,
+                "behavior_flags": inputs.behavior_flags,
+            },
+            stream_callable=create_all_device_interfaces,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "tag": inputs.tag,
+                "clusters_status": inputs.cluster_status,
+                "pxs": inputs.pxs,
+                "use_websocket": True,
+                "behavior_flags": inputs.behavior_flags,
+            },
+            stream_result_mapper=partial(_degraded_list_result, "node-interfaces"),
+            warning_phase="node-interfaces",
+        ),
+        "vm-interfaces": _StageDescriptor(
+            name="vm-interfaces",
+            started_message="Starting VM interfaces synchronization.",
+            completed_message="VM interfaces synchronization finished.",
+            error_message="Error while syncing VM interfaces.",
+            log_message="Error while syncing VM interfaces during full-update",
+            rest_callable=create_only_vm_interfaces,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": False,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_callable=create_only_vm_interfaces,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": True,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_result_mapper=partial(_degraded_list_result, "vm-interfaces"),
+            warning_phase="vm-interfaces",
+        ),
+        "vm-ip-addresses": _StageDescriptor(
+            name="vm-ip-addresses",
+            started_message="Starting VM IP address synchronization.",
+            completed_message="VM IP address synchronization finished.",
+            error_message="Error while syncing VM IP addresses.",
+            log_message="Error while syncing VM IP addresses during full-update",
+            rest_callable=create_only_vm_ip_addresses,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": False,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_callable=create_only_vm_ip_addresses,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+                "cluster_status": inputs.cluster_status,
+                "cluster_resources": inputs.cluster_resources,
+                "tag": inputs.tag,
+                "use_websocket": True,
+                "overwrite_flags": overwrite_flags,
+            },
+            stream_result_mapper=partial(_degraded_list_result, "vm-ip-addresses"),
+            warning_phase="vm-ip-addresses",
+        ),
+        "replications": _StageDescriptor(
+            name="replications",
+            started_message="Starting replications synchronization.",
+            completed_message="Replications synchronization finished.",
+            error_message="Error while syncing replications.",
+            log_message="Error while syncing replications during full-update",
+            rest_callable=sync_all_replications,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+            },
+            stream_callable=sync_all_replications,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+            },
+            stream_result_mapper=_update_counts_result,
+            stream_bridge_keyword=None,
+        ),
+        "backup-routines": _StageDescriptor(
+            name="backup-routines",
+            started_message="Starting backup routines synchronization.",
+            completed_message="Backup routines synchronization finished.",
+            error_message="Error while syncing backup routines.",
+            log_message="Error while syncing backup routines during full-update",
+            rest_callable=sync_all_backup_routines,
+            rest_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+            },
+            stream_callable=sync_all_backup_routines,
+            stream_kwargs={
+                "netbox_session": inputs.netbox_session,
+                "pxs": inputs.pxs,
+            },
+            stream_result_mapper=_update_counts_result,
+            stream_bridge_keyword="bridge",
+        ),
+    }
+
+
+async def _run_stage(
+    descriptor: _StageDescriptor,
+    state: _StageState,
     *,
-    netbox_session,
-    pxs,
-    cluster_status,
-    cluster_resources,
-    tag,
+    streaming: bool,
+    bridge: WebSocketSSEBridge | None = None,
+) -> Any:
+    try:
+        function = descriptor.stream_callable if streaming else descriptor.rest_callable
+        kwargs = dict(descriptor.stream_kwargs if streaming else descriptor.rest_kwargs)
+        if streaming and descriptor.stream_bridge_keyword is not None:
+            kwargs[descriptor.stream_bridge_keyword] = bridge
+        raw_result = await function(**kwargs)
+        if descriptor.warning_phase is not None:
+            state.warnings.extend(_stage_warnings(raw_result, descriptor.warning_phase))
+        normalizer = descriptor.stream_normalizer if streaming else descriptor.rest_normalizer
+        result = normalizer(raw_result)
+        state.results[descriptor.name] = result
+        return result
+    except ProxboxException:
+        raise
+    except Exception as error:  # noqa: BLE001
+        if streaming:
+            raise
+        logger.exception(descriptor.log_message)
+        raise ProxboxException(
+            message=descriptor.error_message,
+            python_exception=str(error),
+        ) from error
+    finally:
+        if bridge is not None:
+            await bridge.close()
+
+
+async def _stream_stage_events(
+    descriptor: _StageDescriptor,
+    state: _StageState,
+) -> AsyncIterator[str]:
+    start_payload: dict[str, object] = {
+        "step": descriptor.name,
+        "status": "started",
+        "message": descriptor.started_message,
+    }
+    if descriptor.start_metadata is not None:
+        start_payload["metadata"] = descriptor.start_metadata
+    yield sse_event(
+        "step",
+        start_payload,
+    )
+    started_at = time.monotonic()
+    bridge = WebSocketSSEBridge()
+    task = asyncio.create_task(_run_stage(descriptor, state, streaming=True, bridge=bridge))
+    async for frame in bridge.iter_sse():
+        yield frame
+    result = await task
+    yield sse_event(
+        "step",
+        {
+            "step": descriptor.name,
+            "status": "completed",
+            "message": descriptor.completed_message,
+            "result": descriptor.stream_result_mapper(result),
+            "duration_seconds": round(time.monotonic() - started_at, 3),
+        },
+    )
+
+
+async def _run_rest_orphan_sweep(
+    context: _FullUpdateContext,
+    state: _StageState,
+    enabled: bool,
+) -> dict[str, object]:
+    inputs = context.inputs
+    return await run_orphan_vm_sweep(
+        inputs.netbox_session,
+        run_id=context.operation_id,
+        enabled=enabled,
+        touched_vm_ids=extract_touched_vm_ids(_vm_stage_rows(state.results["virtual-machines"])),
+        endpoint_ids=inputs.sweep_endpoint_ids,
+        vm_stage_failed=_vm_stage_failed(state.results["virtual-machines"]),
+        **await _fresh_sweep_inventory(inputs.pxs),
+    )
+
+
+async def _run_stream_orphan_sweep(
+    context: _FullUpdateContext,
+    state: _StageState,
+    enabled: bool,
+    *,
+    stream: WebSocketSSEBridge,
+) -> dict[str, object]:
+    inputs = context.inputs
+    return await run_orphan_vm_sweep(
+        inputs.netbox_session,
+        run_id=context.operation_id,
+        enabled=enabled,
+        dry_run=context.dry_run,
+        stream=stream,
+        touched_vm_ids=extract_touched_vm_ids(_vm_stage_rows(state.results["virtual-machines"])),
+        endpoint_ids=inputs.sweep_endpoint_ids,
+        vm_stage_failed=_vm_stage_failed(state.results["virtual-machines"]),
+        **await _fresh_sweep_inventory(inputs.pxs),
+    )
+
+
+def _orphan_sweep_descriptor(
+    context: _FullUpdateContext,
+    state: _StageState,
+    enabled: bool,
+) -> _StageDescriptor:
+    preview = context.dry_run
+    return _StageDescriptor(
+        name="sweep-orphans",
+        started_message=(
+            "Previewing orphan virtual machine sweep."
+            if preview
+            else "Starting orphan virtual machine sweep."
+        ),
+        completed_message=(
+            "Orphan virtual machine sweep preview finished."
+            if preview
+            else "Orphan virtual machine sweep finished."
+        ),
+        error_message="Error while sweeping orphan virtual machines.",
+        log_message="Error while sweeping orphan virtual machines during full-update",
+        rest_callable=partial(_run_rest_orphan_sweep, context, state, enabled),
+        rest_kwargs={},
+        stream_callable=partial(_run_stream_orphan_sweep, context, state, enabled),
+        stream_kwargs={},
+        stream_result_mapper=_raw_mapping_result,
+        stream_bridge_keyword="stream",
+        start_metadata={
+            "operation_id": context.operation_id,
+            "delete_orphans": enabled,
+            "dry_run": context.dry_run,
+        },
+    )
+
+
+def _build_full_update_result(
+    state: _StageState,
+    *,
+    streaming: bool,
+) -> dict[str, object]:
+    results = state.results
+    virtual_machines = _vm_stage_rows(results["virtual-machines"])
+    if streaming:
+        result: dict[str, object] = {
+            "devices": results["devices"],
+            "storage": results["storage"],
+            "virtual_machines": virtual_machines,
+            "virtual_disks": results["virtual-disks"],
+            "task_history": results["task-history"],
+            "backups": results["backups"],
+            "snapshots": results["snapshots"],
+            "node_interfaces": results["node-interfaces"],
+            "vm_interfaces": results["vm-interfaces"],
+            "vm_ip_addresses": results["vm-ip-addresses"],
+            "replications": results["replications"],
+            "backup_routines": results["backup-routines"],
+            "devices_count": len(results["devices"]),
+            "storage_count": len(results["storage"]),
+            "virtual_machines_count": len(virtual_machines),
+            "virtual_disks_count": _result_count(results["virtual-disks"]),
+            "task_history_count": _result_count(results["task-history"]),
+            "backups_count": len(results["backups"]),
+            "snapshots_count": _result_count(results["snapshots"]),
+            "node_interfaces_count": len(results["node-interfaces"]),
+            "vm_interfaces_count": len(results["vm-interfaces"]),
+            "vm_ip_addresses_count": len(results["vm-ip-addresses"]),
+            "replications_count": results["replications"].get("created", 0)
+            + results["replications"].get("updated", 0),
+            "backup_routines_count": results["backup-routines"].get("created", 0)
+            + results["backup-routines"].get("updated", 0),
+        }
+    else:
+        result = {
+            "status": "completed",
+            "devices": results["devices"],
+            "storage": results["storage"],
+            "virtual_machines": virtual_machines,
+            "virtual_disks": results["virtual-disks"],
+            "task_history": results["task-history"],
+            "backups": results["backups"],
+            "snapshots": results["snapshots"],
+            "replications": results["replications"],
+            "backup_routines": results["backup-routines"],
+            "node_interfaces": results["node-interfaces"],
+            "vm_interfaces": results["vm-interfaces"],
+            "vm_ip_addresses": results["vm-ip-addresses"],
+            "devices_count": len(results["devices"]),
+            "storage_count": len(results["storage"]),
+            "virtual_machines_count": len(virtual_machines),
+            "virtual_disks_count": _result_count(results["virtual-disks"]),
+            "task_history_count": _result_count(results["task-history"]),
+            "backups_count": len(results["backups"]),
+            "snapshots_count": _result_count(results["snapshots"]),
+            "replications_count": results["replications"].get("created", 0)
+            + results["replications"].get("updated", 0),
+            "backup_routines_count": results["backup-routines"].get("created", 0)
+            + results["backup-routines"].get("updated", 0),
+            "node_interfaces_count": len(results["node-interfaces"]),
+            "vm_interfaces_count": len(results["vm-interfaces"]),
+            "vm_ip_addresses_count": len(results["vm-ip-addresses"]),
+        }
+    if "sweep-orphans" in results:
+        result["orphan_sweep"] = results["sweep-orphans"]
+    if state.warnings:
+        result["warnings"] = state.warnings
+        result["degraded"] = True
+    return result
+
+
+async def _full_update_sync_impl(
+    *,
+    netbox_session: Any,
+    pxs: Any,
+    cluster_status: Any,
+    cluster_resources: Any,
+    tag: Any,
     overwrite_flags: SyncOverwriteFlags,
     behavior_flags: SyncBehaviorFlags,
     fetch_max_concurrency: int | None,
     sweep_endpoint_ids: frozenset[int] | None = None,
-) -> dict:
-    sync_nodes: list = []
-    sync_storage: list = []
-    sync_vms: list = []
-    sync_disks: dict = {}
-    sync_task_history: dict = {}
-    sync_backups: list = []
-    sync_snapshots: dict = {}
-    sync_node_interfaces: list = []
-    sync_vm_interfaces: list = []
-    sync_vm_ip_addresses: list = []
-    sync_warnings: list[dict[str, object]] = []
-    orphan_sweep_result: dict[str, object] | None = None
-
-    tag_refs = [
-        {
-            "name": getattr(tag, "name", None),
-            "slug": getattr(tag, "slug", None),
-            "color": getattr(tag, "color", None),
-        }
-    ]
-    tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
-
+) -> dict[str, object]:
     operation_id = str(uuid.uuid4())
+    context = _FullUpdateContext(
+        inputs=_FullUpdateInputs(
+            netbox_session=netbox_session,
+            pxs=pxs,
+            cluster_status=cluster_status,
+            cluster_resources=cluster_resources,
+            tag=tag,
+            overwrite_flags=overwrite_flags,
+            behavior_flags=behavior_flags,
+            fetch_max_concurrency=fetch_max_concurrency,
+            sweep_endpoint_ids=sweep_endpoint_ids,
+        ),
+        operation_id=operation_id,
+        tag_refs=_build_tag_refs(tag),
+    )
+    state = _StageState()
     set_operation_id(operation_id)
     logger.info("Starting full_update sync", extra={"operation_id": operation_id})
 
-    _active_entry = await acquire_active_sync(operation_id, kind="full-update")
+    active_entry = await acquire_active_sync(operation_id, kind="full-update")
     try:
-        try:
-            sync_nodes = await create_proxmox_devices(
-                netbox_session=netbox_session,
-                clusters_status=cluster_status,
-                node=None,
-                tag=tag,
-                use_websocket=False,
-                overwrite_device_role=overwrite_flags.overwrite_device_role,
-                overwrite_device_type=overwrite_flags.overwrite_device_type,
-                overwrite_device_tags=overwrite_flags.overwrite_device_tags,
-                overwrite_flags=overwrite_flags,
-            )
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing nodes during full-update")
-            raise ProxboxException(
-                message="Error while syncing nodes.", python_exception=str(error)
-            ) from error
-
-        try:
-            sync_storage = await create_storages(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                tag=tag,
-                use_websocket=False,
-                fetch_concurrency=fetch_max_concurrency if fetch_max_concurrency is not None else 8,
-                overwrite_flags=overwrite_flags,
-            )
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing storages during full-update")
-            raise ProxboxException(
-                message="Error while syncing storages.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_vms = await create_virtual_machines(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                tag=tag,
-                use_websocket=False,
-                sync_vm_network=False,
-                sync_task_history=False,
-                overwrite_vm_role=overwrite_flags.overwrite_vm_role,
-                overwrite_vm_type=overwrite_flags.overwrite_vm_type,
-                overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
-                overwrite_vm_description=overwrite_flags.overwrite_vm_description,
-                overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
-                overwrite_flags=overwrite_flags,
-                behavior_flags=behavior_flags,
-                run_id=operation_id,
-            )
-            sync_warnings.extend(_stage_warnings(sync_vms, "virtual-machines"))
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing virtual machines during full-update")
-            raise ProxboxException(
-                message="Error while syncing virtual machines.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_task_history = await sync_all_virtual_machine_task_histories(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                tag_refs=tag_refs,
-                fetch_max_concurrency=fetch_max_concurrency,
-            )
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing task history during full-update")
-            raise ProxboxException(
-                message="Error while syncing task history.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_disks = await create_virtual_disks(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                tag=tag,
-                use_websocket=False,
-                use_css=False,
-                fetch_max_concurrency=fetch_max_concurrency,
-            )
-            sync_warnings.extend(_stage_warnings(sync_disks, "virtual-disks"))
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing virtual disks during full-update")
-            raise ProxboxException(
-                message="Error while syncing virtual disks.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            backups_stage = _empty_if_none(
-                await create_all_virtual_machine_backups(
-                    netbox_session=netbox_session,
-                    pxs=pxs,
-                    cluster_status=cluster_status,
-                    tag=tag,
-                    delete_nonexistent_backup=True,
-                    fetch_max_concurrency=fetch_max_concurrency,
-                )
-            )
-            sync_warnings.extend(_stage_warnings(backups_stage, "backups"))
-            sync_backups = _backup_rows(backups_stage)
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing backups during full-update")
-            raise ProxboxException(
-                message="Error while syncing backups.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_snapshots = await create_all_virtual_machine_snapshots(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                tag=tag,
-                fetch_max_concurrency=fetch_max_concurrency,
-            )
-            sync_warnings.extend(_stage_warnings(sync_snapshots, "snapshots"))
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing snapshots during full-update")
-            raise ProxboxException(
-                message="Error while syncing snapshots.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_node_interfaces = await create_all_device_interfaces(
-                netbox_session=netbox_session,
-                tag=tag,
-                clusters_status=cluster_status,
-                pxs=pxs,
-                use_websocket=False,
-                behavior_flags=behavior_flags,
-            )
-            sync_warnings.extend(_stage_warnings(sync_node_interfaces, "node-interfaces"))
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing node interfaces during full-update")
-            raise ProxboxException(
-                message="Error while syncing node interfaces.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_vm_interfaces = await create_only_vm_interfaces(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                tag=tag,
-                use_websocket=False,
-                overwrite_flags=overwrite_flags,
-            )
-            sync_warnings.extend(_stage_warnings(sync_vm_interfaces, "vm-interfaces"))
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing VM interfaces during full-update")
-            raise ProxboxException(
-                message="Error while syncing VM interfaces.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_vm_ip_addresses = await create_only_vm_ip_addresses(
-                netbox_session=netbox_session,
-                pxs=pxs,
-                cluster_status=cluster_status,
-                cluster_resources=cluster_resources,
-                tag=tag,
-                use_websocket=False,
-                overwrite_flags=overwrite_flags,
-            )
-            sync_warnings.extend(_stage_warnings(sync_vm_ip_addresses, "vm-ip-addresses"))
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing VM IP addresses during full-update")
-            raise ProxboxException(
-                message="Error while syncing VM IP addresses.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_replications = await sync_all_replications(
-                netbox_session=netbox_session,
-                pxs=pxs,
-            )
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing replications during full-update")
-            raise ProxboxException(
-                message="Error while syncing replications.",
-                python_exception=str(error),
-            ) from error
-
-        try:
-            sync_backup_routines = await sync_all_backup_routines(
-                netbox_session=netbox_session,
-                pxs=pxs,
-            )
-        except ProxboxException:
-            raise
-        except Exception as error:  # noqa: BLE001
-            logger.exception("Error while syncing backup routines during full-update")
-            raise ProxboxException(
-                message="Error while syncing backup routines.",
-                python_exception=str(error),
-            ) from error
-
+        descriptors = _stage_descriptors(context)
+        for stage_name in _REST_STAGE_ORDER:
+            await _run_stage(descriptors[stage_name], state, streaming=False)
         delete_orphans_enabled = is_delete_orphans_enabled()
         if delete_orphans_enabled:
-            try:
-                orphan_sweep_result = await run_orphan_vm_sweep(
-                    netbox_session,
-                    run_id=operation_id,
-                    enabled=delete_orphans_enabled,
-                    touched_vm_ids=extract_touched_vm_ids(_vm_stage_rows(sync_vms)),
-                    endpoint_ids=sweep_endpoint_ids,
-                    vm_stage_failed=_vm_stage_failed(sync_vms),
-                    **await _fresh_sweep_inventory(pxs),
-                )
-            except ProxboxException:
-                raise
-            except Exception as error:  # noqa: BLE001
-                logger.exception("Error while sweeping orphan virtual machines during full-update")
-                raise ProxboxException(
-                    message="Error while sweeping orphan virtual machines.",
-                    python_exception=str(error),
-                ) from error
-
-        result = {
-            "status": "completed",
-            "devices": sync_nodes,
-            "storage": sync_storage,
-            "virtual_machines": _vm_stage_rows(sync_vms),
-            "virtual_disks": sync_disks,
-            "task_history": sync_task_history,
-            "backups": sync_backups,
-            "snapshots": sync_snapshots,
-            "replications": sync_replications,
-            "backup_routines": sync_backup_routines,
-            "node_interfaces": sync_node_interfaces,
-            "vm_interfaces": sync_vm_interfaces,
-            "vm_ip_addresses": sync_vm_ip_addresses,
-            "devices_count": len(sync_nodes),
-            "storage_count": len(sync_storage),
-            "virtual_machines_count": len(_vm_stage_rows(sync_vms)),
-            "virtual_disks_count": _result_count(sync_disks),
-            "task_history_count": _result_count(sync_task_history),
-            "backups_count": len(sync_backups),
-            "snapshots_count": _result_count(sync_snapshots),
-            "replications_count": sync_replications.get("created", 0)
-            + sync_replications.get("updated", 0),
-            "backup_routines_count": sync_backup_routines.get("created", 0)
-            + sync_backup_routines.get("updated", 0),
-            "node_interfaces_count": len(sync_node_interfaces),
-            "vm_interfaces_count": len(sync_vm_interfaces),
-            "vm_ip_addresses_count": len(sync_vm_ip_addresses),
-        }
-        if orphan_sweep_result is not None:
-            result["orphan_sweep"] = orphan_sweep_result
-        if sync_warnings:
-            result["warnings"] = sync_warnings
-            result["degraded"] = True
-        return result
+            descriptor = _orphan_sweep_descriptor(context, state, delete_orphans_enabled)
+            await _run_stage(descriptor, state, streaming=False)
+        return _build_full_update_result(state, streaming=False)
     finally:
-        await release_active_sync(_active_entry)
+        await release_active_sync(active_entry)
+
+
+def _stream_discovery_event(operation_id: str) -> str:
+    stage_items = [{"name": name, "type": "stage"} for name in _DISCOVERY_STAGE_ORDER]
+    return sse_event(
+        "discovery",
+        {
+            "event": "discovery",
+            "phase": "full-update",
+            "status": "discovered",
+            "message": f"Discovered {len(stage_items)} sync stage(s) for full update",
+            "count": len(stage_items),
+            "items": stage_items,
+            "progress": {"current": 0, "total": len(stage_items), "percent": 0},
+            "metadata": {"operation_id": operation_id},
+        },
+    )
+
+
+def _terminal_error_events(error: asyncio.CancelledError | Exception) -> tuple[str, ...]:
+    if isinstance(error, asyncio.CancelledError):
+        return (
+            sse_event(
+                "error",
+                {
+                    "step": "full-update",
+                    "status": "failed",
+                    "error": "Server shutdown or request cancelled.",
+                    "detail": "Server shutdown or request cancelled.",
+                },
+            ),
+            sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": "Full update sync cancelled.",
+                    "errors": [{"detail": "Server shutdown or request cancelled."}],
+                },
+            ),
+        )
+    if isinstance(error, ProxboxException):
+        return (
+            sse_event(
+                "error_detail",
+                {
+                    "event": "error_detail",
+                    "phase": "full-update",
+                    "category": ErrorCategory.INTERNAL.value,
+                    "message": "Full update synchronization failed",
+                    "detail": error.detail or error.message,
+                    "suggestion": "Review backend logs and retry the full update",
+                },
+            ),
+            sse_event(
+                "error",
+                {
+                    "step": "full-update",
+                    "status": "failed",
+                    "error": error.message,
+                    "detail": error.detail,
+                },
+            ),
+            sse_event(
+                "complete",
+                {
+                    "ok": False,
+                    "message": error.message,
+                    "errors": [{"detail": error.detail or error.message}],
+                },
+            ),
+        )
+    return (
+        sse_event(
+            "error_detail",
+            {
+                "event": "error_detail",
+                "phase": "full-update",
+                "category": ErrorCategory.INTERNAL.value,
+                "message": "Unexpected error during full update",
+                "detail": str(error),
+                "suggestion": "Check backend logs for stack trace and retry",
+            },
+        ),
+        sse_event(
+            "error",
+            {
+                "step": "full-update",
+                "status": "failed",
+                "error": str(error),
+                "detail": str(error),
+            },
+        ),
+        sse_event(
+            "complete",
+            {
+                "ok": False,
+                "message": "Full update sync failed.",
+                "errors": [{"detail": str(error)}],
+            },
+        ),
+    )
+
+
+async def _full_update_event_stream(
+    inputs: _FullUpdateInputs,
+    bootstrap_payload: dict[str, object],
+    *,
+    dry_run: bool,
+) -> AsyncIterator[str]:
+    operation_id = str(uuid.uuid4())
+    context = _FullUpdateContext(
+        inputs=inputs,
+        operation_id=operation_id,
+        tag_refs=_build_tag_refs(inputs.tag),
+        dry_run=dry_run,
+    )
+    state = _StageState()
+    set_operation_id(operation_id)
+    logger.info("Starting full_update sync (stream)", extra={"operation_id": operation_id})
+
+    async with register_active_sync(operation_id, kind="full-update"):
+        try:
+            yield sse_event("bootstrap_done", bootstrap_payload)
+            yield sse_event(
+                "step",
+                {
+                    "step": "stream",
+                    "status": "started",
+                    "message": f"Full update stream connected (operation_id={operation_id})",
+                },
+            )
+            yield _stream_discovery_event(operation_id)
+            descriptors = _stage_descriptors(context)
+            for stage_name in _STREAM_STAGE_ORDER:
+                async for frame in _stream_stage_events(descriptors[stage_name], state):
+                    yield frame
+            delete_orphans_enabled = is_delete_orphans_enabled()
+            if delete_orphans_enabled or dry_run:
+                descriptor = _orphan_sweep_descriptor(context, state, delete_orphans_enabled)
+                async for frame in _stream_stage_events(descriptor, state):
+                    yield frame
+            yield sse_event(
+                "complete",
+                {
+                    "ok": True,
+                    "message": "Full update sync completed.",
+                    "result": _build_full_update_result(state, streaming=True),
+                },
+            )
+        except (asyncio.CancelledError, Exception) as error:
+            for frame in _terminal_error_events(error):
+                yield frame
+
+
+async def _branched_full_update_stream(
+    netbox_session: Any,
+    netbox_branch_schema_id: str | None,
+    stream: AsyncIterator[str],
+) -> AsyncIterator[str]:
+    branch_scope = (
+        netbox_session.activate_branch(netbox_branch_schema_id)
+        if netbox_branch_schema_id
+        else nullcontext()
+    )
+    async with branch_scope:
+        async for frame in stream:
+            yield frame
 
 
 @full_update_router.get(
@@ -604,7 +1201,7 @@ async def _full_update_sync_impl(  # noqa: C901
     response_model=None,
     dependencies=[Depends(reset_sidecar_availability_cache)],
 )
-async def full_update_sync_stream(  # noqa: C901
+async def full_update_sync_stream(
     netbox_session: NetBoxSessionDep,
     _sync_deps: NetBoxSyncDependenciesDep,
     pxs: ProxmoxSessionsDep,
@@ -640,791 +1237,24 @@ async def full_update_sync_stream(  # noqa: C901
     ] = None,
     sweep_endpoint_ids: OrphanSweepScopeDep = None,
 ) -> StreamingResponse:
-    bootstrap_payload: dict[str, object] = _sync_deps.as_dict()
-
-    async def event_stream():  # noqa: C901
-        sync_nodes: list = []
-        sync_storage: list = []
-        sync_vms: list = []
-        sync_disks: dict = {}
-        sync_task_history: dict = {}
-        sync_backups: list = []
-        sync_snapshots: dict = {}
-        sync_node_interfaces: list = []
-        sync_vm_interfaces: list = []
-        sync_vm_ip_addresses: list = []
-        sync_replications: dict = {}
-        sync_backup_routines: dict = {}
-        sync_warnings: list[dict[str, object]] = []
-        orphan_sweep_result: dict[str, object] | None = None
-        devices_bridge = WebSocketSSEBridge()
-        storage_bridge = WebSocketSSEBridge()
-        vm_bridge = WebSocketSSEBridge()
-        disks_bridge = WebSocketSSEBridge()
-        task_history_bridge = WebSocketSSEBridge()
-        backups_bridge = WebSocketSSEBridge()
-        snapshots_bridge = WebSocketSSEBridge()
-        node_interfaces_bridge = WebSocketSSEBridge()
-        vm_interfaces_bridge = WebSocketSSEBridge()
-        vm_ip_addresses_bridge = WebSocketSSEBridge()
-        replications_bridge = WebSocketSSEBridge()
-        backup_routines_bridge = WebSocketSSEBridge()
-        orphan_sweep_bridge = WebSocketSSEBridge()
-
-        tag_refs = [
-            {
-                "name": getattr(tag, "name", None),
-                "slug": getattr(tag, "slug", None),
-                "color": getattr(tag, "color", None),
-            }
-        ]
-        tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
-
-        operation_id = str(uuid.uuid4())
-        set_operation_id(operation_id)
-        logger.info("Starting full_update sync (stream)", extra={"operation_id": operation_id})
-
-        async with register_active_sync(operation_id, kind="full-update"):
-            try:
-                yield sse_event("bootstrap_done", bootstrap_payload)
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "stream",
-                        "status": "started",
-                        "message": f"Full update stream connected (operation_id={operation_id})",
-                    },
-                )
-                stage_items = [
-                    {"name": "devices", "type": "stage"},
-                    {"name": "storage", "type": "stage"},
-                    {"name": "virtual-machines", "type": "stage"},
-                    {"name": "virtual-disks", "type": "stage"},
-                    {"name": "task-history", "type": "stage"},
-                    {"name": "backups", "type": "stage"},
-                    {"name": "snapshots", "type": "stage"},
-                    {"name": "replications", "type": "stage"},
-                    {"name": "backup-routines", "type": "stage"},
-                    {"name": "node-interfaces", "type": "stage"},
-                    {"name": "vm-interfaces", "type": "stage"},
-                    {"name": "vm-ip-addresses", "type": "stage"},
-                ]
-                yield sse_event(
-                    "discovery",
-                    {
-                        "event": "discovery",
-                        "phase": "full-update",
-                        "status": "discovered",
-                        "message": f"Discovered {len(stage_items)} sync stage(s) for full update",
-                        "count": len(stage_items),
-                        "items": stage_items,
-                        "progress": {"current": 0, "total": len(stage_items), "percent": 0},
-                        "metadata": {"operation_id": operation_id},
-                    },
-                )
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "devices",
-                        "status": "started",
-                        "message": "Starting devices synchronization.",
-                    },
-                )
-
-                async def _run_devices_sync():
-                    try:
-                        return await create_proxmox_devices(
-                            netbox_session=netbox_session,
-                            clusters_status=cluster_status,
-                            node=None,
-                            tag=tag,
-                            websocket=devices_bridge,
-                            use_websocket=True,
-                            overwrite_device_role=overwrite_flags.overwrite_device_role,
-                            overwrite_device_type=overwrite_flags.overwrite_device_type,
-                            overwrite_device_tags=overwrite_flags.overwrite_device_tags,
-                            overwrite_flags=overwrite_flags,
-                        )
-                    finally:
-                        await devices_bridge.close()
-
-                _devices_start = time.monotonic()
-                devices_task = asyncio.create_task(_run_devices_sync())
-                async for frame in devices_bridge.iter_sse():
-                    yield frame
-                sync_nodes = await devices_task
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "devices",
-                        "status": "completed",
-                        "message": "Devices synchronization finished.",
-                        "result": {"count": len(sync_nodes)},
-                        "duration_seconds": round(time.monotonic() - _devices_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "storage",
-                        "status": "started",
-                        "message": "Starting storage synchronization.",
-                    },
-                )
-
-                async def _run_storage_sync():
-                    try:
-                        return await create_storages(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            tag=tag,
-                            websocket=storage_bridge,
-                            use_websocket=True,
-                            fetch_concurrency=fetch_max_concurrency
-                            if fetch_max_concurrency is not None
-                            else 8,
-                            overwrite_flags=overwrite_flags,
-                        )
-                    finally:
-                        await storage_bridge.close()
-
-                _storage_start = time.monotonic()
-                storage_task = asyncio.create_task(_run_storage_sync())
-                async for frame in storage_bridge.iter_sse():
-                    yield frame
-                sync_storage = await storage_task
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "storage",
-                        "status": "completed",
-                        "message": "Storage synchronization finished.",
-                        "result": {"count": len(sync_storage)},
-                        "duration_seconds": round(time.monotonic() - _storage_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "virtual-machines",
-                        "status": "started",
-                        "message": "Starting virtual machines synchronization.",
-                    },
-                )
-
-                async def _run_vms_sync():
-                    try:
-                        return await create_virtual_machines(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            cluster_resources=cluster_resources,
-                            tag=tag,
-                            websocket=vm_bridge,
-                            use_websocket=True,
-                            sync_vm_network=False,
-                            sync_task_history=False,
-                            overwrite_vm_role=overwrite_flags.overwrite_vm_role,
-                            overwrite_vm_type=overwrite_flags.overwrite_vm_type,
-                            overwrite_vm_tags=overwrite_flags.overwrite_vm_tags,
-                            overwrite_vm_description=overwrite_flags.overwrite_vm_description,
-                            overwrite_vm_custom_fields=overwrite_flags.overwrite_vm_custom_fields,
-                            overwrite_flags=overwrite_flags,
-                            behavior_flags=behavior_flags,
-                            run_id=operation_id,
-                        )
-                    finally:
-                        await vm_bridge.close()
-
-                _vms_start = time.monotonic()
-                vms_task = asyncio.create_task(_run_vms_sync())
-                async for frame in vm_bridge.iter_sse():
-                    yield frame
-                sync_vms = await vms_task
-                sync_warnings.extend(_stage_warnings(sync_vms, "virtual-machines"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "virtual-machines",
-                        "status": "completed",
-                        "message": "Virtual machines synchronization finished.",
-                        "result": {"count": len(_vm_stage_rows(sync_vms))},
-                        "duration_seconds": round(time.monotonic() - _vms_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "virtual-disks",
-                        "status": "started",
-                        "message": "Starting virtual disks synchronization.",
-                    },
-                )
-
-                async def _run_disks_sync():
-                    try:
-                        return await create_virtual_disks(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            cluster_resources=cluster_resources,
-                            tag=tag,
-                            websocket=disks_bridge,
-                            use_websocket=True,
-                            use_css=False,
-                            fetch_max_concurrency=fetch_max_concurrency,
-                        )
-                    finally:
-                        await disks_bridge.close()
-
-                _disks_start = time.monotonic()
-                disks_task = asyncio.create_task(_run_disks_sync())
-                async for frame in disks_bridge.iter_sse():
-                    yield frame
-                sync_disks = await disks_task
-                sync_warnings.extend(_stage_warnings(sync_disks, "virtual-disks"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "virtual-disks",
-                        "status": "completed",
-                        "message": "Virtual disks synchronization finished.",
-                        "result": _stage_result(
-                            _result_count(sync_disks), sync_disks, "virtual-disks"
-                        ),
-                        "duration_seconds": round(time.monotonic() - _disks_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "task-history",
-                        "status": "started",
-                        "message": "Starting task history synchronization.",
-                    },
-                )
-
-                async def _run_task_history_sync():
-                    try:
-                        return await sync_all_virtual_machine_task_histories(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            tag_refs=tag_refs,
-                            websocket=task_history_bridge,
-                            use_websocket=True,
-                            fetch_max_concurrency=fetch_max_concurrency,
-                        )
-                    finally:
-                        await task_history_bridge.close()
-
-                _task_history_start = time.monotonic()
-                task_history_task = asyncio.create_task(_run_task_history_sync())
-                async for frame in task_history_bridge.iter_sse():
-                    yield frame
-                sync_task_history = await task_history_task
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "task-history",
-                        "status": "completed",
-                        "message": "Task history synchronization finished.",
-                        "result": {"count": _result_count(sync_task_history)},
-                        "duration_seconds": round(time.monotonic() - _task_history_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "backups",
-                        "status": "started",
-                        "message": "Starting backup synchronization.",
-                    },
-                )
-
-                async def _run_backups_sync():
-                    try:
-                        return await _create_all_virtual_machine_backups(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            tag=tag,
-                            delete_nonexistent_backup=True,
-                            fetch_max_concurrency=fetch_max_concurrency,
-                            websocket=backups_bridge,
-                            use_websocket=True,
-                        )
-                    finally:
-                        await backups_bridge.close()
-
-                _backups_start = time.monotonic()
-                backups_task = asyncio.create_task(_run_backups_sync())
-                async for frame in backups_bridge.iter_sse():
-                    yield frame
-                sync_backups = _empty_if_none(await backups_task)
-                sync_warnings.extend(_stage_warnings(sync_backups, "backups"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "backups",
-                        "status": "completed",
-                        "message": "Backup synchronization finished.",
-                        "result": _stage_result(len(sync_backups), sync_backups, "backups"),
-                        "duration_seconds": round(time.monotonic() - _backups_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "snapshots",
-                        "status": "started",
-                        "message": "Starting snapshot synchronization.",
-                    },
-                )
-
-                async def _run_snapshots_sync():
-                    try:
-                        return await _create_all_virtual_machine_snapshots(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            cluster_resources=cluster_resources,
-                            tag=tag,
-                            fetch_max_concurrency=fetch_max_concurrency,
-                            websocket=snapshots_bridge,
-                            use_websocket=True,
-                        )
-                    finally:
-                        await snapshots_bridge.close()
-
-                _snapshots_start = time.monotonic()
-                snapshots_task = asyncio.create_task(_run_snapshots_sync())
-                async for frame in snapshots_bridge.iter_sse():
-                    yield frame
-                sync_snapshots = await snapshots_task
-                sync_warnings.extend(_stage_warnings(sync_snapshots, "snapshots"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "snapshots",
-                        "status": "completed",
-                        "message": "Snapshot synchronization finished.",
-                        "result": _stage_result(
-                            _result_count(sync_snapshots), sync_snapshots, "snapshots"
-                        ),
-                        "duration_seconds": round(time.monotonic() - _snapshots_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "node-interfaces",
-                        "status": "started",
-                        "message": "Starting node interfaces synchronization.",
-                    },
-                )
-
-                async def _run_node_interfaces_sync():
-                    try:
-                        return await create_all_device_interfaces(
-                            netbox_session=netbox_session,
-                            tag=tag,
-                            clusters_status=cluster_status,
-                            pxs=pxs,
-                            websocket=node_interfaces_bridge,
-                            use_websocket=True,
-                            behavior_flags=behavior_flags,
-                        )
-                    finally:
-                        await node_interfaces_bridge.close()
-
-                _node_interfaces_start = time.monotonic()
-                node_interfaces_task = asyncio.create_task(_run_node_interfaces_sync())
-                async for frame in node_interfaces_bridge.iter_sse():
-                    yield frame
-                sync_node_interfaces = await node_interfaces_task
-                sync_warnings.extend(_stage_warnings(sync_node_interfaces, "node-interfaces"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "node-interfaces",
-                        "status": "completed",
-                        "message": "Node interfaces synchronization finished.",
-                        "result": _stage_result(
-                            len(sync_node_interfaces), sync_node_interfaces, "node-interfaces"
-                        ),
-                        "duration_seconds": round(time.monotonic() - _node_interfaces_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "vm-interfaces",
-                        "status": "started",
-                        "message": "Starting VM interfaces synchronization.",
-                    },
-                )
-
-                async def _run_vm_interfaces_sync():
-                    try:
-                        return await create_only_vm_interfaces(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            cluster_resources=cluster_resources,
-                            tag=tag,
-                            websocket=vm_interfaces_bridge,
-                            use_websocket=True,
-                            overwrite_flags=overwrite_flags,
-                        )
-                    finally:
-                        await vm_interfaces_bridge.close()
-
-                _vm_interfaces_start = time.monotonic()
-                vm_interfaces_task = asyncio.create_task(_run_vm_interfaces_sync())
-                async for frame in vm_interfaces_bridge.iter_sse():
-                    yield frame
-                sync_vm_interfaces = await vm_interfaces_task
-                sync_warnings.extend(_stage_warnings(sync_vm_interfaces, "vm-interfaces"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "vm-interfaces",
-                        "status": "completed",
-                        "message": "VM interfaces synchronization finished.",
-                        "result": _stage_result(
-                            len(sync_vm_interfaces), sync_vm_interfaces, "vm-interfaces"
-                        ),
-                        "duration_seconds": round(time.monotonic() - _vm_interfaces_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "vm-ip-addresses",
-                        "status": "started",
-                        "message": "Starting VM IP address synchronization.",
-                    },
-                )
-
-                async def _run_vm_ip_addresses_sync():
-                    try:
-                        return await create_only_vm_ip_addresses(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            cluster_status=cluster_status,
-                            cluster_resources=cluster_resources,
-                            tag=tag,
-                            websocket=vm_ip_addresses_bridge,
-                            use_websocket=True,
-                            overwrite_flags=overwrite_flags,
-                        )
-                    finally:
-                        await vm_ip_addresses_bridge.close()
-
-                _vm_ip_addresses_start = time.monotonic()
-                vm_ip_addresses_task = asyncio.create_task(_run_vm_ip_addresses_sync())
-                async for frame in vm_ip_addresses_bridge.iter_sse():
-                    yield frame
-                sync_vm_ip_addresses = await vm_ip_addresses_task
-                sync_warnings.extend(_stage_warnings(sync_vm_ip_addresses, "vm-ip-addresses"))
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "vm-ip-addresses",
-                        "status": "completed",
-                        "message": "VM IP address synchronization finished.",
-                        "result": _stage_result(
-                            len(sync_vm_ip_addresses), sync_vm_ip_addresses, "vm-ip-addresses"
-                        ),
-                        "duration_seconds": round(time.monotonic() - _vm_ip_addresses_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "replications",
-                        "status": "started",
-                        "message": "Starting replications synchronization.",
-                    },
-                )
-
-                async def _run_replications_sync():
-                    try:
-                        return await sync_all_replications(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                        )
-                    finally:
-                        await replications_bridge.close()
-
-                _replications_start = time.monotonic()
-                replications_task = asyncio.create_task(_run_replications_sync())
-                async for frame in replications_bridge.iter_sse():
-                    yield frame
-                sync_replications = await replications_task
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "replications",
-                        "status": "completed",
-                        "message": "Replications synchronization finished.",
-                        "result": {
-                            "created": sync_replications.get("created", 0),
-                            "updated": sync_replications.get("updated", 0),
-                        },
-                        "duration_seconds": round(time.monotonic() - _replications_start, 3),
-                    },
-                )
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "backup-routines",
-                        "status": "started",
-                        "message": "Starting backup routines synchronization.",
-                    },
-                )
-
-                async def _run_backup_routines_sync():
-                    try:
-                        return await sync_all_backup_routines(
-                            netbox_session=netbox_session,
-                            pxs=pxs,
-                            bridge=backup_routines_bridge,
-                        )
-                    finally:
-                        await backup_routines_bridge.close()
-
-                _backup_routines_start = time.monotonic()
-                backup_routines_task = asyncio.create_task(_run_backup_routines_sync())
-                async for frame in backup_routines_bridge.iter_sse():
-                    yield frame
-                sync_backup_routines = await backup_routines_task
-
-                yield sse_event(
-                    "step",
-                    {
-                        "step": "backup-routines",
-                        "status": "completed",
-                        "message": "Backup routines synchronization finished.",
-                        "result": {
-                            "created": sync_backup_routines.get("created", 0),
-                            "updated": sync_backup_routines.get("updated", 0),
-                        },
-                        "duration_seconds": round(time.monotonic() - _backup_routines_start, 3),
-                    },
-                )
-
-                delete_orphans_enabled = is_delete_orphans_enabled()
-                if delete_orphans_enabled or dry_run:
-                    yield sse_event(
-                        "step",
-                        {
-                            "step": "sweep-orphans",
-                            "status": "started",
-                            "message": (
-                                "Previewing orphan virtual machine sweep."
-                                if dry_run
-                                else "Starting orphan virtual machine sweep."
-                            ),
-                            "metadata": {
-                                "operation_id": operation_id,
-                                "delete_orphans": delete_orphans_enabled,
-                                "dry_run": dry_run,
-                            },
-                        },
-                    )
-
-                    async def _run_orphan_sweep():
-                        try:
-                            return await run_orphan_vm_sweep(
-                                netbox_session,
-                                run_id=operation_id,
-                                enabled=delete_orphans_enabled,
-                                dry_run=dry_run,
-                                stream=orphan_sweep_bridge,
-                                touched_vm_ids=extract_touched_vm_ids(_vm_stage_rows(sync_vms)),
-                                endpoint_ids=sweep_endpoint_ids,
-                                vm_stage_failed=_vm_stage_failed(sync_vms),
-                                **await _fresh_sweep_inventory(pxs),
-                            )
-                        finally:
-                            await orphan_sweep_bridge.close()
-
-                    _orphan_sweep_start = time.monotonic()
-                    orphan_sweep_task = asyncio.create_task(_run_orphan_sweep())
-                    async for frame in orphan_sweep_bridge.iter_sse():
-                        yield frame
-                    orphan_sweep_result = await orphan_sweep_task
-
-                    yield sse_event(
-                        "step",
-                        {
-                            "step": "sweep-orphans",
-                            "status": "completed",
-                            "message": (
-                                "Orphan virtual machine sweep preview finished."
-                                if dry_run
-                                else "Orphan virtual machine sweep finished."
-                            ),
-                            "result": orphan_sweep_result,
-                            "duration_seconds": round(time.monotonic() - _orphan_sweep_start, 3),
-                        },
-                    )
-
-                final_result = {
-                    "devices": sync_nodes,
-                    "storage": sync_storage,
-                    "virtual_machines": _vm_stage_rows(sync_vms),
-                    "virtual_disks": sync_disks,
-                    "task_history": sync_task_history,
-                    "backups": sync_backups,
-                    "snapshots": sync_snapshots,
-                    "node_interfaces": sync_node_interfaces,
-                    "vm_interfaces": sync_vm_interfaces,
-                    "vm_ip_addresses": sync_vm_ip_addresses,
-                    "replications": sync_replications,
-                    "backup_routines": sync_backup_routines,
-                    "devices_count": len(sync_nodes),
-                    "storage_count": len(sync_storage),
-                    "virtual_machines_count": len(_vm_stage_rows(sync_vms)),
-                    "virtual_disks_count": _result_count(sync_disks),
-                    "task_history_count": _result_count(sync_task_history),
-                    "backups_count": len(sync_backups),
-                    "snapshots_count": _result_count(sync_snapshots),
-                    "node_interfaces_count": len(sync_node_interfaces),
-                    "vm_interfaces_count": len(sync_vm_interfaces),
-                    "vm_ip_addresses_count": len(sync_vm_ip_addresses),
-                    "replications_count": sync_replications.get("created", 0)
-                    + sync_replications.get("updated", 0),
-                    "backup_routines_count": sync_backup_routines.get("created", 0)
-                    + sync_backup_routines.get("updated", 0),
-                }
-                if orphan_sweep_result is not None:
-                    final_result["orphan_sweep"] = orphan_sweep_result
-                if sync_warnings:
-                    final_result["warnings"] = sync_warnings
-                    final_result["degraded"] = True
-
-                yield sse_event(
-                    "complete",
-                    {
-                        "ok": True,
-                        "message": "Full update sync completed.",
-                        "result": final_result,
-                    },
-                )
-            except asyncio.CancelledError:
-                yield sse_event(
-                    "error",
-                    {
-                        "step": "full-update",
-                        "status": "failed",
-                        "error": "Server shutdown or request cancelled.",
-                        "detail": "Server shutdown or request cancelled.",
-                    },
-                )
-                yield sse_event(
-                    "complete",
-                    {
-                        "ok": False,
-                        "message": "Full update sync cancelled.",
-                        "errors": [{"detail": "Server shutdown or request cancelled."}],
-                    },
-                )
-            except ProxboxException as error:
-                yield sse_event(
-                    "error_detail",
-                    {
-                        "event": "error_detail",
-                        "phase": "full-update",
-                        "category": ErrorCategory.INTERNAL.value,
-                        "message": "Full update synchronization failed",
-                        "detail": error.detail or error.message,
-                        "suggestion": "Review backend logs and retry the full update",
-                    },
-                )
-                yield sse_event(
-                    "error",
-                    {
-                        "step": "full-update",
-                        "status": "failed",
-                        "error": error.message,
-                        "detail": error.detail,
-                    },
-                )
-                yield sse_event(
-                    "complete",
-                    {
-                        "ok": False,
-                        "message": error.message,
-                        "errors": [{"detail": error.detail or error.message}],
-                    },
-                )
-            except Exception as error:  # noqa: BLE001
-                yield sse_event(
-                    "error_detail",
-                    {
-                        "event": "error_detail",
-                        "phase": "full-update",
-                        "category": ErrorCategory.INTERNAL.value,
-                        "message": "Unexpected error during full update",
-                        "detail": str(error),
-                        "suggestion": "Check backend logs for stack trace and retry",
-                    },
-                )
-                yield sse_event(
-                    "error",
-                    {
-                        "step": "full-update",
-                        "status": "failed",
-                        "error": str(error),
-                        "detail": str(error),
-                    },
-                )
-                yield sse_event(
-                    "complete",
-                    {
-                        "ok": False,
-                        "message": "Full update sync failed.",
-                        "errors": [{"detail": str(error)}],
-                    },
-                )
-
-    async def branched_stream():
-        branch_scope = (
-            netbox_session.activate_branch(netbox_branch_schema_id)
-            if netbox_branch_schema_id
-            else nullcontext()
-        )
-        async with branch_scope:
-            async for frame in event_stream():
-                yield frame
-
+    inputs = _FullUpdateInputs(
+        netbox_session=netbox_session,
+        pxs=pxs,
+        cluster_status=cluster_status,
+        cluster_resources=cluster_resources,
+        tag=tag,
+        overwrite_flags=overwrite_flags,
+        behavior_flags=behavior_flags,
+        fetch_max_concurrency=fetch_max_concurrency,
+        sweep_endpoint_ids=sweep_endpoint_ids,
+    )
+    stream = _full_update_event_stream(
+        inputs,
+        _sync_deps.as_dict(),
+        dry_run=dry_run,
+    )
     return StreamingResponse(
-        branched_stream(),
+        _branched_full_update_stream(netbox_session, netbox_branch_schema_id, stream),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1433,6 +1263,6 @@ async def full_update_sync_stream(  # noqa: C901
     )
 
 
-def register_full_update_routes(app) -> None:
+def register_full_update_routes(app: Any) -> None:
     """Mount full-update routes on the root application."""
     app.include_router(full_update_router)

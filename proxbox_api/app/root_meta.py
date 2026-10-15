@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from proxbox_api import __version__
 from proxbox_api.app import bootstrap
 from proxbox_api.services.interactive_policy import InteractiveStatus
+from proxbox_api.settings_client import (
+    refresh_failed_settings_readiness,
+    settings_readiness_failure,
+)
 
 root_meta_router = APIRouter()
 
@@ -38,12 +45,25 @@ async def backend_version() -> dict:
     """Return backend service version for external cache invalidation."""
     return {
         "version": __version__,
+        "capabilities": {"ws_run_id": 1},
     }
 
 
-@root_meta_router.get("/health")
-async def health_check() -> dict:
+@root_meta_router.get("/health", response_model=None)
+async def health_check() -> dict | JSONResponse:
     """Return backend health status for readiness checks."""
+    settings_failure = settings_readiness_failure()
+    if settings_failure is not None:
+        settings_failure = await asyncio.to_thread(refresh_failed_settings_readiness)
+    if settings_failure is not None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unready",
+                "init_ok": bootstrap.init_ok,
+                "reason": settings_failure,
+            },
+        )
     return {
         "status": "ready" if bootstrap.init_ok else "initializing",
         "init_ok": bootstrap.init_ok,

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from functools import partial
 
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import (
@@ -20,6 +21,27 @@ VM_INTERFACE_SYNC_STATE_PATH = "/api/plugins/proxbox/sync-state/vm-interfaces/"
 
 _UNAVAILABLE_SIDECAR_PATHS: set[str] = set()
 _SIDECAR_ABSENT_STATUSES = frozenset({404, 501})
+_ENDPOINT_OWNERSHIP_CONFLICT_CODE = "endpoint_ownership_conflict"
+
+
+class DeviceSyncStateOwnershipConflict(RuntimeError):
+    """Refuse to move a device sidecar between Proxmox endpoints."""
+
+    def __init__(
+        self,
+        *,
+        device_id: object,
+        expected_endpoint_id: object,
+        actual_endpoint_id: object,
+    ) -> None:
+        self.device_id = device_id
+        self.expected_endpoint_id = expected_endpoint_id
+        self.actual_endpoint_id = actual_endpoint_id
+        super().__init__(
+            "Device sync-state ownership conflict for "
+            f"device_id={device_id!r}: endpoint {actual_endpoint_id!r} owns the row, "
+            f"not endpoint {expected_endpoint_id!r}"
+        )
 
 
 def _int_record_id(value: object) -> int | None:
@@ -106,6 +128,86 @@ def _relation_ref(value: object) -> dict[str, int] | None:
 
 def _without_none(payload: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _accept_existing_sidecar(_existing: object) -> None:
+    return None
+
+
+def validate_device_sync_state_owner(
+    existing: object,
+    *,
+    expected_endpoint_id: object,
+    device_id: object,
+) -> None:
+    """Allow an unclaimed or same-endpoint row and reject every other owner."""
+    record = _record_to_dict(existing)
+    if record is None:
+        raise DeviceSyncStateOwnershipConflict(
+            device_id=device_id,
+            expected_endpoint_id=expected_endpoint_id,
+            actual_endpoint_id="unreadable",
+        )
+    if "proxmox_endpoint_raw_id" not in record:
+        return
+    raw_endpoint_id = record.get("proxmox_endpoint_raw_id")
+    if raw_endpoint_id is None:
+        return
+    actual_endpoint_id = _record_id(raw_endpoint_id)
+    expected_id = _record_id(expected_endpoint_id)
+    if actual_endpoint_id == expected_id and expected_id is not None:
+        return
+    raise DeviceSyncStateOwnershipConflict(
+        device_id=device_id,
+        expected_endpoint_id=expected_endpoint_id,
+        actual_endpoint_id=raw_endpoint_id,
+    )
+
+
+def verify_device_sync_state_owner(
+    existing: object,
+    *,
+    expected_endpoint_id: object,
+    device_id: object,
+) -> None:
+    """Verify exposed ownership while preserving old serializers without the field."""
+    record = _record_to_dict(existing)
+    if record is not None and "proxmox_endpoint_raw_id" not in record:
+        return
+    raw_endpoint_id = None if record is None else record.get("proxmox_endpoint_raw_id")
+    actual_endpoint_id = _record_id(raw_endpoint_id)
+    expected_id = _record_id(expected_endpoint_id)
+    if actual_endpoint_id == expected_id and expected_id is not None:
+        return
+    raise DeviceSyncStateOwnershipConflict(
+        device_id=device_id,
+        expected_endpoint_id=expected_endpoint_id,
+        actual_endpoint_id=raw_endpoint_id,
+    )
+
+
+def _contains_endpoint_ownership_conflict(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return any(_contains_endpoint_ownership_conflict(item) for item in value.values())
+    if isinstance(value, list | tuple):
+        return any(_contains_endpoint_ownership_conflict(item) for item in value)
+    return _ENDPOINT_OWNERSHIP_CONFLICT_CODE in str(value)
+
+
+def _is_endpoint_ownership_conflict(error: Exception) -> bool:
+    status = next(
+        (
+            value
+            for value in (
+                getattr(error, "http_status_code", None),
+                getattr(error, "status_code", None),
+                getattr(error, "status", None),
+            )
+            if value is not None
+        ),
+        None,
+    )
+    return status == 409 and _contains_endpoint_ownership_conflict(getattr(error, "detail", error))
 
 
 def reset_sidecar_availability_cache() -> None:
@@ -235,6 +337,10 @@ def _normalize_parent_id(*, path: str, parent_id: object, required: bool) -> int
 
 
 def _handle_sidecar_write_failure(*, path: str, error: Exception, required: bool) -> None:
+    if isinstance(error, DeviceSyncStateOwnershipConflict):
+        raise error
+    if _is_endpoint_ownership_conflict(error):
+        raise error
     if _is_sidecar_unavailable(error):
         _UNAVAILABLE_SIDECAR_PATHS.add(path)
         logger.warning(
@@ -265,6 +371,7 @@ async def _upsert_parent_sidecar(
     parent_id: object,
     payload: dict[str, object],
     required: bool = False,
+    existing_validator: Callable[[object], None] = _accept_existing_sidecar,
 ) -> dict[str, object] | None:
     normalized_parent_id = _normalize_parent_id(
         path=path,
@@ -286,6 +393,7 @@ async def _upsert_parent_sidecar(
             parent_id=normalized_parent_id,
         )
         if existing is not None:
+            existing_validator(existing)
             return await _patch_parent_sidecar(
                 nb,
                 path=path,
@@ -302,6 +410,7 @@ async def _upsert_parent_sidecar(
                 {parent_field: {"id": normalized_parent_id}, **payload},
                 lookup={f"{parent_field}_id": normalized_parent_id},
             )
+            existing_validator(created)
             return _record_to_dict(created)
         except Exception as create_exc:
             if not _is_sidecar_duplicate_conflict(create_exc):
@@ -318,6 +427,7 @@ async def _upsert_parent_sidecar(
             )
             if existing is None:
                 raise
+            existing_validator(existing)
             return await _patch_parent_sidecar(
                 nb,
                 path=path,
@@ -586,6 +696,65 @@ async def write_vm_last_run_sync_state(
     )
 
 
+async def _upsert_device_sync_state(
+    nb: object,
+    *,
+    device_id: object,
+    endpoint_id: object,
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    try:
+        return await _upsert_parent_sidecar(
+            nb,
+            path=DEVICE_SYNC_STATE_PATH,
+            parent_field="device",
+            parent_id=device_id,
+            payload=payload,
+            existing_validator=partial(
+                validate_device_sync_state_owner,
+                expected_endpoint_id=endpoint_id,
+                device_id=device_id,
+            ),
+        )
+    except Exception as error:
+        if not _is_endpoint_ownership_conflict(error):
+            raise
+        raise DeviceSyncStateOwnershipConflict(
+            device_id=device_id,
+            expected_endpoint_id=endpoint_id,
+            actual_endpoint_id="another endpoint",
+        ) from error
+
+
+async def _verify_committed_device_owner(
+    nb: object,
+    *,
+    device_id: object,
+    endpoint_id: object,
+) -> bool:
+    try:
+        clear_rest_get_cache_for_path(nb, DEVICE_SYNC_STATE_PATH)
+        committed = await _lookup_parent_sidecar(
+            nb,
+            path=DEVICE_SYNC_STATE_PATH,
+            parent_field="device",
+            parent_id=_record_id(device_id) or device_id,
+        )
+        verify_device_sync_state_owner(
+            committed,
+            expected_endpoint_id=endpoint_id,
+            device_id=device_id,
+        )
+    except Exception as error:
+        _handle_sidecar_write_failure(
+            path=DEVICE_SYNC_STATE_PATH,
+            error=error,
+            required=False,
+        )
+        return False
+    return True
+
+
 async def write_device_sync_state(
     nb: object,
     *,
@@ -596,22 +765,37 @@ async def write_device_sync_state(
     proxmox_endpoint_raw_id: object = None,
     overwrite_custom_fields: bool,
 ) -> dict[str, object] | None:
-    if not overwrite_custom_fields:
-        return None
-    payload = _without_none({"proxmox_last_updated": proxmox_last_updated})
-    if proxmox_node_name is not None:
-        payload["proxmox_node_name"] = _text_or_blank(proxmox_node_name)
-    if proxmox_cluster_name is not None:
-        payload["proxmox_cluster_name"] = _text_or_blank(proxmox_cluster_name)
+    payload: dict[str, object] = {}
+    if overwrite_custom_fields:
+        payload.update(_without_none({"proxmox_last_updated": proxmox_last_updated}))
+        if proxmox_node_name is not None:
+            payload["proxmox_node_name"] = _text_or_blank(proxmox_node_name)
+        if proxmox_cluster_name is not None:
+            payload["proxmox_cluster_name"] = _text_or_blank(proxmox_cluster_name)
     if proxmox_endpoint_raw_id is not None:
         payload["proxmox_endpoint_raw_id"] = proxmox_endpoint_raw_id
-    return await _upsert_parent_sidecar(
+    if not payload:
+        return None
+    try:
+        clear_rest_get_cache_for_path(nb, DEVICE_SYNC_STATE_PATH)
+    except Exception:  # noqa: BLE001 - cache invalidation must not hide the ownership write
+        pass
+    result = await _upsert_device_sync_state(
         nb,
-        path=DEVICE_SYNC_STATE_PATH,
-        parent_field="device",
-        parent_id=device_id,
+        device_id=device_id,
+        endpoint_id=proxmox_endpoint_raw_id,
         payload=payload,
     )
+    if result is None or proxmox_endpoint_raw_id is None:
+        return result
+    verified = await _verify_committed_device_owner(
+        nb,
+        device_id=device_id,
+        endpoint_id=proxmox_endpoint_raw_id,
+    )
+    if not verified:
+        return None
+    return result
 
 
 async def write_cluster_sync_state(

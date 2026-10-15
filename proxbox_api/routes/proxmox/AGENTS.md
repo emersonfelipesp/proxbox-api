@@ -55,7 +55,9 @@ Endpoints that expose Proxmox sessions, cluster data, node data, viewer generati
   schemas carry `access_methods` (`api` default / `api_ssh`) and the default-off
   `allow_packer_template_builds` capability; a field validator rejects SSH-only
   and unknown access-method values with 422. The narrow packer flag authorizes
-  no write by itself and remains subordinate to `allow_writes`.
+  no write by itself and remains subordinate to `allow_writes`. Submitted hosts
+  use a request-scoped SSRF allow set; the shared registered-endpoint cache is
+  invalidated only after a successful commit.
 - `access_gate.py`: `require_ssh_access` / `gate_ssh_access` — the per-endpoint SSH transport gate (`ProxmoxEndpoint.access_methods == 'api_ssh'`), orthogonal to `allow_writes`. Used by the cloud-image / Azure-VHD SSH-execution routes (SQLite-id paths). Returns 403 `reason="ssh_not_enabled_for_endpoint"`.
 - `firewall.py`: Datacenter, node, and VM-level firewall endpoints (rules, security groups, IP sets, aliases, options). Read-only by default; write endpoints gated by `ProxmoxEndpoint.allow_writes`.
 - `ha.py`: Cluster High-Availability endpoints: status, resources, groups, rules, summary (PVE ≤ 8.x/9.x), plus PVE 9.2+ disarm/arm, manager-status, and CRS config.

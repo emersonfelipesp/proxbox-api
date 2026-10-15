@@ -52,9 +52,26 @@ Core FastAPI package for `proxbox-api`. This package owns application compositio
 
 ## Runtime Boundaries
 
+- `ssrf.py` returns immutable `ResolvedAddress` records rather than bare IP
+  strings. Each record retains the address family, optional port, IPv6 flowinfo,
+  and scope ID from `getaddrinfo()`. Apply SSRF policy to `address` only, but use
+  the complete record for deduplication and outbound connection so identical
+  link-local addresses on different interfaces remain distinct. Unspecified and
+  non-global addresses remain fail-closed unless the established endpoint or
+  operator policy explicitly permits them.
+
 - `settings_client.py` permits metadata compatibility only after runtime HTTP
   404 and removes encryption_key from that response. Authorization, transport,
-  and other runtime failures must not trigger fallback. Keep one timeout
+  and other runtime failures must not trigger fallback. HTTP 401/403 is a typed
+  policy-authorization denial: retain the last known policy, or use strict SSRF
+  defaults and fail `/health` with a secret-free
+  `view_proxboxpluginsettings` remediation when no prior policy exists. Bounded
+  waiters with no prior policy also use strict SSRF defaults. While this
+  readiness failure is active, `/health` drives a one-second-budget refresh
+  through the same ten-second failure cache and process-wide single-flight, so
+  permission repair can restore readiness without application traffic or a
+  restart. Refuse redirects
+  before replaying the token and cap every response at 4 MiB. Keep one timeout
   allocation deadline, not a hard blocking-duration guarantee. Runtime key retrieval requires the plugin's active superuser
   or explicit per-user grant plus view access to the exact settings row.
   All ordinary settings results, caches, and overrides strip the root.

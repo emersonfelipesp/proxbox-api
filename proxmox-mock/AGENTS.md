@@ -34,7 +34,9 @@ proxmox-mock/
 │   └── test_generated_proxmox_mock_routes.py
 ├── pyproject.toml         # Standalone package config (name: proxmox-mock-api)
 ├── uv.lock                # Locked deps for the mock package only
-└── Dockerfile             # Container image for the mock server
+├── Dockerfile             # Qualified package-first release image
+├── Dockerfile.dev         # Lock-backed source image for local and E2E CI use
+└── release/               # Release manifest, validator, and operator guide
 ```
 
 ## Key Files
@@ -65,6 +67,26 @@ async def mock_proxmox():
 - Import: `from proxmox_mock.app import create_mock_app`
 - Standalone server: `python -m proxmox_mock.main` or `uvicorn proxmox_mock.main:app`
 - Docker: `docker run emersonfelipesp/proxmox-mock-api`
+
+## Release Images
+
+`Dockerfile` is release-only. It accepts immutable per-platform Python and uv
+image references from `release/release-manifest.toml`, then installs the
+qualified application wheel and the hash-locked dependency wheelhouse without
+an index. The recipe verifies that its actual `FROM` arguments equal the
+platform manifest references. The checked-in manifest intentionally contains
+placeholders, so image publication fails until an operator records verified
+inputs for both `linux/amd64` and `linux/arm64`.
+
+Published releases build and validate the Python package but never publish an
+image automatically. Uploaded wheels run the detached standalone behavioral
+suite outside the checkout, and package-index collisions require a new version.
+Image publication uses the separately dispatched, environment-protected
+`publish-proxmox-mock-image.yml` workflow. Its Dockerfile obtains the wheel
+filename from the validated manifest rather than embedding a package version,
+and its final multi-platform index consumes the per-platform digests returned
+by the same workflow run rather than resolving mutable architecture tags.
+E2E CI uses `Dockerfile.dev`; do not use that source-build recipe for publication.
 
 ## Development Checks
 

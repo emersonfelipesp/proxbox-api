@@ -14,10 +14,16 @@ Writes from these endpoints persist to the local key file and survive restarts.
 
 from __future__ import annotations
 
+import asyncio
+import time
+from collections.abc import Callable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 from proxbox_api.credentials import (
@@ -31,6 +37,7 @@ from proxbox_api.credentials import (
 from proxbox_api.database import (
     CephDashboardEndpoint,
     CephExternalCluster,
+    CredentialEncryptionKeyState,
     NetBoxEndpoint,
     PBSEndpoint,
     PDMEndpoint,
@@ -40,6 +47,10 @@ from proxbox_api.database import (
 )
 
 router = APIRouter()
+
+_KEY_REPLACEMENT_BUSY = (
+    "Credential encryption key replacement is temporarily busy. Retry the request."
+)
 
 
 class EncryptionStatus(BaseModel):
@@ -96,6 +107,72 @@ def _reject_if_encrypted_values(session: Session) -> None:
         )
 
 
+def _replacement_busy() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=_KEY_REPLACEMENT_BUSY,
+        headers={"Retry-After": "1"},
+    )
+
+
+def _begin_serialized_key_write(session: Session) -> None:
+    try:
+        session.exec(text("BEGIN IMMEDIATE"))
+    except OperationalError:
+        session.rollback()
+        raise _replacement_busy() from None
+
+
+def _replace_key_serialized(engine: Engine, replacement: Callable[[], object]) -> None:
+    """Serialize the ciphertext scan, file replacement, and generation bump."""
+    with Session(engine) as session:
+        _begin_serialized_key_write(session)
+        try:
+            state = session.get(CredentialEncryptionKeyState, 1)
+            if state is None:
+                state = CredentialEncryptionKeyState()
+                session.add(state)
+                session.flush()
+            _reject_if_encrypted_values(session)
+            state.replacement_pending = True
+            state.updated_at = time.time()
+            session.add(state)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
+        _begin_serialized_key_write(session)
+        try:
+            state = session.get(CredentialEncryptionKeyState, 1)
+            if state is None or not state.replacement_pending:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Credential encryption key replacement state changed. Retry the request.",
+                )
+            _reject_if_encrypted_values(session)
+            replacement()
+            state.generation += 1
+            state.replacement_pending = False
+            state.updated_at = time.time()
+            session.add(state)
+            session.commit()
+        except OperationalError:
+            session.rollback()
+            raise _replacement_busy() from None
+        except Exception:
+            session.rollback()
+            raise
+
+
+async def _run_key_replacement(session: Session, replacement: Callable[[], object]) -> None:
+    """Run both serialized phases off-loop with a thread-owned session."""
+    engine = session.get_bind()
+    if not isinstance(engine, Engine):
+        raise HTTPException(status_code=503, detail=_KEY_REPLACEMENT_BUSY)
+    await asyncio.to_thread(_replace_key_serialized, engine, replacement)
+
+
 @router.get("/encryption/status", response_model=EncryptionStatus)
 async def get_encryption_status() -> EncryptionStatus:
     """Report whether a credential encryption key is configured and where it came from."""
@@ -112,8 +189,7 @@ async def set_encryption_key(
     Returns 409 if any encrypted credential exists, since replacing the key
     would strand those ciphertexts.
     """
-    _reject_if_encrypted_values(session)
-    set_local_encryption_key(payload.key)
+    await _run_key_replacement(session, lambda: set_local_encryption_key(payload.key))
     return _build_status()
 
 
@@ -125,9 +201,8 @@ async def generate_and_set_encryption_key(
 
     Returns 409 if any encrypted credential exists.
     """
-    _reject_if_encrypted_values(session)
     new_key = generate_encryption_key()
-    set_local_encryption_key(new_key)
+    await _run_key_replacement(session, lambda: set_local_encryption_key(new_key))
     status = _build_status()
     return EncryptionKeyResponse(configured=status.configured, source=status.source, key=new_key)
 
@@ -141,6 +216,5 @@ async def delete_encryption_key(
     Returns 409 if any encrypted (``enc:``-prefixed) credential value remains in
     the database, since dropping the key would strand those ciphertexts.
     """
-    _reject_if_encrypted_values(session)
-    clear_local_encryption_key()
+    await _run_key_replacement(session, clear_local_encryption_key)
     return _build_status()

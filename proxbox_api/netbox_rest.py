@@ -677,35 +677,47 @@ def _detail_path(list_path: str, record_id: object) -> str:
     return f"{list_path}{record_id}/"
 
 
+def _preserved_upstream_status(status: int) -> int | None:
+    if status >= 500 or status in {404, 409, 501}:
+        return status
+    return None
+
+
+def _error_response_detail(response: ApiResponse) -> str:
+    detail = response.text
+    try:
+        payload = response.json()
+    except json.JSONDecodeError:
+        logger.debug(
+            "NetBox error response body was not JSON (status=%s)",
+            response.status,
+            exc_info=True,
+        )
+        return detail
+    if isinstance(payload, dict):
+        message = str(payload.get("detail") or payload.get("message") or detail)
+        code = payload.get("code")
+        if code is not None and str(code) not in message:
+            return f"{message} ({code})"
+        return message
+    if not isinstance(payload, list):
+        return detail
+    parts = []
+    for i, item in enumerate(payload):
+        if isinstance(item, dict) and item:
+            parts.append(f"item[{i}]: {item}")
+        elif item:
+            parts.append(str(item))
+    return "; ".join(parts) if parts else detail
+
+
 def _extract_payload(response: ApiResponse) -> object:
     if response.status < 200 or response.status >= 300:
-        detail = response.text
-        try:
-            payload = response.json()
-        except json.JSONDecodeError:
-            logger.debug(
-                "NetBox error response body was not JSON (status=%s)",
-                response.status,
-                exc_info=True,
-            )
-            payload = None
-        if isinstance(payload, dict):
-            detail = str(payload.get("detail") or payload.get("message") or detail)
-        elif isinstance(payload, list):
-            parts = []
-            for i, item in enumerate(payload):
-                if isinstance(item, dict) and item:
-                    parts.append(f"item[{i}]: {item}")
-                elif item:
-                    parts.append(str(item))
-            if parts:
-                detail = "; ".join(parts)
-        # Preserve real upstream server failures and the optional sidecar
-        # route-absent statuses. Other client-side 4xx keep the default so
-        # existing validation/duplicate flows are unchanged.
-        upstream_status = (
-            response.status if response.status >= 500 or response.status in {404, 501} else None
-        )
+        detail = _error_response_detail(response)
+        # Preserve real upstream server failures, explicit conflicts, and the
+        # optional sidecar route-absent statuses. Other client-side 4xx keep
+        # the default so existing validation/duplicate flows are unchanged.
+        upstream_status = _preserved_upstream_status(response.status)
         raise ProxboxException(
             message="NetBox REST request failed",
             detail=detail,

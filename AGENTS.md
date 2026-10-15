@@ -89,11 +89,10 @@ Provenance sidecars detect corruption; they do not authenticate an artifact,
 because another process running as the same operating-system user can forge the
 artifact and its digest. Production therefore keeps runtime code generation off.
 
-- **`netbox-proxbox` 0.0.27rc4 (current source)** — the NetBox plugin that
+- **`netbox-proxbox` 0.0.29.post5 (paired release)** — the NetBox plugin that
   consumes this backend. Source:
-  <https://github.com/emersonfelipesp/netbox-proxbox>. The current sibling-source
-  development pairing is `netbox-proxbox 0.0.27rc4 ... proxbox-api 0.0.23 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
-  This source-only tuple is not a published or certified runtime pairing.
+  <https://github.com/emersonfelipesp/netbox-proxbox>. The current release
+  pairing is `netbox-proxbox 0.0.29.post5 ... proxbox-api 0.0.27.post3 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
   `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
   RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
   VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
@@ -899,13 +898,12 @@ by installing a replacement package that bundles the updated schema.
 
 ## Certified Stack Pairing
 
-Current sibling-source development pairing: `netbox-proxbox 0.0.27rc4 ... proxbox-api 0.0.23 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
+Current release pairing: `netbox-proxbox 0.0.29.post5 ... proxbox-api 0.0.27.post3 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
 
 Proxmox node Device names use the effective endpoint/global
 `node_device_name_template`. Keep the Proxmox short node name in API paths and
 typed sync-state identity; use the rendered name only for NetBox Device writes
 and lookups.
-This source-only tuple is not a published or certified runtime pairing.
 `proxbox-api 0.0.21.post2` adds authenticated Proxmox console WebSocket handshakes,
 typed-sidecar-only inventory state, NetBox 4.6.6 certification, strict Python
 3.12/3.13 support, and a verified network-free production release context.

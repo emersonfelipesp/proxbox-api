@@ -54,8 +54,11 @@ evita pulls repetidos do Docker Hub e rebuilds do Proxbox API em uma matriz
 grande de versoes do NetBox. Imagens oficiais de Python, PostgreSQL, Redis,
 nginx e a base fallback do NetBox sao baixadas por `mirror.gcr.io/library` para
 evitar falhas por cota do Docker Hub. A imagem mock do Proxmox e construida a
-partir do pacote local `proxmox-mock/` para cada marcador de servico `pve`,
-`pbs` e `pdm`. O job do NetBox baixa a imagem publica quando disponivel e faz
+partir do pacote local `proxmox-mock/` com `Dockerfile.dev` para cada marcador
+de servico `pve`, `pbs` e `pdm`. Essa receita baseada no lock e exclusiva para
+desenvolvimento e CI E2E; o `proxmox-mock/Dockerfile` package-first exige um
+contexto de release qualificado e e usado somente pelo workflow de imagem com
+aprovacao separada. O job do NetBox baixa a imagem publica quando disponivel e faz
 fallback para build a partir do codigo-fonte quando a imagem do registro nao
 existe. Esse build fallback segue a base atual do `netbox-docker`,
 `ubuntu:26.04`, usando a referencia via mirror.

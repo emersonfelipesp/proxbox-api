@@ -94,6 +94,29 @@ startup boundary. The offline identity-key rebind requires all four existing
 tables and their current columns, including the reservation schema, and never
 initializes or migrates them.
 
+`credential_encryption_key_state` is a separate singleton created during the
+same serialized schema startup. Its monotonic generation coordinates local
+credential-encryption key replacement with NetBox, Proxmox, PBS, PDM,
+Prometheus, Ceph Dashboard, and external Ceph RGW credential writes. Writers
+read the generation and local-key file identity under `no_autoflush` before
+mutating persistent secret fields. The actual encryption operation must match
+that permit, and the ciphertext transaction conditionally updates the same
+generation row. A stale generation or local-file identity rolls back the
+credential write with HTTP 409. The admin replacement routes execute their
+complete `BEGIN IMMEDIATE` protocol in a worker thread; lock contention returns
+HTTP 503 with `Retry-After` without blocking the request event loop.
+The replacement first publishes a `replacement_pending` fence. If the key-file
+change or final database commit fails, that fence remains set and all later
+credential writes return HTTP 409 until an operator successfully retries the
+replacement. This prevents a partial filesystem/database failure from storing
+ciphertext under an indeterminate key generation. Successful local-key
+publication fsyncs the temporary file, atomically renames it, and fsyncs its
+parent directory before clearing the fence. A retry that encounters database
+lock contention never clears an existing pending fence; only a successfully
+completed replacement may clear it. Key deletion also fsyncs the existing
+parent directory when the key is already absent, so a retry proves an earlier
+unlink durable before advancing the generation.
+
 ## Containers
 
 Published images supply an internal fallback:

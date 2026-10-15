@@ -7,13 +7,12 @@ value would raise `TypeError`. The full-update wrappers now translate
 `fetch_max_concurrency` (their own kwarg, kept for plugin/SSE compat) into
 `fetch_concurrency` when calling `create_storages`. This test pins that
 contract: the public function still names the parameter `fetch_concurrency`,
-and the full-update call sites pass that exact kwarg.
+and both full-update stage modes pass that exact keyword.
 """
 
 from __future__ import annotations
 
 import inspect
-import re
 from pathlib import Path
 
 import pytest
@@ -29,27 +28,17 @@ def test_create_storages_signature_uses_fetch_concurrency() -> None:
 
 
 def test_full_update_calls_create_storages_with_fetch_concurrency() -> None:
-    """The two `create_storages(...)` call sites in full_update.py must pass
-    the renamed kwarg, not the legacy `fetch_max_concurrency`.
-    """
+    """Both storage stage descriptors pass the renamed keyword."""
     full_update_path = (
         Path(__file__).resolve().parent.parent / "proxbox_api" / "app" / "full_update.py"
     )
     source = full_update_path.read_text(encoding="utf-8")
 
-    # Find every `create_storages(` call and verify each block includes the
-    # renamed kwarg before the next top-level statement.
-    matches = list(re.finditer(r"create_storages\s*\(", source))
-    assert matches, "expected at least one create_storages(...) call in full_update.py"
-
-    for match in matches:
-        # Take the next ~600 characters as the call window. Long enough to
-        # cover the kwargs block; short enough not to bleed into the next call.
-        window = source[match.start() : match.start() + 600]
-        assert "fetch_concurrency" in window, (
-            f"create_storages call near offset {match.start()} is missing the "
-            "fetch_concurrency kwarg"
-        )
+    storage_descriptor = source.split('"storage": _StageDescriptor(', 1)[1].split(
+        '"virtual-machines": _StageDescriptor(', 1
+    )[0]
+    assert storage_descriptor.count('"fetch_concurrency": fetch_concurrency') == 2
+    assert "fetch_max_concurrency" not in storage_descriptor
 
 
 @pytest.mark.asyncio
@@ -79,12 +68,7 @@ def test_full_update_calls_create_virtual_disks_with_fetch_max_concurrency() -> 
     )
     source = full_update_path.read_text(encoding="utf-8")
 
-    matches = list(re.finditer(r"create_virtual_disks\s*\(", source))
-    assert matches, "expected at least one create_virtual_disks(...) call in full_update.py"
-
-    for match in matches:
-        window = source[match.start() : match.start() + 500]
-        assert "fetch_max_concurrency=fetch_max_concurrency" in window, (
-            f"create_virtual_disks call near offset {match.start()} is missing the "
-            "fetch_max_concurrency kwarg"
-        )
+    disk_descriptor = source.split('"virtual-disks": _StageDescriptor(', 1)[1].split(
+        '"task-history": _StageDescriptor(', 1
+    )[0]
+    assert disk_descriptor.count('"fetch_max_concurrency": inputs.fetch_max_concurrency') == 2

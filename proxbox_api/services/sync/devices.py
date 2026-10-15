@@ -42,9 +42,23 @@ __all__ = [
     "_ensure_site",
     "_resolve_tenant",
     "placement_from_source",
+    "DeviceSyncResultList",
     "create_proxmox_devices",
     "ProxmoxCreateDevicesDep",
 ]
+
+
+class DeviceSyncResultList(list):
+    """List-compatible device result that preserves failed reconciliation count."""
+
+    def __init__(
+        self,
+        values: list[dict[str, object]] | None = None,
+        *,
+        failed_count: int = 0,
+    ) -> None:
+        super().__init__(values or [])
+        self.failed_count = failed_count
 
 
 def _cluster_device_items(
@@ -233,7 +247,7 @@ async def _finalize_devices(
     use_websocket: bool,
     use_css: bool,
     selected_node: str | None,
-) -> tuple[list[dict[str, object]], int]:
+) -> tuple[DeviceSyncResultList, int]:
     finalized: list[dict[str, object]] = []
     failed = 0
     for processed_count, item in enumerate(items, start=1):
@@ -271,7 +285,7 @@ async def _finalize_devices(
             continue
         data = record.serialize()
         if selected_node and selected_node == node_name:
-            return [data], failed
+            return DeviceSyncResultList([data], failed_count=failed), failed
         finalized.append(data)
         if bridge:
             await bridge.emit_item_progress(
@@ -296,7 +310,7 @@ async def _finalize_devices(
             data=data,
             use_css=use_css,
         )
-    return finalized, failed
+    return DeviceSyncResultList(finalized, failed_count=failed), failed
 
 
 def _hardware_node_payload(
@@ -364,7 +378,7 @@ async def create_proxmox_devices(
             "No cluster status data provided",
             level="warning",
         )
-        return []
+        return DeviceSyncResultList()
 
     tag_refs = nested_tag_payload(tag)
     bridge = websocket if use_websocket and isinstance(websocket, WebSocketSSEBridge) else None
@@ -402,6 +416,7 @@ async def create_proxmox_devices(
         selected_node=node,
     )
     failed_devices += len(name_errors)
+    device_list.failed_count = failed_devices
     if node and device_list:
         return device_list
 

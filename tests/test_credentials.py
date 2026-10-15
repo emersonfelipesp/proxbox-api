@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
+import stat
+import threading
 
 import pytest
 
 import proxbox_api.credentials as creds_mod
 from proxbox_api import plugin_key_authority
+from proxbox_api.exception import ProxboxException
 from proxbox_api.plugin_key_authority import AuthorizedPluginKey, PluginKeyBinding
 
 
@@ -89,6 +93,16 @@ def test_env_var_takes_priority_over_settings_key(monkeypatch):
     )
     assert creds_mod.is_encryption_enabled() is True
     assert called == [], "env var should short-circuit plugin authority lookup"
+
+
+def test_selected_key_source_does_not_acquire_key(monkeypatch):
+    monkeypatch.setattr(
+        creds_mod,
+        "_get_encryption_key",
+        lambda: pytest.fail("selected_key_source must not acquire key material"),
+    )
+
+    assert creds_mod.selected_key_source() is None
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +231,135 @@ def test_encryption_key_is_cached_after_first_call(monkeypatch):
     monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY", "different-key")
     second = creds_mod._get_encryption_key()
     assert first is second
+
+
+def test_local_key_replacement_invalidates_another_worker_cache(monkeypatch, tmp_path):
+    key_file = tmp_path / "encryption.key"
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY_FILE", str(key_file))
+    monkeypatch.setattr(
+        creds_mod,
+        "_resolve_local_key_file",
+        lambda: key_file.read_text(encoding="utf-8").strip() if key_file.exists() else "",
+    )
+    creds_mod.set_local_encryption_key("synthetic-retired-local-key")
+    old_ciphertext = creds_mod.encrypt_value("synthetic-old-credential")
+    cached_state = (
+        creds_mod._ENCRYPTION_KEY,
+        creds_mod._FERNET,
+        creds_mod._FERNET_KEY,
+        creds_mod._KEY_SOURCE,
+        creds_mod._PLUGIN_KEY_BINDING,
+        creds_mod._LOCAL_KEY_SIGNATURE,
+    )
+
+    creds_mod.set_local_encryption_key("synthetic-current-local-key")
+    (
+        creds_mod._ENCRYPTION_KEY,
+        creds_mod._FERNET,
+        creds_mod._FERNET_KEY,
+        creds_mod._KEY_SOURCE,
+        creds_mod._PLUGIN_KEY_BINDING,
+        creds_mod._LOCAL_KEY_SIGNATURE,
+    ) = cached_state
+
+    new_ciphertext = creds_mod.encrypt_value("synthetic-new-credential")
+
+    assert creds_mod._KEY_SOURCE == "local"
+    assert creds_mod._ENCRYPTION_KEY != cached_state[0]
+    creds_mod.reset_encryption_cache()
+    assert creds_mod.decrypt_value(new_ciphertext) == "synthetic-new-credential"
+    with pytest.raises(creds_mod.ProxboxException, match="Credential decryption failed"):
+        creds_mod.decrypt_value(old_ciphertext)
+
+
+def test_delayed_local_reader_cannot_publish_replaced_key(monkeypatch, tmp_path):
+    key_file = tmp_path / "encryption.key"
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY_FILE", str(key_file))
+    creds_mod.set_local_encryption_key("synthetic-retired-local-key")
+    creds_mod.reset_encryption_cache()
+    original_resolve = creds_mod._resolve_stable_local_key
+    resolved_old = threading.Event()
+    permit_publication = threading.Event()
+    first_resolution = True
+
+    def delayed_resolution():
+        nonlocal first_resolution
+        resolved = original_resolve()
+        if first_resolution:
+            first_resolution = False
+            resolved_old.set()
+            assert permit_publication.wait(timeout=2)
+        return resolved
+
+    monkeypatch.setattr(creds_mod, "_resolve_stable_local_key", delayed_resolution)
+    result: list[str | BaseException | None] = []
+
+    def encrypt_after_delay() -> None:
+        try:
+            result.append(creds_mod.encrypt_value("synthetic-current-credential"))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            result.append(exc)
+
+    reader = threading.Thread(target=encrypt_after_delay)
+    reader.start()
+    assert resolved_old.wait(timeout=2)
+    replacement = tmp_path / "replacement.key"
+    replacement.write_text("synthetic-current-local-key", encoding="utf-8")
+    os.replace(replacement, key_file)
+    permit_publication.set()
+    reader.join(timeout=2)
+
+    assert not reader.is_alive()
+    assert len(result) == 1 and isinstance(result[0], str)
+    creds_mod.reset_encryption_cache()
+    assert creds_mod.decrypt_value(result[0]) == "synthetic-current-credential"
+
+
+def test_local_key_publication_fsyncs_file_then_rename_then_directory(monkeypatch, tmp_path):
+    key_file = tmp_path / "encryption.key"
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY_FILE", str(key_file))
+    events: list[str] = []
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def recording_fsync(descriptor: int) -> None:
+        events.append(
+            "directory-fsync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-fsync"
+        )
+        real_fsync(descriptor)
+
+    def recording_replace(source, destination) -> None:
+        events.append("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    monkeypatch.setattr(os, "replace", recording_replace)
+
+    creds_mod.set_local_encryption_key("synthetic-durable-local-key")
+
+    assert events == ["file-fsync", "replace", "directory-fsync"]
+
+
+def test_local_key_delete_retries_directory_fsync_after_unlink(monkeypatch, tmp_path):
+    key_file = tmp_path / "encryption.key"
+    key_file.write_text("synthetic-delete-key", encoding="utf-8")
+    monkeypatch.setenv("PROXBOX_ENCRYPTION_KEY_FILE", str(key_file))
+    calls = 0
+
+    def fail_once(_path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("synthetic directory fsync failure")
+
+    monkeypatch.setattr(creds_mod, "fsync_directory", fail_once)
+
+    with pytest.raises(ProxboxException, match="Could not delete local encryption key file"):
+        creds_mod.clear_local_encryption_key()
+
+    assert not key_file.exists()
+    assert creds_mod.clear_local_encryption_key() is False
+    assert calls == 2
 
 
 def test_stable_keyed_fingerprint_is_stable_and_domain_separated(monkeypatch):

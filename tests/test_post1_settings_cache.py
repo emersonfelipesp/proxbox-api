@@ -9,10 +9,10 @@ from proxbox_api import settings_client
 
 @pytest.fixture(autouse=True)
 def _clean_settings(monkeypatch):
-    settings_client.invalidate_settings_cache()
+    settings_client.invalidate_settings_cache(clear_readiness=True)
     monkeypatch.setattr(settings_client, "_settings_session", lambda s: object())
     yield
-    settings_client.invalidate_settings_cache()
+    settings_client.invalidate_settings_cache(clear_readiness=True)
 
 
 def _good() -> dict:
@@ -78,3 +78,44 @@ def test_cache_fallback_false_does_not_cache_failure(monkeypatch):
     settings_client.get_settings(cache_fallback=False)
     settings_client.get_settings(cache_fallback=False)
     assert calls["n"] == 2
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_denied_cold_start_uses_strict_ssrf_policy_and_fails_readiness(
+    monkeypatch,
+    status,
+):
+    def denied(_session, **_kwargs):
+        raise settings_client.SettingsAuthorizationError(f"HTTP {status}")
+
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", denied)
+
+    settings = settings_client.get_settings(use_cache=False)
+
+    assert settings["ssrf_protection_enabled"] is True
+    assert settings["allow_private_ips"] is False
+    assert settings["allowed_ip_ranges"] == []
+    assert settings_client._SETTINGS_LAST_RESULT is None
+    assert "view_proxboxpluginsettings" in settings_client.settings_readiness_failure()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_denied_warm_start_keeps_last_known_policy(monkeypatch, status):
+    calls = 0
+
+    def fetch(_session, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _good()
+        raise settings_client.SettingsAuthorizationError(f"HTTP {status}")
+
+    monkeypatch.setattr(settings_client, "fetch_settings_from_netbox", fetch)
+
+    first = settings_client.get_settings(use_cache=False)
+    denied = settings_client.get_settings(use_cache=False)
+
+    assert first["allow_private_ips"] is False
+    assert denied == first
+    assert settings_client._SETTINGS_LAST_RESULT == first
+    assert settings_client.settings_readiness_failure() is None

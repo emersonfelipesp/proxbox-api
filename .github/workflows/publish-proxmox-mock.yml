@@ -1,122 +1,109 @@
-name: Release proxmox-mock-api
+name: Release proxmox-mock-api package
 
 on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: proxmox-mock-package-release
+  cancel-in-progress: false
+
 jobs:
   prepare-release:
-    name: prepare mock artifacts + metadata
     runs-on: ubuntu-latest
     outputs:
-      package_name: ${{ steps.meta.outputs.package_name }}
-      version: ${{ steps.meta.outputs.version }}
-      should_publish: ${{ steps.meta.outputs.should_publish }}
-
+      version: ${{ steps.metadata.outputs.version }}
+      should_publish: ${{ steps.metadata.outputs.should_publish }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
 
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.5"
+          enable-cache: false
 
-      - name: Validate package metadata and tag
-        id: meta
+      - name: Validate package metadata and release tag
+        id: metadata
         env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
-        working-directory: proxmox-mock
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python - <<'PY'
           import os
           import pathlib
           import tomllib
 
-          data = tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))
-          project_name = data['project']['name']
-          version = data['project']['version']
-          event = os.getenv('GITHUB_EVENT_NAME', '')
-          release_tag = os.getenv('RELEASE_TAG_NAME', '') or ''
-          if project_name != 'proxmox-mock-api':
-              raise SystemExit(
-                  f'Expected project name proxmox-mock-api, got {project_name!r}'
-              )
-          if event == 'release' and release_tag != f'v{version}':
-              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
-                  fh.write(
-                      f'package_name={project_name}\n'
-                      f'version={version}\n'
-                      'should_publish=false\n'
-                  )
-              print(
-                  f'Skipping proxmox-mock-api release: '
-                  f'tag={release_tag!r}, version={version!r}'
-              )
-              raise SystemExit(0)
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
-              fh.write(
-                  f'package_name={project_name}\n'
-                  f'version={version}\n'
-                  'should_publish=true\n'
-              )
+          project = tomllib.loads(pathlib.Path("proxmox-mock/pyproject.toml").read_text())
+          if project["project"]["name"] != "proxmox-mock-api":
+              raise SystemExit("unexpected standalone package name")
+          version = project["project"]["version"]
+          should_publish = str(os.environ["RELEASE_TAG"] == f"v{version}").lower()
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"version={version}\nshould_publish={should_publish}\n")
           PY
 
-      - name: Build distribution
+      - name: Build the wheel and source archive once
+        if: steps.metadata.outputs.should_publish == 'true'
         working-directory: proxmox-mock
-        run: uv run --with build python -m build
+        run: uv run --no-sync --with build==1.5.0 python -m build
 
-      - name: Upload dist artifacts
-        uses: actions/upload-artifact@v7
+      - name: Upload the qualified package artifacts
+        if: steps.metadata.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: proxmox-mock-dist
           path: proxmox-mock/dist/*
           if-no-files-found: error
 
+      - name: Upload the detached standalone test suite
+        if: steps.metadata.outputs.should_publish == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proxmox-mock-tests
+          path: |
+            proxmox-mock/pyproject.toml
+            proxmox-mock/tests/
+          if-no-files-found: error
+
   publish-testpypi:
-    name: publish mock package to TestPyPI
     if: needs.prepare-release.outputs.should_publish == 'true'
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
+          version: "0.12.5"
           enable-cache: false
-          ignore-empty-workdir: true
 
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: proxmox-mock-dist
           path: dist
 
-      - name: Upload to TestPyPI
+      - name: Upload the qualified artifacts to TestPyPI
         env:
-          TEST_PYPI_USERNAME: ${{ secrets.TEST_PYPI_USERNAME }}
-          TEST_PYPI_TOKEN: ${{ secrets.TEST_PYPI_TOKEN }}
+          TWINE_USERNAME: ${{ secrets.TEST_PYPI_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_TOKEN }}
         run: |
-          uv run --with twine python -m twine upload \
+          uv run --no-project --with twine==6.2.0 python -m twine upload \
             --non-interactive \
-            --skip-existing \
             --repository-url https://test.pypi.org/legacy/ \
-            --username "$TEST_PYPI_USERNAME" \
-            --password "$TEST_PYPI_TOKEN" \
             dist/*
 
   validate-testpypi:
-    name: validate proxmox-mock-api / py${{ matrix.python-version }}
     if: needs.prepare-release.outputs.should_publish == 'true'
     needs: [prepare-release, publish-testpypi]
     runs-on: ubuntu-latest
@@ -125,109 +112,104 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - name: Sync development environment
-        working-directory: proxmox-mock
-        run: uv sync --frozen --extra test --group dev
-
-      - name: Ruff (lint + format check)
-        working-directory: proxmox-mock
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
-
-      - name: Compile package
-        working-directory: proxmox-mock
-        run: uv run python -m compileall proxmox_mock tests
-
-      - name: Import smoke checks
-        working-directory: proxmox-mock
-        run: uv run python -c "import proxmox_mock.main"
-
-      - name: Run tests
-        working-directory: proxmox-mock
-        run: uv run pytest tests
-
-  publish-docker:
-    name: publish proxmox-mock-api Docker image
-    if: github.event_name == 'release' && needs.prepare-release.outputs.should_publish == 'true'
-    needs: [prepare-release, validate-testpypi]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and publish runtime image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./proxmox-mock
-          file: ./proxmox-mock/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            emersonfelipesp/proxmox-mock-api:${{ needs.prepare-release.outputs.version }}
-            emersonfelipesp/proxmox-mock-api:latest
-
-  publish-pypi:
-    name: publish mock package to PyPI
-    if: github.event_name == 'release' && needs.prepare-release.outputs.should_publish == 'true'
-    needs: [prepare-release, validate-testpypi]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: false
-          ignore-empty-workdir: true
-
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: proxmox-mock-dist
           path: dist
 
-      - name: Upload to PyPI
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: proxmox-mock-tests
+          path: ${{ runner.temp }}/proxmox-mock-tests
+
+      - name: Download the uploaded wheel
         env:
-          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
         run: |
-          uv run --with twine python -m twine upload \
+          mkdir uploaded-wheel
+          python -m pip download --no-deps --only-binary=:all: \
+            --index-url https://test.pypi.org/simple/ \
+            --dest uploaded-wheel "proxmox-mock-api==${VERSION}"
+
+      - name: Verify and smoke-test the neutral installed artifact
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          built = next(pathlib.Path("dist").glob("*.whl"))
+          uploaded = next(pathlib.Path("uploaded-wheel").glob("*.whl"))
+          if hashlib.sha256(built.read_bytes()).digest() != hashlib.sha256(uploaded.read_bytes()).digest():
+              raise SystemExit("TestPyPI wheel differs from the built artifact")
+          PY
+          python -m venv "${RUNNER_TEMP}/proxmox-mock-neutral"
+          "${RUNNER_TEMP}/proxmox-mock-neutral/bin/python" -m pip install \
+            "uploaded-wheel/proxmox_mock_api-${VERSION}-py3-none-any.whl[test]"
+          "${RUNNER_TEMP}/proxmox-mock-neutral/bin/python" -m pip check
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/proxmox-mock-neutral/bin/python" -I - <<'PY'
+          import importlib
+          import importlib.metadata
+          import pathlib
+          import sys
+
+          from fastapi.testclient import TestClient
+          from proxmox_mock.main import app
+
+          distribution = importlib.metadata.distribution("proxmox-mock-api")
+          origin = pathlib.Path(distribution.locate_file("")).resolve()
+          environment = pathlib.Path(sys.prefix).resolve()
+          if not origin.is_relative_to(environment):
+              raise SystemExit("package did not load from the neutral environment")
+          for name in (
+              "proxmox_mock",
+              "proxmox_mock.main",
+              "proxmox_mock.openapi",
+              "proxmox_mock.routes",
+              "proxmox_mock.state",
+          ):
+              module_path = pathlib.Path(importlib.import_module(name).__file__).resolve()
+              if not module_path.is_relative_to(environment):
+                  raise SystemExit(f"{name} did not load from the neutral environment")
+          response = TestClient(app).get("/health")
+          if response.status_code != 200 or response.json() != {"status": "ready"}:
+              raise SystemExit("installed package smoke test failed")
+          PY
+          "${RUNNER_TEMP}/proxmox-mock-neutral/bin/python" -I -m pytest \
+            --config-file "${RUNNER_TEMP}/proxmox-mock-tests/pyproject.toml" \
+            "${RUNNER_TEMP}/proxmox-mock-tests/tests"
+
+  publish-pypi:
+    if: needs.prepare-release.outputs.should_publish == 'true'
+    needs: [prepare-release, validate-testpypi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.12.5"
+          enable-cache: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: proxmox-mock-dist
+          path: dist
+
+      - name: Upload the same qualified artifacts to PyPI
+        env:
+          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          uv run --no-project --with twine==6.2.0 python -m twine upload \
             --non-interactive \
-            --skip-existing \
             --repository-url https://upload.pypi.org/legacy/ \
-            --username "$PYPI_USERNAME" \
-            --password "$PYPI_TOKEN" \
             dist/*

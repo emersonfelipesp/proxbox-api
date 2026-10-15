@@ -90,6 +90,16 @@ uv run mkdocs build
 - Keep NetBox endpoint probe, cached-client lifecycle, transport-failure status,
   VM platform overwrite, and free-threaded CI guidance aligned in both languages
   with their source modules and workflows.
+- Device sync-state ownership is scoped by `proxmox_endpoint_raw_id`. The
+  backend accepts a missing or NULL field as legacy-unclaimed, but it must never
+  adopt, patch, or re-stamp a device whose sidecar names a different endpoint.
+  Name/site/cluster fallback remains required before an unclaimed device can be
+  adopted, and successful adoption stamps the current endpoint. Non-404 sidecar
+  read failures fail closed as per-target naming conflicts instead of creating a
+  duplicate device; older plugin serializers that omit the field remain
+  compatible as unclaimed rows. Atomic plugin ownership conflicts use HTTP 409
+  with code `endpoint_ownership_conflict`; the backend maps them to per-target
+  name conflicts and verifies every successful claim by reading it back.
 - Ceph v2 write behavior, failure recovery, deployment/rollback, and bounded
   NPR 7150.2D feature evidence live in `operations/ceph-write-approvals.md`;
   keep its Portuguese translation aligned, never document legacy inline apply

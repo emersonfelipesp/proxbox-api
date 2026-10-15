@@ -1071,11 +1071,15 @@ class NetBoxEndpoint(SQLModel, table=True):
     def get_decrypted_token_key(self) -> str | None:
         return decrypt_value(self.token_key)
 
-    def set_encrypted_token(self, value: str) -> None:
-        self.token = encrypt_value(value) or value
+    def set_encrypted_token(
+        self, value: str, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.token = encryptor(value) or value
 
-    def set_encrypted_token_key(self, value: str | None) -> None:
-        self.token_key = encrypt_value(value)
+    def set_encrypted_token_key(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.token_key = encryptor(value)
 
 
 class ProxmoxEndpoint(SQLModel, table=True):
@@ -1159,11 +1163,15 @@ class ProxmoxEndpoint(SQLModel, table=True):
     def get_decrypted_token_value(self) -> str | None:
         return decrypt_value(self.token_value)
 
-    def set_encrypted_password(self, value: str | None) -> None:
-        self.password = encrypt_value(value)
+    def set_encrypted_password(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.password = encryptor(value)
 
-    def set_encrypted_token_value(self, value: str | None) -> None:
-        self.token_value = encrypt_value(value)
+    def set_encrypted_token_value(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.token_value = encryptor(value)
 
 
 class BrowserConsoleRelaySession(SQLModel, table=True):
@@ -1281,8 +1289,10 @@ class PBSEndpoint(SQLModel, table=True):
     def get_decrypted_token_secret(self) -> str | None:
         return decrypt_value(self.token_secret)
 
-    def set_encrypted_token_secret(self, value: str) -> None:
-        self.token_secret = encrypt_value(value) or value
+    def set_encrypted_token_secret(
+        self, value: str, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.token_secret = encryptor(value) or value
 
 
 class PDMEndpoint(SQLModel, table=True):
@@ -1314,8 +1324,10 @@ class PDMEndpoint(SQLModel, table=True):
     def get_decrypted_token_secret(self) -> str | None:
         return decrypt_value(self.token_secret)
 
-    def set_encrypted_token_secret(self, value: str) -> None:
-        self.token_secret = encrypt_value(value) or value
+    def set_encrypted_token_secret(
+        self, value: str, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.token_secret = encryptor(value) or value
 
 
 class CephOperationRunRecord(SQLModel, table=True):
@@ -1485,8 +1497,10 @@ class PrometheusSource(SQLModel, table=True):
     def get_decrypted_bearer_token(self) -> str | None:
         return decrypt_value(self.bearer_token) if self.bearer_token else None
 
-    def set_encrypted_bearer_token(self, value: str | None) -> None:
-        self.bearer_token = encrypt_value(value) if value else None
+    def set_encrypted_bearer_token(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.bearer_token = encryptor(value) if value else None
 
 
 class CephDashboardEndpoint(SQLModel, table=True):
@@ -1518,14 +1532,18 @@ class CephDashboardEndpoint(SQLModel, table=True):
     def get_decrypted_password(self) -> str | None:
         return decrypt_value(self.password) if self.password else None
 
-    def set_encrypted_password(self, value: str | None) -> None:
-        self.password = encrypt_value(value) if value else None
+    def set_encrypted_password(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.password = encryptor(value) if value else None
 
     def get_decrypted_token(self) -> str | None:
         return decrypt_value(self.token) if self.token else None
 
-    def set_encrypted_token(self, value: str | None) -> None:
-        self.token = encrypt_value(value) if value else None
+    def set_encrypted_token(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.token = encryptor(value) if value else None
 
 
 class CephExternalCluster(SQLModel, table=True):
@@ -1559,14 +1577,18 @@ class CephExternalCluster(SQLModel, table=True):
     def get_decrypted_rgw_access_key(self) -> str | None:
         return decrypt_value(self.rgw_access_key) if self.rgw_access_key else None
 
-    def set_encrypted_rgw_access_key(self, value: str | None) -> None:
-        self.rgw_access_key = encrypt_value(value) if value else None
+    def set_encrypted_rgw_access_key(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.rgw_access_key = encryptor(value) if value else None
 
     def get_decrypted_rgw_secret_key(self) -> str | None:
         return decrypt_value(self.rgw_secret_key) if self.rgw_secret_key else None
 
-    def set_encrypted_rgw_secret_key(self, value: str | None) -> None:
-        self.rgw_secret_key = encrypt_value(value) if value else None
+    def set_encrypted_rgw_secret_key(
+        self, value: str | None, *, encryptor: Callable[[str | None], str | None] = encrypt_value
+    ) -> None:
+        self.rgw_secret_key = encryptor(value) if value else None
 
 
 class AuthLockout(SQLModel, table=True):
@@ -1634,6 +1656,21 @@ class AuthLockoutIdentityKeyBinding(SQLModel, table=True):
     fingerprint: str = Field()
     generation: int = Field(default=1)
     created_at: float = Field(default_factory=time.time)
+    updated_at: float = Field(default_factory=time.time)
+
+
+class CredentialEncryptionKeyState(SQLModel, table=True):
+    """Durable singleton generation fencing credential encryption writes."""
+
+    __tablename__: ClassVar[str] = "credential_encryption_key_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_credential_encryption_key_state_singleton"),
+        {"extend_existing": True},
+    )
+
+    id: int = Field(default=1, primary_key=True)
+    generation: int = Field(default=1)
+    replacement_pending: bool = Field(default=False)
     updated_at: float = Field(default_factory=time.time)
 
 
@@ -2629,6 +2666,10 @@ def _create_db_and_tables_unlocked() -> None:
     target_engine = get_engine()
     _migrate_auth_lockout_schema(target_engine)
     SQLModel.metadata.create_all(target_engine)
+    with Session(target_engine) as session:
+        if session.get(CredentialEncryptionKeyState, 1) is None:
+            session.add(CredentialEncryptionKeyState())
+            session.commit()
     validate_browser_console_relay_schema(target_engine)
     _migrate_api_key_bootstrap_claim(target_engine)
     _migrate_proxmox_endpoint_columns()

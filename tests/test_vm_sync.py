@@ -1290,6 +1290,143 @@ def test_create_only_vm_interfaces_reports_partial_bulk_warning(monkeypatch):
     assert any("partial failures" in message for message in warning_messages)
 
 
+def test_create_only_vm_interfaces_isolates_config_fetch_failure(monkeypatch):
+    sent: list[dict[str, object]] = []
+    warnings: list[str] = []
+
+    class _WebSocket:
+        async def send_json(self, payload):
+            sent.append(payload)
+
+    async def _fake_load_snapshot(_nb):
+        return [
+            {
+                "id": 55,
+                "name": "vm01",
+                "proxmox_vm_id": 101,
+                "cluster": {"id": 10, "name": "lab"},
+            }
+        ]
+
+    async def _fake_resolve_cluster_id(*_args, **_kwargs):
+        return 10
+
+    def _failed_config(**_kwargs):
+        raise TimeoutError("config timed out")
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", _failed_config)
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_cluster_id_by_name", _fake_resolve_cluster_id)
+    monkeypatch.setattr(
+        sync_vm.logger,
+        "warning",
+        lambda message, *args: warnings.append(message % args),
+    )
+
+    result = asyncio.run(
+        create_only_vm_interfaces(
+            netbox_session=SimpleNamespace(client=object()),
+            pxs=[SimpleNamespace(name="lab")],
+            cluster_status=[SimpleNamespace(name="lab")],
+            cluster_resources=[
+                {"lab": [{"type": "qemu", "name": "vm01", "node": "pve01", "vmid": 101}]}
+            ],
+            tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+            websocket=_WebSocket(),
+            use_websocket=True,
+        )
+    )
+
+    assert result == []
+    assert result.warnings == []
+    assert sent == [{"object": "vm_interface", "end": True}]
+    assert warnings == ["Could not fetch VM config for vm01 (vmid=101): config timed out"]
+
+
+def test_create_only_vm_interfaces_maps_bulk_failure_to_terminal_stream_events(monkeypatch):
+    sent: list[dict[str, object]] = []
+
+    class _WebSocket:
+        async def send_json(self, payload):
+            sent.append(payload)
+
+    async def _fake_load_snapshot(_nb):
+        return [
+            {
+                "id": 55,
+                "name": "vm01",
+                "proxmox_vm_id": 101,
+                "cluster": {"id": 10, "name": "lab"},
+            }
+        ]
+
+    async def _fake_resolve_cluster_id(*_args, **_kwargs):
+        return 10
+
+    async def _failed_bulk_reconcile(*_args, **_kwargs):
+        raise RuntimeError("bulk write failed")
+
+    monkeypatch.setattr(sync_vm, "get_vm_config", lambda **_kwargs: {"net0": "bridge=vmbr0"})
+    monkeypatch.setattr(sync_vm, "resolve_vm_sync_concurrency", lambda: 1)
+    monkeypatch.setattr(sync_vm, "_load_netbox_virtual_machine_snapshot", _fake_load_snapshot)
+    monkeypatch.setattr(sync_vm, "resolve_netbox_cluster_id_by_name", _fake_resolve_cluster_id)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interfaces",
+        _failed_bulk_reconcile,
+    )
+
+    with pytest.raises(
+        ProxboxException,
+        match="VM interface bulk reconciliation failed; interface sync is incomplete",
+    ):
+        asyncio.run(
+            create_only_vm_interfaces(
+                netbox_session=SimpleNamespace(client=object()),
+                pxs=[SimpleNamespace(name="lab")],
+                cluster_status=[SimpleNamespace(name="lab")],
+                cluster_resources=[
+                    {
+                        "lab": [
+                            {
+                                "type": "qemu",
+                                "name": "vm01",
+                                "node": "pve01",
+                                "vmid": 101,
+                            }
+                        ]
+                    }
+                ],
+                tag=SimpleNamespace(id=7, name="Proxbox", slug="proxbox", color="ff5722"),
+                websocket=_WebSocket(),
+                use_websocket=True,
+                sync_mac=False,
+            )
+        )
+
+    assert sent == [
+        {
+            "object": "vm_interface",
+            "data": {
+                "completed": False,
+                "sync_status": "syncing",
+                "rowid": "net0",
+                "name": "net0",
+                "vm": "vm01",
+            },
+        },
+        {
+            "object": "vm_interface",
+            "data": {
+                "completed": False,
+                "sync_status": "failed",
+                "error": "RuntimeError: bulk write failed",
+            },
+        },
+        {"object": "vm_interface", "end": True},
+    ]
+
+
 def test_create_only_vm_interfaces_truncates_guest_interface_name(monkeypatch):
     captured_payloads: list[dict[str, object]] = []
     warning_messages: list[str] = []

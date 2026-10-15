@@ -335,11 +335,32 @@ credentials, omit query strings/fragments, and pass the shared SSRF host guard
 validated host-agent.
 
 Firecracker provisioning is not a `ProxmoxEndpoint` write and does not use
-`allow_writes`; the trust boundary is the shared API key, the trusted-relay-service
-inventory resolution step, and the host-agent URL SSRF validation above.
-Streaming failures are sanitized with the same
+`allow_writes`, because Firecracker hosts have no local endpoint row. Both
+mutating routes require a nonblank `X-Proxbox-Actor` header. The trust boundary
+also includes the shared API key, the trusted-relay-service inventory resolution
+step, and the host-agent URL SSRF validation above. Host-agent failures never
+include the upstream response body; the non-streaming exception handler returns
+a fixed 502 response, and streaming failures are sanitized with the same
 `PROXBOX_EXPOSE_INTERNAL_ERRORS` gate as the app-level generic exception
 handler: clients see `An unexpected error occurred.` by default.
+Every model-returning host-agent client method validates through the shared
+typed response helper. Validation failures log only schema field names and
+Pydantic error types, suppress the original exception context, and raise a fixed
+`FirecrackerHostAgentError`; upstream values and health status strings must not
+enter REST responses, SSE diagnostics, or application logs.
+
+The client resolves the hostname once through the shared SSRF resolver and
+retains every validated address. Its dedicated HTTP transport connects only to
+that address set, in order, with bounded per-address and total connect timeouts
+while keeping the canonical ASCII `httpx.URL.raw_host` as the DNS, comparison,
+HTTP Host, and TLS identity. Unicode, punycode, mixed-case, and trailing-dot
+spellings therefore cannot diverge at the pinned-transport boundary. Scoped IPv6
+addresses retain their numeric `%scope_id` when passed to httpcore. Connection
+refusal and timeout advance to the next validated address; TLS and HTTP failures
+do not. The custom transport must translate supported
+`httpcore` request and response-stream failures into `httpx` exceptions so the
+client's sanitized host-agent error boundary always handles them. Do not replace
+this transport with a default resolver-backed HTTP client.
 
 ### Who calls it
 

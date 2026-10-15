@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-import pytest
+import asyncio
+import json
+from types import SimpleNamespace
 
+import pytest
+from netbox_sdk.client import ApiResponse
+
+from proxbox_api import netbox_rest
 from proxbox_api.exception import ProxboxException
 from proxbox_api.netbox_rest import RestRecord
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmResourceInput
@@ -37,7 +43,9 @@ class _Recorder:
         self.calls.append({"method": "POST", "path": path, "payload": payload, "lookup": lookup})
         if self.create_error is not None:
             raise self.create_error
-        return {"id": 900, **payload}
+        created = {"id": 900, **payload}
+        self.existing = created
+        return created
 
     async def patch(
         self,
@@ -51,7 +59,10 @@ class _Recorder:
         )
         if self.patch_error is not None:
             raise self.patch_error
-        return {"id": record_id, **payload}
+        current = writer._record_to_dict(self.existing) or {}
+        patched = {**current, "id": record_id, **payload}
+        self.existing = patched
+        return patched
 
 
 @pytest.fixture
@@ -504,7 +515,433 @@ async def test_device_sidecar_writer_persists_endpoint_identity(
     )
 
     assert result is not None
-    assert recorder.calls[-1]["payload"]["proxmox_endpoint_raw_id"] == 501
+    write_call = next(
+        call for call in reversed(recorder.calls) if call["method"] in {"POST", "PATCH"}
+    )
+    assert write_call["payload"]["proxmox_endpoint_raw_id"] == 501
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_endpoint_id", [None, 501], ids=["unclaimed", "same-owner"])
+async def test_device_sidecar_writer_allows_unclaimed_and_same_endpoint_rows(
+    recorder: _Recorder,
+    existing_endpoint_id: int | None,
+) -> None:
+    recorder.existing = RestRecord(
+        object(),
+        writer.DEVICE_SYNC_STATE_PATH,
+        {
+            "id": 55,
+            "device": {"id": 10},
+            "proxmox_endpoint_raw_id": existing_endpoint_id,
+        },
+    )
+
+    result = await writer.write_device_sync_state(
+        object(),
+        device_id=10,
+        proxmox_last_updated="2026-07-20T00:00:00+00:00",
+        proxmox_endpoint_raw_id=501,
+        overwrite_custom_fields=True,
+    )
+
+    assert result is not None
+    patch_call = next(call for call in reversed(recorder.calls) if call["method"] == "PATCH")
+    assert patch_call["payload"]["proxmox_endpoint_raw_id"] == 501
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_rejects_another_endpoint_owner(
+    recorder: _Recorder,
+) -> None:
+    recorder.existing = RestRecord(
+        object(),
+        writer.DEVICE_SYNC_STATE_PATH,
+        {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": 502},
+    )
+
+    with pytest.raises(writer.DeviceSyncStateOwnershipConflict, match="endpoint 502 owns"):
+        await writer.write_device_sync_state(
+            object(),
+            device_id=10,
+            proxmox_last_updated="2026-07-20T00:00:00+00:00",
+            proxmox_endpoint_raw_id=501,
+            overwrite_custom_fields=True,
+        )
+
+    assert [call["method"] for call in recorder.calls] == ["GET"]
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_rechecks_owner_after_duplicate_create_race(
+    recorder: _Recorder,
+) -> None:
+    recorder.first_results = [
+        None,
+        RestRecord(
+            object(),
+            writer.DEVICE_SYNC_STATE_PATH,
+            {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": 502},
+        ),
+    ]
+    recorder.create_error = ProxboxException(
+        message="NetBox REST request failed",
+        detail='{"device":["This object already has a Proxbox sync-state row."]}',
+    )
+
+    with pytest.raises(writer.DeviceSyncStateOwnershipConflict, match="endpoint 502 owns"):
+        await writer.write_device_sync_state(
+            object(),
+            device_id=10,
+            proxmox_last_updated="2026-07-20T00:00:00+00:00",
+            proxmox_endpoint_raw_id=501,
+            overwrite_custom_fields=True,
+        )
+
+    assert [call["method"] for call in recorder.calls] == ["GET", "POST", "GET"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_validates_real_create_recovery_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.client = self
+            self.sidecar: dict[str, object] | None = None
+
+        async def request(self, method: str, _path: str, **_kwargs: object) -> ApiResponse:
+            if method == "GET":
+                rows = [] if self.sidecar is None else [self.sidecar]
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"count": len(rows), "next": None, "results": rows}),
+                )
+            if method == "POST":
+                self.sidecar = {
+                    "id": 55,
+                    "device": {"id": 10},
+                    "proxmox_endpoint_raw_id": 502,
+                }
+                raise RuntimeError("Server disconnected")
+            raise AssertionError(method)
+
+    def _validate(existing: object) -> None:
+        writer.validate_device_sync_state_owner(
+            existing,
+            expected_endpoint_id=501,
+            device_id=10,
+        )
+
+    netbox_rest._reset_netbox_globals()
+    writer.reset_sidecar_availability_cache()
+    monkeypatch.setattr(netbox_rest, "_resolve_netbox_max_retries", lambda: 1)
+    monkeypatch.setattr(netbox_rest, "_resolve_netbox_retry_delay", lambda: 0.0)
+
+    with pytest.raises(writer.DeviceSyncStateOwnershipConflict, match="endpoint 502 owns"):
+        await writer._upsert_parent_sidecar(
+            _Api(),
+            path=writer.DEVICE_SYNC_STATE_PATH,
+            parent_field="device",
+            parent_id=10,
+            payload={"proxmox_endpoint_raw_id": 501},
+            existing_validator=_validate,
+        )
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_maps_atomic_plugin_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner: int | None = None
+    initial_reads = 0
+    both_read = asyncio.Event()
+
+    async def _first(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal initial_reads
+        snapshot = owner
+        if initial_reads < 2:
+            initial_reads += 1
+            if initial_reads == 2:
+                both_read.set()
+            await both_read.wait()
+        return {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": snapshot}
+
+    async def _patch(
+        _nb: object,
+        _path: str,
+        _record_id: int,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        nonlocal owner
+        requested = int(payload["proxmox_endpoint_raw_id"])
+        if owner is not None and owner != requested:
+            raise ProxboxException(
+                message="NetBox REST request failed",
+                detail={"code": "endpoint_ownership_conflict"},
+                http_status_code=409,
+            )
+        owner = requested
+        return {"id": 55, "device": {"id": 10}, **payload}
+
+    monkeypatch.setattr(writer, "rest_first_async", _first)
+    monkeypatch.setattr(writer, "rest_patch_async", _patch)
+    monkeypatch.setattr(writer, "clear_rest_get_cache_for_path", lambda *_args: None)
+
+    outcomes = await asyncio.gather(
+        *(
+            writer.write_device_sync_state(
+                object(),
+                device_id=10,
+                proxmox_last_updated=None,
+                proxmox_endpoint_raw_id=endpoint_id,
+                overwrite_custom_fields=False,
+            )
+            for endpoint_id in (501, 502)
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(outcome, dict) for outcome in outcomes) == 1
+    assert (
+        sum(isinstance(outcome, writer.DeviceSyncStateOwnershipConflict) for outcome in outcomes)
+        == 1
+    )
+    assert owner in {501, 502}
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_maps_real_rest_409_conflict() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.client = SimpleNamespace(request=self.request)
+
+        async def request(
+            self,
+            method: str,
+            _path: str,
+            **_kwargs: object,
+        ) -> ApiResponse:
+            if method == "GET":
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps(
+                        {
+                            "count": 1,
+                            "next": None,
+                            "results": [
+                                {
+                                    "id": 55,
+                                    "device": {"id": 10},
+                                    "proxmox_endpoint_raw_id": None,
+                                }
+                            ],
+                        }
+                    ),
+                )
+            if method == "PATCH":
+                return ApiResponse(
+                    status=409,
+                    text=json.dumps(
+                        {
+                            "detail": "Device ownership belongs to another endpoint.",
+                            "code": "endpoint_ownership_conflict",
+                        }
+                    ),
+                )
+            raise AssertionError(method)
+
+    netbox_rest._reset_netbox_globals()
+    writer.reset_sidecar_availability_cache()
+
+    with pytest.raises(writer.DeviceSyncStateOwnershipConflict, match="another endpoint"):
+        await writer.write_device_sync_state(
+            _Api(),
+            device_id=10,
+            proxmox_last_updated=None,
+            proxmox_endpoint_raw_id=501,
+            overwrite_custom_fields=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_rejects_exposed_null_readback() -> None:
+    class _Api:
+        def __init__(self) -> None:
+            self.client = self
+
+        async def request(self, method: str, _path: str, **_kwargs: object) -> ApiResponse:
+            row = {
+                "id": 55,
+                "device": {"id": 10},
+                "proxmox_endpoint_raw_id": None,
+            }
+            if method == "GET":
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"count": 1, "next": None, "results": [row]}),
+                )
+            if method == "PATCH":
+                return ApiResponse(status=200, text=json.dumps(row))
+            raise AssertionError(method)
+
+    netbox_rest._reset_netbox_globals()
+    writer.reset_sidecar_availability_cache()
+
+    with pytest.raises(writer.DeviceSyncStateOwnershipConflict, match="endpoint None owns"):
+        await writer.write_device_sync_state(
+            _Api(),
+            device_id=10,
+            proxmox_last_updated=None,
+            proxmox_endpoint_raw_id=501,
+            overwrite_custom_fields=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_staggered_cas_claim_authorizes_one_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner: int | None = None
+    initial_reads = 0
+    both_read = asyncio.Event()
+    first_authorized = asyncio.Event()
+
+    async def _first(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal initial_reads
+        snapshot = owner
+        if initial_reads < 2:
+            initial_reads += 1
+            if initial_reads == 2:
+                both_read.set()
+            await both_read.wait()
+            return {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": snapshot}
+        return {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": owner}
+
+    async def _patch(
+        _nb: object,
+        _path: str,
+        _record_id: int,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        nonlocal owner
+        requested = int(payload["proxmox_endpoint_raw_id"])
+        if requested == 502:
+            await first_authorized.wait()
+        if owner is not None and owner != requested:
+            raise ProxboxException(
+                message="NetBox REST request failed",
+                detail={"code": "endpoint_ownership_conflict"},
+                http_status_code=409,
+            )
+        owner = requested
+        return {"id": 55, "device": {"id": 10}, **payload}
+
+    async def _claim(endpoint_id: int) -> dict[str, object] | None:
+        result = await writer.write_device_sync_state(
+            object(),
+            device_id=10,
+            proxmox_last_updated=None,
+            proxmox_endpoint_raw_id=endpoint_id,
+            overwrite_custom_fields=False,
+        )
+        if endpoint_id == 501:
+            first_authorized.set()
+        return result
+
+    monkeypatch.setattr(writer, "rest_first_async", _first)
+    monkeypatch.setattr(writer, "rest_patch_async", _patch)
+    monkeypatch.setattr(writer, "clear_rest_get_cache_for_path", lambda *_args: None)
+
+    outcomes = await asyncio.gather(_claim(501), _claim(502), return_exceptions=True)
+
+    assert isinstance(outcomes[0], dict)
+    assert isinstance(outcomes[1], writer.DeviceSyncStateOwnershipConflict)
+    assert owner == 501
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_verifies_claim_against_legacy_plugin_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner: int | None = None
+    initial_reads = 0
+    patch_count = 0
+    both_read = asyncio.Event()
+    both_patched = asyncio.Event()
+
+    async def _first(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal initial_reads
+        snapshot = owner
+        if initial_reads < 2:
+            initial_reads += 1
+            if initial_reads == 2:
+                both_read.set()
+            await both_read.wait()
+            return {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": snapshot}
+        return {"id": 55, "device": {"id": 10}, "proxmox_endpoint_raw_id": owner}
+
+    async def _patch(
+        _nb: object,
+        _path: str,
+        _record_id: int,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        nonlocal owner, patch_count
+        owner = int(payload["proxmox_endpoint_raw_id"])
+        patch_count += 1
+        if patch_count == 2:
+            both_patched.set()
+        await both_patched.wait()
+        return {"id": 55, "device": {"id": 10}, **payload}
+
+    monkeypatch.setattr(writer, "rest_first_async", _first)
+    monkeypatch.setattr(writer, "rest_patch_async", _patch)
+    monkeypatch.setattr(writer, "clear_rest_get_cache_for_path", lambda *_args: None)
+
+    outcomes = await asyncio.gather(
+        *(
+            writer.write_device_sync_state(
+                object(),
+                device_id=10,
+                proxmox_last_updated=None,
+                proxmox_endpoint_raw_id=endpoint_id,
+                overwrite_custom_fields=False,
+            )
+            for endpoint_id in (501, 502)
+        ),
+        return_exceptions=True,
+    )
+
+    assert patch_count == 2
+    assert sum(isinstance(outcome, dict) for outcome in outcomes) == 1
+    assert (
+        sum(isinstance(outcome, writer.DeviceSyncStateOwnershipConflict) for outcome in outcomes)
+        == 1
+    )
+    assert owner == (501 if isinstance(outcomes[0], dict) else 502)
+
+
+@pytest.mark.asyncio
+async def test_device_sidecar_writer_stamps_owner_when_reflection_overwrite_is_disabled(
+    recorder: _Recorder,
+) -> None:
+    result = await writer.write_device_sync_state(
+        object(),
+        device_id=10,
+        proxmox_last_updated="2026-07-20T00:00:00+00:00",
+        proxmox_node_name="pve01",
+        proxmox_cluster_name="cluster-a",
+        proxmox_endpoint_raw_id=501,
+        overwrite_custom_fields=False,
+    )
+
+    assert result is not None
+    post_call = next(call for call in reversed(recorder.calls) if call["method"] == "POST")
+    assert post_call["payload"] == {
+        "device": {"id": 10},
+        "proxmox_endpoint_raw_id": 501,
+    }
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,9 @@ Endpoints for managing NetBox endpoint records and API diagnostics.
   NetBox API-client, and plugin-settings caches. Endpoint creation otherwise leaves
   the pre-connection default settings cached for five minutes, hiding the operator's
   NetBox-backed feature flags from the newly configured runtime.
+- Endpoint create and update validate submitted addresses with a request-scoped
+  allow set. Never insert uncommitted addresses into the process-wide SSRF cache;
+  expose them globally only by clearing and reloading the cache after commit.
 - Create and update return a typed advisory probe result after the transaction commits.
   Probe failure never reverses the write. `GET /endpoint/{id}/probe` exposes the same
   operation for test-connection callers, and probe responses never serialize tokens.

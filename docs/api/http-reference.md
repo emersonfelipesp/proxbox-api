@@ -262,6 +262,9 @@ These endpoints are called by the management backend after it resolves the selec
 Firecracker host/image inventory from `netbox-proxbox` and creates the
 `FirecrackerMicroVM` row in NetBox.
 
+Both mutations require `X-Proxbox-Actor`. Firecracker hosts have no local
+`ProxmoxEndpoint` row, so `allow_writes` does not apply to this route family.
+
 - `POST /cloud/firecracker/provision` - Provision a Firecracker micro-VM through one host-agent and return a final JSON response.
 - `POST /cloud/firecracker/provision/stream` - Same provisioning flow as Server-Sent Events. Emits `provision_step` and `terminal_line` events, then a terminal `complete` event.
 
@@ -286,6 +289,10 @@ host-agent client: it must be `http` or `https`, include a host, omit embedded
 credentials/query/fragment components, and pass the shared SSRF guard. The SSE
 variant returns a generic failure message by default unless
 `PROXBOX_EXPOSE_INTERNAL_ERRORS=true`.
+The non-streaming route maps host-agent failures to a fixed HTTP 502 response,
+and upstream response bodies are never reflected. URL validation and the HTTP
+connection currently perform separate DNS resolutions; address pinning with
+correct HTTPS SNI and certificate verification remains follow-up work.
 
 Successful responses return `FirecrackerProvisionResponse` with `ok`,
 `microvm_id`, `instance_ref`, `host_id`, `host_pool_id`, `image_id`, `status`,
@@ -687,7 +694,17 @@ not proxbox-api's own SQLite endpoint id.
 Implemented in `proxbox_api/routes/ssh_terminal.py`. Provides a browser-based SSH terminal backed by `asyncssh`.
 
 - `POST /ssh/sessions` — Create a one-time ticket for a browser SSH session. Request body: `TerminalSessionCreate` (`target_type`, `endpoint_id`, optional `node_id`, optional `host`, optional `actor`, `cols`, `rows`). Returns HTTP 201 with `TerminalSessionPublic` (`session_id`, `ticket`, `websocket_path`, `expires_at`, `target_type`).
+- `GET /ssh/host-key-fingerprint?host=&port=` — Scan a host key without
+  authenticating. The caller-selected host must pass the shared SSRF policy
+  before the socket opens.
 - `WebSocket /ssh/sessions/{session_id}/ws` — Authenticate the ticket and bridge a PTY to the target SSH host. The first WebSocket frame must be `{"type": "auth", "ticket": "<ticket>"}`. On success, raw terminal I/O is relayed. On error, `{"type": "error", "message": "..."}` is sent before close.
+
+Any caller-selected ticket host must also pass the shared SSRF policy before
+the ticket is retained. Before presenting a password or private key, the SSH
+service performs a separate credential-free handshake and compares the server
+fingerprint with the stored pin. It retains AsyncSSH callback validation and
+checks the negotiated key again after the authenticated connection, before a
+PTY or fixed command is started.
 
 ### Viewer and generated contract helpers
 

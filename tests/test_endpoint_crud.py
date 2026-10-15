@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from proxbox_api import credentials
+from proxbox_api import credentials, ssrf
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.routes.proxmox import endpoints as proxmox_endpoints
 from proxbox_api.routes.proxmox.endpoints import (
@@ -289,6 +289,28 @@ class TestNetBoxEndpointCRUD:
         assert data["name"] == "test-netbox"
         assert "token" not in data
 
+    def test_failed_create_commit_does_not_allow_submitted_host(self, auth_test_client):
+        ssrf.clear_endpoint_cache()
+        commit = AsyncMock(side_effect=RuntimeError("synthetic commit failure"))
+        with (
+            patch.object(AsyncSession, "commit", commit),
+            pytest.raises(RuntimeError, match="synthetic commit failure"),
+        ):
+            auth_test_client.post(
+                "/netbox/endpoint",
+                json={
+                    "name": "failed-netbox",
+                    "ip_address": "169.254.169.254",
+                    "port": 8000,
+                    "token_version": "v1",
+                    "token": "a" * 40,
+                    "verify_ssl": False,
+                },
+            )
+
+        assert ssrf._registered_ips_cache == set()
+        assert ssrf._registered_domains_cache == set()
+
     def test_create_second_endpoint_rejected(self, auth_test_client):
         """NetBox endpoint is a singleton — second create must fail."""
         payload = {
@@ -393,6 +415,27 @@ class TestProxmoxEndpointCRUD:
         assert updated.status_code == 200, updated.text
         assert updated.json()["node_device_name_template"] == "{node}.{endpoint}"
 
+    def test_failed_create_commit_does_not_allow_submitted_host(self, auth_test_client):
+        ssrf.clear_endpoint_cache()
+        commit = AsyncMock(side_effect=RuntimeError("synthetic commit failure"))
+        with (
+            patch.object(AsyncSession, "commit", commit),
+            pytest.raises(RuntimeError, match="synthetic commit failure"),
+        ):
+            auth_test_client.post(
+                "/proxmox/endpoints",
+                json={
+                    "name": "failed-proxmox",
+                    "ip_address": "169.254.169.254",
+                    "port": 8006,
+                    "username": "root@pam",
+                    "password": "secret",
+                },
+            )
+
+        assert ssrf._registered_ips_cache == set()
+        assert ssrf._registered_domains_cache == set()
+
     def test_identical_update_skips_validation_settings_and_write(self, auth_test_client):
         payload = {
             "name": "pve-idempotent",
@@ -444,7 +487,11 @@ class TestProxmoxEndpointCRUD:
             },
         )
         assert created.status_code == 200, created.text
-        monkeypatch.setattr(proxmox_endpoints, "pre_allow_endpoint_hosts", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            proxmox_endpoints,
+            "pre_allow_endpoint_hosts",
+            lambda *_a, **_kw: frozenset(),
+        )
         monkeypatch.setattr(
             proxmox_endpoints,
             "get_settings",

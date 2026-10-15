@@ -4,7 +4,27 @@ import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from proxbox_api.services.ssh_terminal import terminal_session_manager
-from tests.websocket_test_support import websocket_session
+from tests.websocket_test_support import rejected_websocket_session, websocket_session
+
+
+@pytest.fixture
+def interactive_handshake_messages(monkeypatch):
+    """Record accept and close messages emitted by the interactive boundary."""
+    from proxbox_api.services.interactive_policy import InteractiveBoundaryMiddleware
+
+    handshake_messages = []
+    original_deny = InteractiveBoundaryMiddleware._deny
+
+    async def recording_deny(scope, receive, send):
+        async def recording_send(message):
+            if message["type"] in {"websocket.accept", "websocket.close"}:
+                handshake_messages.append((message["type"], message.get("code")))
+            await send(message)
+
+        await original_deny(scope, receive, recording_send)
+
+    monkeypatch.setattr(InteractiveBoundaryMiddleware, "_deny", staticmethod(recording_deny))
+    return handshake_messages
 
 
 def test_default_rpc_only_denies_ticket_creation_before_store(auth_test_client):
@@ -19,7 +39,9 @@ def test_default_rpc_only_denies_ticket_creation_before_store(auth_test_client):
     assert set(terminal_session_manager._sessions) == before
 
 
-def test_default_denial_precedes_every_eager_provider(auth_test_client, monkeypatch):
+def test_default_denial_precedes_every_eager_provider(
+    auth_test_client, monkeypatch, interactive_handshake_messages
+):
     """Real mounted HTTP and WebSocket routes must reject before provider entry."""
     from proxbox_api.routes import ssh_terminal
     from proxbox_api.routes.proxmox import console
@@ -59,10 +81,9 @@ def test_default_denial_precedes_every_eager_provider(auth_test_client, monkeypa
         "/ws",
         "/ws/virtual-machines",
     ):
-        with pytest.raises(WebSocketDisconnect) as denied:
-            with auth_test_client.websocket_connect(path):
-                pytest.fail("Denied WebSocket accepted")
-        assert denied.value.code == 1008
+        with rejected_websocket_session(auth_test_client, path, expected_code=1008):
+            pass
+    assert interactive_handshake_messages == [("websocket.close", 1008)] * 4
 
 
 def test_authenticated_policy_status_has_no_provider_dependencies(auth_test_client):
@@ -179,8 +200,12 @@ def test_legacy_one_shot_skips_netbox_configuration_and_invalid_ticket_skips_mat
         calls.append(credential.username)
         await websocket.send_json({"type": "ready"})
 
+    async def allow_synthetic_host(_host):
+        return None
+
     monkeypatch.setattr(ssh_terminal, "get_netbox_async_session", forbidden)
     monkeypatch.setattr(ssh_terminal, "connect_and_relay", relay)
+    monkeypatch.setattr(ssh_terminal, "ensure_ssh_host_allowed", allow_synthetic_host)
     created = legacy_auth_test_client.post(
         "/ssh/sessions",
         json={
@@ -194,9 +219,12 @@ def test_legacy_one_shot_skips_netbox_configuration_and_invalid_ticket_skips_mat
             },
         },
     ).json()
-    with legacy_auth_test_client.websocket_connect(created["websocket_path"]) as websocket:
+    with websocket_session(legacy_auth_test_client, created["websocket_path"]) as websocket:
         websocket.send_json({"type": "auth", "ticket": "invalid"})
         assert websocket.receive_json()["type"] == "error"
+        with pytest.raises(WebSocketDisconnect) as closed:
+            websocket.receive_json()
+        assert closed.value.code == 4001
     assert calls == []
     with websocket_session(legacy_auth_test_client, created["websocket_path"]) as websocket:
         websocket.send_json({"type": "auth", "ticket": created["ticket"]})
@@ -205,7 +233,7 @@ def test_legacy_one_shot_skips_netbox_configuration_and_invalid_ticket_skips_mat
 
 
 def test_existing_ticket_cannot_cross_the_default_boundary(
-    legacy_auth_test_client, auth_test_client, monkeypatch
+    legacy_auth_test_client, auth_test_client, monkeypatch, interactive_handshake_messages
 ):
     from proxbox_api.routes import ssh_terminal
 
@@ -219,14 +247,15 @@ def test_existing_ticket_cannot_cross_the_default_boundary(
     assert response.status_code == 201
     ticket = response.json()
     retained = terminal_session_manager._sessions[ticket["session_id"]]
-    with pytest.raises(WebSocketDisconnect) as denied:
-        with auth_test_client.websocket_connect(ticket["websocket_path"]):
-            pytest.fail("The default consumer accepted an existing valid ticket")
-    assert denied.value.code == 1008
+    with rejected_websocket_session(auth_test_client, ticket["websocket_path"], expected_code=1008):
+        pass
+    assert interactive_handshake_messages == [("websocket.close", 1008)]
     assert retained.consumed is False
 
 
-def test_policy_is_pinned_and_local_quiesce_precedes_auth(legacy_auth_test_client, monkeypatch):
+def test_policy_is_pinned_and_local_quiesce_precedes_auth(
+    legacy_auth_test_client, monkeypatch, interactive_handshake_messages
+):
     monkeypatch.setenv("PROXBOX_EXECUTION_MODE", "rpc_only")
     monkeypatch.setenv("PROXBOX_EXECUTION_GENERATION", "different-generation")
     response = legacy_auth_test_client.post(
@@ -242,10 +271,9 @@ def test_policy_is_pinned_and_local_quiesce_precedes_auth(legacy_auth_test_clien
         denied = legacy_auth_test_client.post(path, headers={"X-Proxbox-API-Key": "invalid"})
         assert denied.status_code == 403
     for path in ("/ws", "/ws/virtual-machines"):
-        with pytest.raises(WebSocketDisconnect) as denied:
-            with legacy_auth_test_client.websocket_connect(path):
-                pytest.fail("A quiescing worker accepted a new WebSocket")
-        assert denied.value.code == 1008
+        with rejected_websocket_session(legacy_auth_test_client, path, expected_code=1008):
+            pass
+    assert interactive_handshake_messages == [("websocket.close", 1008)] * 2
 
 
 def test_legacy_http_authentication_precedes_console_and_ssh_effects(

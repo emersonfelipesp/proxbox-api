@@ -1,6 +1,8 @@
 """Real loopback SSH and event-controlled acquisition/relay ownership tests."""
 
 import asyncio
+import importlib.util
+import socket
 from types import SimpleNamespace
 
 import asyncssh
@@ -8,6 +10,7 @@ import pytest
 
 from proxbox_api.services import ssh_terminal as terminal
 from proxbox_api.services.interactive_policy import ExecutionPolicy, InteractiveRuntime
+from proxbox_api.ssrf import ResolvedAddress
 
 
 class TerminalSocket:
@@ -44,17 +47,139 @@ async def _run(runtime, socket, credential):
 
 
 class PasswordServer(asyncssh.SSHServer):
+    def __init__(self, auth_events=None):
+        self.auth_events = auth_events if auth_events is not None else []
+
+    def begin_auth(self, username):
+        self.auth_events.append(("begin_auth", username))
+        return True
+
     def password_auth_supported(self):
         return True
 
     def validate_password(self, username, password):
+        self.auth_events.append(("password", username, password))
         return username == "synthetic" and password == "test-only-password"
 
+    def public_key_auth_supported(self):
+        return True
 
-@pytest.mark.parametrize("matching_pin", [True, False])
-async def test_real_loopback_ssh_preserves_host_pin_and_pty_cleanup(matching_pin):
-    """Use the locked real AsyncSSH transport, not a source-string assertion."""
+    def validate_public_key(self, username, key):
+        self.auth_events.append(("public_key", username, key.get_fingerprint("sha256")))
+        return False
+
+
+async def test_real_loopback_mismatch_sends_no_auth_material_despite_ambient_trust(
+    monkeypatch,
+    tmp_path,
+):
+    """A trusted ambient key cannot bypass the same-connection fingerprint pin."""
+
+    async def allow_loopback_fixture(_host):
+        return (ResolvedAddress(socket.AF_INET, "127.0.0.1"),)
+
+    monkeypatch.setattr(terminal, "ensure_ssh_host_allowed", allow_loopback_fixture)
+    server_key = asyncssh.generate_private_key("ssh-ed25519")
+    pinned_key = asyncssh.generate_private_key("ssh-ed25519")
+    client_key = asyncssh.generate_private_key("ssh-ed25519")
+    auth_events = []
+
+    server = await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_factory=lambda: PasswordServer(auth_events),
+        server_host_keys=[server_key],
+    )
+    try:
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        public_key = server_key.export_public_key().decode().strip()
+        (ssh_dir / "known_hosts").write_text(
+            f"[localhost]:{server.get_port()} {public_key}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HOME", str(tmp_path))
+        credential = terminal.TerminalCredential(
+            "endpoint",
+            1,
+            "localhost",
+            server.get_port(),
+            "synthetic",
+            pinned_key.get_fingerprint("sha256"),
+            password="test-only-password",
+            private_key=client_key.export_private_key().decode(),
+        )
+        runtime = InteractiveRuntime(ExecutionPolicy("legacy", "local-test"))
+        with pytest.raises(terminal.TerminalCredentialError, match="does not match"):
+            await asyncio.wait_for(_run(runtime, TerminalSocket(), credential), 10)
+        assert auth_events == []
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("OpenSSL") is None,
+    reason="PyOpenSSL is required for AsyncSSH X.509 host-certificate support",
+)
+async def test_real_x509_ambient_ca_cannot_receive_authentication(monkeypatch, tmp_path):
+    """An ambient X.509 CA cannot bypass the request's raw-key fingerprint pin."""
+
+    async def allow_loopback_fixture(_host):
+        return (ResolvedAddress(socket.AF_INET, "127.0.0.1"),)
+
+    monkeypatch.setattr(terminal, "ensure_ssh_host_allowed", allow_loopback_fixture)
+    ca_key = asyncssh.generate_private_key("ssh-rsa", key_size=2048)
+    server_key = asyncssh.generate_private_key("ssh-rsa", key_size=2048)
+    pinned_key = asyncssh.generate_private_key("ssh-ed25519")
+    client_key = asyncssh.generate_private_key("ssh-ed25519")
+    ca_cert = ca_key.generate_x509_ca_certificate(ca_key, "CN=Proxbox Test CA")
+    host_cert = ca_key.generate_x509_host_certificate(
+        server_key,
+        "CN=localhost",
+        principals=["localhost"],
+    )
+    auth_events = []
+
+    server = await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_factory=lambda: PasswordServer(auth_events),
+        server_host_keys=[(server_key, host_cert)],
+    )
+    try:
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "ca-bundle.crt").write_bytes(ca_cert.export_certificate("pem"))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        credential = terminal.TerminalCredential(
+            "endpoint",
+            1,
+            "localhost",
+            server.get_port(),
+            "synthetic",
+            pinned_key.get_fingerprint("sha256"),
+            password="test-only-password",
+            private_key=client_key.export_private_key().decode(),
+        )
+        runtime = InteractiveRuntime(ExecutionPolicy("legacy", "local-test"))
+
+        with pytest.raises(terminal.TerminalCredentialError, match="does not match"):
+            await asyncio.wait_for(_run(runtime, TerminalSocket(), credential), 10)
+
+        assert auth_events == []
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_real_loopback_matching_pin_authenticates_and_opens_pty(monkeypatch):
+    async def allow_loopback_fixture(_host):
+        return (ResolvedAddress(socket.AF_INET, "127.0.0.1"),)
+
+    monkeypatch.setattr(terminal, "ensure_ssh_host_allowed", allow_loopback_fixture)
     key = asyncssh.generate_private_key("ssh-ed25519")
+    auth_events = []
     opened = []
 
     async def shell(process):
@@ -69,36 +194,32 @@ async def test_real_loopback_ssh_preserves_host_pin_and_pty_cleanup(matching_pin
     server = await asyncssh.listen(
         "127.0.0.1",
         0,
-        server_factory=PasswordServer,
+        server_factory=lambda: PasswordServer(auth_events),
         server_host_keys=[key],
         process_factory=shell,
     )
     try:
-        fingerprint = key.get_fingerprint("sha256") if matching_pin else "SHA256:not-the-key"
         credential = terminal.TerminalCredential(
             "endpoint",
             1,
-            "127.0.0.1",
+            "localhost",
             server.get_port(),
             "synthetic",
-            fingerprint,
+            key.get_fingerprint("sha256"),
             password="test-only-password",
         )
         runtime = InteractiveRuntime(ExecutionPolicy("legacy", "local-test"))
-        socket = TerminalSocket()
-        task = asyncio.create_task(_run(runtime, socket, credential))
-        if not matching_pin:
-            with pytest.raises((asyncssh.HostKeyNotVerifiable, terminal.TerminalCredentialError)):
-                await asyncio.wait_for(task, 10)
-            assert opened == []
-            assert socket.messages == []
-            return
-        await asyncio.wait_for(socket.ready.wait(), 10)
-        socket.incoming.put_nowait({"type": "input", "data": "synthetic-input\n"})
+        terminal_socket = TerminalSocket()
+        task = asyncio.create_task(_run(runtime, terminal_socket, credential))
+        await asyncio.wait_for(terminal_socket.ready.wait(), 10)
+        terminal_socket.incoming.put_nowait({"type": "input", "data": "synthetic-input\n"})
         await asyncio.wait_for(task, 10)
+        assert ("password", "synthetic", "test-only-password") in auth_events
         assert opened
-        assert any("echo:synthetic-input" in frame.get("data", "") for frame in socket.messages)
-        assert socket.messages[-1] == {"type": "exit", "status": 0}
+        assert any(
+            "echo:synthetic-input" in frame.get("data", "") for frame in terminal_socket.messages
+        )
+        assert terminal_socket.messages[-1] == {"type": "exit", "status": 0}
         assert runtime.status()["active"] == 0
         assert runtime.status()["cleanup_active"] == 0
     finally:

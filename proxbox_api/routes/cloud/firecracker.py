@@ -14,6 +14,7 @@ from proxbox_api.firecracker_agent.client import (
     FirecrackerHostAgentError,
 )
 from proxbox_api.logger import logger
+from proxbox_api.routes.proxmox.write_gate import require_actor
 from proxbox_api.runtime_settings import get_bool
 from proxbox_api.schemas.firecracker import (
     FirecrackerAssetPrepareRequest,
@@ -48,7 +49,7 @@ def _stream_error_detail(error: Exception) -> str:
 async def _run_firecracker_provision(
     req: FirecrackerProvisionRequest,
     *,
-    actor: str | None = None,
+    actor: str,
     emit: Callable[[str, dict], Awaitable[None]] | None = None,
 ) -> FirecrackerProvisionResponse:
     async def send(event: str, payload: dict) -> None:
@@ -62,7 +63,7 @@ async def _run_firecracker_provision(
     metadata = dict(req.metadata)
     metadata.update(
         {
-            "actor": actor or "proxbox-api",
+            "actor": actor,
             "tenant_id": req.tenant_id,
             "netbox_microvm_id": req.netbox_microvm_id,
             "instance_ref": req.instance_ref,
@@ -75,7 +76,7 @@ async def _run_firecracker_provision(
     )
     health = await client.health()
     if not health.ok:
-        raise FirecrackerHostAgentError(f"host-agent is not healthy: {health.status}")
+        raise FirecrackerHostAgentError("host-agent health check failed")
     await send(
         "provision_step",
         {"step": "host_agent_health", "label": "Check Firecracker host", "status": "done"},
@@ -171,7 +172,7 @@ async def _run_firecracker_provision(
 async def _firecracker_provision_stream_generator(
     req: FirecrackerProvisionRequest,
     *,
-    actor: str | None = None,
+    actor: str,
 ) -> AsyncIterator[str]:
     queue: asyncio.Queue[str] = asyncio.Queue()
 
@@ -216,7 +217,7 @@ async def provision_firecracker_microvm(
     req: FirecrackerProvisionRequest,
     actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
 ) -> FirecrackerProvisionResponse:
-    return await _run_firecracker_provision(req, actor=actor)
+    return await _run_firecracker_provision(req, actor=require_actor(actor))
 
 
 @router.post("/firecracker/provision/stream", response_model=None)
@@ -224,8 +225,9 @@ async def provision_firecracker_microvm_stream(
     req: FirecrackerProvisionRequest,
     actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
 ) -> StreamingResponse:
+    actor_value = require_actor(actor)
     return StreamingResponse(
-        _firecracker_provision_stream_generator(req, actor=actor),
+        _firecracker_provision_stream_generator(req, actor=actor_value),
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )

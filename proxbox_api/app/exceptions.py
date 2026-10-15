@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import ProxboxException
+from proxbox_api.firecracker_agent.client import FirecrackerHostAgentError
 from proxbox_api.logger import logger
 from proxbox_api.runtime_settings import get_bool
 
@@ -97,6 +98,26 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "python_exception": (
                     exc.python_exception if expose else exc.public_python_exception
                 ),
+            },
+        )
+
+    @app.exception_handler(FirecrackerHostAgentError)
+    async def firecracker_host_agent_error_handler(
+        request: Request,
+        exc: FirecrackerHostAgentError,
+    ) -> JSONResponse:
+        logger.warning(
+            "Firecracker host-agent request failed for %s %s (upstream_status=%s)",
+            request.method,
+            request.url.path,
+            exc.status_code,
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "message": "Firecracker host-agent request failed.",
+                "detail": "The Firecracker host-agent request could not be completed safely.",
+                "python_exception": None,
             },
         )
 

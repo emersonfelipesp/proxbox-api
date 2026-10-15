@@ -1,0 +1,24 @@
+schema = 1
+package = "proxmox-mock-api"
+version = "0.0.6.post5"
+requirements_sha256 = "REPLACE_WITH_FROZEN_REQUIREMENTS_SHA256"
+
+[tools]
+uv_version = "0.12.5"
+build_version = "1.5.0"
+
+[wheel]
+filename = "proxmox_mock_api-0.0.6.post5-py3-none-any.whl"
+sha256 = "REPLACE_WITH_QUALIFIED_APPLICATION_WHEEL_SHA256"
+
+[platforms."linux/amd64"]
+base_image = "python:3.13.PATCH-slim-bookworm@sha256:REPLACE_WITH_VERIFIED_AMD64_BASE_DIGEST"
+uv_image = "ghcr.io/astral-sh/uv:0.12.5@sha256:REPLACE_WITH_VERIFIED_AMD64_UV_DIGEST"
+wheel_graph_sha256 = "REPLACE_WITH_QUALIFIED_AMD64_WHEEL_GRAPH_SHA256"
+installed_provenance_sha256 = "REPLACE_WITH_QUALIFIED_AMD64_INSTALLED_PROVENANCE_SHA256"
+
+[platforms."linux/arm64"]
+base_image = "python:3.13.PATCH-slim-bookworm@sha256:REPLACE_WITH_VERIFIED_ARM64_BASE_DIGEST"
+uv_image = "ghcr.io/astral-sh/uv:0.12.5@sha256:REPLACE_WITH_VERIFIED_ARM64_UV_DIGEST"
+wheel_graph_sha256 = "REPLACE_WITH_QUALIFIED_ARM64_WHEEL_GRAPH_SHA256"
+installed_provenance_sha256 = "REPLACE_WITH_QUALIFIED_ARM64_INSTALLED_PROVENANCE_SHA256"

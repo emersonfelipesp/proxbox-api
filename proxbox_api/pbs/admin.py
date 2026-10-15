@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
 
+from proxbox_api.credential_writes import commit_credential_write, prepare_credential_write
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import PBSEndpoint
 from proxbox_api.utils.async_compat import maybe_await as _maybe_await
@@ -71,11 +72,14 @@ async def create_pbs_endpoint(
     if existing_result.first():
         raise HTTPException(status_code=400, detail="PBS endpoint name already exists")
 
-    db_endpoint = PBSEndpoint(**endpoint.model_dump())
-    db_endpoint.set_encrypted_token_secret(endpoint.token_secret)
+    values = endpoint.model_dump()
+    token_secret = values.pop("token_secret")
+    db_endpoint = PBSEndpoint(**values, token_secret="")
+    permit = await prepare_credential_write(session)
+    db_endpoint.set_encrypted_token_secret(token_secret, encryptor=permit.encrypt)
 
     session.add(db_endpoint)
-    await _maybe_await(session.commit())
+    await commit_credential_write(session, permit)
     await _maybe_await(session.refresh(db_endpoint))
     return _to_public(db_endpoint)
 
@@ -119,13 +123,18 @@ async def update_pbs_endpoint(
             raise HTTPException(status_code=400, detail="PBS endpoint name already exists")
 
     new_secret = update_data.pop("token_secret", None)
+    permit = await prepare_credential_write(session) if new_secret is not None else None
     for key, value in update_data.items():
         setattr(db_endpoint, key, value)
     if new_secret is not None:
-        db_endpoint.set_encrypted_token_secret(new_secret)
+        assert permit is not None
+        db_endpoint.set_encrypted_token_secret(new_secret, encryptor=permit.encrypt)
 
     session.add(db_endpoint)
-    await _maybe_await(session.commit())
+    if permit is None:
+        await _maybe_await(session.commit())
+    else:
+        await commit_credential_write(session, permit)
     await _maybe_await(session.refresh(db_endpoint))
     return _to_public(db_endpoint)
 

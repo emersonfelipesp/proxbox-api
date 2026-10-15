@@ -22,11 +22,16 @@ deep code review of 0.0.27. It adds no features.
   PDM endpoints, Prometheus sources, Ceph dashboard endpoints and Ceph external
   clusters. Replacing the key would otherwise make those credentials
   undecryptable. Short-lived browser console relay tickets are not covered and
-  simply expire. The guard checks stored ciphertext at the moment of the request; it
-  does not coordinate with credential writes that are still in flight or with other
-  backend workers, which cache the key per process. Replace the key only in a
-  maintenance window with no endpoint changes under way, and restart every backend
-  worker afterwards.
+  simply expire. Current releases run the serialized replacement transaction off the
+  request event loop, bind credential encryption to the captured database generation
+  and local-file identity, and revalidate resolved and cached local keys during
+  publication. Atomic key-file replacement fsyncs its parent directory before the
+  durable pending fence is cleared. The former maintenance-window
+  restriction therefore no longer applies when every worker shares the same SQLite
+  database and local key file. Restart every backend worker if that shared visibility
+  and revalidation cannot be guaranteed. A contended retry cannot clear an inherited
+  pending fence, and a retried deletion fsyncs the key directory even when the prior
+  attempt already removed the file.
 - **SSRF checks.** IPv4-mapped, 6to4 and Teredo IPv6 addresses are checked as
   written and as the IPv4 they embed, so `::ffff:127.0.0.1` is blocked like
   `127.0.0.1` and an operator's explicit IPv6 deny range still applies to them.

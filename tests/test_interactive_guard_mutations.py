@@ -5,6 +5,7 @@ bypasses only that guard and requires ``GuardMutationReached`` from the effect.
 """
 
 import asyncio
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -271,10 +272,29 @@ async def test_ssh_post_wait_guard_mutation_reaches_only_named_effect(
         class SSHClient:
             pass
 
+        async def allow_host(_host):
+            from proxbox_api.ssrf import ResolvedAddress
+
+            return (ResolvedAddress(socket.AF_INET, "127.0.0.1"),)
+
         monkeypatch.setattr(
             ssh_terminal,
             "_load_asyncssh",
-            lambda: SimpleNamespace(connect=async_sentinel, SSHClient=SSHClient),
+            lambda: SimpleNamespace(
+                connect=async_sentinel,
+                SSHClient=SSHClient,
+                Error=Exception,
+            ),
+        )
+        monkeypatch.setattr(ssh_terminal, "ensure_ssh_host_allowed", allow_host)
+
+        async def open_socket(*_args, **_kwargs):
+            return SimpleNamespace(close=lambda: None)
+
+        monkeypatch.setattr(
+            ssh_terminal,
+            "_open_validated_ssh_socket",
+            open_socket,
         )
         credential = ssh_terminal.TerminalCredential(
             "endpoint", 1, "test.invalid", 22, "mutation", "SHA256:test", password="test"

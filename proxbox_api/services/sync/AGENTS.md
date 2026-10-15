@@ -23,10 +23,28 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   identity sidecars claim different devices for one node, deleted devices are
   ignored, the target cluster decides ownership (a site match counts only for
   clusterless devices), and anything still ambiguous fails closed. Device names
-  are never evidence.
+  are never evidence. Every identity or name-fallback candidate is also checked
+  through its device sync-state sidecar before adoption. A sidecar owned by a
+  different `proxmox_endpoint_raw_id`, or a sidecar lookup failure other than a
+  plain 404, becomes a per-target name conflict and is never patched or
+  re-stamped. Missing/NULL endpoint fields remain legacy-unclaimed and may be
+  adopted only after the existing site/cluster corroboration; adoption stamps
+  the current endpoint even when reflection-field overwrite is disabled. The
+  paired plugin release that exposes `proxmox_endpoint_raw_id` makes the
+  NULL-to-endpoint claim atomic and returns `409 endpoint_ownership_conflict`
+  rather than changing a committed non-NULL owner. The backend also reads the
+  claim back before device mutation. Released older plugins omit the field; the
+  backend treats those responses as unclaimed and unverifiable and preserves
+  legacy synchronization behavior. Do not pair this backend with a plugin that
+  exposes the field but lacks the atomic 409 contract. In that unsupported
+  mismatch, read-back verification narrows but cannot close a staggered race:
+  one worker can verify and proceed before another worker overwrites its claim.
 - `guest_vm_interface.py`: best-effort netbox-proxbox plugin reconciliation for
   guest OS VM interfaces and guest-interface-to-core-IP links.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
+  Its list-compatible `DeviceSyncResultList` preserves the combined missing
+  reconciliation-record and invalid-name failure count for orchestrators while
+  retaining the historical JSON list response shape.
 - `network.py`: network and interface sync helpers.
 - `reconciliation/`: pure operation-queue reconciliation, Python fallback,
   optional Rust bridge, mismatch metric, and shared VM operation types.

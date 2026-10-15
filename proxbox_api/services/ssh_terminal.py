@@ -9,6 +9,7 @@ import inspect
 import json
 import os
 import secrets
+import socket
 import ssl
 import urllib.error
 import urllib.parse
@@ -30,6 +31,8 @@ from proxbox_api.services.interactive_policy import (
     owned_resource,
     require_interactive,
 )
+from proxbox_api.settings_client import get_settings
+from proxbox_api.ssrf import ResolvedAddress, resolve_endpoint_host
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
@@ -44,6 +47,10 @@ class TerminalSessionError(Exception):
 
 class TerminalCredentialError(TerminalSessionError):
     """Raised when SSH credential material cannot be resolved."""
+
+
+class SSHHostValidationError(TerminalCredentialError):
+    """Raised before SSH I/O when the shared SSRF policy rejects a host."""
 
 
 class SSHCommandError(TerminalSessionError):
@@ -488,19 +495,115 @@ def _load_asyncssh() -> Any:
     return importlib.import_module("asyncssh")
 
 
-def _pinned_client_factory(asyncssh_module: Any, expected_fingerprint: str) -> object:
+def _empty_known_hosts(_host: str, _addr: str, _port: int) -> tuple[tuple, tuple, tuple]:
+    """Return an explicit empty trust store without triggering AsyncSSH defaults."""
+    return (), (), ()
+
+
+_SSH_ADDRESS_CONNECT_TIMEOUT = 2.0
+_SSH_TOTAL_CONNECT_TIMEOUT = 10.0
+
+
+async def _open_validated_ssh_socket(
+    addresses: tuple[ResolvedAddress, ...],
+    port: int,
+    *,
+    timeout: float = _SSH_TOTAL_CONNECT_TIMEOUT,
+) -> socket.socket:
+    """Connect to validated addresses in order without resolving the hostname again."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.001, timeout)
+    last_error: BaseException | None = None
+
+    for address in addresses:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        sock = socket.socket(address.family, socket.SOCK_STREAM)
+        sock.setblocking(False)
+        try:
+            await asyncio.wait_for(
+                loop.sock_connect(sock, address.socket_address(port)),
+                timeout=min(_SSH_ADDRESS_CONNECT_TIMEOUT, remaining),
+            )
+            return sock
+        except (OSError, asyncio.TimeoutError) as exc:
+            last_error = exc
+            sock.close()
+
+    raise OSError("No validated SSH address was reachable") from last_error
+
+
+def _restricted_ssh_auth_options(
+    *,
+    password: str | None,
+    client_keys: list[object] | None,
+) -> dict[str, Any]:
+    """Disable every ambient AsyncSSH authentication and trust source."""
+    return {
+        "password": password,
+        "client_keys": client_keys,
+        "password_auth": bool(password),
+        "public_key_auth": bool(client_keys),
+        "kbdint_auth": False,
+        "host_based_auth": False,
+        "client_host_keysign": False,
+        "client_host_keys": None,
+        "client_host_certs": [],
+        "client_certs": [],
+        "agent_path": None,
+        "agent_identities": None,
+        "agent_forwarding": False,
+        "pkcs11_provider": None,
+        "pkcs11_pin": None,
+        "gss_kex": False,
+        "gss_auth": False,
+        "gss_host": None,
+        "gss_store": None,
+        "gss_delegate_creds": False,
+    }
+
+
+def _restricted_ssh_trust_options() -> dict[str, Any]:
+    """Disable ambient SSH config, known hosts, and X.509 trust stores."""
+    return {
+        "known_hosts": _empty_known_hosts,
+        "config": [],
+        "x509_trusted_certs": None,
+        "x509_trusted_cert_paths": [],
+    }
+
+
+def _pinned_client_factory(
+    asyncssh_module: Any,
+    expected_fingerprint: str,
+    state: dict[str, bool],
+) -> object:
     expected = _canonical_fingerprint(expected_fingerprint)
 
     class PinnedHostKeyClient(asyncssh_module.SSHClient):  # type: ignore[misc]
         def validate_host_public_key(self, host, addr, port, key):  # noqa: ANN001
             actual = _fingerprint_from_key(key)
-            return secrets.compare_digest(expected, actual)
+            state["callback_called"] = True
+            state["matched"] = secrets.compare_digest(expected, actual)
+            return state["matched"]
 
     return PinnedHostKeyClient
 
 
 class HostKeyScanError(Exception):
     """Raised when a host-key fingerprint scan cannot be completed."""
+
+
+async def ensure_ssh_host_allowed(host: str) -> tuple[ResolvedAddress, ...]:
+    """Return addresses validated by the registered-endpoint SSRF policy."""
+    settings = await asyncio.to_thread(get_settings)
+    safe, reason, addresses = await asyncio.to_thread(resolve_endpoint_host, host, settings)
+    if not safe:
+        raise SSHHostValidationError(f"SSH host is not allowed: {reason}")
+    if not addresses:
+        raise SSHHostValidationError("SSH host is not allowed: no validated address")
+    return addresses
 
 
 def _scan_client_factory(asyncssh_module: Any, state: dict[str, Any]) -> object:
@@ -567,7 +670,9 @@ async def scan_host_key_fingerprint(
     what ``validate_host_public_key`` verifies during a real session. The scan
     mirrors :func:`connect_and_relay`'s host-key args:
 
-    * ``known_hosts=b""`` — load no system ``known_hosts`` entries.
+    * a truthy empty-known-hosts callback — load no ambient trust entries.
+    * ``config=[]`` — load no ambient SSH client configuration.
+    * explicit empty X.509 roots and paths, with all authentication disabled.
     * ``server_host_key_algs="default"`` — same algorithm preference as the
       terminal, so the same server key is negotiated and fingerprinted.
 
@@ -575,27 +680,26 @@ async def scan_host_key_fingerprint(
     ``PermissionDenied`` after key exchange — that is the expected success path.
     The host key is captured two ways: (1) ``validate_host_public_key`` when the
     runtime consults it, and (2) ``conn.get_server_host_key()`` read from the
-    connection stashed in ``connection_made`` for runtimes where the callback is
-    bypassed (the deployed asyncssh build treats ``known_hosts=b""`` as
-    no-verification and skips the callback). Only a failure that yields neither a
-    captured key nor a connection (connect-refused / timeout / DNS) is a real
-    error.
+    connection stashed in ``connection_made`` as a defensive compatibility
+    fallback. Only a failure that yields neither a captured key nor a connection
+    (connect-refused / timeout) is a real error.
     """
+    addresses = await ensure_ssh_host_allowed(host)
     asyncssh = _load_asyncssh()
     state: dict[str, Any] = {}
     conn = None
+    sock = None
     try:
+        sock = await _open_validated_ssh_socket(addresses, port, timeout=timeout)
         conn = await asyncssh.connect(
-            host,
-            port=port,
+            sock=sock,
             username="proxbox-host-key-scan",
-            password=None,
-            client_keys=[],
-            agent_path=None,
-            known_hosts=b"",
+            host_key_alias=host,
             server_host_key_algs="default",
             client_factory=_scan_client_factory(asyncssh, state),
             connect_timeout=timeout,
+            **_restricted_ssh_trust_options(),
+            **_restricted_ssh_auth_options(password=None, client_keys=None),
         )
     except Exception as exc:  # noqa: BLE001 — auth failure after key exchange is expected
         if state.get("key") is None and state.get("conn") is None:
@@ -609,6 +713,8 @@ async def scan_host_key_fingerprint(
                 await conn.wait_closed()
             except Exception:  # noqa: BLE001
                 pass
+        elif sock is not None:
+            sock.close()
 
     key = _resolve_scanned_host_key(state)
     if key is None:
@@ -804,19 +910,61 @@ async def _connect_terminal(credential: TerminalCredential) -> object:
         except Exception as exc:  # noqa: BLE001
             raise TerminalCredentialError("SSH private key could not be loaded") from exc
 
-    return await asyncssh.connect(
-        credential.host,
-        port=credential.port,
-        username=credential.username,
-        password=credential.password or None,
+    return await _connect_pinned(
+        asyncssh,
+        credential,
         client_keys=client_keys,
-        known_hosts=b"",
-        server_host_key_algs="default",
-        client_factory=_pinned_client_factory(
-            asyncssh,
-            credential.known_host_fingerprint,
-        ),
     )
+
+
+async def _connect_pinned(
+    asyncssh_module: Any,
+    credential: TerminalCredential,
+    *,
+    client_keys: list[object] | None,
+    timeout: float | None = None,
+) -> object:
+    """Connect to a validated IP and enforce the pin during key exchange."""
+    addresses = await ensure_ssh_host_allowed(credential.host)
+    state: dict[str, bool] = {}
+    kwargs: dict[str, Any] = {
+        "username": credential.username,
+        "host_key_alias": credential.host,
+        "server_host_key_algs": "default",
+        "client_factory": _pinned_client_factory(
+            asyncssh_module,
+            credential.known_host_fingerprint,
+            state,
+        ),
+        **_restricted_ssh_trust_options(),
+        **_restricted_ssh_auth_options(
+            password=credential.password or None,
+            client_keys=client_keys,
+        ),
+    }
+    if timeout is not None:
+        kwargs["connect_timeout"] = timeout
+    sock = await _open_validated_ssh_socket(
+        addresses,
+        credential.port,
+        timeout=timeout or _SSH_TOTAL_CONNECT_TIMEOUT,
+    )
+    try:
+        conn = await asyncssh_module.connect(sock=sock, **kwargs)
+    except asyncssh_module.Error as exc:
+        sock.close()
+        if state.get("callback_called") and not state.get("matched"):
+            raise TerminalCredentialError(
+                "SSH server host key does not match the pinned fingerprint"
+            ) from exc
+        raise
+    except BaseException:
+        sock.close()
+        raise
+    if state.get("callback_called") and state.get("matched"):
+        return conn
+    await _close_terminal_connection(conn)
+    raise TerminalCredentialError("SSH server host key verification callback was not invoked")
 
 
 async def _close_terminal_connection(conn: object) -> None:
@@ -899,7 +1047,6 @@ async def connect_and_relay(
 
 def _verify_terminal_host_key(conn: object, credential: TerminalCredential) -> None:
     """Verify the acquired transport before PTY even if a callback is skipped."""
-    require_interactive()
     actual = _fingerprint_from_key(getattr(conn, "get_server_host_key")())
     expected = _canonical_fingerprint(credential.known_host_fingerprint)
     if not secrets.compare_digest(actual, expected):
@@ -914,8 +1061,9 @@ async def run_endpoint_command(
 ) -> CompletedCommand:
     """Run a single fixed command over SSH using a resolved endpoint credential.
 
-    Reuses the same pinned-host-key posture as :func:`connect_and_relay`
-    (``known_hosts=b""`` plus fingerprint-pinned ``validate_host_public_key``)
+    Reuses the same pinned-host-key posture as :func:`connect_and_relay`:
+    an explicitly empty trust store plus fingerprint-pinned key-exchange
+    validation on the credential-bearing connection
     but opens a one-shot connection instead of a PTY relay: it runs
     ``command`` via a bounded ``conn.run(command, check=False)`` call and returns its
     captured stdout/stderr/exit status. ``check=False`` means a non-zero exit
@@ -945,25 +1093,18 @@ async def run_endpoint_command(
             raise TerminalCredentialError("SSH private key could not be loaded") from exc
 
     try:
-        conn = await asyncssh.connect(
-            credential.host,
-            port=credential.port,
-            username=credential.username,
-            password=credential.password or None,
+        conn = await _connect_pinned(
+            asyncssh,
+            credential,
             client_keys=client_keys,
-            known_hosts=b"",
-            server_host_key_algs="default",
-            client_factory=_pinned_client_factory(
-                asyncssh,
-                credential.known_host_fingerprint,
-            ),
-            connect_timeout=timeout,
+            timeout=timeout,
         )
     except (OSError, asyncio.TimeoutError, asyncssh.Error) as exc:
         raise SSHCommandError(f"Could not reach {credential.display}: {exc}") from exc
 
     try:
         async with conn:
+            _verify_terminal_host_key(conn, credential)
             result = await asyncio.wait_for(conn.run(command, check=False), timeout=timeout)
     except asyncio.TimeoutError as exc:
         raise SSHCommandTimeoutError(

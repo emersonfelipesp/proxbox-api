@@ -26,7 +26,10 @@ HTML admin dashboard and backend log buffer routes.
 - `GET /admin/encryption/status` reports whether a credential encryption key is configured and its source (`env`/`plugin`/`local`).
 - `POST /admin/encryption/key` persists a caller-supplied key to the local key file (mode 0600) and resets the in-process Fernet cache.
 - `POST /admin/encryption/generate` generates a fresh Fernet key, persists it locally, and returns it once.
-- `DELETE /admin/encryption/key` clears the local key file; returns 409 if any `enc:`-prefixed value still exists in the database.
+- `POST /admin/encryption/key`, `/admin/encryption/generate`, and `DELETE /admin/encryption/key` run the complete serialized SQLite replacement protocol in a worker thread, so `BEGIN IMMEDIATE` lock waits never block the event loop. Lock contention returns a secret-free HTTP 503 with `Retry-After`; encrypted stored credentials still return HTTP 409.
+- Every persistent credential writer reads the generation and local-file identity under `no_autoflush` before mutating an ORM secret field, encrypts through that captured permit, and conditionally fences the same generation in the ciphertext commit. A generation or file-identity change returns a secret-free, retryable HTTP 409 and rolls back the credential row. Local key publication fsyncs the file, performs the atomic rename, and fsyncs the parent directory before the durable pending fence can be cleared.
+- Replacement publishes a durable pending fence before changing the file. A filesystem or final database failure leaves that fence set, and lock contention on a retry must never clear an inherited fence. Only successful replacement clears it, so credential writes fail closed with HTTP 409 until completion. Deletion must fsync the existing key-file directory even when a prior attempt already unlinked the key.
+- NetBox endpoint creation and credential changes enforce provenance on the actual material returned to the encryption sink and return HTTP 409 if it is `plugin`, including when plugin authority recovers during the request. Before an authenticated endpoint credential change, configure `PROXBOX_ENCRYPTION_KEY` or an independent local key file and confirm that `/admin/encryption/status` reports `env` or `local`. Unchanged endpoint pushes remain accepted.
 - The dashboard uses the shared `proxbox_api.templates` Jinja2 environment.
 - The routes are mounted by `proxbox_api.app.factory.create_app()` under the `/admin` prefix.
 
@@ -35,6 +38,7 @@ HTML admin dashboard and backend log buffer routes.
 - Keep the dashboard read-only and template-focused.
 - Keep persistence, validation, and endpoint CRUD in the NetBox route and service layers.
 - Mask secrets if you expose more endpoint fields in the template.
+- Preserve off-loop serialization, the durable pending fence, file and directory fsync ordering, actual-source enforcement, and the writer-side generation/file-identity permit as one coordination protocol.
 
 ## Extension Guidance
 

@@ -4,8 +4,9 @@ SSRF protection validates that endpoints do not point to restricted IP addresses
 Settings can be configured via NetBox plugin (ProxboxPluginSettings) with caching.
 
 IPs that are already registered in ProxmoxEndpoint or NetBoxEndpoint are automatically allowed.
-IPs submitted during endpoint creation/update are pre-allowed so that the endpoint's
-own address passes SSRF validation within the same request.
+IPs submitted during endpoint creation/update can be allowed only within that
+request so the endpoint's own address passes validation without changing the
+process-wide registered-endpoint cache before the database commit succeeds.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ import ipaddress
 import logging
 import re
 import socket
+from collections.abc import Collection
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,6 +51,30 @@ PRIVATE_IP_RANGES = (
 
 _registered_ips_cache: set[str] = set()
 _registered_domains_cache: set[str] = set()
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAddress:
+    """A validated socket address with IPv6 interface identity preserved."""
+
+    family: int
+    address: str
+    port: int | None = None
+    flowinfo: int = 0
+    scope_id: int = 0
+
+    def socket_address(self, port: int) -> tuple[str, int] | tuple[str, int, int, int]:
+        resolved_port = self.port if self.port is not None else port
+        if self.family == socket.AF_INET6:
+            return self.address, resolved_port, self.flowinfo, self.scope_id
+        return self.address, resolved_port
+
+    @property
+    def httpcore_host(self) -> str:
+        """Return a numeric host accepted by httpcore while retaining IPv6 scope."""
+        if self.family == socket.AF_INET6 and self.scope_id:
+            return f"{self.address}%{self.scope_id}"
+        return self.address
 
 
 def get_registered_endpoints() -> tuple[set[str], set[str]]:
@@ -108,44 +135,38 @@ def clear_endpoint_cache() -> None:
     _registered_domains_cache = set()
 
 
-def pre_allow_endpoint_hosts(*hosts: str, source: str = "endpoint") -> None:
-    """Pre-seed the SSRF cache with IPs/domains from an endpoint being created or updated.
+def pre_allow_endpoint_hosts(*hosts: str, source: str = "endpoint") -> frozenset[str]:
+    """Build a request-scoped allow set for endpoint creation or update.
 
-    Called before SSRF validation in create/update handlers so that the endpoint's
-    own address is treated as registered and passes validation in the same request.
-    Any internal or reserved address is automatically allowed and logged — users
-    are not asked to configure SSRF manually for their own endpoint addresses.
+    This function deliberately does not mutate the registered-endpoint cache. The
+    caller passes the returned set to :func:`validate_endpoint_host`, and clears
+    the global cache only after the endpoint transaction commits successfully.
 
     Args:
         *hosts: IP address strings or domain names to allow.
         source: Label used in log messages (e.g. "NetBox", "Proxmox").
     """
-    global _registered_ips_cache, _registered_domains_cache
-
+    allowed: set[str] = set()
     for host in hosts:
         if not host:
             continue
         host = host.strip()
         if not host:
             continue
-        try:
-            ipaddress.ip_address(host)
-            if host not in _registered_ips_cache:
-                _registered_ips_cache.add(host)
-                logger.info(
-                    "SSRF: auto-allowed IP %s from %s endpoint configuration",
-                    host,
-                    source,
-                )
-        except ValueError:
-            host_lower = host.lower()
-            if host_lower not in _registered_domains_cache:
-                _registered_domains_cache.add(host_lower)
-                logger.info(
-                    "SSRF: auto-allowed domain %s from %s endpoint configuration",
-                    host,
-                    source,
-                )
+        normalized = host.lower()
+        if normalized not in allowed:
+            allowed.add(normalized)
+            logger.info(
+                "SSRF: created request-scoped allow from %s endpoint configuration",
+                source,
+            )
+    return frozenset(allowed)
+
+
+def _is_request_allowed(host: str, request_allowed_hosts: Collection[str] | None) -> bool:
+    if request_allowed_hosts is None:
+        return False
+    return host.strip().lower() in request_allowed_hosts
 
 
 def is_registered_endpoint(host: str) -> bool:
@@ -184,7 +205,54 @@ def _looks_like_ip_literal(host: str) -> bool:
     return ":" in host or "%" in host or bool(re.fullmatch(r"[0-9.]+", host))
 
 
-def is_ip_blocked(  # noqa: C901
+def _ip_allowed_by_settings(
+    original: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    settings: dict,
+) -> bool:
+    allow_candidates = (original,)
+    if isinstance(original, ipaddress.IPv6Address) and original.ipv4_mapped is not None:
+        allow_candidates = (original, original.ipv4_mapped)
+    allowed_ranges = settings.get("allowed_ip_ranges", [])
+    for network in allowed_ranges:
+        if any(candidate in network for candidate in allow_candidates):
+            return True
+
+    if settings.get("allow_private_ips", False):
+        for network in PRIVATE_IP_RANGES:
+            if addr in network:
+                return True
+    return False
+
+
+def _configured_ip_block(
+    ip: str,
+    original: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    candidates: tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, ...],
+    settings: dict,
+) -> tuple[bool, str]:
+    blocked_ranges = settings.get("blocked_ip_ranges", [])
+    for network in blocked_ranges:
+        if any(candidate in network for candidate in candidates):
+            return True, f"Host '{ip}' is in explicitly blocked range {network}"
+
+    if _ip_allowed_by_settings(original, addr, settings):
+        return False, "OK"
+
+    for network in INTERNAL_IP_RANGES:
+        if any(candidate in network for candidate in candidates):
+            return (
+                True,
+                f"Host '{ip}' is a reserved/internal IP address. Either add it to ProxmoxEndpoint first, or adjust SSRF settings in ProxboxPluginSettings.",
+            )
+
+    if any(not candidate.is_global for candidate in candidates):
+        return True, f"Host '{ip}' is a non-global IP address"
+    return False, "OK"
+
+
+def is_ip_blocked(
     ip: str,
     settings: dict | None = None,
 ) -> tuple[bool, str]:
@@ -204,6 +272,12 @@ def is_ip_blocked(  # noqa: C901
     addr = _normalize_ip(original)
     candidates = (original,) if addr == original else (original, addr)
 
+    # Unspecified addresses never identify a routable endpoint. Do this before
+    # registered-endpoint and operator-policy exceptions so ``0.0.0.0`` and
+    # ``::`` cannot turn into a platform-dependent local connection target.
+    if any(candidate.is_unspecified for candidate in candidates):
+        return True, f"Host '{ip}' is an unspecified IP address"
+
     # If IP is already registered, allow it
     if is_registered_endpoint(ip):
         return False, "OK"
@@ -215,41 +289,153 @@ def is_ip_blocked(  # noqa: C901
     if not ssrf_enabled:
         return False, "OK"
 
-    blocked_ranges = settings.get("blocked_ip_ranges", [])
-    for network in blocked_ranges:
-        if any(candidate in network for candidate in candidates):
-            return True, f"Host '{ip}' is in explicitly blocked range {network}"
-
     # Operator allow-lists apply to the address as written and to a true IPv4-mapped
     # form only. 6to4 and Teredo addresses merely embed an IPv4 and reach it through a
     # relay, so an IPv4 allow range must not whitelist them.
-    allow_candidates = (original,)
-    if isinstance(original, ipaddress.IPv6Address) and original.ipv4_mapped is not None:
-        allow_candidates = (original, original.ipv4_mapped)
-    allowed_ranges = settings.get("allowed_ip_ranges", [])
-    for network in allowed_ranges:
-        if any(candidate in network for candidate in allow_candidates):
-            return False, "OK"
+    return _configured_ip_block(ip, original, addr, candidates, settings)
 
-    allow_private = settings.get("allow_private_ips", True)
-    if allow_private:
-        for network in PRIVATE_IP_RANGES:
-            if addr in network:
-                return False, "OK"
 
-    for network in INTERNAL_IP_RANGES:
-        if any(candidate in network for candidate in candidates):
-            return (
-                True,
-                f"Host '{ip}' is a reserved/internal IP address. Either add it to ProxmoxEndpoint first, or adjust SSRF settings in ProxboxPluginSettings.",
-            )
+def _validate_literal_host(
+    host: str,
+    settings: dict | None,
+    *,
+    endpoint_allowed: bool,
+) -> tuple[bool, str, tuple[ResolvedAddress, ...]] | None:
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    canonical = str(literal).split("%", 1)[0]
+    if literal.is_unspecified:
+        return False, f"Host '{host}' is an unspecified IP address", ()
+    family = socket.AF_INET6 if literal.version == 6 else socket.AF_INET
+    scope_id = 0
+    scope = getattr(literal, "scope_id", None)
+    if scope:
+        try:
+            scope_id = int(scope)
+        except ValueError:
+            try:
+                scope_id = socket.if_nametoindex(scope)
+            except OSError:
+                return False, f"Host '{host}' has an unknown IPv6 interface scope", ()
+    resolved = ResolvedAddress(family, canonical, scope_id=scope_id)
+    if endpoint_allowed:
+        return True, "OK", (resolved,)
+    blocked, reason = is_ip_blocked(canonical, settings)
+    return (False, reason, ()) if blocked else (True, "OK", (resolved,))
 
-    return False, "OK"
+
+def _resolve_socket_addresses(
+    host: str,
+) -> tuple[str | None, tuple[ResolvedAddress, ...]]:
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except (socket.gaierror, OSError) as exc:
+        return f"Could not resolve host '{host}': {exc}", ()
+    resolved: list[ResolvedAddress] = []
+    for info in infos:
+        family = info[0]
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            resolved_ip = str(ipaddress.ip_address(str(sockaddr[0])))
+        except ValueError:
+            return f"Host '{host}' resolved to an invalid IP address", ()
+        if family == socket.AF_INET6:
+            port, flowinfo, scope_id = sockaddr[1:4]
+        else:
+            port, flowinfo, scope_id = sockaddr[1], 0, 0
+        address = ResolvedAddress(
+            family=family,
+            address=resolved_ip,
+            port=port or None,
+            flowinfo=flowinfo,
+            scope_id=scope_id,
+        )
+        if address not in resolved:
+            resolved.append(address)
+    if not resolved:
+        return f"Could not resolve host '{host}'", ()
+    return None, tuple(resolved)
+
+
+def _validate_socket_addresses(
+    host: str,
+    addresses: tuple[ResolvedAddress, ...],
+    settings: dict | None,
+    *,
+    endpoint_allowed: bool,
+) -> tuple[bool, str, tuple[ResolvedAddress, ...]]:
+    for resolved in addresses:
+        resolved_ip = resolved.address
+        if ipaddress.ip_address(resolved_ip).is_unspecified:
+            return False, f"Host '{host}' resolves to unspecified address {resolved_ip}", ()
+        if endpoint_allowed:
+            continue
+        blocked, reason = is_ip_blocked(resolved_ip, settings)
+        if blocked:
+            return False, f"Host '{host}' resolves to {resolved_ip}: {reason}", ()
+    return True, "OK", addresses
+
+
+def resolve_endpoint_host(
+    host: str | None,
+    settings: dict | None = None,
+    *,
+    request_allowed_hosts: Collection[str] | None = None,
+) -> tuple[bool, str, tuple[ResolvedAddress, ...]]:
+    """Validate and return the exact socket addresses an outbound caller may use.
+
+    Registered and request-scoped endpoint names may resolve to private addresses,
+    but unspecified addresses are always refused. Callers must connect to one of
+    the returned addresses instead of resolving ``host`` again.
+    """
+    if not host:
+        return False, "Host cannot be empty", ()
+
+    host = host.strip()
+    request_allowed = _is_request_allowed(host, request_allowed_hosts)
+    registered = is_registered_endpoint(host)
+    endpoint_allowed = request_allowed or registered
+
+    literal_result = _validate_literal_host(
+        host,
+        settings,
+        endpoint_allowed=endpoint_allowed,
+    )
+    if literal_result is not None:
+        return literal_result
+
+    if _looks_like_ip_literal(host):
+        blocked, reason = is_ip_blocked(host, settings)
+        return (False, reason, ()) if blocked else (True, "OK", ())
+
+    if not endpoint_allowed:
+        if host.lower() in ("localhost", "localhost.localdomain"):
+            return False, "localhost is not allowed", ()
+        if re.match(r"^[\w.-]+\.(local|lan|internal|private)$", host, re.IGNORECASE):
+            return False, f"Host '{host}' appears to be an internal domain", ()
+
+    error, addresses = _resolve_socket_addresses(host)
+    if error is not None:
+        return False, error, ()
+    return _validate_socket_addresses(
+        host,
+        addresses,
+        settings,
+        endpoint_allowed=endpoint_allowed,
+    )
 
 
 def validate_endpoint_host(  # noqa: C901
     host: str | None,
     settings: dict | None = None,
+    *,
+    request_allowed_hosts: Collection[str] | None = None,
 ) -> tuple[bool, str]:
     """Validate that an endpoint host is not an internal/reserved IP.
 
@@ -268,48 +454,22 @@ def validate_endpoint_host(  # noqa: C901
 
     host = host.strip()
 
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None and literal.is_unspecified:
+        return False, f"Host '{host}' is an unspecified IP address"
+
+    if _is_request_allowed(host, request_allowed_hosts):
+        return True, "OK"
+
     # If domain/host is already registered, allow it
     if is_registered_endpoint(host):
         return True, "OK"
 
-    blocked, reason = is_ip_blocked(host, settings)
-    if blocked:
-        return False, reason
-
-    try:
-        ipaddress.ip_address(host)
-        return True, "OK"
-    except ValueError:
-        pass
-
-    if host.lower() in ("localhost", "localhost.localdomain"):
-        return False, "localhost is not allowed"
-
-    if re.match(r"^[\w.-]+\.(local|lan|internal|private)$", host, re.IGNORECASE):
-        return False, f"Host '{host}' appears to be an internal domain"
-
-    # Hostname did not match any heuristic block. Resolve it and re-validate every
-    # resolved IP so that a hostname pointing at e.g. 127.0.0.1 cannot bypass the
-    # IP-based SSRF guard.
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except (socket.gaierror, OSError) as exc:
-        return False, f"Could not resolve host '{host}': {exc}"
-
-    resolved: set[str] = set()
-    for info in infos:
-        sockaddr = info[4]
-        if sockaddr:
-            resolved.add(str(sockaddr[0]))
-    if not resolved:
-        return False, f"Could not resolve host '{host}'"
-
-    for resolved_ip in resolved:
-        blocked, reason = is_ip_blocked(resolved_ip, settings)
-        if blocked:
-            return False, f"Host '{host}' resolves to {resolved_ip}: {reason}"
-
-    return True, "OK"
+    safe, reason, _addresses = resolve_endpoint_host(host, settings)
+    return safe, reason
 
 
 def validate_endpoint_url(url: str | None, settings: dict | None = None) -> tuple[bool, str]:

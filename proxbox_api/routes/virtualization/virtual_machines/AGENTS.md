@@ -25,7 +25,11 @@ Main synchronization endpoints for virtual machines and related resources.
 - `storages_vm.py`: storage reconciliation helpers and routes.
 - `sync_vm.py`: VM sync orchestration routes, including the create and stream
   entrypoints. Deterministic operation-queue reconciliation is delegated to
-  `proxbox_api.services.sync.reconciliation`.
+  `proxbox_api.services.sync.reconciliation`. The two public VM and interface
+  orchestrators keep their route signatures thin and delegate run-scoped state
+  through typed context dataclasses to module-level phase helpers. Keep those
+  helpers independently testable and below the repository complexity ceiling;
+  do not reintroduce nested async workers that capture orchestration state.
 
 ## How These Routes Work
 
@@ -85,7 +89,10 @@ Main synchronization endpoints for virtual machines and related resources.
   that still fail are counted. The per-VM progress item carries
   `failed_interfaces` and `total_interfaces`, and a VM with any failed interface
   is reported with `status="warning"` (degraded) instead of `completed`. Keep
-  the WebSocket and SSE item payloads aligned when changing these fields.
+  the WebSocket and SSE item payloads aligned when changing these fields. The
+  VM stage's list-compatible result also counts each affected VM in
+  `failed_count`, so correlated WebSocket completion cannot report success when
+  a required interface write failed.
 - **VM batch failures are counted, not reported as success (issue #563).**
   `_run_full_update_vm_batch` returns `(results, failed_vms)`. A VM that raises
   during preparation or fails to resolve increments `failed_vms`; the caller

@@ -389,6 +389,24 @@ podem levar mais tempo. Todos os resultados comuns de configuracao,
 caches e overrides por thread removem a raiz, inclusive respostas de runtime
 bem-sucedidas.
 
+Leituras comuns da politica de runtime tambem exigem a permissao de modelo
+`view_proxboxpluginsettings`. O cliente distingue HTTP 401/403 de falhas
+transitorias de transporte. Quando a autorizacao e negada depois de uma leitura
+bem-sucedida, a ultima politica conhecida permanece autoritativa. Quando a
+autorizacao e negada antes de qualquer leitura bem-sucedida, callers sensiveis a
+SSRF recebem defaults estritos (`allow_private_ips=false` sem ranges permitidos
+implicitos), e `/health` retorna HTTP 503 com uma instrucao sem segredos para
+conceder `view_proxboxpluginsettings`. Um waiter com prazo limitado e sem
+politica anterior tambem usa o fallback SSRF estrito. Enquanto essa recusa no
+inicio mantiver a prontidao em HTTP 503, cada probe de prontidao solicita uma
+atualizacao ao single-flight existente do processo. O cache de falha de dez
+segundos limita a frequencia dessas tentativas, e o budget especifico da
+requisicao de prontidao e de um segundo. Assim, conceder a permissao pode
+restaurar a prontidao somente por probes, sem trafego da aplicacao nem restart.
+Requisicoes de
+configuracoes nunca seguem redirects com o token do NetBox e rejeitam corpos de
+resposta maiores que 4 MiB.
+
 A autoridade privada usa entradas imutaveis do cliente de servico NetBox padrao.
 Ela nao cria uma nova sessao que precisa descriptografar credenciais para obter
 a propria raiz. Cada criptografia, descriptografia, aquisicao de Fernet e

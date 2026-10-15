@@ -422,7 +422,7 @@ jobs:
       - name: Build and save Proxmox mock image
         run: |
           set -eux
-          docker build -f proxmox-mock/Dockerfile \
+          docker build -f proxmox-mock/Dockerfile.dev \
             --build-arg "PYTHON_BASE_IMAGE=${CI_OFFICIAL_IMAGE_PREFIX}/python:3.13-slim-bookworm" \
             -t "${PROXMOX_OPENAPI_IMAGE}" \
             proxmox-mock

@@ -33,9 +33,30 @@ _SETTINGS_CONDITION = threading.Condition()
 _SETTINGS_FETCH_IN_PROGRESS = False
 _SETTINGS_FETCH_GENERATION = 0
 _SETTINGS_LAST_RESULT: ProxboxSettingsDict | None = None
+_SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY = False
 _SETTINGS_THREAD_LOCAL = threading.local()
 _VALID_RECONCILIATION_ENGINES = {"python", "compare", "rust"}
 _DEFAULT_SETTINGS_REQUEST_TIMEOUT_SECONDS = 10.0
+_SETTINGS_RESPONSE_MAX_BYTES = 4 * 1024 * 1024
+_SETTINGS_AUTHORIZATION_READINESS_REASON = (
+    "NetBox denied plugin settings access; grant view_proxboxpluginsettings to the "
+    "proxbox-api service account."
+)
+
+
+class SettingsAuthorizationError(RuntimeError):
+    """NetBox refused access to the plugin settings policy."""
+
+
+class SettingsResponseTooLargeError(RuntimeError):
+    """The plugin settings response exceeded the fixed body limit."""
+
+
+class _NoSettingsRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so the Authorization header never reaches another URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ARG002
+        return None
 
 
 def _metadata_settings(settings: ProxboxSettingsDict) -> ProxboxSettingsDict:
@@ -237,6 +258,28 @@ def _extract_settings_payload(data: object) -> dict[str, object] | None:
     return payload
 
 
+def _open_settings_request(
+    request: urllib.request.Request,
+    *,
+    context: ssl.SSLContext | None,
+    timeout: float,
+):
+    handlers: list[urllib.request.BaseHandler] = [_NoSettingsRedirectHandler()]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+
+
+def _read_settings_response(response: object) -> object:
+    read = getattr(response, "read")
+    body = read(_SETTINGS_RESPONSE_MAX_BYTES + 1)
+    if len(body) > _SETTINGS_RESPONSE_MAX_BYTES:
+        raise SettingsResponseTooLargeError(
+            f"ProxboxPluginSettings response exceeds {_SETTINGS_RESPONSE_MAX_BYTES} bytes"
+        )
+    return json.loads(body.decode())
+
+
 def _request_settings_json(
     *,
     base_url: str,
@@ -255,21 +298,15 @@ def _request_settings_json(
         context = ssl._create_unverified_context()
 
     try:
-        if context is None:
-            response = urllib.request.urlopen(
-                req,
-                timeout=request_timeout_seconds,
-            )
-        else:
-            response = urllib.request.urlopen(
-                req,
-                timeout=request_timeout_seconds,
-                context=context,
-            )
+        response = _open_settings_request(
+            req,
+            context=context,
+            timeout=request_timeout_seconds,
+        )
         with response as resp:
             if resp.status != 200:
                 return None, resp.status
-            return json.loads(resp.read().decode()), resp.status
+            return _read_settings_response(resp), resp.status
     except urllib.error.HTTPError as exc:
         return None, exc.code
     except urllib.error.URLError as exc:
@@ -280,6 +317,12 @@ def _request_settings_json(
         return None, None
     except json.JSONDecodeError as exc:
         logger.warning("Invalid JSON fetching ProxboxPluginSettings from %s: %s", url, exc)
+        return None, None
+    except SettingsResponseTooLargeError:
+        logger.warning(
+            "ProxboxPluginSettings response exceeded the %d-byte limit",
+            _SETTINGS_RESPONSE_MAX_BYTES,
+        )
         return None, None
 
 
@@ -418,6 +461,8 @@ def _fetch_settings_payload(
     )
     if status == 200:
         return _extract_settings_payload(data)
+    if status in (401, 403):
+        raise SettingsAuthorizationError("NetBox denied plugin settings access")
     if status != 404:
         logger.warning("ProxboxPluginSettings runtime request failed; metadata fallback refused")
         return None
@@ -431,6 +476,8 @@ def _fetch_settings_payload(
         ssl_verify=ssl_verify,
         request_timeout_seconds=remaining,
     )
+    if status in (401, 403):
+        raise SettingsAuthorizationError("NetBox denied plugin settings access")
     if status != 200:
         return None
     payload = _extract_settings_payload(data)
@@ -475,12 +522,39 @@ def fetch_settings_from_netbox(
 
         return _normalize_settings_payload(settings)
 
+    except SettingsAuthorizationError:
+        raise
     except urllib.error.URLError as exc:
         logger.warning("Error fetching ProxboxPluginSettings: %s", exc)
         return None
     except Exception as exc:
         logger.warning("Error fetching ProxboxPluginSettings: %s", exc)
         return None
+
+
+def _strict_ssrf_fallback_settings() -> ProxboxSettingsDict:
+    """Return defaults with private-address access denied for an unknown policy."""
+    settings = get_default_settings()
+    settings["ssrf_protection_enabled"] = True
+    settings["allow_private_ips"] = False
+    settings["allowed_ip_ranges"] = []
+    return settings
+
+
+def settings_readiness_failure() -> str | None:
+    """Return the secret-free cold-start policy authorization failure, if any."""
+    with _SETTINGS_CONDITION:
+        if _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY:
+            return _SETTINGS_AUTHORIZATION_READINESS_REASON
+    return None
+
+
+def refresh_failed_settings_readiness(*, request_timeout_seconds: float = 1.0) -> str | None:
+    """Rate-limit a readiness recovery fetch through the settings single-flight."""
+    if settings_readiness_failure() is None:
+        return None
+    get_settings(request_timeout_seconds=request_timeout_seconds)
+    return settings_readiness_failure()
 
 
 def _claim_settings_fetch(
@@ -504,7 +578,7 @@ def _claim_settings_fetch(
             if remaining is not None and remaining <= 0:
                 # A bounded availability-preserving caller must never inherit an
                 # unrelated, longer settings lookup already in progress.
-                return False, _SETTINGS_LAST_RESULT or get_default_settings()
+                return False, _SETTINGS_LAST_RESULT or _strict_ssrf_fallback_settings()
             _SETTINGS_CONDITION.wait(timeout=remaining)
 
 
@@ -543,10 +617,13 @@ def _publish_settings_result(
     *,
     fetched: bool,
     cache_fallback: bool,
+    authorization_denied: bool = False,
+    had_last_good: bool = False,
 ) -> None:
     """Release every single-flight waiter, including failed acquisition paths."""
     global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME
     global _SETTINGS_FETCH_IN_PROGRESS, _SETTINGS_FETCH_GENERATION, _SETTINGS_LAST_RESULT
+    global _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY
     with _SETTINGS_CONDITION:
         if settings is not None:
             settings = _metadata_settings(settings)
@@ -562,6 +639,10 @@ def _publish_settings_result(
                 _SETTINGS_CACHE_TIME = time.monotonic() - (
                     _SETTINGS_CACHE_TTL - _SETTINGS_FAILURE_TTL
                 )
+        if fetched:
+            _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY = False
+        elif authorization_denied:
+            _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY = not had_last_good
         _SETTINGS_FETCH_IN_PROGRESS = False
         _SETTINGS_CONDITION.notify_all()
 
@@ -580,7 +661,8 @@ def get_settings(
     recursion_depth = getattr(_SETTINGS_THREAD_LOCAL, "fetch_depth", 0)
     if recursion_depth:
         # Facade construction can re-enter credential parsing on the same thread.
-        return get_default_settings()
+        with _SETTINGS_CONDITION:
+            return _SETTINGS_LAST_RESULT or _strict_ssrf_fallback_settings()
     deadline = (
         None
         if request_timeout_seconds is None
@@ -593,20 +675,37 @@ def get_settings(
     _SETTINGS_THREAD_LOCAL.fetch_depth = recursion_depth + 1
     settings: ProxboxSettingsDict | None = None
     fetched: ProxboxSettingsDict | None = None
+    authorization_denied = False
+    had_last_good = False
     try:
-        fetched = _fetch_settings_with_deadline(netbox_session, deadline=deadline)
+        try:
+            fetched = _fetch_settings_with_deadline(netbox_session, deadline=deadline)
+        except SettingsAuthorizationError:
+            authorization_denied = True
         if fetched is not None:
             settings = _metadata_settings(fetched)
         else:
             with _SETTINGS_CONDITION:
                 last_good = _SETTINGS_LAST_RESULT
+                prior_denial = _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY
+            had_last_good = last_good is not None
             settings = _metadata_settings(
-                last_good if last_good is not None else get_default_settings()
+                last_good
+                if last_good is not None
+                else (
+                    _strict_ssrf_fallback_settings()
+                    if authorization_denied or prior_denial
+                    else get_default_settings()
+                )
             )
     finally:
         delattr(_SETTINGS_THREAD_LOCAL, "fetch_depth")
         _publish_settings_result(
-            settings, fetched=fetched is not None, cache_fallback=cache_fallback
+            settings,
+            fetched=fetched is not None,
+            cache_fallback=cache_fallback,
+            authorization_denied=authorization_denied,
+            had_last_good=had_last_good,
         )
 
     if settings is None:  # pragma: no cover - the fetch path either returns or raises
@@ -614,10 +713,13 @@ def get_settings(
     return settings
 
 
-def invalidate_settings_cache() -> None:
-    """Invalidate the settings cache to force a fresh fetch."""
+def invalidate_settings_cache(*, clear_readiness: bool = False) -> None:
+    """Invalidate cached settings while retaining observed authorization failure."""
     global _SETTINGS_CACHE, _SETTINGS_CACHE_TIME, _SETTINGS_LAST_RESULT
+    global _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY
     with _SETTINGS_CONDITION:
         _SETTINGS_CACHE = None
         _SETTINGS_CACHE_TIME = 0.0
         _SETTINGS_LAST_RESULT = None
+        if clear_readiness:
+            _SETTINGS_AUTHORIZATION_DENIED_WITHOUT_POLICY = False

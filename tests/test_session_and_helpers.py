@@ -3766,6 +3766,10 @@ def test_ensure_device_preserves_existing_site_different_from_sync_default():
         ("GET", "/api/dcim/device-roles/"): (200, {"count": 0, "results": []}),
         ("GET", "/api/virtualization/cluster-types/"): (200, {"count": 0, "results": []}),
         ("GET", "/api/virtualization/clusters/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/plugins/proxbox/sync-state/devices/"): (
+            200,
+            {"count": 0, "results": []},
+        ),
     }
 
     facade = AsyncNetBoxRestFacade(responses)
@@ -3875,6 +3879,10 @@ def test_ensure_device_prefers_proxbox_tagged_duplicate_over_manual_device(monke
         ("GET", "/api/dcim/device-roles/"): (200, {"count": 0, "results": []}),
         ("GET", "/api/virtualization/cluster-types/"): (200, {"count": 0, "results": []}),
         ("GET", "/api/virtualization/clusters/"): (200, {"count": 0, "results": []}),
+        ("GET", "/api/plugins/proxbox/sync-state/devices/"): (
+            200,
+            {"count": 0, "results": []},
+        ),
     }
 
     facade = AsyncNetBoxRestFacade(responses)

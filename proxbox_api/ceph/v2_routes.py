@@ -92,6 +92,7 @@ from proxbox_api.ceph.v2_schemas import (
     ValidationResponse,
     validate_credential_ref,
 )
+from proxbox_api.credential_writes import commit_credential_write, prepare_credential_write
 from proxbox_api.database import (
     AsyncDatabaseSessionDep,
     CephApprovalRecord,
@@ -1161,9 +1162,10 @@ async def ceph_v2_create_prometheus_source(
         timeout_seconds=payload.timeout_seconds,
         scrape_interval_seconds=payload.scrape_interval_seconds,
     )
-    source.set_encrypted_bearer_token(payload.bearer_token)
+    permit = await prepare_credential_write(session)
+    source.set_encrypted_bearer_token(payload.bearer_token, encryptor=permit.encrypt)
     session.add(source)
-    await session.commit()
+    await commit_credential_write(session, permit)
     await session.refresh(source)
     return _source_out(source)
 
@@ -1277,10 +1279,11 @@ async def ceph_v2_create_dashboard_endpoint(
         enabled=payload.enabled,
         timeout_seconds=payload.timeout_seconds,
     )
-    endpoint.set_encrypted_password(payload.password)
-    endpoint.set_encrypted_token(payload.token)
+    permit = await prepare_credential_write(session)
+    endpoint.set_encrypted_password(payload.password, encryptor=permit.encrypt)
+    endpoint.set_encrypted_token(payload.token, encryptor=permit.encrypt)
     session.add(endpoint)
-    await session.commit()
+    await commit_credential_write(session, permit)
     await session.refresh(endpoint)
     return _dashboard_out(endpoint)
 
@@ -1400,10 +1403,11 @@ async def ceph_v2_create_external_cluster(
         verify_ssl=payload.verify_ssl,
         enabled=payload.enabled,
     )
-    cluster.set_encrypted_rgw_access_key(payload.rgw_access_key)
-    cluster.set_encrypted_rgw_secret_key(payload.rgw_secret_key)
+    permit = await prepare_credential_write(session)
+    cluster.set_encrypted_rgw_access_key(payload.rgw_access_key, encryptor=permit.encrypt)
+    cluster.set_encrypted_rgw_secret_key(payload.rgw_secret_key, encryptor=permit.encrypt)
     session.add(cluster)
-    await session.commit()
+    await commit_credential_write(session, permit)
     await session.refresh(cluster)
     return _external_out(cluster)
 

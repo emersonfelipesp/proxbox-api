@@ -3423,6 +3423,7 @@ def test_new_lockout_schema_initialization_is_safe_across_processes(tmp_path) ->
         assert inspector.has_table("auth_lockout_reservations")
         assert inspector.has_table("auth_lockout_metrics")
         assert inspector.has_table("auth_lockout_identity_key_binding")
+        assert inspector.has_table("credential_encryption_key_state")
     finally:
         verified.dispose()
 

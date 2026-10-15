@@ -26,6 +26,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api import database
 from proxbox_api.database import AuthLockout, AuthLockoutMetric, AuthLockoutReservation
 from proxbox_api.logger import logger
+from proxbox_api.utils.durable_file import fsync_directory
 
 _DEFAULT_THRESHOLD = 5
 _DEFAULT_WINDOW_SECONDS = 300
@@ -329,16 +330,6 @@ def load_trusted_proxy_cidrs(environ: Mapping[str, str] | None = None) -> tuple[
     return parse_trusted_proxy_cidrs(values.get("PROXBOX_TRUSTED_PROXIES", ""))
 
 
-def _fsync_directory(path: Path) -> None:
-    """Persist a newly created key-file directory entry before startup succeeds."""
-
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 _identity_key_runtime_lock = threading.RLock()
 _runtime_identity_hmac_key: bytes | None = None
 
@@ -409,7 +400,7 @@ def _read_identity_key_file(*, allow_create: bool) -> str:  # noqa: C901
                     key_file.flush()
                     os.fsync(key_file.fileno())
                 os.replace(temporary_path, key_path)
-                _fsync_directory(key_path.parent)
+                fsync_directory(key_path.parent)
             finally:
                 if created is not None:
                     os.close(created)

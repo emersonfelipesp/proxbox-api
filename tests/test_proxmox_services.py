@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+import socket
 import urllib.error
 from pathlib import Path
 
@@ -770,6 +771,13 @@ async def test_run_endpoint_command_times_out_remote_command_and_closes_connecti
         async def run(self, _command, *, check=False):  # noqa: ARG002
             await asyncio.sleep(1)
 
+        def get_server_host_key(self):
+            class _FakeKey:
+                def get_fingerprint(self, _algorithm="sha256"):
+                    return credential.known_host_fingerprint
+
+            return _FakeKey()
+
     fake_conn = _FakeConnection()
 
     class _FakeAsyncSSH:
@@ -779,7 +787,11 @@ async def test_run_endpoint_command_times_out_remote_command_and_closes_connecti
         class Error(Exception):
             pass
 
-        async def connect(self, *_args, **_kwargs):
+        async def connect(self, **kwargs):
+            client = kwargs["client_factory"]()
+            assert client.validate_host_public_key(
+                credential.host, None, credential.port, fake_conn.get_server_host_key()
+            )
             return fake_conn
 
     monkeypatch.setattr(
@@ -787,10 +799,91 @@ async def test_run_endpoint_command_times_out_remote_command_and_closes_connecti
         lambda: _FakeAsyncSSH(),
     )
 
+    async def _allow_host(_host):
+        from proxbox_api.ssrf import ResolvedAddress
+
+        return (ResolvedAddress(socket.AF_INET, "10.0.0.2"),)
+
+    monkeypatch.setattr("proxbox_api.services.ssh_terminal.ensure_ssh_host_allowed", _allow_host)
+
+    async def _open_socket(*_args, **_kwargs):
+        return type("Socket", (), {"close": lambda self: None})()
+
+    monkeypatch.setattr(
+        "proxbox_api.services.ssh_terminal._open_validated_ssh_socket", _open_socket
+    )
+
     with pytest.raises(SSHCommandTimeoutError, match="timed out"):
         await run_endpoint_command(credential, "systemctl show -- test.service", timeout=0.01)
 
     assert fake_conn.closed is True
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_command_rechecks_negotiated_host_key(monkeypatch) -> None:
+    credential = _fake_credential()
+
+    class _FakeKey:
+        def get_fingerprint(self, _algorithm="sha256"):
+            return "SHA256:mismatched-host-key"
+
+    class _FakeConnection:
+        ran = False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def get_server_host_key(self):
+            return _FakeKey()
+
+        async def run(self, *_args, **_kwargs):
+            self.ran = True
+
+    connection = _FakeConnection()
+
+    class _FakeAsyncSSH:
+        class SSHClient:
+            pass
+
+        class Error(Exception):
+            pass
+
+        async def connect(self, **kwargs):
+            class _HandshakeKey:
+                def get_fingerprint(self, _algorithm="sha256"):
+                    return credential.known_host_fingerprint
+
+            client = kwargs["client_factory"]()
+            assert client.validate_host_public_key(
+                credential.host, None, credential.port, _HandshakeKey()
+            )
+            return connection
+
+    async def _allow_host(_host):
+        from proxbox_api.ssrf import ResolvedAddress
+
+        return (ResolvedAddress(socket.AF_INET, "10.0.0.2"),)
+
+    monkeypatch.setattr(
+        "proxbox_api.services.ssh_terminal._load_asyncssh",
+        lambda: _FakeAsyncSSH(),
+    )
+    monkeypatch.setattr("proxbox_api.services.ssh_terminal.ensure_ssh_host_allowed", _allow_host)
+
+    async def _open_socket(*_args, **_kwargs):
+        return type("Socket", (), {"close": lambda self: None})()
+
+    monkeypatch.setattr(
+        "proxbox_api.services.ssh_terminal._open_validated_ssh_socket", _open_socket
+    )
+
+    with pytest.raises(TerminalCredentialError, match="does not match"):
+        await run_endpoint_command(credential, "systemctl show -- test.service")
+
+    assert connection.ran is False
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,12 @@ O endpoint sem stream retorna JSON final. O endpoint com stream envia Server-Sen
 | `POST` | `/cloud/firecracker/provision` | Provisiona uma micro-VM em um host-agent e retorna JSON final |
 | `POST` | `/cloud/firecracker/provision/stream` | Provisiona uma micro-VM e envia progresso por SSE |
 
-Ambos usam o middleware normal `X-Proxbox-API-Key`. `X-Proxbox-Actor` e opcional e entra nos metadados enviados ao host-agent.
+Ambos usam o middleware normal `X-Proxbox-API-Key` e exigem um header
+`X-Proxbox-Actor` nao vazio. O actor entra nos metadados enviados ao host-agent.
+Hosts Firecracker nao possuem um registro local `ProxmoxEndpoint`, portanto
+essas rotas nao podem aplicar `ProxmoxEndpoint.allow_writes`; o actor
+obrigatorio, a chave da API, a resolucao do inventario e a validacao do destino
+de saida formam a fronteira de escrita dessas rotas.
 
 ## Limite de confianca
 
@@ -43,6 +48,17 @@ para esse host-agent validado.
 A rota SSE retorna `An unexpected error occurred.` por padrao em falhas. Use
 `PROXBOX_EXPOSE_INTERNAL_ERRORS=true` apenas em depuracao confiavel, quando
 detalhes do host-agent puderem ser expostos ao cliente.
+A rota sem stream sempre converte `FirecrackerHostAgentError` em uma resposta
+HTTP 502 fixa. Corpos de resposta do upstream nao sao copiados para excecoes,
+logs ou respostas ao cliente.
+
+O resolvedor SSRF compartilhado recusa enderecos nao especificados e nao globais,
+exceto quando uma politica explicita do endpoint ou do operador os permite. O
+cliente do host-agent armazena o conjunto completo de enderecos validados, e seu
+transporte HTTP dedicado conecta somente a esses enderecos. O hostname original
+permanece na requisicao HTTP e na origem TLS, preservando o header Host, o SNI
+HTTPS e a verificacao do certificado sem uma segunda consulta DNS. Isso fecha a
+janela de DNS rebinding entre a validacao e a conexao.
 
 ## Eventos SSE
 

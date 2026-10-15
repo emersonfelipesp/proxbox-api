@@ -518,6 +518,22 @@ blocking wall-clock duration: synchronous DNS, construction, and response reads
 can take longer. All ordinary settings results, caches, and
 thread-local overrides remove the root key, including successful runtime results.
 
+Ordinary runtime-policy reads also require the plugin model permission
+`view_proxboxpluginsettings`. The client distinguishes HTTP 401/403 from
+transient transport failures. If authorization is denied after a successful
+read, the last known policy remains authoritative. If authorization is denied
+before any successful read, SSRF-sensitive callers receive strict defaults
+(`allow_private_ips=false` with no implicit allowed ranges), and `/health`
+returns HTTP 503 with a secret-free instruction to grant
+`view_proxboxpluginsettings`. A bounded waiter with no last known policy also
+uses the strict SSRF fallback. While this cold-start denial keeps readiness at
+HTTP 503, each readiness probe asks the existing process-wide single-flight for
+a refresh. The ten-second failure cache rate-limits those attempts and the
+readiness-specific request budget is one second. Granting the permission can
+therefore restore readiness through probes alone, without application traffic
+or a restart. Settings requests never follow redirects with
+the NetBox token and reject response bodies larger than 4 MiB.
+
 The private key authority uses immutable connection inputs from the default
 NetBox service facade. It does not construct a new decrypting session to obtain
 the root. Every plugin-backed encryption, decryption, Fernet acquisition, and

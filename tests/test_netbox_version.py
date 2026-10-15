@@ -46,6 +46,7 @@ async def _skip_vm_sync_state_write(*args: object, **kwargs: object) -> None:
         ("4.6.0", (4, 6, 0)),
         ("4.6.4", (4, 6, 4)),
         ("4.6.6", (4, 6, 6)),
+        ("4.7.2", (4, 7, 2)),
         ("4.6.0-beta2", (4, 6, 0)),
         ("v4.5.9", (4, 5, 9)),
         ("4.5", (4, 5, 0)),
@@ -312,3 +313,22 @@ async def test_ensure_vm_type_preresolved_below_threshold_skips_without_network_
 
     assert result is None
     assert nb.client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "outside_window"),
+    [("4.5.8", False), ("4.6.6", False), ("4.7.2", False), ("4.8.0", True)],
+)
+def test_supported_window_covers_netbox_47(
+    raw: str, outside_window: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NetBox 4.7.x is inside the supported window; 4.8 is not."""
+    from proxbox_api import netbox_version
+
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        netbox_version.logger, "warning", lambda msg, *args: warnings.append(msg % args)
+    )
+    netbox_version._maybe_warn_schema_mismatch(SimpleNamespace(), parse_netbox_version(raw), raw)
+    flagged = any("outside the supported window" in w for w in warnings)
+    assert flagged is outside_window

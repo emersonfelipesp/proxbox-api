@@ -54,7 +54,10 @@ large NetBox-version matrix from repeatedly pulling Docker Hub images or
 rebuilding Proxbox API targets. Official Python, PostgreSQL, Redis, nginx, and
 NetBox fallback base images are pulled through `mirror.gcr.io/library` to avoid
 Docker Hub quota failures. The Proxmox mock image is built from the checked-out
-`proxmox-mock/` package for each `pve`, `pbs`, and `pdm` service marker. The
+`proxmox-mock/` package with `Dockerfile.dev` for each `pve`, `pbs`, and `pdm`
+service marker. This lock-backed source recipe is limited to development and
+E2E CI; the package-first `proxmox-mock/Dockerfile` requires a qualified release
+context and is used only by the separately approved image workflow. The
 NetBox prep job pulls the public image when available and falls back to a
 source build when the registry image is missing. The fallback source build
 follows the current upstream `netbox-docker` base image, `ubuntu:26.04`, via the

@@ -9,6 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlmodel import select
 
+from proxbox_api.credential_writes import (
+    CredentialWritePermit,
+    commit_credential_write,
+    prepare_credential_write,
+)
+from proxbox_api.credentials import selected_key_source
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import NetBoxEndpoint
 from proxbox_api.dependencies import NetBoxSessionDep
@@ -111,6 +117,11 @@ _CONNECTION_FIELDS = (
     "verify_ssl",
     "enabled",
 )
+_PLUGIN_KEY_CREDENTIAL_CONFLICT = (
+    "NetBox service credentials cannot be stored with the selected plugin encryption key "
+    "because that key depends on these credentials. Configure PROXBOX_ENCRYPTION_KEY or "
+    "an independent local key file, then retry."
+)
 
 
 def _stored_connection_snapshot(endpoint: NetBoxEndpoint) -> dict[str, object] | None:
@@ -139,6 +150,84 @@ def _requested_connection_snapshot(
     return snapshot
 
 
+def _reject_plugin_key_credential_change() -> None:
+    """Refuse the circular dependency between service credentials and their key."""
+    if selected_key_source() == "plugin":
+        raise HTTPException(status_code=409, detail=_PLUGIN_KEY_CREDENTIAL_CONFLICT)
+
+
+def _prepare_netbox_endpoint_update(
+    endpoint: NetBoxEndpoint,
+    update_data: dict[str, object],
+    stored: dict[str, object] | None,
+) -> tuple[NetBoxEndpoint, tuple[str, str | None], dict[str, object] | None, bool]:
+    """Build a detached candidate while retaining the persisted ciphertext."""
+    stored_ciphertext = (endpoint.token, endpoint.token_key)
+    candidate_values = {
+        field: getattr(endpoint, field) for field in NetBoxEndpoint.model_fields if field != "id"
+    }
+    candidate_values.update(update_data)
+    candidate = NetBoxEndpoint(**candidate_values)
+    _normalize_netbox_endpoint_fields(candidate)
+    _validate_netbox_credentials(candidate)
+    replaced_secrets = set(update_data) & _SECRET_FIELDS
+    if "token_version" in update_data and candidate.token_version == "v1":
+        replaced_secrets.add("token_key")
+    if stored is None:
+        return candidate, stored_ciphertext, None, True
+
+    requested = _requested_connection_snapshot(candidate, stored, replaced_secrets)
+    credentials_changed = any(stored[field] != requested[field] for field in _SECRET_FIELDS)
+    return candidate, stored_ciphertext, requested, credentials_changed
+
+
+def _store_updated_netbox_credentials(
+    endpoint: NetBoxEndpoint,
+    stored: dict[str, object] | None,
+    requested: dict[str, object] | None,
+    stored_ciphertext: tuple[str, str | None],
+    permit: CredentialWritePermit | None,
+) -> None:
+    """Encrypt changed credentials and preserve ciphertext for unchanged values."""
+    if stored is None or requested is None:
+        assert permit is not None
+        encryptor = lambda value: permit.encrypt(  # noqa: E731
+            value, plugin_conflict_detail=_PLUGIN_KEY_CREDENTIAL_CONFLICT
+        )
+        endpoint.set_encrypted_token(endpoint.token, encryptor=encryptor)
+        if endpoint.token_key:
+            endpoint.set_encrypted_token_key(endpoint.token_key, encryptor=encryptor)
+        return
+
+    if stored["token"] != requested["token"]:
+        assert permit is not None
+        endpoint.set_encrypted_token(
+            str(requested["token"] or ""),
+            encryptor=lambda value: permit.encrypt(
+                value, plugin_conflict_detail=_PLUGIN_KEY_CREDENTIAL_CONFLICT
+            ),
+        )
+    else:
+        endpoint.token = stored_ciphertext[0]
+    if stored["token_key"] != requested["token_key"]:
+        assert permit is not None
+        endpoint.set_encrypted_token_key(
+            requested["token_key"],
+            encryptor=lambda value: permit.encrypt(
+                value, plugin_conflict_detail=_PLUGIN_KEY_CREDENTIAL_CONFLICT
+            ),
+        )
+    else:
+        endpoint.token_key = stored_ciphertext[1]
+
+
+def _apply_netbox_candidate(endpoint: NetBoxEndpoint, candidate: NetBoxEndpoint) -> None:
+    """Copy a validated, encrypted detached candidate onto the persistent row."""
+    for field in NetBoxEndpoint.model_fields:
+        if field != "id":
+            setattr(endpoint, field, getattr(candidate, field))
+
+
 @router.post("/endpoint", response_model=NetBoxEndpointResponse)
 async def create_netbox_endpoint(
     netbox: NetBoxEndpointCreate, session: SessionDep
@@ -154,12 +243,16 @@ async def create_netbox_endpoint(
     if existing_name_result.first():
         raise HTTPException(status_code=400, detail="NetBox endpoint name already exists")
 
-    # Auto-allow the endpoint's own addresses so they pass SSRF validation below.
-    pre_allow_endpoint_hosts(netbox.ip_address, netbox.domain or "", source="NetBox")
+    request_allowed_hosts = pre_allow_endpoint_hosts(
+        netbox.ip_address, netbox.domain or "", source="NetBox"
+    )
 
     settings = await asyncio.to_thread(get_settings)
     ip_safe, ip_reason = await asyncio.to_thread(
-        validate_endpoint_host, netbox.ip_address, settings
+        validate_endpoint_host,
+        netbox.ip_address,
+        settings,
+        request_allowed_hosts=request_allowed_hosts,
     )
     if not ip_safe:
         raise HTTPException(
@@ -169,7 +262,10 @@ async def create_netbox_endpoint(
 
     if netbox.domain:
         domain_safe, domain_reason = await asyncio.to_thread(
-            validate_endpoint_host, netbox.domain, settings
+            validate_endpoint_host,
+            netbox.domain,
+            settings,
+            request_allowed_hosts=request_allowed_hosts,
         )
         if not domain_safe:
             raise HTTPException(
@@ -180,13 +276,18 @@ async def create_netbox_endpoint(
     db_endpoint = NetBoxEndpoint(**netbox.model_dump())
     _normalize_netbox_endpoint_fields(db_endpoint)
     _validate_netbox_credentials(db_endpoint)
+    _reject_plugin_key_credential_change()
+    permit = await prepare_credential_write(session)
 
-    db_endpoint.set_encrypted_token(db_endpoint.token)
+    encryptor = lambda value: permit.encrypt(  # noqa: E731
+        value, plugin_conflict_detail=_PLUGIN_KEY_CREDENTIAL_CONFLICT
+    )
+    db_endpoint.set_encrypted_token(db_endpoint.token, encryptor=encryptor)
     if db_endpoint.token_key:
-        db_endpoint.set_encrypted_token_key(db_endpoint.token_key)
+        db_endpoint.set_encrypted_token_key(db_endpoint.token_key, encryptor=encryptor)
 
     session.add(db_endpoint)
-    await _maybe_await(session.commit())
+    await commit_credential_write(session, permit)
     await _maybe_await(session.refresh(db_endpoint))
     clear_endpoint_cache()
     await invalidate_netbox_api_cache(db_endpoint.id)
@@ -232,8 +333,7 @@ async def update_netbox_endpoint(
 
     update_data = netbox.model_dump(exclude_unset=True)
 
-    # Auto-allow any new addresses so they pass SSRF validation below.
-    pre_allow_endpoint_hosts(
+    request_allowed_hosts = pre_allow_endpoint_hosts(
         update_data.get("ip_address", ""),
         update_data.get("domain", ""),
         source="NetBox",
@@ -242,7 +342,10 @@ async def update_netbox_endpoint(
     settings = await asyncio.to_thread(get_settings)
     if "ip_address" in update_data:
         ip_safe, ip_reason = await asyncio.to_thread(
-            validate_endpoint_host, update_data["ip_address"], settings
+            validate_endpoint_host,
+            update_data["ip_address"],
+            settings,
+            request_allowed_hosts=request_allowed_hosts,
         )
         if not ip_safe:
             raise HTTPException(
@@ -252,7 +355,10 @@ async def update_netbox_endpoint(
 
     if "domain" in update_data and update_data["domain"]:
         domain_safe, domain_reason = await asyncio.to_thread(
-            validate_endpoint_host, update_data["domain"], settings
+            validate_endpoint_host,
+            update_data["domain"],
+            settings,
+            request_allowed_hosts=request_allowed_hosts,
         )
         if not domain_safe:
             raise HTTPException(
@@ -264,26 +370,29 @@ async def update_netbox_endpoint(
         update_data["token"] = (update_data["token"] or "").strip()
 
     stored = await asyncio.to_thread(_stored_connection_snapshot, db_netbox)
-    for key, value in update_data.items():
-        setattr(db_netbox, key, value)
-
-    _normalize_netbox_endpoint_fields(db_netbox)
-    _validate_netbox_credentials(db_netbox)
-    if stored is not None and stored == _requested_connection_snapshot(
-        db_netbox, stored, set(update_data) & _SECRET_FIELDS
-    ):
+    candidate, stored_ciphertext, requested, credentials_changed = _prepare_netbox_endpoint_update(
+        db_netbox, update_data, stored
+    )
+    if stored is not None and stored == requested:
         # The plugin pushes its unchanged endpoint before every sync. Re-encrypting,
         # committing, or invalidating here would retire the selected plugin-key
         # authority and fail every later key request until restart.
         await _maybe_await(session.refresh(db_netbox))
         return await _endpoint_response_with_probe(db_netbox)
 
-    db_netbox.set_encrypted_token(db_netbox.token)
-    if db_netbox.token_key:
-        db_netbox.set_encrypted_token_key(db_netbox.token_key)
+    if credentials_changed and selected_key_source() == "plugin":
+        await _maybe_await(session.rollback())
+        raise HTTPException(status_code=409, detail=_PLUGIN_KEY_CREDENTIAL_CONFLICT)
+
+    permit = await prepare_credential_write(session) if credentials_changed else None
+    _store_updated_netbox_credentials(candidate, stored, requested, stored_ciphertext, permit)
+    _apply_netbox_candidate(db_netbox, candidate)
 
     session.add(db_netbox)
-    await _maybe_await(session.commit())
+    if permit is None:
+        await _maybe_await(session.commit())
+    else:
+        await commit_credential_write(session, permit)
     await _maybe_await(session.refresh(db_netbox))
     clear_endpoint_cache()
     await invalidate_netbox_api_cache(db_netbox.id)

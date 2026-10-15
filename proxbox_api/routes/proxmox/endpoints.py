@@ -10,6 +10,11 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlmodel import select
 
+from proxbox_api.credential_writes import (
+    CredentialWritePermit,
+    commit_credential_write,
+    prepare_credential_write,
+)
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.enum.proxmox import ProxmoxAccessMethod
@@ -364,7 +369,7 @@ def _validate_update_node_device_name(
 
 
 async def _validate_update_hosts(update_data: dict[str, object]) -> None:
-    pre_allow_endpoint_hosts(
+    request_allowed_hosts = pre_allow_endpoint_hosts(
         update_data.get("ip_address", ""),
         update_data.get("domain", "") or "",
         source="Proxmox",
@@ -374,7 +379,12 @@ async def _validate_update_hosts(update_data: dict[str, object]) -> None:
         host = update_data.get(field)
         if not host:
             continue
-        safe, reason = await asyncio.to_thread(validate_endpoint_host, host, settings)
+        safe, reason = await asyncio.to_thread(
+            validate_endpoint_host,
+            host,
+            settings,
+            request_allowed_hosts=request_allowed_hosts,
+        )
         if not safe:
             raise HTTPException(
                 status_code=400,
@@ -402,6 +412,7 @@ async def _ensure_unique_endpoint_name(
 def _apply_update_credentials(
     endpoint: ProxmoxEndpoint,
     update_data: dict[str, object],
+    permit: CredentialWritePermit | None,
 ) -> None:
     credential_fields = ("password", "token_name", "token_value")
     if not any(field in update_data for field in credential_fields):
@@ -410,25 +421,36 @@ def _apply_update_credentials(
     token_name = update_data.get("token_name")
     token_value = update_data.get("token_value")
     _validate_auth_fields(password, token_name, token_value)
+    assert permit is not None
+    encrypted_password = permit.encrypt(password) if "password" in update_data else None
+    encrypted_token = permit.encrypt(token_value) if "token_value" in update_data else None
     if "password" in update_data:
-        endpoint.set_encrypted_password(password)
+        endpoint.password = encrypted_password
     if "token_value" in update_data:
-        endpoint.set_encrypted_token_value(token_value)
+        endpoint.token_value = encrypted_token
 
 
 def _apply_endpoint_update(
     endpoint: ProxmoxEndpoint,
     update_data: dict[str, object],
+    permit: CredentialWritePermit | None,
 ) -> None:
-    _apply_update_credentials(endpoint, update_data)
+    _apply_update_credentials(endpoint, update_data, permit)
     for key, value in update_data.items():
         if key not in ("password", "token_value"):
             setattr(endpoint, key, value)
 
 
-async def _persist_endpoint_update(endpoint: ProxmoxEndpoint, session: SessionDep) -> None:
+async def _persist_endpoint_update(
+    endpoint: ProxmoxEndpoint,
+    session: SessionDep,
+    permit: CredentialWritePermit | None,
+) -> None:
     session.add(endpoint)
-    await _maybe_await(session.commit())
+    if permit is None:
+        await _maybe_await(session.commit())
+    else:
+        await commit_credential_write(session, permit)
     await _maybe_await(session.refresh(endpoint))
     clear_endpoint_cache()
 
@@ -440,12 +462,16 @@ async def create_proxmox_endpoint(
 ) -> ProxmoxEndpointPublic:
     _validate_auth_fields(endpoint.password, endpoint.token_name, endpoint.token_value)
 
-    # Auto-allow the endpoint's own addresses so they pass SSRF validation below.
-    pre_allow_endpoint_hosts(endpoint.ip_address, endpoint.domain or "", source="Proxmox")
+    request_allowed_hosts = pre_allow_endpoint_hosts(
+        endpoint.ip_address, endpoint.domain or "", source="Proxmox"
+    )
 
     settings = await asyncio.to_thread(get_settings)
     ip_safe, ip_reason = await asyncio.to_thread(
-        validate_endpoint_host, endpoint.ip_address, settings
+        validate_endpoint_host,
+        endpoint.ip_address,
+        settings,
+        request_allowed_hosts=request_allowed_hosts,
     )
     if not ip_safe:
         raise HTTPException(
@@ -455,7 +481,10 @@ async def create_proxmox_endpoint(
 
     if endpoint.domain:
         domain_safe, domain_reason = await asyncio.to_thread(
-            validate_endpoint_host, endpoint.domain, settings
+            validate_endpoint_host,
+            endpoint.domain,
+            settings,
+            request_allowed_hosts=request_allowed_hosts,
         )
         if not domain_safe:
             raise HTTPException(
@@ -470,15 +499,25 @@ async def create_proxmox_endpoint(
     if existing:
         raise HTTPException(status_code=400, detail="Proxmox endpoint name already exists")
 
-    db_endpoint = ProxmoxEndpoint(**endpoint.model_dump())
+    values = endpoint.model_dump()
+    password = values.pop("password", None)
+    token_value = values.pop("token_value", None)
+    db_endpoint = ProxmoxEndpoint(**values)
+    has_credentials = bool(password or token_value)
+    permit = await prepare_credential_write(session) if has_credentials else None
 
-    if db_endpoint.password:
-        db_endpoint.set_encrypted_password(db_endpoint.password)
-    if db_endpoint.token_value:
-        db_endpoint.set_encrypted_token_value(db_endpoint.token_value)
+    if password:
+        assert permit is not None
+        db_endpoint.set_encrypted_password(password, encryptor=permit.encrypt)
+    if token_value:
+        assert permit is not None
+        db_endpoint.set_encrypted_token_value(token_value, encryptor=permit.encrypt)
 
     session.add(db_endpoint)
-    await _maybe_await(session.commit())
+    if permit is None:
+        await _maybe_await(session.commit())
+    else:
+        await commit_credential_write(session, permit)
     await _maybe_await(session.refresh(db_endpoint))
 
     clear_endpoint_cache()
@@ -522,8 +561,10 @@ async def update_proxmox_endpoint(
     _validate_update_node_device_name(db_endpoint, update_data)
     await _validate_update_hosts(update_data)
     await _ensure_unique_endpoint_name(endpoint_id, update_data, session)
-    _apply_endpoint_update(db_endpoint, update_data)
-    await _persist_endpoint_update(db_endpoint, session)
+    changes_credentials = bool({"password", "token_value"} & update_data.keys())
+    permit = await prepare_credential_write(session) if changes_credentials else None
+    _apply_endpoint_update(db_endpoint, update_data, permit)
+    await _persist_endpoint_update(db_endpoint, session, permit)
     return _to_public_endpoint(db_endpoint)
 
 

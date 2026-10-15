@@ -20,12 +20,12 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 | `factory.py` | `create_app()` — assembles the import-safe FastAPI application: validates auth-lockout policy/trusted-proxy process configuration, registers middleware/routers, mounts static files, sets custom OpenAPI, wires exception handlers, and starts database/bootstrap, adjacent HMAC-key validation, plus generated Proxmox route registration during lifespan. |
 | `bootstrap.py` | Resolves the guarded SQLite target, initializes its complete probe/schema boundary (including auth-lockout validation) under the target-specific interprocess lock, opens the default NetBox session, and records bootstrap status. A condition-protected generation claim ensures simultaneous lifespans publish these process-global results exactly once. Database failures are fatal and shared with waiting owners, while an absent NetBox endpoint remains non-fatal. A `CephProviderTaskClaimMigrationError` raised during schema initialization is fatal: bootstrap records one stable reason and refuses startup. |
 | `cors.py` | Builds CORS allowed-origin lists from active NetBox endpoint records, including endpoint rows loaded after app construction. |
-| `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses. |
+| `exceptions.py` | Registers exception handlers that convert `ProxboxException` into structured HTTP error responses and map `FirecrackerHostAgentError` to a fixed, body-free 502 response. |
 | `cache_routes.py` | Cache control and invalidation API endpoints (`/cache/*`, `/clear-cache`), including durable label-free authentication lockout metrics plus NetBox GET cache invalidation. |
-| `websockets.py` | WebSocket connection manager — uses the same normalized source/trust context and shared auth lockout service as HTTP, tracks active connections, and broadcasts sync progress messages. |
+| `websockets.py` | WebSocket connection manager — uses the same normalized source/trust context and shared auth lockout service as HTTP, accepts legacy sync command strings plus closed run-correlated envelopes, and streams progress and terminal messages. |
 | `full_update.py` | `POST /full-update` endpoint — orchestrates a full Proxmox-to-NetBox sync run with SSE or WebSocket streaming. Each handler registers its `operation_id` via `sync_state` so `GET /sync/active` reflects in-flight work. |
 | `sync_state.py` | Process-local registry of in-flight sync runs. Exposes `register_active_sync` (async context manager), `acquire_active_sync` / `release_active_sync` (for non-`with` call sites), and `get_active_sync` / `is_active` for the `/sync/active` probe. |
-| `root_meta.py` | Root metadata router — version, health, and standalone-mode info endpoints. |
+| `root_meta.py` | Root metadata router — version, health, and standalone-mode info endpoints. `/health` returns 503 when a cold settings-policy read is denied and names the required `view_proxboxpluginsettings` permission without exposing credentials. While denied, readiness probes trigger the settings client's ten-second-cache, single-flight refresh with a one-second request budget, allowing permission repair to restore readiness without unrelated traffic. |
 | `netbox_session.py` | Helpers for retrieving the raw NetBox session outside of dependency injection. |
 | `__init__.py` | Re-exports `create_app` for import convenience. |
 
@@ -55,6 +55,15 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
 - Keep probe, engine/table creation, and all migrations inside the same target-specific advisory-lock acquisition. The lock file is persistent and must not be unlinked while workers can run.
 - Never downgrade migration inspection or the required post-schema endpoint-table read to an optional NetBox connection failure.
 - WebSocket broadcasts in `websockets.py` must tolerate disconnected clients silently.
+- Preserve byte-identical responses for bare-string synchronization commands.
+  A JSON command envelope must contain only `command` and a `run_id` matching
+  `^[A-Za-z0-9_-]{8,64}$`, must not exceed 4096 UTF-8 bytes, and must reject
+  malformed or excessively nested JSON without closing the connection; every
+  command frame must echo that ID. Correlated full updates emit one final
+  `full-update` aggregate with explicit `devices` and `virtual-machines` stage
+  states, including skipped and failed stages.
+  Keep `capabilities.ws_run_id` on authenticated `GET /version` aligned with
+  this contract.
 - `PROXBOX_STRICT_STARTUP=1` turns generated-route load failures into fatal startup errors.
 - `PROXBOX_RUNTIME_CODEGEN_ENABLED=true` is a development-only process opt-in
   that mounts the HTTP generation and refresh routes and permits user-schema
@@ -67,6 +76,13 @@ Application factory and lifecycle management for the `proxbox-api` FastAPI servi
   `sync_all_virtual_machine_task_histories()` once. Forward
   `fetch_max_concurrency` to that dedicated stage and do not re-enable the
   standalone VM default inside full-update.
+
+Full-update SSE consumer cancellation has inherited task-lifetime behavior: if
+the consumer disconnects or cancels while a stage task is running, cancellation
+of the orchestration generator abandons that stage task rather than explicitly
+cancelling and draining it. The shared stage-runner refactor deliberately
+preserves this behavior. Any future structured cancellation or draining change
+must be handled as a separate behavioral change with dedicated tests.
 
 ## Native OpenTelemetry
 

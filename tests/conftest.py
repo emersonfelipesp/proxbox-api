@@ -164,7 +164,7 @@ def reset_fastapi_state():
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
     _reset_netbox_globals()
-    invalidate_settings_cache()
+    invalidate_settings_cache(clear_readiness=True)
     reset_sidecar_reader_availability_cache()
     yield
     app.dependency_overrides.clear()
@@ -172,7 +172,7 @@ def reset_fastapi_state():
     clear_generated_proxmox_routes(app)
     app.openapi_schema = None
     _reset_netbox_globals()
-    invalidate_settings_cache()
+    invalidate_settings_cache(clear_readiness=True)
     reset_sidecar_reader_availability_cache()
 
 
