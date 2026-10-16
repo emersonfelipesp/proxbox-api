@@ -227,6 +227,8 @@ async def test_device_sidecar_identity_distinguishes_duplicate_endpoint_cluster_
                 {
                     "device": device_id,
                     "proxmox_endpoint_raw_id": device_id - 1000,
+                    "proxmox_cluster_name": "cluster-a",
+                    "proxmox_node_name": "pve01",
                 }
             ]
         endpoint_id = int(query["proxmox_endpoint_raw_id"])
@@ -234,6 +236,8 @@ async def test_device_sidecar_identity_distinguishes_duplicate_endpoint_cluster_
             {
                 "device": endpoint_id + 1000,
                 "proxmox_endpoint_raw_id": endpoint_id,
+                "proxmox_cluster_name": "cluster-a",
+                "proxmox_node_name": "pve01",
             }
         ]
 
@@ -2028,11 +2032,31 @@ def _sidecar_target() -> device_ensure._DeviceTarget:
     )
 
 
-def _patch_sidecar_lookup(monkeypatch: pytest.MonkeyPatch, devices: dict[int, dict]) -> None:
+def _patch_sidecar_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    devices: dict[int, dict[str, object] | None],
+    *,
+    sidecars: list[dict[str, object]] | None = None,
+) -> None:
+    if sidecars is None:
+        sidecars = [
+            {
+                "id": 900 + index,
+                "device": device_id,
+                "proxmox_endpoint_raw_id": 501,
+                "proxmox_cluster_name": "lab",
+                "proxmox_node_name": "pve2",
+            }
+            for index, device_id in enumerate(devices)
+        ]
+
     async def _sidecars(
         _nb: object, _path: str, *, query: dict[str, object]
     ) -> list[dict[str, object]]:
-        return [{"device": device_id, "proxmox_endpoint_raw_id": 501} for device_id in devices]
+        device_id = query.get("device_id")
+        if device_id is not None:
+            return [row for row in sidecars if row["device"] == device_id]
+        return sidecars
 
     async def _device(_nb: object, _path: str, *, query: dict[str, object]):
         record = devices.get(int(query["id"]))
@@ -2049,6 +2073,191 @@ async def test_sidecar_ignores_deleted_devices(monkeypatch: pytest.MonkeyPatch) 
         {10: {"id": 10, "name": "pve2", "cluster": {"id": 3}}, 12: None},
     )
     resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+    assert resolved is not None and resolved.get("id") == 10
+
+
+@pytest.mark.asyncio
+async def test_sidecar_all_deleted_devices_returns_no_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(monkeypatch, {10: None, 12: None})
+
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+    assert resolved is None
+
+
+@pytest.mark.asyncio
+async def test_sidecar_does_not_adopt_a_different_device_returned_by_id_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(monkeypatch, {10: {"id": 10}})
+
+    async def _wrong_device(*_args: object, **_kwargs: object) -> _FakeExistingDevice:
+        return _FakeExistingDevice({"id": 99, "name": "foreign-device", "cluster": {"id": 3}})
+
+    monkeypatch.setattr(device_ensure, "rest_first_async", _wrong_device)
+
+    with pytest.raises(
+        device_ensure.DeviceSyncStateLookupError,
+        match="returned device id=99 for requested id=10",
+    ):
+        await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+
+@pytest.mark.asyncio
+async def test_sidecar_malformed_device_lookup_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(monkeypatch, {10: {"id": 10}})
+
+    async def _missing_id(*_args: object, **_kwargs: object) -> _FakeExistingDevice:
+        return _FakeExistingDevice({"name": "malformed"})
+
+    monkeypatch.setattr(device_ensure, "rest_first_async", _missing_id)
+
+    with pytest.raises(
+        device_ensure.DeviceSyncStateLookupError,
+        match="returned a record without a usable id",
+    ):
+        await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+
+@pytest.mark.asyncio
+async def test_sidecar_conflict_fails_when_device_lookup_ignores_id_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    devices = {
+        10: {"id": 10, "name": "stale", "cluster": {"id": 9}},
+        11: {"id": 11, "name": "correct", "cluster": {"id": 3}},
+    }
+    _patch_sidecar_lookup(monkeypatch, devices)
+
+    async def _ignored_filter(*_args: object, **_kwargs: object) -> _FakeExistingDevice:
+        return _FakeExistingDevice(devices[10])
+
+    monkeypatch.setattr(device_ensure, "rest_first_async", _ignored_filter)
+
+    with pytest.raises(
+        device_ensure.DeviceSyncStateLookupError,
+        match="returned device id=10 for requested id=11",
+    ):
+        await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+
+@pytest.mark.asyncio
+async def test_sidecar_confirmed_absent_stale_claim_keeps_correct_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: None,
+            11: {"id": 11, "name": "correct", "cluster": {"id": 3}},
+        },
+    )
+
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+    assert resolved is not None and resolved.get("id") == 11
+
+
+@pytest.mark.asyncio
+async def test_sidecar_lone_survivor_requires_target_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: None,
+            11: {"id": 11, "name": "foreign", "cluster": {"id": 9}},
+        },
+    )
+
+    with pytest.raises(
+        device_ensure.DeviceSyncStateLookupError,
+        match="Could not corroborate device id=11",
+    ):
+        await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+
+@pytest.mark.asyncio
+async def test_sidecar_ignores_rows_whose_cluster_or_node_identity_mismatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    devices = {
+        10: {"id": 10, "name": "pve2", "cluster": {"id": 3}},
+        11: {"id": 11, "name": "wrong-cluster", "cluster": {"id": 3}},
+        12: {"id": 12, "name": "wrong-node", "cluster": {"id": 3}},
+        13: {"id": 13, "name": "wrong-endpoint", "cluster": {"id": 3}},
+    }
+    sidecars = [
+        {
+            "id": 900,
+            "device": 10,
+            "proxmox_endpoint_raw_id": 501,
+            "proxmox_cluster_name": "lab",
+            "proxmox_node_name": "pve2",
+        },
+        {
+            "id": 901,
+            "device": 11,
+            "proxmox_endpoint_raw_id": 501,
+            "proxmox_cluster_name": "retired-lab",
+            "proxmox_node_name": "pve2",
+        },
+        {
+            "id": 902,
+            "device": 12,
+            "proxmox_endpoint_raw_id": 501,
+            "proxmox_cluster_name": "lab",
+            "proxmox_node_name": "pve3",
+        },
+        {
+            "id": 903,
+            "device": 13,
+            "proxmox_endpoint_raw_id": 777,
+            "proxmox_cluster_name": "lab",
+            "proxmox_node_name": "pve2",
+        },
+    ]
+
+    _patch_sidecar_lookup(monkeypatch, devices, sidecars=sidecars)
+
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
+    assert resolved is not None and resolved.get("id") == 10
+
+
+@pytest.mark.asyncio
+async def test_sidecar_prefers_claimed_endpoint_over_unclaimed_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    devices = {
+        10: {"id": 10, "name": "claimed", "cluster": {"id": 9}, "site": {"id": 8}},
+        11: {"id": 11, "name": "unclaimed", "cluster": {"id": 3}, "site": {"id": 7}},
+    }
+    sidecars = [
+        {
+            "id": 900,
+            "device": 10,
+            "proxmox_endpoint_raw_id": 501,
+            "proxmox_cluster_name": "lab",
+            "proxmox_node_name": "pve2",
+        },
+        {
+            "id": 901,
+            "device": 11,
+            "proxmox_endpoint_raw_id": None,
+            "proxmox_cluster_name": "lab",
+            "proxmox_node_name": "pve2",
+        },
+    ]
+
+    _patch_sidecar_lookup(monkeypatch, devices, sidecars=sidecars)
+
+    resolved = await device_ensure._device_from_identity_sidecar(object(), _sidecar_target())
+
     assert resolved is not None and resolved.get("id") == 10
 
 
@@ -2136,3 +2345,28 @@ async def test_sidecar_unset_placement_does_not_match_unset_devices(
     target.desired_site_id = None
     with pytest.raises(ProxboxException, match="Ambiguous Proxmox node device identity"):
         await device_ensure._device_from_identity_sidecar(object(), target)
+
+
+@pytest.mark.asyncio
+async def test_sidecar_cluster_deleted_conflict_names_rows_to_remove(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_sidecar_lookup(
+        monkeypatch,
+        {
+            10: {"id": 10, "name": "pve2-old", "site": {"id": 7}},
+            11: {"id": 11, "name": "pve2-new", "site": {"id": 7}},
+        },
+    )
+    target = _sidecar_target()
+    target.cluster_id = None
+
+    with pytest.raises(ProxboxException) as caught:
+        await device_ensure._device_from_identity_sidecar(object(), target)
+
+    assert caught.value.message == "Ambiguous Proxmox node device identity"
+    assert caught.value.detail is not None
+    detail = str(caught.value.detail)
+    assert "device ids [10, 11]" in detail
+    assert "device sync-state row ids [900, 901]" in detail
+    assert "Remove obsolete device sync-state rows" in detail

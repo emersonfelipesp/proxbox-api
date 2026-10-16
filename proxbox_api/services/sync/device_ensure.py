@@ -824,6 +824,9 @@ async def _validate_device_candidate_owner(
         query={"device_id": device_id, "limit": 2},
         target=target,
     )
+    sidecars = [
+        sidecar for sidecar in sidecars if _relation_id_or_none(sidecar.get("device")) == device_id
+    ]
     for sidecar in sidecars:
         validate_device_sync_state_owner(
             sidecar,
@@ -835,6 +838,29 @@ async def _validate_device_candidate_owner(
         for sidecar in sidecars
     )
     return candidate
+
+
+def _sidecar_matches_target_identity(
+    sidecar: NetBoxRecord,
+    target: _DeviceTarget,
+) -> bool:
+    return (
+        _relation_text_or_none(sidecar.get("proxmox_cluster_name")) == target.cluster_name
+        and _relation_text_or_none(sidecar.get("proxmox_node_name")) == target.node_name
+    )
+
+
+def _device_claims_by_id(sidecars: list[NetBoxRecord]) -> dict[int, list[int]]:
+    claims: dict[int, list[int]] = {}
+    for sidecar in sidecars:
+        device_id = _relation_id_or_none(sidecar.get("device"))
+        if device_id is None:
+            continue
+        claims.setdefault(device_id, [])
+        sidecar_id = _relation_id_or_none(sidecar.get("id"))
+        if sidecar_id is not None:
+            claims[device_id].append(sidecar_id)
+    return claims
 
 
 async def _device_from_identity_sidecar(
@@ -851,41 +877,32 @@ async def _device_from_identity_sidecar(
     if target.endpoint_id is not None:
         query["proxmox_endpoint_raw_id"] = target.endpoint_id
     sidecars = await _load_device_sidecars(nb, query=query, target=target)
+    matching_sidecars = [
+        sidecar for sidecar in sidecars if _sidecar_matches_target_identity(sidecar, target)
+    ]
     owned_sidecars = [
         sidecar
-        for sidecar in sidecars
+        for sidecar in matching_sidecars
         if target.endpoint_id is not None
         and _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) == target.endpoint_id
     ]
     unclaimed_sidecars = [
         sidecar
-        for sidecar in sidecars
+        for sidecar in matching_sidecars
         if _relation_id_or_none(sidecar.get("proxmox_endpoint_raw_id")) is None
     ]
-    device_ids = {
-        device_id
-        for sidecar in owned_sidecars
-        if (device_id := _relation_id_or_none(sidecar.get("device"))) is not None
-    }
-    unclaimed_device_ids = {
-        device_id
-        for sidecar in unclaimed_sidecars
-        if (device_id := _relation_id_or_none(sidecar.get("device"))) is not None
-    }
-    if len(device_ids) > 1:
-        candidate = await _disambiguate_sidecar_devices(nb, target, sorted(device_ids))
+    owned_claims = _device_claims_by_id(owned_sidecars)
+    unclaimed_claims = _device_claims_by_id(unclaimed_sidecars)
+    if len(owned_claims) > 1:
+        candidate = await _disambiguate_sidecar_devices(nb, target, owned_claims)
         return await _validate_device_candidate_owner(nb, target, candidate)
-    if device_ids:
-        candidate = await rest_first_async(
-            nb,
-            "/api/dcim/devices/",
-            query={"id": next(iter(device_ids)), "limit": 2},
-        )
+    if owned_claims:
+        candidate = await _load_identity_device(nb, next(iter(owned_claims)))
         return await _validate_device_candidate_owner(nb, target, candidate)
     candidate = await _corroborate_unclaimed_identity_devices(
         nb,
         target,
-        sorted(unclaimed_device_ids),
+        unclaimed_claims,
     )
     return await _validate_device_candidate_owner(nb, target, candidate)
 
@@ -907,32 +924,87 @@ def _device_corroborates_target_placement(
 async def _corroborate_unclaimed_identity_devices(
     nb: object,
     target: _DeviceTarget,
-    device_ids: list[int],
+    claims_by_device: dict[int, list[int]],
 ) -> NetBoxRecord | None:
     corroborated: list[NetBoxRecord] = []
-    for device_id in device_ids:
-        record = await rest_first_async(
-            nb,
-            "/api/dcim/devices/",
-            query={"id": device_id, "limit": 2},
-        )
+    for device_id in sorted(claims_by_device):
+        record = await _load_identity_device(nb, device_id)
         if record is not None and _device_corroborates_target_placement(record, target):
             corroborated.append(record)
     if len(corroborated) > 1:
+        conflicting_ids = sorted(
+            device_id
+            for record in corroborated
+            if (device_id := _relation_id_or_none(record.get("id"))) is not None
+        )
         raise ProxboxException(
             message="Ambiguous unclaimed Proxmox node device identity",
-            detail=(
-                f"Multiple unclaimed NetBox devices match node {target.node_name!r} in "
-                f"cluster {target.cluster_name!r}."
+            detail=_ambiguous_device_identity_detail(
+                target,
+                conflicting_ids,
+                claims_by_device,
+                qualifier="unclaimed ",
             ),
         )
     return corroborated[0] if corroborated else None
 
 
+async def _load_identity_device(nb: object, device_id: int) -> NetBoxRecord | None:
+    record = await rest_first_async(
+        nb,
+        "/api/dcim/devices/",
+        query={"id": device_id, "limit": 2},
+    )
+    if record is None:
+        return None
+    returned_id = _relation_id_or_none(_record_value(record, "id"))
+    if returned_id is None:
+        logger.error(
+            "NetBox device identity lookup for id=%r returned a record without a usable id",
+            device_id,
+        )
+        raise DeviceSyncStateLookupError(
+            f"NetBox device lookup for requested id={device_id} returned a record "
+            "without a usable id"
+        )
+    if returned_id == device_id:
+        return record
+    logger.error(
+        "NetBox device identity lookup id=%r returned mismatched device id=%r",
+        device_id,
+        returned_id,
+    )
+    raise DeviceSyncStateLookupError(
+        f"NetBox device lookup returned device id={returned_id} for requested id={device_id}"
+    )
+
+
+def _ambiguous_device_identity_detail(
+    target: _DeviceTarget,
+    device_ids: list[int],
+    claims_by_device: dict[int, list[int]],
+    *,
+    qualifier: str = "",
+) -> str:
+    sidecar_ids = sorted(
+        sidecar_id for device_id in device_ids for sidecar_id in claims_by_device.get(device_id, [])
+    )
+    row_reference = (
+        f"device sync-state row ids {sidecar_ids}"
+        if sidecar_ids
+        else "the device sync-state rows attached to those devices"
+    )
+    return (
+        f"Multiple {qualifier}NetBox devices claim node {target.node_name!r} in cluster "
+        f"{target.cluster_name!r}: device ids {device_ids}; {row_reference}. "
+        "Remove obsolete device sync-state rows after confirming the correct device."
+    )
+
+
 async def _disambiguate_sidecar_devices(
     nb: object,
     target: _DeviceTarget,
-    device_ids: list[int],
+    claims_by_device: dict[int, list[int]],
 ) -> NetBoxRecord | None:
     """Resolve several identity sidecars that point at different NetBox devices.
 
@@ -943,16 +1015,21 @@ async def _disambiguate_sidecar_devices(
     ambiguous fails closed so the wrong device is never adopted.
     """
     live: list[NetBoxRecord] = []
-    for device_id in device_ids:
-        record = await rest_first_async(
-            nb,
-            "/api/dcim/devices/",
-            query={"id": device_id, "limit": 2},
-        )
+    for device_id in sorted(claims_by_device):
+        record = await _load_identity_device(nb, device_id)
         if record is not None:
             live.append(record)
-    if len(live) <= 1:
-        return live[0] if live else None
+    if not live:
+        return None
+    if len(live) == 1:
+        survivor = live[0]
+        if _device_corroborates_target_placement(survivor, target):
+            return survivor
+        survivor_id = _relation_id_or_none(survivor.get("id"))
+        raise DeviceSyncStateLookupError(
+            f"Could not corroborate device id={survivor_id!r} for node "
+            f"{target.node_name!r} in cluster {target.cluster_name!r}"
+        )
     placed = [
         record
         for record in live
@@ -968,18 +1045,25 @@ async def _disambiguate_sidecar_devices(
             and _relation_id_or_none(record.get("site")) == target.desired_site_id
         ]
     if len(placed) != 1:
+        conflicting = placed or live
+        conflicting_ids = sorted(
+            device_id
+            for record in conflicting
+            if (device_id := _relation_id_or_none(record.get("id"))) is not None
+        )
         raise ProxboxException(
             message="Ambiguous Proxmox node device identity",
-            detail=(
-                f"Multiple NetBox devices claim node {target.node_name!r} in "
-                f"cluster {target.cluster_name!r}."
+            detail=_ambiguous_device_identity_detail(
+                target,
+                conflicting_ids,
+                claims_by_device,
             ),
         )
     logger.warning(
         "Ignored conflicting identity sidecars for node %r in cluster %r (device ids %s)",
         target.node_name,
         target.cluster_name,
-        device_ids,
+        sorted(claims_by_device),
     )
     return placed[0]
 

@@ -21,15 +21,22 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 - `clusters.py`: cluster synchronization helpers.
 - `device_ensure.py`: device creation and reconciliation helpers. When several
   identity sidecars claim different devices for one node, deleted devices are
-  ignored, the target cluster decides ownership (a site match counts only for
-  clusterless devices), and anything still ambiguous fails closed. Device names
-  are never evidence. Every identity or name-fallback candidate is also checked
-  through its device sync-state sidecar before adoption. A sidecar owned by a
-  different `proxmox_endpoint_raw_id`, or a sidecar lookup failure other than a
-  plain 404, becomes a per-target name conflict and is never patched or
-  re-stamped. Missing/NULL endpoint fields remain legacy-unclaimed and may be
-  adopted only after the existing site/cluster corroboration; adoption stamps
-  the current endpoint even when reflection-field overwrite is disabled. The
+  ignored, returned sidecars are client-verified against the requested
+  cluster/node identity, and every returned device is client-verified against
+  the sidecar's device id. An ignored id filter, a malformed device response,
+  or a lone survivor that does not match the target placement fails the target
+  closed instead of being treated as a deleted device. The target cluster
+  decides ownership (a site match counts only for clusterless devices), and
+  anything still ambiguous fails closed with the conflicting live device ids,
+  sync-state row ids, and cleanup guidance. Device names are never evidence.
+  Every identity or name-fallback
+  candidate is also checked through its device sync-state sidecar before
+  adoption. A sidecar owned by a different `proxmox_endpoint_raw_id`, or a
+  sidecar lookup failure other than a plain 404, becomes a per-target name
+  conflict and is never patched or re-stamped. Missing/NULL endpoint fields
+  remain legacy-unclaimed and may be adopted only after the existing
+  site/cluster corroboration; adoption stamps the current endpoint even when
+  reflection-field overwrite is disabled. The
   paired plugin release that exposes `proxmox_endpoint_raw_id` makes the
   NULL-to-endpoint claim atomic and returns `409 endpoint_ownership_conflict`
   rather than changing a committed non-NULL owner. The backend also reads the

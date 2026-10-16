@@ -66,6 +66,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Release Notes:
+      - Version 0.0.27.post4: release-notes/version-0.0.27.post4.md
       - Version 0.0.20: release-notes/version-0.0.20.md
   - Getting Started:
       - Installation: getting-started/installation.md
