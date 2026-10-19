@@ -66,7 +66,6 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Release Notes:
-      - Version 0.0.28rc1: release-notes/version-0.0.28rc1.md
       - Version 0.0.28: release-notes/version-0.0.28.md
       - Version 0.0.27.post4: release-notes/version-0.0.27.post4.md
       - Version 0.0.20: release-notes/version-0.0.20.md
