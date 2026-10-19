@@ -705,6 +705,205 @@ def test_user_data_delimiter_payload_never_becomes_shell_source() -> None:
     assert syntax.returncode == 0, syntax.stderr
 
 
+@pytest.mark.parametrize(
+    "value",
+    (
+        "#cloud-config\nruncmd:\n  - echo ready\n",
+        "#!/bin/sh\necho ready\n",
+    ),
+)
+def test_first_boot_script_accepts_supported_document_prefixes(value: str) -> None:
+    request = CloudImageTemplateBuildRequest(first_boot_script=value)
+
+    assert request.first_boot_script == value
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    (
+        ("", "must start with #cloud-config or #!"),
+        ("cloud-config\nruncmd: []\n", "must start with #cloud-config or #!"),
+        (" #!/bin/sh\n", "must start with #cloud-config or #!"),
+        ("#!/bin/sh\nprintf '\x00'\n", "must not contain NUL bytes"),
+        ("#!" + "x" * 65535, "String should have at most 65536 characters"),
+    ),
+)
+def test_first_boot_script_rejects_invalid_schema_values(value: str, message: str) -> None:
+    with pytest.raises(ValidationError) as exc:
+        CloudImageTemplateBuildRequest(first_boot_script=value)
+
+    assert message in str(exc.value)
+
+
+def test_first_boot_script_and_user_data_are_mutually_exclusive() -> None:
+    request = CloudImageTemplateBuildRequest(
+        product_type="pbs",
+        provider="release_image",
+        first_boot_script="#!/bin/sh\necho vendor\n",
+        user_data_yaml="#cloud-config\nruncmd: []\n",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        build_pipeline_response(request)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "first_boot_script_user_data_conflict"
+
+
+def test_first_boot_script_rejects_private_key_marker() -> None:
+    request = CloudImageTemplateBuildRequest(
+        product_type="pbs",
+        provider="release_image",
+        first_boot_script=(
+            "#!/bin/sh\n"
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+            "not-a-real-key\n"
+            "-----END OPENSSH PRIVATE KEY-----\n"
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        build_pipeline_response(request)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "first_boot_script_private_key_forbidden"
+
+
+@pytest.mark.parametrize("provider", ("release_image", "debian_cloud_image"))
+def test_first_boot_script_accepts_vendor_capable_providers(provider: str) -> None:
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            provider=provider,
+            image_url=PUBLIC_IMAGE_URL,
+            first_boot_script="#!/bin/sh\necho vendor\n",
+            execute=False,
+            include_sensitive_preview=True,
+        )
+    )
+
+    assert response.provider.value == provider
+    assert response.sensitive_preview is not None
+    assert response.sensitive_preview.generated_userdata is None
+
+
+@pytest.mark.parametrize("provider", ("ubuntu_cloud_image", "proxmox_iso", "source_tree"))
+def test_first_boot_script_rejects_non_vendor_provider(provider: str) -> None:
+    request = CloudImageTemplateBuildRequest(
+        product_type="pbs",
+        provider=provider,
+        first_boot_script="#!/bin/sh\necho vendor\n",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        build_pipeline_response(request)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "first_boot_script_provider_not_supported"
+
+
+@pytest.mark.parametrize("product_type", ("pve", "pfsense", "opnsense"))
+def test_first_boot_script_rejects_catalog_vendor_conflict(product_type: str) -> None:
+    request = CloudImageTemplateBuildRequest(
+        product_type=product_type,
+        provider="release_image",
+        first_boot_script="#!/bin/sh\necho vendor\n",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        build_pipeline_response(request)
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["code"] == "first_boot_script_catalog_conflict"
+
+
+def test_first_boot_script_bakes_only_vendor_and_metadata_snippets() -> None:
+    script_content = "#cloud-config\nruncmd:\n  - echo vendor\n"
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            name="caller-vendor",
+            vmid=9012,
+            product_version="4.2",
+            image_url=PUBLIC_IMAGE_URL,
+            snippets_storage="snippet-store",
+            first_boot_script=script_content,
+            execute=False,
+            include_sensitive_preview=True,
+        )
+    )
+
+    assert response.sensitive_preview is not None
+    assert response.provider == CloudImageBuildProvider.release_image
+    assert response.sensitive_preview.generated_userdata is None
+    assert response.sensitive_preview.first_boot_script == script_content
+    script = response.sensitive_preview.build_script
+    snippet_prefix = "snippet-store:snippets/caller-vendor-pve-4.2"
+    content_digest = hashlib.sha256(script_content.encode("utf-8")).hexdigest()[:16]
+    vendor_prefix = f"{snippet_prefix}-{content_digest}"
+    assert base64.b64encode(script_content.encode()).decode() in script
+    assert f"BOOT_SNIPPET_PATH=$(pvesm path {vendor_prefix}-first-boot.sh)" in script
+    assert 'chmod 600 "$BOOT_SNIPPET_PATH"' in script
+    assert (
+        f"--cicustom vendor={vendor_prefix}-first-boot.sh,meta={snippet_prefix}-meta-data.yml"
+    ) in script
+    assert "user=snippet-store:snippets/" not in script
+
+
+def test_first_boot_script_name_is_content_bound_and_idempotent() -> None:
+    def render(script: str, vmid: int) -> str:
+        response = build_pipeline_response(
+            CloudImageTemplateBuildRequest(
+                name="shared-vendor",
+                vmid=vmid,
+                product_version="4.2",
+                image_url=PUBLIC_IMAGE_URL,
+                snippets_storage="snippet-store",
+                first_boot_script=script,
+                execute=False,
+                include_sensitive_preview=True,
+            )
+        )
+        assert response.sensitive_preview is not None
+        return response.sensitive_preview.build_script
+
+    first_script = "#!/bin/sh\necho first\n"
+    second_script = "#!/bin/sh\necho second\n"
+    first_digest = hashlib.sha256(first_script.encode("utf-8")).hexdigest()[:16]
+    second_digest = hashlib.sha256(second_script.encode("utf-8")).hexdigest()[:16]
+    first_name = f"shared-vendor-pve-4.2-{first_digest}-first-boot.sh"
+    second_name = f"shared-vendor-pve-4.2-{second_digest}-first-boot.sh"
+
+    first_render = render(first_script, 9012)
+    second_render = render(second_script, 9013)
+    repeated_render = render(first_script, 9014)
+
+    assert first_name in first_render
+    assert second_name in second_render
+    assert first_name != second_name
+    assert first_name in repeated_render
+
+
+def test_generated_snippet_names_remain_unchanged_without_caller_script() -> None:
+    response = build_pipeline_response(
+        CloudImageTemplateBuildRequest(
+            name="generated-paths",
+            vmid=9015,
+            product_type="pbs",
+            product_version="4.2",
+            provider="debian_cloud_image",
+            snippets_storage="snippet-store",
+            execute=False,
+            include_sensitive_preview=True,
+        )
+    )
+
+    assert response.sensitive_preview is not None
+    script = response.sensitive_preview.build_script
+    snippet_prefix = "snippet-store:snippets/generated-paths-pbs-4.2"
+    assert f"USER_SNIPPET_PATH=$(pvesm path {snippet_prefix}-user-data.yml)" in script
+    assert f"user={snippet_prefix}-user-data.yml" in script
+    assert f"meta={snippet_prefix}-meta-data.yml" in script
+
+
 def test_execute_requires_environment_opt_in():
     with pytest.raises(HTTPException) as exc:
         build_pipeline_response(

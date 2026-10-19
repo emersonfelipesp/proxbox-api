@@ -108,12 +108,13 @@ execution does not replace either endpoint write gate.
 
 `build_cloud_image_template()` in `template_images.py` has two paths:
 
-1. **Direct Proxmox API build** — when `execute`, `provider`, `user_data_yaml`
-   are all unset and the product is a plain image: requires `endpoint_id`,
+1. **Direct Proxmox API build** — when `execute`, `provider`, `user_data_yaml`,
+   and `first_boot_script` are all unset and the product is a plain image: requires `endpoint_id`,
    `target_node`, `image_url`; downloads via the Proxmox storage API and builds
    through the proxmox-sdk session.
 2. **Pipeline build** — when `execute is not None`, `provider is not None`,
-   `user_data_yaml is not None`, or the product is pfSense/OPNsense: routes to
+   `user_data_yaml is not None`, `first_boot_script is not None`, or the product is
+   pfSense/OPNsense: routes to
    `build_pipeline_response(req)` in `pipeline_scripts.py`, which renders a bash
    bake script (download image, `qm` create, write the `cicustom` user-data
    snippet, `qm template`). When `execute=true`, the route uses the separate
@@ -128,7 +129,17 @@ must not mask an otherwise valid response.
 
 QEMU VM provisioning (`POST /cloud/vm/provision` and
 `POST /cloud/vm/provision/stream`) accepts optional `sockets`, `bridge`,
-`vlan_tag`, and `disk_gb` overrides plus `enable_agent` (default `True`). They
+`vlan_tag`, and `disk_gb` overrides plus `enable_agent` (default `True`). It also
+accepts up to eight extra data disks, Proxmox tags, and a description. Extra
+disk storage resolves from the disk, the request, then an attached disk in the
+cloned VM config. Config inference prefers `scsi0`, then the lowest-numbered
+disk, and ignores network, description, CD-ROM, and Cloud-Init values. An
+extra-disk request requires a successful mapping-shaped config read. The route
+returns HTTP 502 with `config_read_failed` before any config write when that
+read fails or is malformed. It sends the read digest with the shared config
+write when Proxmox supplies one. The route also rejects an occupied extra-disk
+slot after the clone and before that write. Tags are lowercased and joined with
+semicolons for the Proxmox `tags` value. These fields and the existing overrides
 are applied through the Proxmox API after clone and before start, preserving the
 existing `net0` model/MAC when overriding bridge or VLAN tag, and forcing
 `agent=enabled=1` on the clone when `enable_agent` is true. The nested
@@ -194,6 +205,37 @@ API cannot. When `user_data_yaml` is set, the pipeline writes it verbatim to
 `cicustom=user=...` on the template. The schema field is on
 `CloudImageTemplateBuildRequest` in `schemas/cloud_provision.py`
 (`user_data_yaml: str | None`, max 65536, `extra="forbid"`).
+
+`first_boot_script` is the mutually exclusive caller-supplied vendor-data path.
+It accepts at most 65536 characters, contains no NUL byte, and starts with
+`#cloud-config` or `#!`. An omitted provider defaults to `release_image`. The
+release-image renderer writes it verbatim to
+`<snippets_storage>:snippets/<name>-<sha256-prefix>-first-boot.sh` with mode
+`0600`. The prefix is the first 16 hexadecimal characters of the SHA-256 digest
+of the exact UTF-8 script bytes. Equal scripts reuse the same name. Content
+changes produce a content-bound name instead of reusing only the shared request
+name. The renderer sets `cicustom=vendor=<volid>,meta=<volid>` and does not add
+a `user=` snippet.
+The exact content is part of the rendered script, so the existing keyed recipe
+digest and signed plan bind the content-bound name and script without putting
+the content in the preflight request or operation journal. Generated catalog
+snippet names stay unchanged when the caller does not supply a script.
+
+The caller-supplied snippet matrix is:
+
+| Request | Result |
+|---|---|
+| `first_boot_script` with `provider=release_image` or `provider=debian_cloud_image` and no explicit product, or product PBS, PDM, or Firecracker | Use the caller vendor snippet and metadata snippet. Do not generate catalog user data. |
+| `first_boot_script` with explicitly selected product PVE, pfSense, or OPNsense | Refuse with `first_boot_script_catalog_conflict`, because these catalog paths already generate first-boot vendor data. |
+| `first_boot_script` with `provider=ubuntu_cloud_image`, `provider=proxmox_iso`, or `provider=source_tree` | Refuse with `first_boot_script_provider_not_supported`. |
+| `first_boot_script` with `user_data_yaml` | Refuse with `first_boot_script_user_data_conflict`. |
+| `user_data_yaml` only | Keep the existing caller-supplied `user=` snippet path. |
+| Neither field | Keep the existing catalog-generated behavior and recipe digest. |
+
+The vendor snippet is non-secret content that persists on the Proxmox host.
+Callers must not put credentials or private keys in it. A line that contains
+`-----BEGIN` followed by `PRIVATE KEY` is refused with
+`first_boot_script_private_key_forbidden`.
 
 For Proxmox product snippets, install `curl`/`gnupg`/`ca-certificates` from the
 base Debian repositories, fetch `proxmox-release-<codename>.gpg`, and only then

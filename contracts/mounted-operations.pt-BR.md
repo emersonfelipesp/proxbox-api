@@ -3993,7 +3993,7 @@
 | 3961 | http | PUT | /intent/untag-pending-deletion | proxbox&#95;api/routes/intent/vm&#95;tags.py:203 untag&#95;pending&#95;deletion | - |
 | 3962 | http | GET | /cloud/lxc/templates | proxbox&#95;api/routes/cloud/lxc.py:384 list&#95;lxc&#95;templates | - |
 | 3963 | http | POST | /cloud/lxc/provision | proxbox&#95;api/routes/cloud/lxc.py:425 provision&#95;lxc | - |
-| 3964 | http | POST | /cloud/vm/provision | proxbox&#95;api/routes/cloud/provision.py:667 provision&#95;vm | - |
+| 3964 | http | POST | /cloud/vm/provision | proxbox&#95;api/routes/cloud/provision.py:791 provision&#95;vm | - |
 | 3965 | http | POST | /cloud/vm/provision/stream | proxbox&#95;api/routes/cloud/provision&#95;stream.py:418 provision&#95;vm&#95;stream | - |
 | 3966 | http | POST | /cloud/firecracker/provision | proxbox&#95;api/routes/cloud/firecracker.py:215 provision&#95;firecracker&#95;microvm | - |
 | 3967 | http | POST | /cloud/firecracker/provision/stream | proxbox&#95;api/routes/cloud/firecracker.py:223 provision&#95;firecracker&#95;microvm&#95;stream | - |

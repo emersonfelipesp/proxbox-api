@@ -125,6 +125,82 @@ async def test_step_rollback_scrubs_cipassword_even_without_lease() -> None:
 
 
 @pytest.mark.asyncio
+async def test_step_rollback_preserves_extra_disk_collision() -> None:
+    """An occupied cloned-VM disk slot remains a stable HTTP 409 response."""
+    from fastapi import HTTPException
+
+    async def _collision() -> None:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "extra_disk_slot_in_use", "slot": "scsi1"},
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await provision_route._run_proxmox_step_with_cloud_network_rollback(
+            "configure_cloud_init", _collision(), None
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == {"reason": "extra_disk_slot_in_use", "slot": "scsi1"}
+
+
+@pytest.mark.asyncio
+async def test_step_rollback_preserves_extra_disk_config_read_failure() -> None:
+    """An unreadable cloned-VM config remains a stable HTTP 502 response."""
+    from fastapi import HTTPException
+
+    async def _config_read_failure() -> None:
+        raise HTTPException(status_code=502, detail={"reason": "config_read_failed"})
+
+    with pytest.raises(HTTPException) as exc:
+        await provision_route._run_proxmox_step_with_cloud_network_rollback(
+            "configure_cloud_init", _config_read_failure(), None
+        )
+
+    assert exc.value.status_code == 502
+    assert exc.value.detail == {"reason": "config_read_failed"}
+
+
+@pytest.mark.asyncio
+async def test_step_rollback_releases_the_lease_for_every_failure() -> None:
+    """A leased NetBox address returns to the pool on any failed Proxmox step."""
+    from fastapi import HTTPException
+
+    released: list[object] = []
+
+    async def _release(lease: object) -> None:
+        released.append(lease)
+
+    async def _http_failure() -> None:
+        raise HTTPException(status_code=404, detail={"reason": "template_vmid_not_found"})
+
+    async def _collision() -> None:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "extra_disk_slot_in_use", "slot": "scsi1"},
+        )
+
+    original = provision_route._release_cloud_network_lease
+    provision_route._release_cloud_network_lease = _release
+    try:
+        sentinel = object()
+        with pytest.raises(HTTPException) as generic:
+            await provision_route._run_proxmox_step_with_cloud_network_rollback(
+                "clone", _http_failure(), sentinel
+            )
+        with pytest.raises(HTTPException) as refusal:
+            await provision_route._run_proxmox_step_with_cloud_network_rollback(
+                "configure_cloud_init", _collision(), sentinel
+            )
+    finally:
+        provision_route._release_cloud_network_lease = original
+
+    assert generic.value.status_code == 502
+    assert refusal.value.status_code == 409
+    assert len(released) == 2
+
+
+@pytest.mark.asyncio
 async def test_cloud_provision_clones_configures_cloudinit_and_starts(
     auth_headers,
     db_session,

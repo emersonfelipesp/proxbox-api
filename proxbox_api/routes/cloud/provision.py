@@ -52,6 +52,16 @@ _TASK_TIMEOUT_SECONDS = 300.0
 _TASK_POLL_INTERVAL_SECONDS = 1.0
 _JOURNAL_TIMEOUT_SECONDS = 5.0
 _DRIVE_PREFIXES = ("ide", "sata", "scsi", "virtio")
+_DISK_CONFIG_KEY = re.compile(r"(?P<bus>scsi|virtio|sata|ide|efidisk|tpmstate)(?P<index>\d+)\Z")
+_DISK_BUS_ORDER = {
+    "scsi": 0,
+    "virtio": 1,
+    "sata": 2,
+    "ide": 3,
+    "efidisk": 4,
+    "tpmstate": 5,
+}
+_EXTRA_DISK_STORAGE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 _NETBOX_ENDPOINT_PATH = "/api/plugins/proxbox/endpoints/proxmox/"
 _T = TypeVar("_T")
 
@@ -222,15 +232,110 @@ def _pick_unused_ide_slot(config_payload: object | None) -> str | None:
     return None
 
 
+def _disk_entry_storage(key: str, value: object) -> tuple[int, int, int, str] | None:
+    match = _DISK_CONFIG_KEY.fullmatch(key)
+    if match is None or not isinstance(value, str):
+        return None
+    volume_ref, *options = value.strip().split(",")
+    storage, separator, volume = volume_ref.partition(":")
+    if not separator or not _EXTRA_DISK_STORAGE_ID.fullmatch(storage) or not volume:
+        return None
+    if "cloudinit" in volume.lower():
+        return None
+    if any(option.strip().lower() == "media=cdrom" for option in options):
+        return None
+    bus = match.group("bus")
+    index = int(match.group("index"))
+    return (0 if key == "scsi0" else 1, index, _DISK_BUS_ORDER[bus], storage)
+
+
 def _infer_default_storage(config_payload: object | None) -> str:
-    if config_payload is not None:
-        for value in mapping_from_response(config_payload).values():
-            if not isinstance(value, str) or ":" not in value:
-                continue
-            storage, _sep, _volume = value.partition(":")
-            if storage and "cloudinit" not in value.lower():
-                return storage
-    return "local-lvm"
+    candidates = [
+        candidate
+        for key, value in mapping_from_response(config_payload).items()
+        if (candidate := _disk_entry_storage(key, value)) is not None
+    ]
+    return min(candidates)[-1] if candidates else "local-lvm"
+
+
+def _config_mapping_for_extra_disks(config_payload: object) -> dict[str, object] | None:
+    value = config_payload
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            value = model_dump(mode="python", by_alias=True, exclude_none=True)
+        except Exception:  # noqa: BLE001
+            return None
+    if not isinstance(value, Mapping):
+        return None
+    if "data" in value:
+        value = value.get("data")
+        if not isinstance(value, Mapping):
+            return None
+    return {str(key): item for key, item in value.items()}
+
+
+def _extra_disk_config_args(
+    req: CloudVMProvisionRequest,
+    existing_config: object | None,
+) -> dict[str, object]:
+    if not req.extra_disks:
+        return {}
+    config = _config_mapping_for_extra_disks(existing_config)
+    if config is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"reason": "config_read_failed"},
+        )
+    args: dict[str, object] = build_extra_disk_args(
+        req,
+        config,
+        _infer_default_storage(config),
+    )
+    digest = config.get("digest")
+    if isinstance(digest, str) and digest:
+        args["digest"] = digest
+    return args
+
+
+def build_extra_disk_args(
+    req: CloudVMProvisionRequest,
+    existing_config: object | None,
+    default_storage: str,
+) -> dict[str, str]:
+    """Build validated extra-disk config arguments without changing Proxmox."""
+
+    existing = mapping_from_response(existing_config)
+    disk_args: dict[str, str] = {}
+    for disk in req.extra_disks:
+        slot = f"{disk.bus}{disk.index}"
+        if slot in existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"reason": "extra_disk_slot_in_use", "slot": slot},
+            )
+        storage = disk.storage or req.storage or default_storage
+        if not _EXTRA_DISK_STORAGE_ID.fullmatch(storage):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"reason": "extra_disk_storage_invalid", "slot": slot},
+            )
+        value = f"{storage}:{disk.size_gb}"
+        if disk.discard:
+            value += ",discard=on"
+        if disk.ssd:
+            value += ",ssd=1"
+        disk_args[slot] = value
+    return disk_args
+
+
+def _build_vm_metadata_args(req: CloudVMProvisionRequest) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    if req.tags:
+        metadata["tags"] = ";".join(tag.lower() for tag in req.tags)
+    if req.description is not None:
+        metadata["description"] = req.description
+    return metadata
 
 
 def _build_net0_override(
@@ -345,6 +450,21 @@ async def _release_cloud_network_lease(lease: _CloudNetworkLease | None) -> None
     await release_ip(lease.ip_id, netbox_session=lease.netbox_session)
 
 
+_EXTRA_DISK_REFUSAL_REASONS = frozenset(
+    {"config_read_failed", "extra_disk_slot_in_use", "extra_disk_storage_invalid"}
+)
+
+
+def _is_extra_disk_refusal(error: Exception) -> bool:
+    """Return whether the error is a stable extra-disk refusal that clients must see."""
+
+    return (
+        isinstance(error, HTTPException)
+        and isinstance(error.detail, dict)
+        and error.detail.get("reason") in _EXTRA_DISK_REFUSAL_REASONS
+    )
+
+
 async def _run_proxmox_step_with_cloud_network_rollback(
     step: str,
     operation: Awaitable[_T],
@@ -357,6 +477,8 @@ async def _run_proxmox_step_with_cloud_network_rollback(
         # receive a stable CIDR; release it if any later Proxmox step fails.
         if lease is not None:
             await _release_cloud_network_lease(lease)
+        if _is_extra_disk_refusal(error):
+            raise
         # Always route through _proxmox_step_failed so the cipassword is scrubbed
         # from the log + client body even on the default enforce_cloud_network=
         # False path — parity with the SSE stream, which scrubs unconditionally.
@@ -619,6 +741,8 @@ async def _configure_cloud_init_vm(
         # gracefully (templates bake qemu-guest-agent via netbox-packer). Merge
         # rather than clobber so a template's agent sub-options survive.
         ci_args["agent"] = _build_agent_override(existing_config)
+    ci_args.update(_extra_disk_config_args(req, existing_config))
+    ci_args.update(_build_vm_metadata_args(req))
     if existing_config is None or not _has_cloudinit_drive(existing_config):
         slot = _pick_unused_ide_slot(existing_config)
         if slot is None:

@@ -1156,6 +1156,7 @@ def test_openapi_pins_versioned_preflight_and_safe_build_response() -> None:
     build_request_properties = components["CloudImageTemplateBuildRequest"]["properties"]
     assert "storage" not in build_request_properties
     assert "vm_storage" in build_request_properties
+    assert build_request_properties["first_boot_script"]["anyOf"][0]["maxLength"] == 65536
     source_build_command = components["CloudImageSourceBuildCommand"]
     assert set(source_build_command["enum"]) == {"pfsense_memstickserial", "opnsense_dvd"}
 

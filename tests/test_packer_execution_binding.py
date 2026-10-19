@@ -1354,6 +1354,72 @@ def test_recipe_digest_changes_with_build_affecting_input_and_ignores_execute_fl
     assert len(digest) == 64
 
 
+def test_first_boot_script_one_byte_change_invalidates_signed_plan() -> None:
+    endpoint = _endpoint()
+    request = CloudImageTemplateBuildRequest(
+        endpoint_id=endpoint.id,
+        target_node="pve01",
+        vmid=9010,
+        product_type="pbs",
+        provider="release_image",
+        first_boot_script="#!/bin/sh\necho vendor-a\n",
+    )
+    target, recipe_digest = pipeline_scripts.pipeline_execution_contract(request)
+    _plan, _plan_digest, token = issue_packer_plan(
+        endpoint=endpoint,
+        target=target,
+        recipe_digest=recipe_digest,
+        now=1000,
+    )
+    changed_request = request.model_copy(update={"first_boot_script": "#!/bin/sh\necho vendor-b\n"})
+    changed_target, changed_digest = pipeline_scripts.pipeline_execution_contract(changed_request)
+
+    assert changed_target == target
+    assert changed_digest != recipe_digest
+    verify_packer_plan(
+        token,
+        endpoint=endpoint,
+        target=target,
+        recipe_digest=recipe_digest,
+        now=1001,
+    )
+    with pytest.raises(PackerPlanError) as exc:
+        verify_packer_plan(
+            token,
+            endpoint=endpoint,
+            target=changed_target,
+            recipe_digest=changed_digest,
+            now=1001,
+        )
+
+    assert exc.value.code == "preflight_plan_mismatch"
+
+
+def test_absent_first_boot_script_preserves_existing_recipe_and_digest() -> None:
+    request = CloudImageTemplateBuildRequest(
+        endpoint_id=17,
+        target_node="pve01",
+        vmid=9010,
+        product_type="pfsense",
+        product_version="2.8.1",
+        provider="release_image",
+        execute=False,
+    )
+    explicit_none = request.model_copy(update={"first_boot_script": None})
+
+    *_base_inputs, base_script, _base_commands, _base_url = pipeline_scripts._render_pipeline(
+        request
+    )
+    *_none_inputs, none_script, _none_commands, _none_url = pipeline_scripts._render_pipeline(
+        explicit_none
+    )
+
+    assert none_script == base_script
+    assert pipeline_scripts.pipeline_recipe_digest(explicit_none) == (
+        pipeline_scripts.pipeline_recipe_digest(request)
+    )
+
+
 def test_recipe_binding_is_keyed_and_not_a_low_entropy_secret_oracle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -41,6 +41,7 @@ from proxbox_api.schemas.cloud_provision import (
     CloudImageVersionEntry,
     PackerFinding,
     PackerFindingSeverity,
+    ProxmoxProductType,
 )
 from proxbox_api.utils.cancellation import await_task_through_repeated_cancellation
 
@@ -48,6 +49,15 @@ _SSH_BINARY = "/usr/bin/ssh"
 _SSH_KEYSCAN_BINARY = "/usr/bin/ssh-keyscan"
 _LEGACY_PIPELINE_VM_STORAGE = "local-lvm"
 _RECIPE_BINDING_CONTEXT = "packer-recipe-binding-v1"
+_CALLER_VENDOR_PROVIDERS = {
+    CloudImageBuildProvider.release_image,
+    CloudImageBuildProvider.debian_cloud_image,
+}
+_CATALOG_FIRST_BOOT_PRODUCTS = {
+    ProxmoxProductType.pve,
+    ProxmoxProductType.pfsense,
+    ProxmoxProductType.opnsense,
+}
 
 
 class SSHExecutionRequest(Protocol):
@@ -396,7 +406,11 @@ def _append_template_import_commands(
         )
         snippet_refs.append(f"user={user_volid}")
     if first_boot_script:
-        boot_volid = f"{request.snippets_storage}:snippets/{snippet_name}-first-boot.sh"
+        boot_snippet_name = snippet_name
+        if request.first_boot_script is not None:
+            content_digest = hashlib.sha256(first_boot_script.encode("utf-8")).hexdigest()[:16]
+            boot_snippet_name = f"{snippet_name}-{content_digest}"
+        boot_volid = f"{request.snippets_storage}:snippets/{boot_snippet_name}-first-boot.sh"
         commands.append(f"BOOT_SNIPPET_PATH=$(pvesm path {_q(boot_volid)})")
         commands.append(
             _encoded_write_command(
@@ -601,15 +615,13 @@ def _source_tree_script(
     return "\n".join(commands) + "\n", commands
 
 
-def _custom_userdata_entry(
+def _custom_payload_entry(
     request: CloudImageTemplateBuildRequest,
 ) -> CloudImageVersionEntry:
-    """Build a synthetic catalog entry for a verbatim ``user_data_yaml`` build.
+    """Build a synthetic catalog entry for a caller-supplied cloud-init payload.
 
-    Used when the caller supplies cloud-init user-data directly (for example a
-    netbox-packer ``cloud_config`` installer config) instead of selecting a
-    Proxmox product from the catalog. The entry only needs enough fields for the
-    release-image/source-tree script builders and the snippet label.
+    The entry only supplies the release-image renderer and snippet label. It
+    prevents catalog-generated user data from replacing per-VM Cloud-Init fields.
     """
     provider = request.provider or CloudImageBuildProvider.release_image
     return CloudImageVersionEntry(
@@ -621,6 +633,55 @@ def _custom_userdata_entry(
         os_family="linux",
         image_url=request.image_url,
     )
+
+
+def _contains_private_key_marker(value: str) -> bool:
+    return any(
+        "-----BEGIN" in line and "PRIVATE KEY" in line.split("-----BEGIN", 1)[1]
+        for line in value.splitlines()
+    )
+
+
+def _caller_vendor_pipeline_inputs(
+    request: CloudImageTemplateBuildRequest,
+) -> tuple[CloudImageVersionEntry, CloudImageBuildProvider, None, str]:
+    script = request.first_boot_script
+    if script is None:
+        raise RuntimeError("caller vendor inputs require first_boot_script")
+    if _contains_private_key_marker(script):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "first_boot_script_private_key_forbidden",
+                "message": "first_boot_script must not contain a private key block.",
+            },
+        )
+    if (
+        "product_type" in request.model_fields_set
+        and request.product_type in _CATALOG_FIRST_BOOT_PRODUCTS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "first_boot_script_catalog_conflict",
+                "message": (
+                    "The selected catalog product already generates first-boot vendor data."
+                ),
+            },
+        )
+    provider = request.provider or CloudImageBuildProvider.release_image
+    if provider not in _CALLER_VENDOR_PROVIDERS:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "first_boot_script_provider_not_supported",
+                "message": (
+                    "first_boot_script requires provider=release_image or "
+                    "provider=debian_cloud_image."
+                ),
+            },
+        )
+    return _custom_payload_entry(request), provider, None, script
 
 
 def _catalog_pipeline_inputs(
@@ -675,11 +736,21 @@ def _catalog_pipeline_inputs(
 def _resolve_pipeline_inputs(
     request: CloudImageTemplateBuildRequest,
 ) -> tuple[CloudImageVersionEntry, CloudImageBuildProvider, str | None, str | None]:
-    """Pick the build inputs from either a verbatim user_data_yaml or the catalog."""
+    """Pick catalog inputs or one caller-supplied cloud-init snippet."""
+    if request.first_boot_script is not None and request.user_data_yaml is not None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "first_boot_script_user_data_conflict",
+                "message": "first_boot_script and user_data_yaml are mutually exclusive.",
+            },
+        )
+    if request.first_boot_script is not None:
+        return _caller_vendor_pipeline_inputs(request)
     if request.user_data_yaml is not None:
         # Verbatim cloud-init user-data path: skip the product catalog entirely and
         # bake the supplied #cloud-config as the cicustom user snippet over SSH.
-        entry = _custom_userdata_entry(request)
+        entry = _custom_payload_entry(request)
         provider = request.provider or CloudImageBuildProvider.release_image
         return entry, provider, request.user_data_yaml, None
     return _catalog_pipeline_inputs(request)

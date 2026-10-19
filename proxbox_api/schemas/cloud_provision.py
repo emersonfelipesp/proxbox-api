@@ -1,6 +1,8 @@
 """Cloud-init driven VM provisioning schemas."""
 
 import ipaddress
+import re
+import unicodedata
 from collections.abc import Mapping
 from enum import Enum
 from typing import Literal, Optional
@@ -98,6 +100,33 @@ def provider_requires_snippets(provider: CloudImageBuildProvider) -> bool:
 
 
 CloudImageProductType = ProxmoxProductType
+
+
+class ExtraDisk(BaseModel):
+    """An additional Proxmox data disk attached during VM provisioning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    bus: Literal["scsi", "virtio", "sata"]
+    index: int
+    storage: str | None = Field(
+        None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+    )
+    size_gb: int = Field(..., ge=1, le=65536)
+    discard: bool = False
+    ssd: bool = False
+
+    @model_validator(mode="after")
+    def validate_index_for_bus(self) -> "ExtraDisk":
+        upper_bounds = {"scsi": 30, "virtio": 15, "sata": 5}
+        if not 1 <= self.index <= upper_bounds[self.bus]:
+            raise ValueError(f"index must be between 1 and {upper_bounds[self.bus]} for {self.bus}")
+        if self.bus == "virtio" and self.ssd:
+            # Proxmox rejects the ssd option on VirtIO block disks, and it does so after
+            # the clone exists, so the request must fail before any allocation.
+            raise ValueError("ssd is not supported for virtio disks")
+        return self
 
 
 class CloudImageBuildTarget(BaseModel):
@@ -218,6 +247,9 @@ class CloudVMProvisionRequest(BaseModel):
     cores: Optional[int] = Field(None, ge=1)
     sockets: Optional[int] = Field(None, ge=1)
     disk_gb: Optional[int] = Field(None, ge=1)
+    extra_disks: list[ExtraDisk] = Field(default_factory=list, max_length=8)
+    tags: list[str] = Field(default_factory=list, max_length=16)
+    description: str | None = Field(None, max_length=512)
     bridge: Optional[str] = Field(
         None,
         min_length=1,
@@ -245,6 +277,36 @@ class CloudVMProvisionRequest(BaseModel):
         ),
     )
     full_clone: bool = True
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, tags: list[str]) -> list[str]:
+        # Proxmox requires the first character to be alphanumeric or an underscore and
+        # rejects anything else only after the clone exists.
+        pattern = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63}$")
+        if any(pattern.fullmatch(tag) is None for tag in tags):
+            raise ValueError(
+                "tags must start with A-Z, a-z, 0-9, or _ and contain only A-Z, a-z, 0-9, _, ., +, or -"
+            )
+        return tags
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, description: str | None) -> str | None:
+        if description is not None and any(
+            unicodedata.category(character) == "Cc" and character != "\n"
+            for character in description
+        ):
+            raise ValueError("description must not contain control characters other than newline")
+        return description
+
+    @field_validator("extra_disks")
+    @classmethod
+    def validate_unique_extra_disk_slots(cls, disks: list[ExtraDisk]) -> list[ExtraDisk]:
+        slots = [(disk.bus, disk.index) for disk in disks]
+        if len(slots) != len(set(slots)):
+            raise ValueError("extra_disks must use unique bus and index pairs")
+        return disks
 
 
 class CloudVMProvisionResponse(BaseModel):
@@ -378,6 +440,14 @@ class CloudImageTemplateBuildRequest(BaseModel):
             "actually executes on first boot of cloned VMs."
         ),
     )
+    first_boot_script: str | None = Field(
+        None,
+        max_length=65536,
+        description=(
+            "Verbatim #cloud-config vendor-data or a shebang script to bake into the "
+            "template through the Proxmox cicustom vendor snippet."
+        ),
+    )
     product_type: ProxmoxProductType = ProxmoxProductType.pve
     product_version: str | None = Field(
         None, description="Proxmox product version; None = latest in catalog"
@@ -452,6 +522,17 @@ class CloudImageTemplateBuildRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
+    def default_first_boot_provider(cls, value: object) -> object:
+        if not isinstance(value, Mapping) or value.get("first_boot_script") is None:
+            return value
+        if value.get("provider") is not None:
+            return value
+        normalized = dict(value)
+        normalized["provider"] = CloudImageBuildProvider.release_image
+        return normalized
+
+    @model_validator(mode="before")
+    @classmethod
     def normalize_legacy_storage_alias(cls, value: object) -> object:
         """Accept ``storage`` in v0.0.21 while keeping ``vm_storage`` authoritative."""
 
@@ -470,6 +551,9 @@ class CloudImageTemplateBuildRequest(BaseModel):
         if (
             self.product_type == ProxmoxProductType.pve
             and self.provider == CloudImageBuildProvider.debian_cloud_image
+            and not (
+                self.first_boot_script is not None and "product_type" not in self.model_fields_set
+            )
         ):
             raise ValueError(
                 "PVE products must use provider=proxmox_iso; "
@@ -534,6 +618,17 @@ class CloudImageTemplateBuildRequest(BaseModel):
         if not _is_valid_hostname(cleaned):
             raise ValueError("search_domain must be a valid DNS search domain")
         return cleaned
+
+    @field_validator("first_boot_script")
+    @classmethod
+    def validate_first_boot_script(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if "\x00" in value:
+            raise ValueError("first_boot_script must not contain NUL bytes")
+        if not value.startswith(("#cloud-config", "#!")):
+            raise ValueError("first_boot_script must start with #cloud-config or #!")
+        return value
 
     @field_validator("zabbix_server")
     @classmethod
