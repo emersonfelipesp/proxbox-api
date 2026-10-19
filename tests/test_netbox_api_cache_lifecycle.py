@@ -321,3 +321,78 @@ def test_invalidation_during_configuration_cannot_publish_a_late_client(monkeypa
     assert failures == ["NetBox client generation changed during acquisition."]
     assert _FakeClient.states == []
     assert plugin_key_authority.get_fresh_plugin_key() is None
+
+
+# --- default selection from the application database ------------------------------------------
+
+
+@pytest.fixture
+def _selection_database(monkeypatch):
+    """An in-memory application database holding NetBox endpoint rows."""
+    from sqlmodel import Session, SQLModel, create_engine
+
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine, tables=[NetBoxEndpoint.__table__])
+    monkeypatch.setattr(netbox_session, "get_engine", lambda: engine)
+    monkeypatch.setattr(plugin_key_authority, "_DEFAULT_BINDING", None)
+    monkeypatch.setattr(netbox_session, "netbox_config_from_endpoint", _plain_config)
+    return lambda *endpoints: _store(engine, endpoints, Session)
+
+
+def _plain_config(endpoint):
+    from netbox_sdk.config import Config
+
+    return Config(
+        base_url=f"https://{endpoint.domain}:{endpoint.port}",
+        token_version="v1",
+        token_secret=f"synthetic-token-{endpoint.id}",
+        ssl_verify=True,
+    )
+
+
+def _store(engine, endpoints, session_class):
+    with session_class(engine) as session:
+        for endpoint in endpoints:
+            session.add(endpoint)
+        session.commit()
+
+
+def test_database_selection_designates_the_lowest_enabled_endpoint(_selection_database):
+    disabled = _endpoint(1)
+    disabled.enabled = False
+    _selection_database(disabled, _endpoint(3), _endpoint(2))
+
+    netbox_session._select_default_authority_from_database()
+
+    binding = plugin_key_authority._DEFAULT_BINDING
+    assert binding is not None
+    assert binding.endpoint_id == 2
+
+
+def test_database_selection_without_an_endpoint_designates_nothing(_selection_database):
+    _selection_database()
+
+    netbox_session._select_default_authority_from_database()
+
+    assert plugin_key_authority._DEFAULT_BINDING is None
+
+
+def test_database_selection_before_database_startup_designates_nothing(monkeypatch):
+    from proxbox_api.database import DatabaseNotInitializedError
+
+    def unavailable():
+        raise DatabaseNotInitializedError("synthetic: before lifespan startup")
+
+    monkeypatch.setattr(netbox_session, "get_engine", unavailable)
+    monkeypatch.setattr(plugin_key_authority, "_DEFAULT_BINDING", None)
+
+    netbox_session._select_default_authority_from_database()
+
+    assert plugin_key_authority._DEFAULT_BINDING is None
+
+
+def test_the_session_module_registers_database_selection_as_the_default_selector():
+    assert (
+        plugin_key_authority._DEFAULT_SELECTOR
+        is netbox_session._select_default_authority_from_database
+    )

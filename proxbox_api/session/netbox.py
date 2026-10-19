@@ -12,15 +12,22 @@ from netbox_sdk.client import NetBoxApiClient
 from netbox_sdk.config import Config
 from netbox_sdk.facade import Api
 from netbox_sdk.schema import build_schema_index
-from sqlmodel import select
+from sqlmodel import Session, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from proxbox_api.constants import NETBOX_SCHEMA_VERSION
-from proxbox_api.database import DatabaseSessionDep, NetBoxEndpoint, get_async_session
+from proxbox_api.database import (
+    DatabaseNotInitializedError,
+    DatabaseSessionDep,
+    NetBoxEndpoint,
+    get_async_session,
+    get_engine,
+)
 from proxbox_api.exception import ProxboxException
 from proxbox_api.plugin_key_authority import (
     designate_default_plugin_authority,
     invalidate_plugin_key_authority,
+    register_default_selector,
     register_plugin_key_candidate,
 )
 from proxbox_api.runtime_settings import get_float
@@ -234,6 +241,31 @@ def _default_netbox_api_from_endpoint(endpoint: NetBoxEndpoint) -> Api:
     api = netbox_api_from_endpoint(endpoint)
     designate_default_plugin_authority(api)
     return api
+
+
+def _select_default_authority_from_database() -> None:
+    """Apply default NetBox service selection against the application database.
+
+    Initial plugin-key acquisition runs this when no request in the worker has selected the
+    default service yet, for example a route that reads encrypted Proxmox credentials before any
+    NetBox call. It applies the same rule as ``get_netbox_session`` without an explicit id: the
+    enabled NetBox endpoint with the lowest id. It designates nothing when there is none.
+    """
+    try:
+        engine = get_engine()
+    except DatabaseNotInitializedError:
+        return
+    with Session(engine) as database_session:
+        endpoint = database_session.exec(
+            select(NetBoxEndpoint)
+            .where(NetBoxEndpoint.enabled == True)  # noqa: E712
+            .order_by(cast("Any", NetBoxEndpoint.id))
+        ).first()
+        if endpoint is not None:
+            _default_netbox_api_from_endpoint(endpoint)
+
+
+register_default_selector(_select_default_authority_from_database)
 
 
 def get_netbox_session(

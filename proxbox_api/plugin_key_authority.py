@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 from uuid import uuid4
@@ -21,6 +22,11 @@ _AUTHORITY_TIMEOUT_SECONDS = 2.0
 _MAX_RESPONSE_BYTES = 65_536
 _MAX_KEY_BYTES = 4096
 _LOCK = threading.Lock()
+# Default-service selection that an initial key acquisition may run when no worker request has
+# selected a default NetBox service yet. The session module registers it; this module never
+# imports the database or the session layer.
+_DEFAULT_SELECTOR: Callable[[], None] | None = None
+_SELECTION = threading.local()
 
 
 class PluginKeyAuthorityError(ProxboxException):
@@ -261,10 +267,40 @@ def _request_runtime_key(candidate: _Candidate) -> str:
         raise PluginKeyAuthorityError() from None
 
 
+def register_default_selector(selector: Callable[[], None] | None) -> None:
+    """Install the default-service selection that initial acquisition may run."""
+    global _DEFAULT_SELECTOR
+    with _LOCK:
+        _DEFAULT_SELECTOR = selector
+
+
+def _select_default_when_unset() -> None:
+    """Run default-service selection once, and only while nothing is designated.
+
+    A route that reads encrypted Proxmox credentials can run before any request has selected the
+    default NetBox service in this worker. Without this step the initial acquisition finds no
+    designated candidate and reports that no key exists. The selector applies the same rule as
+    every default NetBox session request; an existing or blocked designation is never replaced.
+    """
+    with _LOCK:
+        selector = _DEFAULT_SELECTOR if _DEFAULT_BINDING is None else None
+    if selector is None or getattr(_SELECTION, "active", False):
+        return
+    _SELECTION.active = True
+    try:
+        selector()
+    except Exception:  # noqa: BLE001 - an unavailable selector must read as "no default yet"
+        return
+    finally:
+        _SELECTION.active = False
+
+
 def get_fresh_plugin_key(
     expected_binding: PluginKeyBinding | None = None,
 ) -> AuthorizedPluginKey | None:
     """A new sensitive acquisition cannot use metadata caches or old grants."""
+    if expected_binding is None:
+        _select_default_when_unset()
     with _LOCK:
         binding = _DEFAULT_BINDING
         candidate = _CANDIDATES.get(binding) if binding is not None else None

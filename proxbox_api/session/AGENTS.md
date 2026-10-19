@@ -28,6 +28,12 @@ Session management utilities for NetBox and Proxmox API clients.
     retire authority as well as clients. Do not let late construction publish
     into a retired cache generation. Refuse unresolved encrypted service tokens
     before constructing a client. Async facade construction runs in a worker.
+  - A route that reads encrypted Proxmox credentials can run before any request in the
+    worker has selected the default service. Initial key acquisition then runs the
+    registered default-service selection (`_select_default_authority_from_database`, the
+    lowest enabled `NetBoxEndpoint`, the same rule as `get_netbox_session`) once, only while
+    no default is designated. It never replaces an existing or blocked designation, never
+    runs for an expected-binding check, and is not re-entered from inside the selector.
 - `../netbox_probe.py`: request-private 10-second authenticated status probe with a typed response contract and separately bounded one-second temporary-client cleanup. It caches the latest result for 30 seconds by an unambiguous URL/TLS/credential fingerprint in a bounded, atomically replaced, `flock`-protected file beside the configured SQLite database, making results visible across workers without storing credentials. Both bootstrap and tag sync dependencies reject only a fresh known-unreachable result. Probe errors redact stored token material; repeated cancellation cannot interrupt cleanup before its deadline, and a stalled close is cancelled without indefinitely blocking the request.
 - `proxmox.py`: Proxmox session management module that re-exports the session types and helper functions.
 - `proxmox_core.py`: shared Proxmox client core helpers.

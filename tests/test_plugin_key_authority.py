@@ -491,3 +491,106 @@ async def test_cancelled_worker_cannot_reinstall_a_retired_result(monkeypatch, r
         assert await asyncio.to_thread(finished.wait, 3)
     assert credentials._ENCRYPTION_KEY is None
     assert credentials._FERNET is None
+
+
+# --- initial default-service selection -------------------------------------------------------
+#
+# A route that reads encrypted Proxmox credentials can run before any request in the worker has
+# selected the default NetBox service. Initial acquisition must then run the same default
+# selection instead of reporting that no key exists.
+
+
+@pytest.fixture
+def bare_runtime(monkeypatch):
+    """A reachable plugin transport whose default service nothing has selected yet."""
+    state = SimpleNamespace(
+        body=json.dumps({"encryption_key": _ROOT}).encode(),
+        status=200,
+        encoding="identity",
+        url=_RUNTIME_URL,
+    )
+    requests = []
+
+    def open_response(request, *, timeout):
+        requests.append(request)
+        return _Response(state)
+
+    monkeypatch.setattr(
+        authority, "_authority_opener", lambda _candidate: SimpleNamespace(open=open_response)
+    )
+    monkeypatch.setattr(authority, "_DEFAULT_SELECTOR", None)
+    facade = _register()
+    return SimpleNamespace(state=state, requests=requests, facade=facade)
+
+
+def test_initial_acquisition_runs_default_selection_when_nothing_is_designated(bare_runtime):
+    calls = []
+
+    def selector() -> None:
+        calls.append(1)
+        authority.designate_default_plugin_authority(bare_runtime.facade)
+
+    authority.register_default_selector(selector)
+
+    assert credentials._get_fernet() is not None
+    assert calls == [1]
+    assert len(bare_runtime.requests) == 1
+
+
+def test_without_a_registered_selector_nothing_is_designated(bare_runtime):
+    assert authority.get_fresh_plugin_key() is None
+    assert credentials._get_fernet() is None
+    assert bare_runtime.requests == []
+
+
+def test_an_existing_default_is_never_reselected(runtime, monkeypatch):
+    calls = []
+    monkeypatch.setattr(authority, "_DEFAULT_SELECTOR", lambda: calls.append(1))
+
+    assert authority.get_fresh_plugin_key() is not None
+    assert calls == []
+
+
+def test_a_blocked_default_after_retirement_is_not_reselected_automatically(runtime, monkeypatch):
+    credentials._get_fernet()
+    authority.invalidate_plugin_key_authority(7)
+    calls = []
+    monkeypatch.setattr(authority, "_DEFAULT_SELECTOR", lambda: calls.append(1))
+
+    with pytest.raises(authority.PluginKeyAuthorityError):
+        credentials._get_fernet()
+    assert calls == []
+
+
+def test_an_expected_binding_never_runs_selection(bare_runtime, monkeypatch):
+    calls = []
+    monkeypatch.setattr(authority, "_DEFAULT_SELECTOR", lambda: calls.append(1))
+    mismatch = authority.PluginKeyBinding(99, "synthetic-different-generation")
+
+    with pytest.raises(authority.PluginKeyAuthorityError):
+        authority.get_fresh_plugin_key(expected_binding=mismatch)
+    assert calls == []
+    assert bare_runtime.requests == []
+
+
+def test_a_failing_selector_reads_as_no_default(bare_runtime, monkeypatch):
+    def selector() -> None:
+        raise RuntimeError("synthetic selector failure with secret-token")
+
+    monkeypatch.setattr(authority, "_DEFAULT_SELECTOR", selector)
+
+    assert authority.get_fresh_plugin_key() is None
+    assert bare_runtime.requests == []
+
+
+def test_selection_is_not_reentered_from_inside_the_selector(bare_runtime, monkeypatch):
+    inner = []
+
+    def selector() -> None:
+        inner.append(authority.get_fresh_plugin_key())
+        authority.designate_default_plugin_authority(bare_runtime.facade)
+
+    monkeypatch.setattr(authority, "_DEFAULT_SELECTOR", selector)
+
+    assert authority.get_fresh_plugin_key() is not None
+    assert inner == [None]
