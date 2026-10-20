@@ -92,6 +92,11 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(netbox_rest, "rest_first_async", _fake_first)
     monkeypatch.setattr(netbox_rest, "rest_create_async", _fake_create)
+
+    async def _claim(*_args, **_kwargs):
+        return SimpleNamespace(record=cluster_record, created=False)
+
+    monkeypatch.setattr("proxbox_api.services.netbox_writers.claim_endpoint_cluster", _claim)
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
@@ -99,10 +104,6 @@ def in_sync_netbox(monkeypatch: pytest.MonkeyPatch):
     # cluster_sync now pre-checks cluster existence directly via the imported
     # `rest_first_async` symbol (issue #362 discovery-tag gate). Patch the
     # bound name in that module so the fixture's fake handler is used.
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
-        _fake_first,
-    )
 
     yield {
         "cluster_type": cluster_type_record,

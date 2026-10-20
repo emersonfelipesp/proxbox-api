@@ -306,7 +306,30 @@ def _seed_collection(
     return [sample]
 
 
-def _filter_collection(items: list[Any], query_values: dict[str, Any]) -> list[Any]:
+# Proxmox's ``GET /cluster/resources`` filter ``type=vm`` selects every guest
+# row; the rows themselves carry their concrete type (``qemu``, ``lxc``, or the
+# legacy ``openvz``). A literal comparison would answer an empty list.
+_CLUSTER_RESOURCES_TYPE_FILTERS: dict[str, frozenset[str]] = {
+    "vm": frozenset({"qemu", "lxc", "openvz"}),
+}
+
+
+def _query_value_matches(
+    concrete_path: str | None, key: str, item_value: Any, query_value: Any
+) -> bool:
+    if key == "type" and (concrete_path or "").rstrip("/").endswith("cluster/resources"):
+        row_types = _CLUSTER_RESOURCES_TYPE_FILTERS.get(str(query_value))
+        if row_types is not None:
+            return str(item_value) in row_types
+    return str(item_value) == str(query_value)
+
+
+def _filter_collection(
+    items: list[Any],
+    query_values: dict[str, Any],
+    *,
+    concrete_path: str | None = None,
+) -> list[Any]:
     if not query_values:
         return items
 
@@ -319,7 +342,7 @@ def _filter_collection(items: list[Any], query_values: dict[str, Any]) -> list[A
         for key, value in query_values.items():
             if key not in item:
                 continue
-            if str(item[key]) != str(value):
+            if not _query_value_matches(concrete_path, key, item[key], value):
                 include = False
                 break
         if include:
@@ -471,7 +494,7 @@ def _resolve_get_state(
                 path_values=path_values,
             )
             store.replace_collection(concrete_path, collection)
-        return _filter_collection(collection, query_values)
+        return _filter_collection(collection, query_values, concrete_path=concrete_path)
 
     if store.is_deleted(concrete_path):
         raise HTTPException(status_code=404, detail="Mock resource not found.")

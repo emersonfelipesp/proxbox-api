@@ -59,6 +59,23 @@ class _FakeRecord:
         self._payload[key] = value
 
 
+def _stub_cluster_claim(monkeypatch, *, record=None, created=False, writes=None):
+    """Keep discovery-tag tests focused on metadata after atomic ownership."""
+
+    class ClaimedRecord(_FakeRecord):
+        async def save(self):
+            await super().save()
+            writes.append({"path": "/api/virtualization/clusters/", "payload": self.serialize()})
+
+    if record is None:
+        record = ClaimedRecord({"name": "lab", "type": 42, "tags": []}, record_id=42)
+
+    async def claim(*_args, **_kwargs):
+        return SimpleNamespace(record=record, created=created)
+
+    monkeypatch.setattr("proxbox_api.services.netbox_writers.claim_endpoint_cluster", claim)
+
+
 # --------------------------------------------------------------------------- #
 # Pure helpers — no NetBox required.                                          #
 # --------------------------------------------------------------------------- #
@@ -170,6 +187,7 @@ def empty_netbox(monkeypatch: pytest.MonkeyPatch):
     """NetBox with no cluster yet. Records POST traffic and asserts the
     create payload carries the discovery slug."""
     posts: list[dict[str, Any]] = []
+    _stub_cluster_claim(monkeypatch, created=True, writes=posts)
 
     async def _fake_first(_nb: object, path: str, *, query: dict[str, Any]) -> Any:
         # Model the documented precondition that bootstrap created the four
@@ -203,10 +221,6 @@ def empty_netbox(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
-        _fake_first,
     )
 
     yield posts
@@ -273,6 +287,7 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     )
 
     posts: list[dict[str, Any]] = []
+    _stub_cluster_claim(monkeypatch, record=cluster_record)
     by_path: dict[str, _FakeRecord] = {
         "/api/virtualization/cluster-types/": cluster_type_record,
         "/api/virtualization/clusters/": cluster_record,
@@ -301,10 +316,6 @@ def cluster_with_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
-        _fake_first,
     )
 
     yield {"cluster": cluster_record, "cluster_type": cluster_type_record, "posts": posts}
@@ -362,6 +373,7 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     )
 
     posts: list[dict[str, Any]] = []
+    _stub_cluster_claim(monkeypatch, record=cluster_record)
     by_path: dict[str, _FakeRecord] = {
         "/api/virtualization/cluster-types/": cluster_type_record,
         "/api/virtualization/clusters/": cluster_record,
@@ -390,10 +402,6 @@ def cluster_without_discovery_tag(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async",
         _fake_list,
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
-        _fake_first,
     )
 
     yield {"cluster": cluster_record, "posts": posts}
@@ -431,6 +439,7 @@ async def test_first_cluster_sync_skips_discovery_tag_when_absent(
     must still create the cluster — just without stamping the (missing) slug,
     rather than failing with NetBox 'Related object not found'."""
     posts: list[dict[str, Any]] = []
+    _stub_cluster_claim(monkeypatch, created=True, writes=posts)
 
     async def _miss_first(_nb: object, _path: str, *, query: dict[str, Any]) -> Any:
         del query
@@ -449,9 +458,6 @@ async def test_first_cluster_sync_skips_discovery_tag_when_absent(
     monkeypatch.setattr("proxbox_api.services.sync.discovery_tags.rest_first_async", _miss_first)
     monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.rest_list_async", _fake_list
-    )
-    monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async", _miss_first
     )
 
     ctx = make_session(

@@ -713,10 +713,6 @@ async def test_sync_cluster_individual_reports_real_drift_status(monkeypatch):
         _fake_rest_list_async,
     )
     monkeypatch.setattr(
-        "proxbox_api.services.sync.individual.cluster_sync.rest_first_async",
-        _fake_rest_first_async,
-    )
-    monkeypatch.setattr(
         "proxbox_api.services.sync.individual.cluster_sync.upsert_cluster_type",
         _fake_upsert_cluster_type,
     )

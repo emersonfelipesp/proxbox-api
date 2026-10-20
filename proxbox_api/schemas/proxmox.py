@@ -247,6 +247,10 @@ class ClusterStatusSchema(BaseClusterStatusSchema):
     endpoint_name: str | None = None
     node_device_name_template: str = "{node}"
     db_endpoint_id: int | None = None
+    endpoint_source: Literal["database", "netbox"] | None = None
+    domain: str | None = None
+    ip_address: str | None = None
+    http_port: int | None = None
     site_id: int | None = None
     site_slug: str | None = None
     site_name: str | None = None

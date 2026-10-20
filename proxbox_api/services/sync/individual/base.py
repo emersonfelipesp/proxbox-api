@@ -72,7 +72,7 @@ class BaseIndividualSyncService:
     async def _get_or_create_cluster(
         self,
         cluster_name: str,
-        mode: str = "cluster",
+        mode: str | None = None,
     ) -> object:
         """Get or create a cluster with its type.
 
@@ -88,6 +88,7 @@ class BaseIndividualSyncService:
             _ensure_cluster_type,
         )
 
+        mode = mode or getattr(self.px, "mode", None) or "cluster"
         site = await self._get_or_create_site(cluster_name)
         tenant = await self._get_or_create_tenant()
         cluster_type = await _ensure_cluster_type(
@@ -104,6 +105,7 @@ class BaseIndividualSyncService:
             site_id=getattr(site, "id", None),
             tenant_id=getattr(tenant, "id", None),
             overwrite_flags=self.overwrite_flags,
+            endpoint_source=self.px,
         )
         return cluster
 
@@ -279,7 +281,7 @@ class BaseIndividualSyncService:
             _ensure_cluster_type,
         )
 
-        cluster_mode = "cluster"
+        cluster_mode = getattr(self.px, "mode", None) or "cluster"
         cluster_type = await _ensure_cluster_type(
             self.nb,
             mode=cluster_mode,

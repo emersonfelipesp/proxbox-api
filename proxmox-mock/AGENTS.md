@@ -106,6 +106,9 @@ uv run pytest tests
 - Keep `generated/openapi.json` in sync with the Proxmox schema version it targets.
 - Do not import from `proxbox_api` — this package must remain standalone.
 - Reset in-memory state between test cases to avoid cross-test pollution.
+- Collection query filters compare values literally, except `GET /cluster/resources`
+  with `type=vm`, which returns every guest row (`qemu`, `lxc`, `openvz`) exactly as
+  Proxmox does. proxbox-api's node resolver depends on that filter.
 
 ## Native OpenTelemetry
 

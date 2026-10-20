@@ -3107,6 +3107,7 @@ async def _precompute_single_vm_cluster(
         site_id=getattr(site, "id", None),
         tenant_id=getattr(tenant, "id", None),
         overwrite_flags=context.overwrite_flags,
+        endpoint_source=dependency_cluster.px_source or dependency_cluster.cluster_state,
     )
     site_id = _effective_cluster_site_id(cluster, fallback_site_id=getattr(site, "id", None))
     context.cluster_dependency_cache[

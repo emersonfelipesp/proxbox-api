@@ -305,13 +305,43 @@ def test_full_update_route_bootstrap_runs_before_vm_creation(auth_test_client, m
     assert events.index("bootstrap") < events.index("virtual-machines")
 
 
-def test_create_proxmox_devices_uses_request_scoped_rest_session():
+def _stub_owned_cluster_dependencies(monkeypatch, expected_nb):
+    """Keep route transport tests scoped to an already endpoint-owned cluster."""
+    from proxbox_api.netbox_rest import RestRecord
+    from proxbox_api.services.sync import device_ensure
+
+    async def owned_cluster(nb, **kwargs):
+        assert nb is expected_nb
+        assert kwargs["endpoint_source"].db_endpoint_id == 73
+        return RestRecord(
+            nb,
+            "/api/virtualization/clusters/",
+            {
+                "id": 12,
+                "name": kwargs["cluster_name"],
+                "scope_type": "dcim.site",
+                "scope_id": kwargs["site_id"],
+            },
+        )
+
+    async def ownership(nb, **kwargs):
+        assert nb is expected_nb
+        return SimpleNamespace(id=1)
+
+    monkeypatch.setattr(device_ensure, "_ensure_cluster", owned_cluster)
+    monkeypatch.setattr(device_ensure, "write_device_sync_state", ownership)
+
+
+def test_create_proxmox_devices_uses_request_scoped_rest_session(monkeypatch):
     class FakeClient:
         def __init__(self):
             self.calls = []
 
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
             self.calls.append((method, path, query, payload, expect_json))
+
+            if method == "GET" and path == "/api/plugins/proxbox/sync-state/devices/":
+                return ApiResponse(status=200, text=json.dumps({"count": 0, "results": []}))
 
             if (
                 method == "GET"
@@ -414,8 +444,10 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
         client=FakeClient(),
         extras=SimpleNamespace(journal_entries=SimpleNamespace(create=lambda payload: payload)),
     )
+    _stub_owned_cluster_dependencies(monkeypatch, fake_session)
     cluster_status = [
         SimpleNamespace(
+            db_endpoint_id=73,
             name="lab",
             mode="cluster",
             node_list=[SimpleNamespace(name="pve01")],
@@ -441,7 +473,7 @@ def test_create_proxmox_devices_uses_request_scoped_rest_session():
     assert first_payload["tags"] == [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}]
 
 
-def test_create_proxmox_devices_surfaces_real_netbox_detail():
+def test_create_proxmox_devices_surfaces_real_netbox_detail(monkeypatch):
     class FakeClient:
         async def request(self, method, path, *, query=None, payload=None, expect_json=True):
             if method == "GET":
@@ -457,8 +489,10 @@ def test_create_proxmox_devices_surfaces_real_netbox_detail():
         client=FakeClient(),
         extras=SimpleNamespace(journal_entries=SimpleNamespace(create=lambda payload: payload)),
     )
+    _stub_owned_cluster_dependencies(monkeypatch, fake_session)
     cluster_status = [
         SimpleNamespace(
+            db_endpoint_id=73,
             name="lab",
             mode="cluster",
             node_list=[SimpleNamespace(name="pve01")],

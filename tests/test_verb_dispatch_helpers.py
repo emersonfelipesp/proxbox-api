@@ -23,14 +23,16 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.responses import JSONResponse
 
+from proxbox_api.enum.proxmox import ClusterResourcesTypeResponse
 from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
 from proxbox_api.services import verb_dispatch
 
 
 class _FakeResource:
-    def __init__(self, vmid: int | None, node: str | None) -> None:
+    def __init__(self, vmid: int | None, node: str | None, type: str | None = "qemu") -> None:
         self.vmid = vmid
         self.node = node
+        self.type = type
 
 
 async def test_build_journal_comments_includes_all_keys():
@@ -151,6 +153,48 @@ async def test_resolve_proxmox_node_returns_404_when_absent():
     assert isinstance(result, JSONResponse)
     assert result.status_code == 404
     assert b"vm_not_found_in_cluster" in result.body
+
+
+@pytest.mark.parametrize("vm_type", ["qemu", "lxc"])
+async def test_resolve_proxmox_node_queries_the_vm_resource_type(vm_type: str):
+    """Proxmox accepts only vm/storage/node/sdn as the request filter (issue #616)."""
+    lookup = AsyncMock(return_value=[_FakeResource(vmid=101, node="pve-node-01", type=vm_type)])
+    with patch("proxbox_api.services.verb_dispatch.get_cluster_resources", new=lookup):
+        node = await verb_dispatch.resolve_proxmox_node(session=object(), vm_type=vm_type, vmid=101)
+    assert node == "pve-node-01"
+    lookup.assert_awaited_once()
+    assert lookup.await_args.kwargs == {"resource_type": "vm"}
+
+
+@pytest.mark.parametrize(
+    ("row_type", "requested"),
+    [("lxc", "qemu"), ("qemu", "lxc"), (None, "qemu"), ("node", "qemu")],
+)
+async def test_resolve_proxmox_node_requires_matching_row_type(
+    row_type: str | None, requested: str
+):
+    """A row with the same VMID but another guest type is never the answer."""
+    with patch(
+        "proxbox_api.services.verb_dispatch.get_cluster_resources",
+        new=AsyncMock(return_value=[_FakeResource(vmid=101, node="pve-node-03", type=row_type)]),
+    ):
+        result = await verb_dispatch.resolve_proxmox_node(
+            session=object(), vm_type=requested, vmid=101
+        )
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 404
+
+
+async def test_resolve_proxmox_node_accepts_enum_row_types():
+    """Typed responses may carry the row type as a str-valued Enum member."""
+    row = _FakeResource(vmid=101, node="pve-node-02", type=None)
+    row.type = ClusterResourcesTypeResponse.qemu
+    with patch(
+        "proxbox_api.services.verb_dispatch.get_cluster_resources",
+        new=AsyncMock(return_value=[row]),
+    ):
+        node = await verb_dispatch.resolve_proxmox_node(session=object(), vm_type="qemu", vmid=101)
+    assert node == "pve-node-02"
 
 
 async def test_resolve_proxmox_node_returns_502_on_proxmox_error():

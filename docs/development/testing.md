@@ -51,10 +51,12 @@ uv run pytest tests/ -n auto \
 ```
 
 The Gitea pre-merge gate (`.gitea/workflows/ci.yml`) runs the same suite with
-statement-only coverage (`COVERAGE_CORE=sysmon`, no `--cov-branch`, `-n 8
---dist worksteal`) so the job fits the shared runner pool's 60-minute member;
-branch coverage remains authoritative in the GitHub-hosted `.github/` CI and
-in the local invocation above.
+branch coverage retained by `branch = true` in `pyproject.toml`. It requests
+`COVERAGE_CORE=sysmon`, but Python 3.12 cannot measure branches with that core,
+so coverage.py falls back to its default core. The gate pins `-n 4 --dist
+worksteal` to leave CPU headroom for telemetry subprocesses within the runner's
+8-CPU quota. This scheduling change preserves the coverage threshold, test
+selection, assertions, and subprocess deadlines.
 
 The TestPyPI and PyPI candidate validation jobs run the same mocked suite with
 two pytest-xdist workers and `--dist loadgroup`, preserving the singleton-state

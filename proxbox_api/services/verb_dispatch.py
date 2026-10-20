@@ -60,9 +60,15 @@ async def resolve_proxmox_node(
     do not cache: cluster topology changes (migrate, failover) are rare
     but real, and the verb path is operator-initiated so an extra
     ``cluster/resources`` call is acceptable.
+
+    The query uses ``type=vm``: Proxmox accepts only ``vm``, ``storage``,
+    ``node``, and ``sdn`` as the request filter and rejects ``qemu`` or
+    ``lxc`` with HTTP 400. ``qemu`` and ``lxc`` are row types in the
+    response, so a row matches only when both its ``vmid`` and its ``type``
+    equal the request. A row without a type never matches.
     """
     try:
-        resources = await get_cluster_resources(session, resource_type=vm_type)
+        resources = await get_cluster_resources(session, resource_type="vm")
     except ProxmoxAPIError as error:
         logger.warning("Failed to fetch cluster resources for %s/%s: %s", vm_type, vmid, error)
         return JSONResponse(
@@ -77,7 +83,9 @@ async def resolve_proxmox_node(
         )
 
     for item in resources:
-        if item.vmid == vmid and item.node:
+        item_type = getattr(item, "type", None)
+        item_type = getattr(item_type, "value", item_type)
+        if item.vmid == vmid and item_type == vm_type and item.node:
             return item.node
 
     return JSONResponse(

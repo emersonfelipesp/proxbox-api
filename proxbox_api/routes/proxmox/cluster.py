@@ -60,6 +60,12 @@ def _cluster_item_defaults(
     if proxmox_object is not None:
         payload["endpoint_name"] = getattr(proxmox_object, "endpoint_name", None)
         payload["db_endpoint_id"] = getattr(proxmox_object, "db_endpoint_id", None)
+        payload.update(
+            endpoint_source=getattr(proxmox_object, "endpoint_source", None),
+            domain=getattr(proxmox_object, "domain", None),
+            ip_address=getattr(proxmox_object, "ip_address", None),
+            http_port=getattr(proxmox_object, "http_port", None),
+        )
         payload["node_device_name_template"] = (
             getattr(proxmox_object, "node_device_name_template", None) or "{node}"
         )

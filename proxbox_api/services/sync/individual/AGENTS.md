@@ -42,6 +42,12 @@ Per-object synchronization services that sync individual objects from Proxmox to
 3. Dry runs should report `dependencies_synced`.
 4. Missing dependencies should be created automatically instead of failing early.
 5. Use targeted Proxmox endpoints rather than broad bulk fetches.
+6. Refuse equal-name session ambiguity before individual dependency writes.
+7. Cluster dry runs verify exact returned endpoint and linked native IDs. They
+   must never invoke an ownership action or dependency upsert.
+8. Report claim-induced changes as updated and drift-free retries as unchanged.
+   Deploy the backend guard and prove old-code work is drained before the new
+   plugin is installed. Missing action support must fail before native writes.
 
 ## Cross-Cluster VMID Scoping (issue #223)
 

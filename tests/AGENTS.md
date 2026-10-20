@@ -97,7 +97,7 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_proxmox_codegen_docs.py` | Code generation documentation accuracy |
 | `test_codegen_no_source_evaluation.py` | Runtime model construction without source evaluation, AST-based dynamic-execution prohibitions, hostile-alias integration oracle, bundled-first and provenance resolution, custom-source isolation, schema resource limits, unsafe shape rejection, route validation ordering, quarantine, literal-safe rendering, and symlink-aware artifact path containment |
 | `test_proxmox_ha_routes.py` | `/proxmox/cluster/ha/*` aggregation, runtime-state merge, vm/ct fallback in `by-vm`, parallel composition in `summary`, and live router-prefix registration |
-| `test_proxmox_sdk_dependency.py` | Verifies `proxbox_api` can import the `proxmox_sdk` mock entrypoint |
+| `test_proxmox_sdk_dependency.py` | Verifies the SDK mock entrypoint, independently specified candidate version and certified SDK pins in the manifest and lockfile, and the canonical final-version release notes used by that candidate. |
 | `test_promotion_ancestor_blob_guard.py` | Promotion history guard: exhaustive merge-parent and stale-blob rejection, base advancement, new-path rename/deletion acceptance, shallow/non-blob fail-closed behavior, symlink type changes, and hostile/non-UTF-8 filenames |
 | `test_proxmox_to_netbox_contracts.py` | VM mapper behavior and generated schema availability checks |
 | `test_pydantic_generator_models.py` | Pydantic model generation from OpenAPI specs |
@@ -129,6 +129,8 @@ real nested HTTP/WebSocket/mount oracle and explicit collision occurrences.
 | `test_sync_overwrite_flags.py` | Behavior of `SyncOverwriteFlags` propagation through the sync pipeline |
 | `test_sync_state_reader.py` | Typed sidecar-first VM identity/name/role reads and legacy fallback contracts, plus endpoint-scoped orphan candidate scans (unscoped, scoped, empty scope, sidecar without an endpoint id) |
 | `test_sync_state_writer.py` | Typed sidecar writes, including best-effort reflection fields, required/retried post-success role ownership evidence with exact snapshot compensation, and the warning (with unchanged persistence) for an incomplete VM ownership identity |
+| `test_verb_dispatch_helpers.py` | Verb-dispatch journal/response shapes and `resolve_proxmox_node`: the `type=vm` request filter for QEMU and LXC, row-type matching (same VMID, other type is 404), enum row types, and the 404/502 contracts |
+| `cloud/test_clone_template_cross_node.py` | `_clone_template_vm` against a fake Proxmox that enforces the `cluster/resources` type enum: the clone is posted on the template's node with `target=<destination>` for same-node and cross-node requests, and a missing template answers 404 without a clone |
 | `test_task_history_sync.py` | Task history sync workflow |
 | `test_virtual_disks_sync.py` | Virtual disk sync workflow, skipping decommissioned or soft-deleted VMs, the missing-guest classification (WARNING, "VM not found in Proxmox", still counted skipped), and lenient vs strict selection with the per-route mode choice |
 | `test_vm_backup_volids.py` | VM backup volume ID parsing and normalization |

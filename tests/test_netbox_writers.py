@@ -15,6 +15,7 @@ real ``NetBoxClusterTypeSyncState`` / ``NetBoxClusterSyncState`` models.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -98,6 +99,11 @@ def patch_rest(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(netbox_rest, "rest_first_async", _fake_first)
     monkeypatch.setattr(netbox_rest, "rest_create_async", _fake_create)
+
+    async def _claim(*_args, **_kwargs):
+        return SimpleNamespace(record=holder["existing"], created=False)
+
+    monkeypatch.setattr("proxbox_api.services.netbox_writers.claim_endpoint_cluster", _claim)
 
     return {"holder": holder, "posts": posts}
 

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from proxbox_api.constants import DISCOVERY_TAG_CLUSTER
 from proxbox_api.netbox_rest import (
     ReconcileResult,
     ReconcileStatus,
@@ -41,6 +42,12 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineTypeSyncState,
 )
 from proxbox_api.schemas.netbox.extras import TagSchema
+from proxbox_api.services.sync.cluster_links import claim_endpoint_cluster
+from proxbox_api.services.sync.discovery_tags import (
+    discovery_tag_ref,
+    merge_tag_refs,
+    resolve_discovery_tag_id,
+)
 
 if TYPE_CHECKING:
     from netbox_sdk.facade import Api
@@ -130,27 +137,33 @@ async def upsert_cluster(
     cluster_type_id: int | None,
     mode: str,
     tag_refs: list[dict[str, object]],
+    endpoint_source: object | None = None,
 ) -> UpsertResult:
-    """Create-or-update the ``virtualization.Cluster`` named ``cluster_name``.
-
-    ``mode`` only influences the description string; the payload itself is
-    limited to fields the existing ``NetBoxClusterSyncState`` schema allows.
-    Scope (``site``/``tenant``) wiring is out of scope for issue #357 PR 1 —
-    the cluster reconciler did not write those fields on v0.0.11 either.
-    """
+    """Claim the endpoint's native cluster, then reconcile its metadata by ID."""
+    claim = await claim_endpoint_cluster(
+        nb,
+        source=endpoint_source,
+        cluster_name=cluster_name,
+        mode=mode,
+        cluster_type_id=cluster_type_id,
+    )
+    cluster_tags = merge_tag_refs(tag_refs, claim.record.get("tags"))
+    if claim.created and await resolve_discovery_tag_id(nb, DISCOVERY_TAG_CLUSTER) is not None:
+        cluster_tags.append(discovery_tag_ref(DISCOVERY_TAG_CLUSTER))
     payload: dict[str, object] = {
         "name": cluster_name,
         "type": cluster_type_id,
         "description": f"Proxmox {mode} cluster.",
-        "tags": tag_refs,
+        "tags": cluster_tags,
     }
 
     result = await rest_reconcile_async_with_status(
         nb,
         "/api/virtualization/clusters/",
-        lookup={"name": cluster_name},
+        lookup={"id": claim.record.id},
         payload=payload,
         schema=NetBoxClusterSyncState,
+        existing_record=claim.record,
         current_normalizer=lambda record: {
             "name": record.get("name"),
             "type": _relation_id_or_none(record.get("type")),
@@ -158,6 +171,10 @@ async def upsert_cluster(
             "tags": record.get("tags"),
         },
     )
+    if claim.created:
+        return UpsertResult(record=result.record, status="created")
+    if getattr(claim, "changed", False):
+        return UpsertResult(record=result.record, status="updated")
     return _from_reconcile(result)
 
 

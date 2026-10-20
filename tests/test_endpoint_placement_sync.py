@@ -58,6 +58,13 @@ async def test_ensure_cluster_sets_site_scope_and_tenant(
     monkeypatch.setattr(device_ensure, "rest_reconcile_async", _fake_reconcile)
     monkeypatch.setattr("proxbox_api.services.sync.discovery_tags.rest_first_async", _fake_first)
 
+    async def _claim(*_args, **kwargs):
+        assert kwargs["site_id"] == 42
+        assert kwargs["tenant_id"] == 9
+        return SimpleNamespace(record=SimpleNamespace(id=77), created=True)
+
+    monkeypatch.setattr(device_ensure, "claim_endpoint_cluster", _claim)
+
     await device_ensure._ensure_cluster(
         object(),
         cluster_name="cluster-a",

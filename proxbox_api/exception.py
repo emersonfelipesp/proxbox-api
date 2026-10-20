@@ -33,7 +33,8 @@ class ProxboxException(Exception):
         if http_status_code is not None:
             self.http_status_code = http_status_code
 
-        log_message = f"ProxboxException: {self.message}"
+        log_identity = type(self).__name__ if redact_log_details else self.message
+        log_message = f"ProxboxException: {log_identity}"
 
         if self.detail:
             log_message += (
@@ -251,6 +252,7 @@ class ProxmoxAPIError(ProxboxException):
             message=message,
             detail=detail if detail else None,
             python_exception=str(original_error) if original_error else None,
+            redact_log_details=True,
         )
         self.node = node
         self.endpoint = endpoint

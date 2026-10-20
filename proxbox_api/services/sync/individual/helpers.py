@@ -45,11 +45,17 @@ def resolve_proxmox_session(
     Returns:
         Matching Proxmox session or None.
     """
-    for px in px_list:
-        px_name = getattr(px, "name", None)
-        if px_name and px_name.lower() == cluster_name.lower():
-            return px
-    return None
+    candidates = [
+        px
+        for px in px_list
+        if str(getattr(px, "name", None) or "").casefold() == cluster_name.casefold()
+    ]
+    if len(candidates) > 1:
+        raise ProxboxException(
+            message=f"Several endpoint scopes match cluster: {cluster_name}",
+            detail="Select one exact endpoint before individual synchronization.",
+        )
+    return candidates[0] if candidates else None
 
 
 def resolve_proxmox_session_for_request(

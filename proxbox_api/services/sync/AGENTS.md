@@ -16,10 +16,19 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
 ## Current Modules
 
 - `__init__.py`: sync service namespace for Proxmox-to-NetBox flows.
-- `cluster_links.py`: repairs netbox-proxbox `ProxmoxCluster.netbox_cluster`
-  links by exact NetBox cluster-name resolution after cluster reconciliation.
+- `cluster_links.py`: validates the atomic endpoint cluster action contract,
+  resolves exact plugin endpoint ownership from session transport identity,
+  and returns the native cluster claimed inside the plugin transaction.
+  Its transport identity uses domain-before-IP precedence and corroborates any
+  source fallback IP in the endpoint's configured hosts. An endpoint-only extra
+  fallback does not disqualify an IP-only source. Native responses
+  require strict positive IDs and matching detail URLs; mutable record paths
+  use the validated ID. The additive `changed` flag preserves actual outcomes.
 - `clusters.py`: cluster synchronization helpers.
 - `device_ensure.py`: device creation and reconciliation helpers. When several
+  bulk statuses have missing or repeated endpoint IDs, reject the entire batch
+  before prerequisite writes. Resolve placement per endpoint during the claim;
+  do not restore name-collapsed preparatory site writes. When several
   identity sidecars claim different devices for one node, deleted devices are
   ignored, returned sidecars are client-verified against the requested
   cluster/node identity, and every returned device is client-verified against
@@ -195,13 +204,22 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   cluster-dependent write paths on the same helper to avoid NetBox validation
   errors where the assigned cluster belongs to a different site than the
   dependent object payload.
-- **ProxmoxCluster link invariant.** After a NetBox
-  `virtualization.Cluster` is reconciled, cluster sync calls
-  `cluster_links.sync_proxmox_cluster_netbox_link()` to set or repair every
-  matching netbox-proxbox `ProxmoxCluster.netbox_cluster` row by exact cluster
-  name. This backfills existing multi-endpoint plugin rows whose
-  `netbox_cluster` was previously null and keeps the cloud provisioning
-  cluster-to-endpoint map resolvable after re-sync.
+- **Endpoint cluster ownership invariant.** Before any native cluster write,
+  call `POST /api/plugins/proxbox/endpoints/proxmox/{id}/sync-cluster/` through
+  `cluster_links.claim_endpoint_cluster()`. The plugin atomically creates or
+  resolves one native cluster, its endpoint relation, its tracking row, and
+  its sidecar. Native metadata reconciliation uses the returned primary key
+  and existing record, never a name-based lookup. Full device sync keeps
+  results keyed by `(db_endpoint_id, cluster_name)` so equal names on different
+  endpoints remain separate. Individual cluster, node and VM synchronization
+  and full VM dependency precomputation use the same action. `endpoint_source`
+  distinguishes NetBox IDs from backend IDs. The NetBox source requires the
+  exact ID and matching host/port; other sources require one unambiguous
+  transport match, including every alternate IP the source can use after domain
+  failure. Contradictory hosts, duplicate matches, disabled endpoints,
+  failed actions, and malformed responses are fatal. There is no name-only or
+  singleton fallback and no name-wide tracking-link repair. The request omits
+  null placement values, preserving an existing cluster's placement.
 - **Shared-MAC guest interfaces.** Guest-agent interfaces that share a Proxmox
   config NIC MAC are aggregated onto the single NetBox VMInterface for that
   config NIC. The merge is keyed by the authoritative config NIC MAC, so VRRP

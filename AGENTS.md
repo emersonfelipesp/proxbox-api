@@ -275,6 +275,22 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Transport access method** (`ProxmoxEndpoint.access_methods`, enum `proxbox_api/enum/proxmox.py::ProxmoxAccessMethod`): per-endpoint axis orthogonal to `allow_writes`. `api` (default, new endpoints) = Read+Write over API only; `api_ssh` = API + SSH. SSH-only is unrepresentable (two-value enum; create/update reject any other value with 422). Existing rows are backfilled to `api_ssh` on upgrade (non-breaking). Gates proxbox-api's own SQLite-id SSH paths (Cloud Image Build Pipeline, Azure VHD import) via `routes/proxmox/access_gate.py`. The value is pushed from the NetBox plugin and accepted on `POST/PUT /proxmox/endpoints`.
 - **Extras status** (`routes/extras/`, `/extras/*`): `GET /extras/bootstrap-status` exposes startup bootstrap warnings. The former custom-field creation and reconciliation routes have been removed; typed `Proxbox*SyncState` sidecars are the only Proxbox reflection-state store.
 - **Sync** (`routes/sync/`, `/sync/*`): individual and active sync endpoints.
+  Native cluster creation must first call the exact plugin endpoint's atomic
+  `sync-cluster` action. Resolve plugin ownership through corroborated host and
+  port metadata; backend database IDs and NetBox endpoint IDs are independent.
+  Reconcile native cluster metadata by the returned primary key, preserve that
+  identity on rename and retry, and never repair tracking links by cluster name.
+  A missing action, ambiguous endpoint, disabled endpoint, or failed ownership
+  claim must stop native cluster writes. Both cluster and standalone modes use
+  this contract, including device and VM dependency creation.
+  Match effective connection hosts using domain-before-IP precedence. Refuse
+  ambiguous individual names and missing or repeated bulk endpoint IDs before
+  prerequisite writes. Validate strict native response IDs and construct detail
+  paths from those IDs. Preserve the action's substantive `changed` outcome.
+  Deploy the backend guard first and prove its exact revision and replacement
+  or drain of old-code work before installing the new plugin. Missing action
+  support causes transient failures before native metadata writes. Verify the
+  action capability, runtime permissions, and successful synchronization next.
   Proxmox node Device names use the effective endpoint/global
   `node_device_name_template`, while Proxmox API paths and typed sync-state
   identity retain the original short node name. The supported placeholders are

@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 from proxmox_mock.openapi import load_packaged_openapi
-from proxmox_mock.routes import register_generated_proxmox_mock_routes
+from proxmox_mock.routes import _filter_collection, register_generated_proxmox_mock_routes
 from proxmox_mock.state import reset_shared_mock_state
 
 TEST_MOCK_OPENAPI = {
@@ -360,3 +360,86 @@ async def test_generated_proxmox_mock_routes_preserve_state_across_rebuild(mock_
         fetched_after_reset = await client.get("/api2/json/items/reload-item")
         assert fetched_after_reset.status_code == 200
         assert fetched_after_reset.json()["name"] != "Reload"
+
+
+CLUSTER_RESOURCES_OPENAPI = {
+    "openapi": "3.1.0",
+    "info": {"title": "Proxmox mock cluster resources test", "version": "test"},
+    "paths": {
+        "/api2/json/cluster/resources": {
+            "get": {
+                "operationId": "get_cluster_resources",
+                "parameters": [
+                    {
+                        "name": "type",
+                        "in": "query",
+                        "required": False,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {"type": "string"},
+                                            "type": {"type": "string", "enum": ["qemu", "lxc"]},
+                                            "vmid": {"type": "integer"},
+                                            "node": {"type": "string"},
+                                        },
+                                    },
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        }
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_cluster_resources_type_vm_returns_guest_rows(mock_namespace: str):
+    """Proxmox treats ``type=vm`` as every guest row, as proxbox-api relies on."""
+    app = FastAPI()
+    register_generated_proxmox_mock_routes(
+        app,
+        openapi_document=CLUSTER_RESOURCES_OPENAPI,
+        namespace=mock_namespace,
+        owner_pid=os.getpid(),
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        seeded = await client.get("/api2/json/cluster/resources")
+        guests = await client.get("/api2/json/cluster/resources", params={"type": "vm"})
+        literal = await client.get("/api2/json/cluster/resources", params={"type": "qemu"})
+        storage = await client.get("/api2/json/cluster/resources", params={"type": "storage"})
+
+    assert [row["type"] for row in seeded.json()] == ["qemu"]
+    assert guests.status_code == 200
+    assert [row["type"] for row in guests.json()] == ["qemu"]
+    assert [row["type"] for row in literal.json()] == ["qemu"]
+    assert storage.json() == []
+
+
+def test_cluster_resources_type_vm_filter_scope():
+    """The ``vm`` alias applies only to cluster/resources; other paths stay literal."""
+    rows = [
+        {"type": "qemu", "vmid": 101},
+        {"type": "lxc", "vmid": 102},
+        {"type": "node", "node": "pve01"},
+    ]
+
+    guests = _filter_collection(rows, {"type": "vm"}, concrete_path="/cluster/resources")
+    assert [row.get("vmid") for row in guests] == [101, 102]
+    assert _filter_collection(rows, {"type": "vm"}, concrete_path="/nodes/pve01/qemu") == []
+    assert _filter_collection(rows, {"type": "lxc"}, concrete_path="/cluster/resources") == [
+        {"type": "lxc", "vmid": 102}
+    ]

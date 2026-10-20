@@ -61,6 +61,14 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
   label-free capacity/row/in-flight/orphan/compaction metrics and provides safe local
   inspection/clear selectors. Startup pins the validated HMAC generation in
   memory; do not re-read a mutable key source on request paths.
+- `verb_dispatch.py`: shared node resolver, NetBox VM resolver, and journal
+  writer for the operational verbs and Cloud VM provisioning.
+  `resolve_proxmox_node()` queries `cluster/resources` with `type=vm`, because
+  Proxmox accepts only `vm`, `storage`, `node`, and `sdn` as the request filter
+  and rejects `qemu` or `lxc` with HTTP 400. It matches a row only when both
+  `vmid` and the row `type` (`qemu` or `lxc`) equal the request. The cloud clone
+  depends on it to find the template's own node, so a template on shared storage
+  can be cloned with Proxmox `target=<destination>` onto another node.
 - `proxmox_helpers.py`: typed Proxmox helper functions used by route orchestration. VM configuration responses are validated by the generated models shipped in the exactly pinned `proxmox-sdk`, which is the single runtime authority for narrow legacy scalar unions such as QEMU `memory` and `agent`. The backend retains only one copy-on-write compatibility normalization: whitespace-only values become `None` for optional boolean fields, covering observed legacy LXC `unprivileged` responses. Do not add broad scalar-to-string coercion or validate sync responses with backend-local proxy/viewer artifacts.
 - `packer_preflight.py`: endpoint-scoped Cloud Image Pipeline readiness checks.
   It accepts one already-resolved Proxmox session, performs only GET calls for

@@ -57,6 +57,29 @@ class _FakeExistingDevice:
         self.applied[key] = value
 
 
+def _stub_cluster_dependencies(monkeypatch: pytest.MonkeyPatch, scope_id: int | None = 41) -> None:
+    """Supply endpoint-owned dependencies for tests of device-only reconciliation."""
+
+    async def cluster(*_args: Any, **_kwargs: Any) -> _FakePhaseRecord:
+        return _FakePhaseRecord(
+            {"id": 11, "name": "PVE-CLUSTER-01", "scope_type": "dcim.site", "scope_id": scope_id}
+        )
+
+    async def site(*_args: Any, **_kwargs: Any) -> _FakePhaseRecord:
+        return _FakePhaseRecord({"id": 41})
+
+    async def tenant(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def ownership(*_args: Any, **_kwargs: Any) -> object:
+        return SimpleNamespace(id=1)
+
+    monkeypatch.setattr(device_ensure, "_ensure_cluster", cluster)
+    monkeypatch.setattr(device_ensure, "_ensure_site", site)
+    monkeypatch.setattr(device_ensure, "_resolve_tenant", tenant)
+    monkeypatch.setattr(device_ensure, "write_device_sync_state", ownership)
+
+
 def _target(*, desired_name: str = "pve01.cluster-a.example.com") -> device_ensure._DeviceTarget:
     return device_ensure._DeviceTarget(
         cluster_name="cluster-a",
@@ -1565,6 +1588,7 @@ async def test_bulk_device_reconcile_does_not_reuse_untagged_same_name_node(
     Without the ``proxbox`` opt-in tag the bulk reconcile targets the desired
     Proxmox site (41) and lets name+site lookup create a fresh record there.
     """
+    _stub_cluster_dependencies(monkeypatch)
     captured_device_phase: dict[str, Any] = {}
 
     async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
@@ -1608,7 +1632,7 @@ async def test_bulk_device_reconcile_does_not_reuse_untagged_same_name_node(
                 ),
             }
 
-        if "clusters" in phase_names:
+        if "device_types" in phase_names:
             return {
                 "clusters": SimpleNamespace(
                     records=[_FakePhaseRecord({"id": 11, "name": "PVE-CLUSTER-01"})]
@@ -1637,6 +1661,7 @@ async def test_bulk_device_reconcile_does_not_reuse_untagged_same_name_node(
         object(),
         clusters_status=[
             SimpleNamespace(
+                db_endpoint_id=73,
                 name="PVE-CLUSTER-01",
                 mode="cluster",
                 node_list=[SimpleNamespace(name="pve01")],
@@ -1658,6 +1683,7 @@ async def test_bulk_device_reconcile_uses_reconciled_cluster_site_scope(
 ) -> None:
     """Cluster scope wins over stale endpoint/default site during device writes."""
 
+    _stub_cluster_dependencies(monkeypatch, scope_id=99)
     captured_device_phase: dict[str, Any] = {}
 
     async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
@@ -1691,7 +1717,7 @@ async def test_bulk_device_reconcile_uses_reconciled_cluster_site_scope(
                 ),
             }
 
-        if "clusters" in phase_names:
+        if "device_types" in phase_names:
             return {
                 "clusters": SimpleNamespace(
                     records=[
@@ -1725,6 +1751,7 @@ async def test_bulk_device_reconcile_uses_reconciled_cluster_site_scope(
         object(),
         clusters_status=[
             SimpleNamespace(
+                db_endpoint_id=73,
                 name="PVE-CLUSTER-01",
                 mode="cluster",
                 node_list=[SimpleNamespace(name="pve01")],
@@ -1748,6 +1775,7 @@ async def test_bulk_device_reconcile_adopts_tagged_same_name_node(
     targets and updates it in place, attaching it to the Proxmox cluster instead
     of creating a duplicate in the default Proxmox site.
     """
+    _stub_cluster_dependencies(monkeypatch)
     captured_device_phase: dict[str, Any] = {}
 
     async def _fake_rest_list(*_args: Any, **_kwargs: Any) -> list[Any]:
@@ -1791,7 +1819,7 @@ async def test_bulk_device_reconcile_adopts_tagged_same_name_node(
                 ),
             }
 
-        if "clusters" in phase_names:
+        if "device_types" in phase_names:
             return {
                 "clusters": SimpleNamespace(
                     records=[_FakePhaseRecord({"id": 11, "name": "PVE-CLUSTER-01"})]
@@ -1817,6 +1845,7 @@ async def test_bulk_device_reconcile_adopts_tagged_same_name_node(
         object(),
         clusters_status=[
             SimpleNamespace(
+                db_endpoint_id=73,
                 name="PVE-CLUSTER-01",
                 mode="cluster",
                 node_list=[SimpleNamespace(name="pve01")],

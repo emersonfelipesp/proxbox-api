@@ -25,6 +25,63 @@ Current execution order:
 
 The streaming variant at `GET /full-update/stream` emits the same stage transitions over Server-Sent Events.
 
+### Endpoint-owned native clusters
+
+Before creating or updating a native NetBox cluster, synchronization calls
+`POST /api/plugins/proxbox/endpoints/proxmox/{id}/sync-cluster/` on the exact
+NetBox Proxmox endpoint. The plugin establishes the endpoint, native cluster,
+Proxmox tracking row, and typed sidecar relationship in one database
+transaction. The backend then updates native metadata by the returned cluster
+primary key. This contract applies to full updates, individual cluster and
+node updates, and VM dependency creation, in both cluster and standalone mode.
+
+An existing endpoint relation remains authoritative after a Proxmox cluster
+rename and on retries. Equal cluster names on different endpoints do not
+authorize a shared native cluster. If NetBox's cluster name and placement
+constraints prevent a separate cluster, synchronization reports a conflict
+instead of updating another endpoint's cluster. Resolve the conflicting
+inventory or placement before retrying.
+
+Backend endpoint IDs and NetBox endpoint IDs use separate ID spaces.
+Synchronization checks the session source and corroborates the exact host and
+port before selecting the plugin endpoint. Missing identity, conflicting
+hosts, duplicate matches, disabled endpoints, missing plugin action support,
+and invalid action responses stop cluster writes. There is no name-only or
+single-endpoint fallback. The paired plugin release must provide the atomic
+action before successful cluster synchronization can resume. Omitted site or tenant fields preserve
+existing placement; normal dependency synchronization sends resolved placement
+IDs when available.
+
+Host identity follows the actual connection precedence: a configured domain wins
+over an IP address. An unused secondary IP cannot authorize a different effective
+host. The session can fall back to its configured IP when the domain fails, so
+that alternate source host must also appear in the selected endpoint's host
+configuration. Equal domains with different fallback IPs fail before the claim,
+even when the domain currently works. An IP-only source may match an endpoint
+whose preferred host is that IP and whose unused alternate IP differs; that
+source cannot connect to the endpoint-only alternate host. Correct stale domain
+and IP configurations before retrying. Bulk synchronization requires unique positive endpoint IDs before any
+prerequisite writes. An individual cluster request refuses multiple equal-name
+sessions. Dry runs verify both the requested endpoint ID and linked native ID
+against the returned records and never call the ownership action.
+
+The action returns strict native identity and a substantive `changed` flag.
+Creation reports `created`. A claim-induced rename, type or placement change,
+or later metadata drift reports `updated`. A retry without drift reports
+`unchanged`. Missing `changed` remains compatible with `false`.
+
+Deploy this backend first as the compatibility guard for the changed native
+cluster creation paths. Verify its exact final revision and prove that all old
+backend processes and in-flight old-code work have been replaced or drained.
+Only then deploy and migrate the plugin. While the old plugin lacks the action,
+synchronization can fail transiently after reconciling type/site prerequisites;
+the missing action stops native cluster metadata writes without a name fallback.
+Verify the action capability and runtime service token permissions, then verify
+successful synchronization and the exact endpoint/native-cluster relationship.
+Record the backend revision, process drain, plugin deployment, permission probe,
+and successful synchronization in the release journal. Do not expose the new
+plugin to an old backend that can still use name-based native writes.
+
 Node Device reconciliation uses the effective node name template documented in
 [Configuration](../getting-started/configuration.md#node-device-name-template).
 Maps are keyed by the Proxmox cluster and short node name, while NetBox writes

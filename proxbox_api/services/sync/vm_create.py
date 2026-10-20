@@ -56,6 +56,17 @@ from proxbox_api.services.sync.vm_helpers import (
 from proxbox_api.services.sync.vmid_helpers import normalize_positive_int
 
 
+def _unique_cluster_state(cluster_status: list[object], cluster_name: str) -> object | None:
+    """Refuse a name-only dependency request that spans several endpoint scopes."""
+    candidates = [state for state in cluster_status if getattr(state, "name", None) == cluster_name]
+    if len(candidates) > 1:
+        raise ProxboxException(
+            message="Several endpoint scopes have the requested cluster name.",
+            detail="Select one exact Proxmox endpoint before creating VM dependencies.",
+        )
+    return candidates[0] if candidates else None
+
+
 async def ensure_vm_dependencies(
     netbox_session: object,
     cluster_status: ClusterStatusSchemaList,
@@ -83,10 +94,7 @@ async def ensure_vm_dependencies(
         ProxboxException: If dependency creation fails
     """
     try:
-        cluster_state = next(
-            (state for state in cluster_status if getattr(state, "name", None) == cluster_name),
-            None,
-        )
+        cluster_state = _unique_cluster_state(cluster_status, cluster_name)
         cluster_mode = getattr(cluster_state, "mode", None) or "cluster"
 
         cluster_type = await _ensure_cluster_type(
@@ -110,6 +118,7 @@ async def ensure_vm_dependencies(
             site_id=getattr(site, "id", None),
             tenant_id=getattr(tenant, "id", None),
             overwrite_flags=overwrite_flags,
+            endpoint_source=cluster_state,
         )
         site_id = _effective_cluster_site_id(
             cluster,

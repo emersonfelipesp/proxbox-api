@@ -4,17 +4,41 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from proxbox_api.constants import DISCOVERY_TAG_CLUSTER
-from proxbox_api.netbox_rest import rest_first_async, rest_list_async
+from proxbox_api.netbox_rest import rest_list_async
 from proxbox_api.services.netbox_writers import upsert_cluster, upsert_cluster_type
 from proxbox_api.services.run_session import SyncContext
-from proxbox_api.services.sync.cluster_links import sync_proxmox_cluster_netbox_link
-from proxbox_api.services.sync.discovery_tags import (
-    discovery_tag_ref,
-    merge_tag_refs,
-    resolve_discovery_tag_id,
+from proxbox_api.services.sync.cluster_links import (
+    CLUSTER_PATH,
+    ENDPOINT_PATH,
+    ClusterBindingError,
+    NativeClusterResponse,
+    resolve_plugin_endpoint_id,
 )
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
+from proxbox_api.services.sync.vm_helpers import to_mapping
+
+
+def _one_exact_read(rows: list[object], expected_id: int) -> dict[str, object]:
+    if len(rows) != 1:
+        raise ClusterBindingError("Dry-run identity read must return exactly one record.")
+    row = to_mapping(rows[0])
+    if type(row.get("id")) is not int or row["id"] != expected_id:
+        raise ClusterBindingError("Dry-run response differs from its exact requested identity.")
+    return row
+
+
+async def _dry_run_native_cluster(nb: object, source: object) -> dict[str, object] | None:
+    endpoint_id = await resolve_plugin_endpoint_id(nb, source)
+    endpoints = await rest_list_async(nb, ENDPOINT_PATH, query={"id": endpoint_id, "limit": 2})
+    endpoint = _one_exact_read(endpoints, endpoint_id)
+    link = endpoint.get("netbox_cluster")
+    if link is None:
+        return None
+    native = NativeClusterResponse.model_validate(
+        {"id": link} if type(link) is int else to_mapping(link)
+    )
+    clusters = await rest_list_async(nb, CLUSTER_PATH, query={"id": native.id, "limit": 2})
+    return _one_exact_read(clusters, native.id)
 
 
 async def sync_cluster_individual(
@@ -61,16 +85,11 @@ async def sync_cluster_individual(
 
     service = BaseIndividualSyncService(ctx.nb, px, ctx.tag)
     tag_refs = service.tag_refs
+    mode = getattr(px, "mode", None) or "cluster"
+    proxmox_resource["mode"] = mode
 
     if dry_run:
-        existing = await rest_list_async(
-            ctx.nb,
-            "/api/virtualization/clusters/",
-            query={"name": cluster_name},
-        )
-        netbox_object = None
-        if existing:
-            netbox_object = existing[0].serialize() if hasattr(existing[0], "serialize") else None
+        netbox_object = await _dry_run_native_cluster(ctx.nb, px)
         return {
             "object_type": "cluster",
             "action": "dry_run",
@@ -84,41 +103,18 @@ async def sync_cluster_individual(
     try:
         cluster_type_result = await upsert_cluster_type(
             ctx.nb,
-            mode="cluster",
+            mode=mode,
             tag_refs=tag_refs,
         )
-
-        # Pre-check existence so the discovery tag (issue #362) only lands
-        # in the create payload. On update we merge the desired baseline
-        # with the current tag set so subsequent syncs do not strip the
-        # discovery slug nor any operator-added tags.
-        existing_cluster = await rest_first_async(
-            ctx.nb,
-            "/api/virtualization/clusters/",
-            query={"name": cluster_name},
-        )
-        if existing_cluster is None:
-            cluster_tag_refs = list(tag_refs)
-            # Soft contract (issue #362): only stamp the discovery slug when the
-            # tag exists in NetBox, so a missing tag never fails the create.
-            if await resolve_discovery_tag_id(ctx.nb, DISCOVERY_TAG_CLUSTER) is not None:
-                cluster_tag_refs.append(discovery_tag_ref(DISCOVERY_TAG_CLUSTER))
-        else:
-            existing_tags = (
-                existing_cluster.serialize().get("tags")
-                if hasattr(existing_cluster, "serialize")
-                else None
-            )
-            cluster_tag_refs = merge_tag_refs(list(tag_refs), existing_tags)
 
         cluster_result = await upsert_cluster(
             ctx.nb,
             cluster_name=cluster_name,
             cluster_type_id=getattr(cluster_type_result.record, "id", None),
-            mode="cluster",
-            tag_refs=cluster_tag_refs,
+            mode=mode,
+            tag_refs=tag_refs,
+            endpoint_source=px,
         )
-        await sync_proxmox_cluster_netbox_link(ctx.nb, cluster_name=cluster_name)
 
         netbox_object = (
             cluster_result.record.serialize()

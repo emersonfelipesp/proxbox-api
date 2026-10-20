@@ -25,6 +25,66 @@ Ordem atual de execucao:
 
 A variacao em `GET /full-update/stream` emite os mesmos estagios via Server-Sent Events.
 
+### Clusters nativos vinculados ao endpoint
+
+Antes de criar ou atualizar um cluster nativo do NetBox, a sincronizacao chama
+`POST /api/plugins/proxbox/endpoints/proxmox/{id}/sync-cluster/` no endpoint
+Proxmox exato do NetBox. O plugin estabelece a relacao entre endpoint, cluster
+nativo, registro de acompanhamento Proxmox e sidecar tipado em uma unica
+transacao. Depois, o backend atualiza os metadados nativos pela chave primaria
+retornada. O contrato vale para atualizacoes completas, sincronizacao individual
+de cluster e node e criacao de dependencias de VM, nos modos cluster e standalone.
+
+Uma relacao existente continua sendo a autoridade apos renomear o cluster
+Proxmox ou repetir uma sincronizacao. Nomes iguais em endpoints diferentes nao
+autorizam compartilhar um cluster nativo. Se as restricoes de nome e localizacao
+do NetBox impedirem criar um cluster separado, a sincronizacao informa um
+conflito e nao atualiza o cluster de outro endpoint. Corrija o inventario ou a
+localizacao conflitante antes de repetir.
+
+Os IDs de endpoint do backend e do NetBox pertencem a espacos independentes.
+A sincronizacao verifica a origem da sessao e confirma host e porta antes de
+selecionar o endpoint do plugin. Identidade ausente, hosts conflitantes,
+correspondencias duplicadas, endpoints desativados, ausencia da acao no plugin
+ou resposta invalida interrompem as escritas de cluster. Nao existe fallback
+por nome ou por endpoint unico. A versao pareada do plugin deve fornecer a acao
+atomica antes de retomar sincronizacoes de cluster bem-sucedidas. A omissao de site ou tenant preserva a localizacao
+existente; a sincronizacao normal de dependencias envia os IDs resolvidos
+quando disponiveis.
+
+A identidade do host segue a precedencia real da conexao: o dominio configurado
+tem prioridade sobre o endereco IP. Um IP secundario nao utilizado nao autoriza
+outro host efetivo. A sessao pode usar seu IP configurado quando o dominio falha;
+esse host alternativo da origem tambem deve constar na configuracao do endpoint
+selecionado. Dominios iguais com IPs alternativos diferentes interrompem a
+vinculacao, mesmo quando o dominio funciona. Uma origem que usa somente IP pode
+corresponder a um endpoint cujo host preferido seja esse IP e cujo IP alternativo
+seja diferente; essa origem nao pode conectar ao host alternativo exclusivo do
+endpoint. Corrija configuracoes antigas de dominio e IP antes de repetir.
+A sincronizacao em lote exige IDs de endpoint positivos e
+unicos antes de qualquer escrita de dependencia. A sincronizacao individual
+recusa varias sessoes com o mesmo nome. O dry run verifica os IDs retornados do
+endpoint e do cluster nativo e nunca chama a acao de vinculacao.
+
+A resposta da acao valida a identidade nativa e inclui o indicador booleano
+`changed` para alteracoes substanciais. A criacao informa `created`. Uma
+renomeacao, mudanca de tipo ou localizacao na vinculacao, ou uma alteracao
+posterior de metadados, informa `updated`. Uma repeticao sem alteracoes informa
+`unchanged`. A ausencia de `changed` permanece compativel com `false`.
+
+Implante este backend primeiro como protecao de compatibilidade para os caminhos
+alterados de criacao do cluster nativo. Verifique sua revisao final exata e
+comprove a substituicao dos processos antigos e a conclusao ou interrupcao de
+todo trabalho que ainda executa codigo antigo. Somente depois implante e migre o
+plugin. Enquanto o plugin antigo nao fornecer a acao, a sincronizacao pode falhar
+temporariamente apos reconciliar dependencias de tipo e site; a ausencia da acao
+impede escritas de metadados do cluster nativo, sem fallback por nome. Verifique
+a capacidade da acao e as permissoes do token de servico; depois confirme a
+sincronizacao bem-sucedida e a relacao exata entre endpoint e cluster nativo.
+Registre a revisao do backend, a conclusao do trabalho antigo, a implantacao do
+plugin, as permissoes e a sincronizacao no diario da versao. Nao exponha o plugin
+novo a um backend antigo que ainda executa escritas nativas baseadas em nome.
+
 A reconciliacao de Devices de node usa o template efetivo documentado em
 [Configuracao](../getting-started/configuration.md#template-de-nome-do-device-de-node).
 Os mapas usam o cluster Proxmox e o nome curto do node como chave, enquanto as

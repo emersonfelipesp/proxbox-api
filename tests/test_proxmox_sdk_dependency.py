@@ -5,8 +5,11 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from packaging.version import Version
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PROXBOX_API_VERSION = "0.0.28.post1"
+PROXBOX_API_VERSION = "0.0.29rc1"
+RELEASE_NOTES_VERSION = "0.0.29"
 PROXMOX_SDK_VERSION = "0.0.15"
 NETBOX_SDK_VERSION = "0.0.13"
 
@@ -65,9 +68,10 @@ def test_certified_stack_dependency_pins_are_locked() -> None:
 
 
 def test_release_version_has_source_bound_release_notes() -> None:
-    release_notes = REPO_ROOT / "docs" / "release-notes" / f"version-{PROXBOX_API_VERSION}.md"
+    assert Version(PROXBOX_API_VERSION).base_version == RELEASE_NOTES_VERSION
+    release_notes = REPO_ROOT / "docs" / "release-notes" / f"version-{RELEASE_NOTES_VERSION}.md"
 
     assert release_notes.is_file()
     assert release_notes.read_text(encoding="utf-8").startswith(
-        f"# proxbox-api {PROXBOX_API_VERSION}\n"
+        f"# proxbox-api {RELEASE_NOTES_VERSION}\n"
     )
