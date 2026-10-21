@@ -1,10 +1,5 @@
 # proxbox-api 0.0.29
 
-## Release status
-
-These notes describe the planned `0.0.29` release. The current package preparation uses
-`0.0.29rc1`. A candidate does not establish final release availability or production readiness.
-
 ## Summary
 
 Cluster synchronization now resolves native NetBox clusters through exact Proxmox endpoint
@@ -19,7 +14,7 @@ Proxmox credential decryption. It adds no backend database migration or dependen
 
 | Component | Release or contract |
 | --- | --- |
-| proxbox-api candidate | `0.0.29rc1`, toward final `0.0.29` |
+| proxbox-api | `0.0.29` |
 | Proxmox SDK | `proxmox-sdk 0.0.15` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 and 3.13 |
@@ -34,8 +29,8 @@ strict `created` flag. An optional strict `changed` flag reports substantive nat
 an omitted flag means `false` for compatibility.
 
 Verify this capability and the runtime service token permissions on the selected plugin build.
-These notes do not assert that companion plugin final `0.0.30` is available. The plugin owns
-its separate schema migration and release qualification.
+The plugin owns its separate schema migration. Use companion netbox-proxbox `0.0.31` or
+later, which provides this action, and deploy this backend first.
 
 ## VM node resolution
 

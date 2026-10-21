@@ -1,11 +1,5 @@
 # proxbox-api 0.0.29
 
-## Estado da versão
-
-Estas notas descrevem a versão planejada `0.0.29`. A preparação atual do pacote usa
-`0.0.29rc1`. Uma candidata não comprova a disponibilidade da versão final nem a aprovação
-para produção.
-
 ## Resumo
 
 A sincronização de clusters agora resolve os clusters nativos do NetBox pela propriedade
@@ -21,7 +15,7 @@ backend nem alteração de dependências.
 
 | Componente | Versão ou contrato |
 | --- | --- |
-| Candidata proxbox-api | `0.0.29rc1`, com destino à final `0.0.29` |
+| proxbox-api | `0.0.29` |
 | Proxmox SDK | `proxmox-sdk 0.0.15` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 e 3.13 |
@@ -36,8 +30,8 @@ de acompanhamento e o booleano estrito `created`. O booleano estrito opcional `c
 indica alterações substanciais no cluster nativo. Sua ausência equivale a `false`.
 
 Verifique a capacidade e as permissões do token de serviço na versão selecionada do plugin.
-Estas notas não afirmam que a versão final `0.0.30` do plugin esteja disponível. O plugin
-mantém sua própria migração de esquema e qualificação de versão.
+O plugin mantém sua própria migração de esquema. Use o netbox-proxbox `0.0.31` ou posterior,
+que fornece essa ação, e implante este backend primeiro.
 
 ## Resolução do nó de VMs
 
