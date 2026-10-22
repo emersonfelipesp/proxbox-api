@@ -64,7 +64,10 @@ Reusable business workflows for synchronization, reconciliation, and Proxmox hel
 - `verb_dispatch.py`: shared node resolver, NetBox VM resolver, and journal
   writer for the operational verbs and Cloud VM provisioning. The journal
   writer accepts an explicit assigned-object type and ID while retaining the
-  existing NetBox VM defaults for all VM verb call sites.
+  existing NetBox VM defaults for all VM verb call sites. It returns the fields
+  of the `RestRecord` that `rest_create_async` answers with (through
+  `serialize()`); the verbs need that entry id to write their terminal update
+  and fail closed without it, so test it with a real `RestRecord`.
   `resolve_proxmox_node()` queries `cluster/resources` with `type=vm`, because
   Proxmox accepts only `vm`, `storage`, `node`, and `sdn` as the request filter
   and rejects `qemu` or `lxc` with HTTP 400. It matches a row only when both

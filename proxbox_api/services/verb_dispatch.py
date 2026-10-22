@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
-from proxbox_api.netbox_rest import rest_create_async, rest_patch_async
+from proxbox_api.netbox_rest import RestRecord, rest_create_async, rest_patch_async
 from proxbox_api.services.proxmox_helpers import get_cluster_resources
 from proxbox_api.services.sync.sync_state_reader import (
     resolve_virtual_machine_by_sync_state,
@@ -253,11 +253,15 @@ async def write_verb_journal_entry(
             method="POST",
             original_error=error,
         ) from error
+    # rest_create_async answers with a RestRecord, whose fields are only reachable through
+    # serialize(); without them the verbs find no journal entry id and fail closed.
+    if isinstance(record, RestRecord):
+        return record.serialize()
+    if isinstance(record, dict):
+        return record
     body = getattr(record, "data", None)
     if isinstance(body, dict):
         return body
-    if isinstance(record, dict):
-        return record
     return None
 
 

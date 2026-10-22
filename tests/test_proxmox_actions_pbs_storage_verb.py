@@ -11,8 +11,10 @@ from pydantic import ValidationError
 
 from proxbox_api.database import ProxmoxEndpoint
 from proxbox_api.exception import ProxboxException, ProxmoxAPIError
+from proxbox_api.netbox_rest import RestRecord
 from proxbox_api.routes import proxmox_actions
 from proxbox_api.routes.proxmox import runtime_generated
+from proxbox_api.services import verb_dispatch
 from proxbox_api.services.idempotency import get_idempotency_cache
 from proxbox_api.services.proxmox_helpers import create_pbs_storage
 
@@ -231,6 +233,27 @@ async def test_create_posts_exact_pbs_fields(endpoint, optional):
         "netbox_proxbox.proxmoxendpoint"
     )
     assert mocks["write"].call_args.kwargs["assigned_object_id"] == 419
+
+
+async def test_the_verb_reaches_proxmox_when_netbox_answers_with_a_rest_record(endpoint):
+    """The real journal helper keeps the id of the RestRecord that NetBox creates."""
+    record = RestRecord(
+        object(),
+        "/api/extras/journal-entries/",
+        {"id": 26861, "url": "/api/extras/journal-entries/26861/"},
+    )
+    with (
+        _patched() as mocks,
+        patch.object(
+            proxmox_actions, "write_verb_journal_entry", verb_dispatch.write_verb_journal_entry
+        ),
+        patch.object(verb_dispatch, "rest_create_async", AsyncMock(return_value=record)),
+    ):
+        response = await _call(endpoint, _payload())
+    assert response.status_code == 200
+    assert _body(response)["result"] == "created"
+    mocks["create"].assert_awaited_once()
+    assert mocks["update"].call_args.kwargs["journal_entry_id"] == 26861
 
 
 async def test_helper_posts_fixed_type_content_and_optional_fields():

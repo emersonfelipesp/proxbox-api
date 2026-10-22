@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 
 from proxbox_api.enum.proxmox import ClusterResourcesTypeResponse
 from proxbox_api.exception import NetBoxAPIError, ProxboxException, ProxmoxAPIError
+from proxbox_api.netbox_rest import RestRecord
 from proxbox_api.services import verb_dispatch
 
 
@@ -273,6 +274,30 @@ async def test_write_verb_journal_entry_posts_payload():
     assert payload["assigned_object_id"] == 42
     assert payload["kind"] == "info"
     assert payload["comments"] == "body"
+
+
+async def test_write_verb_journal_entry_returns_the_fields_of_a_rest_record():
+    """rest_create_async answers with a RestRecord, not the plain dict a mock returns."""
+    record = RestRecord(
+        object(),
+        "/api/extras/journal-entries/",
+        {"id": 26861, "url": "/api/extras/journal-entries/26861/", "comments": "body"},
+    )
+    with patch(
+        "proxbox_api.services.verb_dispatch.rest_create_async",
+        new=AsyncMock(return_value=record),
+    ):
+        entry = await verb_dispatch.write_verb_journal_entry(
+            nb=object(),
+            netbox_vm_id=42,
+            kind="info",
+            comments="body",
+        )
+    assert entry == {
+        "id": 26861,
+        "url": "/api/extras/journal-entries/26861/",
+        "comments": "body",
+    }
 
 
 async def test_write_verb_journal_entry_raises_on_failure():
