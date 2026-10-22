@@ -33,7 +33,7 @@ from proxbox_api.services.cloud_network import (
     resolve_cloud_network,
     validate_cloud_network_configured,
 )
-from proxbox_api.services.proxmox_helpers import get_node_task_status
+from proxbox_api.services.proxmox_helpers import get_cluster_resources, get_node_task_status
 from proxbox_api.services.sync.vm_network import ensure_ip_assigned_to_vm
 from proxbox_api.services.verb_dispatch import (
     resolve_netbox_vm_id,
@@ -70,6 +70,18 @@ _T = TypeVar("_T")
 class _CloudNetworkLease:
     ip_id: int | None
     netbox_session: object
+
+
+@dataclass(frozen=True, slots=True)
+class _ClonePlan:
+    template_node: str
+    needs_relocation: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _CloneTemplateResult:
+    clone_upid: str | None
+    relocate_upids: list[str]
 
 
 def _extract_task_id(response: object) -> str | None:
@@ -380,6 +392,54 @@ def _build_net0_override(
     return ",".join(rewritten)
 
 
+def _existing_network_mac(existing_config: object | None, key: str) -> str | None:
+    value = mapping_from_response(existing_config).get(key)
+    if not isinstance(value, str):
+        return None
+    for part in (part.strip() for part in value.split(",")):
+        name, separator, mac = part.partition("=")
+        if separator and mac and (name == "macaddr" or _looks_like_mac(mac)):
+            return mac
+    return None
+
+
+def _looks_like_mac(value: str) -> bool:
+    return re.fullmatch(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}", value) is not None
+
+
+def _build_extra_network_args(
+    req: CloudVMProvisionRequest,
+    existing_config: object | None,
+) -> dict[str, str]:
+    if req.extra_networks and _config_mapping_for_extra_disks(existing_config) is None:
+        # Without a readable config an existing NIC's MAC cannot be preserved, so
+        # Proxmox would silently mint a new one; refuse like extra disks do.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"reason": "config_read_failed"},
+        )
+    network_args: dict[str, str] = {}
+    for network in req.extra_networks:
+        key = f"net{network.index}"
+        mac = _existing_network_mac(existing_config, key)
+        value = network.model + (f"={mac}" if mac else "")
+        value += f",bridge={network.bridge}"
+        if network.vlan_tag is not None:
+            value += f",tag={network.vlan_tag}"
+        if network.firewall is not None:
+            value += f",firewall={int(network.firewall)}"
+        network_args[key] = value
+    return network_args
+
+
+def _reject_managed_extra_networks(req: CloudVMProvisionRequest) -> None:
+    if req.enforce_cloud_network and req.extra_networks:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"reason": "extra_networks_not_allowed_with_cloud_network"},
+        )
+
+
 def _proxmox_step_failed(step: str, error: Exception) -> HTTPException:
     safe_error = scrub_cloud_init({"error": str(error)}).get("error", str(error))
     logger.warning("cloud provision failed at step=%s: %s", step, safe_error)
@@ -450,18 +510,25 @@ async def _release_cloud_network_lease(lease: _CloudNetworkLease | None) -> None
     await release_ip(lease.ip_id, netbox_session=lease.netbox_session)
 
 
-_EXTRA_DISK_REFUSAL_REASONS = frozenset(
-    {"config_read_failed", "extra_disk_slot_in_use", "extra_disk_storage_invalid"}
+_PROVISION_REFUSAL_REASONS = frozenset(
+    {
+        "config_read_failed",
+        "extra_disk_slot_in_use",
+        "extra_disk_storage_invalid",
+        "relocate_disk_failed",
+        "storage_lookup_failed",
+        "target_storage_unavailable",
+    }
 )
 
 
-def _is_extra_disk_refusal(error: Exception) -> bool:
-    """Return whether the error is a stable extra-disk refusal that clients must see."""
+def _is_provision_refusal(error: Exception) -> bool:
+    """Return whether the error is a stable provisioning refusal clients must see."""
 
     return (
         isinstance(error, HTTPException)
         and isinstance(error.detail, dict)
-        and error.detail.get("reason") in _EXTRA_DISK_REFUSAL_REASONS
+        and error.detail.get("reason") in _PROVISION_REFUSAL_REASONS
     )
 
 
@@ -477,7 +544,7 @@ async def _run_proxmox_step_with_cloud_network_rollback(
         # receive a stable CIDR; release it if any later Proxmox step fails.
         if lease is not None:
             await _release_cloud_network_lease(lease)
-        if _is_extra_disk_refusal(error):
+        if _is_provision_refusal(error):
             raise
         # Always route through _proxmox_step_failed so the cipassword is scrubbed
         # from the log + client body even on the default enforce_cloud_network=
@@ -647,7 +714,7 @@ async def _journal_provision_best_effort(
         )
 
 
-async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionRequest) -> str | None:
+async def _resolve_template_node(proxmox: ProxmoxSession, req: CloudVMProvisionRequest) -> str:
     template_node = await resolve_proxmox_node(proxmox, "qemu", req.template_vmid)
     if not isinstance(template_node, str) or not template_node:
         try:
@@ -669,7 +736,74 @@ async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionReque
                     "template_vmid": req.template_vmid,
                 },
             ) from error
-        template_node = req.target_node
+        return req.target_node
+    return template_node
+
+
+async def _storage_supports_cross_node_clone(
+    proxmox: ProxmoxSession,
+    *,
+    template_node: str,
+    target_node: str,
+    storage: str,
+) -> bool:
+    try:
+        resources = await get_cluster_resources(proxmox, resource_type="storage")
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"reason": "storage_lookup_failed", "storage": storage},
+        ) from error
+    _require_target_storage(resources, storage=storage, target_node=target_node)
+    return any(
+        _row_field(row, "node") == template_node
+        and _row_field(row, "storage") == storage
+        and _row_field(row, "shared") == 1
+        for row in resources
+    )
+
+
+def _require_target_storage(resources: list[object], *, storage: str, target_node: str) -> None:
+    destination = next(
+        (
+            row
+            for row in resources
+            if _row_field(row, "node") == target_node and _row_field(row, "storage") == storage
+        ),
+        None,
+    )
+    destination_status = _row_field(destination, "status") if destination is not None else None
+    if destination is None or (
+        destination_status is not None and destination_status != "available"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason": "target_storage_unavailable",
+                "storage": storage,
+                "target_node": target_node,
+            },
+        )
+
+
+async def _plan_template_clone(proxmox: ProxmoxSession, req: CloudVMProvisionRequest) -> _ClonePlan:
+    template_node = await _resolve_template_node(proxmox, req)
+    if template_node == req.target_node or req.storage is None:
+        return _ClonePlan(template_node=template_node, needs_relocation=False)
+    usable = await _storage_supports_cross_node_clone(
+        proxmox,
+        template_node=template_node,
+        target_node=req.target_node,
+        storage=req.storage,
+    )
+    return _ClonePlan(template_node=template_node, needs_relocation=not usable)
+
+
+async def _dispatch_template_clone(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    plan: _ClonePlan,
+) -> str | None:
 
     clone_payload: dict[str, object] = {
         "newid": req.new_vmid,
@@ -677,15 +811,113 @@ async def _clone_template_vm(proxmox: ProxmoxSession, req: CloudVMProvisionReque
         "target": req.target_node,
         "full": 1 if req.full_clone else 0,
     }
-    if req.storage:
+    if req.storage and not plan.needs_relocation:
         clone_payload["storage"] = req.storage
     clone_result = await _maybe_await(
-        proxmox.session.nodes(template_node).qemu(req.template_vmid).clone.post(**clone_payload)
+        proxmox.session.nodes(plan.template_node)
+        .qemu(req.template_vmid)
+        .clone.post(**clone_payload)
     )
     clone_upid = _extract_task_id(clone_result)
     if _is_upid(clone_upid) and _should_wait_for_upid():
-        await _wait_for_upid(proxmox, template_node, clone_upid)
+        await _wait_for_upid(proxmox, plan.template_node, clone_upid)
     return clone_upid
+
+
+def _relocatable_disks(config_payload: object, storage: str) -> list[str]:
+    disks: list[tuple[tuple[int, int, int, str], str]] = []
+    for key, value in mapping_from_response(config_payload).items():
+        candidate = _disk_entry_storage(key, value)
+        if candidate is not None and candidate[-1] != storage:
+            disks.append((candidate, key))
+    return [key for _, key in sorted(disks)]
+
+
+def _relocation_failure(
+    req: CloudVMProvisionRequest,
+    clone_upid: str | None,
+    relocate_upids: dict[str, str],
+    failed_disk: str | None,
+    error: object,
+) -> HTTPException:
+    """Build the evidence-preserving relocation refusal for REST and SSE callers."""
+    safe_error = scrub_cloud_init({"error": str(error)}).get("error", str(error))
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail={
+            "reason": "relocate_disk_failed",
+            "vmid": req.new_vmid,
+            "target_node": req.target_node,
+            "clone_upid": clone_upid,
+            "relocate_upids": relocate_upids,
+            "failed_disk": failed_disk,
+            "error": safe_error,
+        },
+    )
+
+
+async def _read_relocation_config(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    clone_upid: str | None,
+) -> dict[str, object]:
+    """Read the cloned VM config, failing closed when it is unusable.
+
+    A degraded read (null, a list, an empty ``data`` envelope, or a config that
+    lists no disk) would otherwise relocate nothing and let provisioning report
+    success with the disks still on the template storage.
+    """
+    try:
+        payload = await _maybe_await(
+            proxmox.session.nodes(req.target_node).qemu(req.new_vmid).config.get()
+        )
+    except Exception as error:  # noqa: BLE001
+        raise _relocation_failure(req, clone_upid, {}, None, error) from error
+    config = _config_mapping_for_extra_disks(payload)
+    has_disk = config is not None and any(
+        _disk_entry_storage(key, value) is not None for key, value in config.items()
+    )
+    if config is None or not has_disk:
+        raise _relocation_failure(
+            req, clone_upid, {}, None, "cloned VM config is unreadable or lists no disk"
+        )
+    return config
+
+
+async def _relocate_vm_disks(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    plan: _ClonePlan,
+    clone_upid: str | None,
+) -> list[str]:
+    if not plan.needs_relocation or req.storage is None:
+        return []
+    config = await _read_relocation_config(proxmox, req, clone_upid)
+    relocate_upids: dict[str, str] = {}
+    for disk in _relocatable_disks(config, req.storage):
+        try:
+            result = await _maybe_await(
+                proxmox.session.nodes(req.target_node)
+                .qemu(req.new_vmid)
+                .move_disk.post(disk=disk, storage=req.storage, delete=0)
+            )
+            upid = _extract_task_id(result)
+            if upid is not None:
+                relocate_upids[disk] = upid
+            if _is_upid(upid) and _should_wait_for_upid():
+                await _wait_for_upid(proxmox, req.target_node, upid)
+        except Exception as error:  # noqa: BLE001
+            raise _relocation_failure(req, clone_upid, relocate_upids, disk, error) from error
+    return list(relocate_upids.values())
+
+
+async def _clone_template_vm(
+    proxmox: ProxmoxSession, req: CloudVMProvisionRequest
+) -> _CloneTemplateResult:
+    plan = await _plan_template_clone(proxmox, req)
+    clone_upid = await _dispatch_template_clone(proxmox, req, plan)
+    relocate_upids = await _relocate_vm_disks(proxmox, req, plan, clone_upid)
+    return _CloneTemplateResult(clone_upid=clone_upid, relocate_upids=relocate_upids)
 
 
 def _build_agent_override(existing_config: dict | None) -> str:
@@ -735,6 +967,7 @@ async def _configure_cloud_init_vm(
     net0 = _build_net0_override(existing_config, bridge=req.bridge, vlan_tag=req.vlan_tag)
     if net0 is not None:
         ci_args["net0"] = net0
+    ci_args.update(_build_extra_network_args(req, existing_config))
     if req.enable_agent:
         # Force the QEMU guest agent on regardless of what the source template
         # carried, so every cloud clone reports guest IPs and shuts down
@@ -794,6 +1027,7 @@ async def provision_vm(
     session: SessionDep,
     actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
 ) -> CloudVMProvisionResponse | JSONResponse:
+    _reject_managed_extra_networks(req)
     gated = await _cloud_provision_gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated
@@ -807,9 +1041,19 @@ async def provision_vm(
             _open_proxmox_session(gated),
             lease,
         )
+        clone_plan = await _run_proxmox_step_with_cloud_network_rollback(
+            "clone",
+            _plan_template_clone(proxmox, req),
+            lease,
+        )
         clone_upid = await _run_proxmox_step_with_cloud_network_rollback(
             "clone",
-            _clone_template_vm(proxmox, req),
+            _dispatch_template_clone(proxmox, req, clone_plan),
+            lease,
+        )
+        relocate_upids = await _run_proxmox_step_with_cloud_network_rollback(
+            "relocate_disk",
+            _relocate_vm_disks(proxmox, req, clone_plan, clone_upid),
             lease,
         )
         config_upid = await _run_proxmox_step_with_cloud_network_rollback(
@@ -845,6 +1089,7 @@ async def provision_vm(
         response = CloudVMProvisionResponse(
             new_vmid=req.new_vmid,
             clone_upid=clone_upid,
+            relocate_upids=relocate_upids,
             config_upid=config_upid,
             resize_upid=resize_upid,
             start_upid=start_upid,

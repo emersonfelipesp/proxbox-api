@@ -130,7 +130,15 @@ must not mask an otherwise valid response.
 QEMU VM provisioning (`POST /cloud/vm/provision` and
 `POST /cloud/vm/provision/stream`) accepts optional `sockets`, `bridge`,
 `vlan_tag`, and `disk_gb` overrides plus `enable_agent` (default `True`). It also
-accepts up to eight extra data disks, Proxmox tags, and a description. Extra
+accepts up to eight extra data disks, up to eight extra network interfaces,
+Proxmox tags, and a description. Extra interfaces use `net1` through `net31`,
+preserve an existing MAC at the requested index, and accept an explicit bridge,
+optional VLAN tag, supported model, and optional firewall flag. They are
+refused with `extra_networks_not_allowed_with_cloud_network` when
+`enforce_cloud_network=true`, because the tenant network policy owns NIC
+placement. Extra interfaces also require a successful mapping-shaped config
+read, so an existing MAC is never silently replaced; an unreadable config
+returns HTTP 502 `config_read_failed` before any config write. Extra
 disk storage resolves from the disk, the request, then an attached disk in the
 cloned VM config. Config inference prefers `scsi0`, then the lowest-numbered
 disk, and ignores network, description, CD-ROM, and Cloud-Init values. An
@@ -154,6 +162,28 @@ surface** (#222): the QEMU REST step-rollback wrapper scrubs even on the default
 scrubs), and the LXC `provision_lxc` failure handler scrubs the 502 body + log
 line too (the LXC create carries a `password` field). `CloudInitPayload.password`
 is bounded to `max_length=128`.
+
+For a cross-node clone with a requested storage, provisioning reads
+`cluster/resources?type=storage` exactly once. It refuses with
+`target_storage_unavailable` before cloning unless the storage has a target-node
+row whose status is absent or `available`. It uses the existing direct clone
+behavior when the same inventory has a template-node row with `shared=1`.
+Otherwise it clones without the `storage` parameter and then runs relocation as
+a separate REST `relocate_disk` step: it reads the new VM config on the target
+node and moves every eligible data disk to the requested storage. Cloud-Init
+drives, CD-ROMs, and disks already on the destination are excluded. Each
+`move_disk` call uses `delete=0`, so Proxmox retains the source volume as an
+unused disk. Storage discovery failures return `storage_lookup_failed` before
+the clone. The relocation config read is inside the same evidence boundary:
+a read failure, a non-mapping payload (`null`, a list, an empty `data`
+envelope), or a config that lists no disk returns `relocate_disk_failed` with
+`failed_disk=null`, the VMID, target node, and clone UPID, and configuration
+and start never run. A dispatch or task-wait failure returns
+`relocate_disk_failed` with
+the failed disk and a disk-to-UPID map for every move dispatched so far. REST
+success responses expose the move task IDs in dispatch order as
+`relocate_upids`; SSE reports the `relocate_disk` step as skipped, done, or
+error, and its error and completion events retain the same partial evidence.
 
 QEMU and LXC provisioning also accept `enforce_cloud_network` (default
 `false`). When true, proxbox-api resolves the customer-network settings from

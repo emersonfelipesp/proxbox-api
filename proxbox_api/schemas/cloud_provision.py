@@ -129,6 +129,23 @@ class ExtraDisk(BaseModel):
         return self
 
 
+class ExtraNetwork(BaseModel):
+    """An additional Proxmox network interface attached during provisioning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int = Field(..., ge=1, le=31)
+    bridge: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+    )
+    vlan_tag: int | None = Field(None, ge=1, le=4094)
+    model: Literal["virtio", "e1000", "e1000e", "vmxnet3", "rtl8139"] = "virtio"
+    firewall: bool | None = None
+
+
 class CloudImageBuildTarget(BaseModel):
     """Canonical target shared by planning, preflight, and execution."""
 
@@ -248,6 +265,7 @@ class CloudVMProvisionRequest(BaseModel):
     sockets: Optional[int] = Field(None, ge=1)
     disk_gb: Optional[int] = Field(None, ge=1)
     extra_disks: list[ExtraDisk] = Field(default_factory=list, max_length=8)
+    extra_networks: list[ExtraNetwork] = Field(default_factory=list, max_length=8)
     tags: list[str] = Field(default_factory=list, max_length=16)
     description: str | None = Field(None, max_length=512)
     bridge: Optional[str] = Field(
@@ -308,10 +326,21 @@ class CloudVMProvisionRequest(BaseModel):
             raise ValueError("extra_disks must use unique bus and index pairs")
         return disks
 
+    @field_validator("extra_networks")
+    @classmethod
+    def validate_unique_extra_network_indices(
+        cls, networks: list[ExtraNetwork]
+    ) -> list[ExtraNetwork]:
+        indices = [network.index for network in networks]
+        if len(indices) != len(set(indices)):
+            raise ValueError("extra_networks must use unique indices")
+        return networks
+
 
 class CloudVMProvisionResponse(BaseModel):
     new_vmid: int
     clone_upid: Optional[str] = None
+    relocate_upids: list[str] = Field(default_factory=list)
     config_upid: Optional[str] = None
     resize_upid: Optional[str] = None
     start_upid: Optional[str] = None

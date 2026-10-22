@@ -903,6 +903,73 @@ async def get_storage_config(
         )
 
 
+# The retention that keeps every backup; the PBS prune jobs own the retention of a PBS datastore.
+PBS_KEEP_ALL = "keep-all=1"
+
+
+@_dual_mode
+async def create_pbs_storage(
+    session: ProxmoxSession,
+    *,
+    storage: str,
+    server: str,
+    port: int,
+    datastore: str,
+    username: str,
+    password: str,
+    fingerprint: str,
+    namespace: str | None = None,
+    nodes: list[str] | None = None,
+) -> None:
+    """Create one PBS storage without retaining secret-bearing errors.
+
+    The retention is fixed to ``keep-all=1``: without it Proxmox applies the storage or node
+    retention after every backup and can delete older PBS backups, which the PBS prune jobs own.
+    """
+    body: dict[str, object] = {
+        "storage": storage,
+        "type": "pbs",
+        "content": "backup",
+        "prune-backups": PBS_KEEP_ALL,
+        "server": server,
+        "port": port,
+        "datastore": datastore,
+        "username": username,
+        "password": password,
+        "fingerprint": fingerprint,
+    }
+    if namespace:
+        body["namespace"] = namespace
+    if nodes:
+        body["nodes"] = ",".join(nodes)
+    try:
+        await resolve_async(session.session.storage.post(**body))
+    except ProxmoxTimeoutError:
+        safe_error = ProxmoxAPIError(message="Proxmox PBS storage create request timed out")
+        safe_error.lost_answer = True
+        raise safe_error from None
+    except ProxmoxConnectionError:
+        safe_error = ProxmoxAPIError(message="Unable to connect to Proxmox to create PBS storage")
+        safe_error.lost_answer = True
+        raise safe_error from None
+    except ResourceException as error:
+        raise _pbs_storage_refused(error) from None
+    except Exception:
+        raise ProxmoxAPIError(message="Error creating Proxmox PBS storage") from None
+
+
+def _pbs_storage_refused(error: ResourceException) -> ProxmoxAPIError:
+    """Describe a Proxmox refusal by its status and parameter names; values can hold the secret."""
+    status_code = error.status_code if isinstance(error.status_code, int) else None
+    fields = sorted(str(key) for key in (error.errors or {}))
+    message = "Proxmox refused the PBS storage"
+    if status_code is not None:
+        message += f" (HTTP {status_code})"
+    if fields:
+        message += f"; rejected parameters: {', '.join(fields)}"
+    return ProxmoxAPIError(message=message, status_code=status_code)
+
+
 @_dual_mode
 async def get_node_storage_content(
     session: ProxmoxSession,

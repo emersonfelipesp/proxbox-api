@@ -201,6 +201,41 @@ async def test_step_rollback_releases_the_lease_for_every_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_step_rollback_preserves_relocation_evidence_and_releases_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    detail = {
+        "reason": "relocate_disk_failed",
+        "vmid": 9100,
+        "target_node": "node04",
+        "clone_upid": "UPID:node01:clone",
+        "relocate_upids": {"scsi0": "UPID:node04:move:scsi0"},
+        "failed_disk": "scsi1",
+        "error": "move failed",
+    }
+    released: list[object] = []
+
+    async def _failure() -> None:
+        raise HTTPException(status_code=502, detail=detail)
+
+    async def _release(lease: object) -> None:
+        released.append(lease)
+
+    monkeypatch.setattr(provision_route, "_release_cloud_network_lease", _release)
+    lease = object()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provision_route._run_proxmox_step_with_cloud_network_rollback(
+            "relocate_disk", _failure(), lease
+        )
+
+    assert exc_info.value.detail == detail
+    assert released == [lease]
+
+
+@pytest.mark.asyncio
 async def test_cloud_provision_clones_configures_cloudinit_and_starts(
     auth_headers,
     db_session,
@@ -404,9 +439,17 @@ async def test_cloud_provision_waits_for_config_upid_before_start(monkeypatch) -
         events.append("open")
         return _Proxmox()
 
-    async def _clone(_proxmox, _req):
+    async def _plan(_proxmox, _req):
+        events.append("plan")
+        return provision_route._ClonePlan("pve", True)
+
+    async def _clone(_proxmox, _req, _plan):
         events.append("clone")
         return "clone-result"
+
+    async def _relocate(_proxmox, _req, _plan, _clone_upid):
+        events.append("relocate")
+        return ["relocate-result"]
 
     async def _configure(_proxmox, _req):
         events.append("configure")
@@ -424,7 +467,9 @@ async def test_cloud_provision_waits_for_config_upid_before_start(monkeypatch) -
 
     monkeypatch.setattr(provision_route, "_gate", _gate)
     monkeypatch.setattr(provision_route, "_open_proxmox_session", _open)
-    monkeypatch.setattr(provision_route, "_clone_template_vm", _clone)
+    monkeypatch.setattr(provision_route, "_plan_template_clone", _plan)
+    monkeypatch.setattr(provision_route, "_dispatch_template_clone", _clone)
+    monkeypatch.setattr(provision_route, "_relocate_vm_disks", _relocate)
     monkeypatch.setattr(provision_route, "_configure_cloud_init_vm", _configure)
     monkeypatch.setattr(provision_route, "_wait_for_upid", _wait)
     monkeypatch.setattr(provision_route, "_start_vm_after_provision", _start)
@@ -444,10 +489,14 @@ async def test_cloud_provision_waits_for_config_upid_before_start(monkeypatch) -
     )
 
     assert response.config_upid == "UPID:pve:config"
+    assert response.clone_upid == "clone-result"
+    assert response.relocate_upids == ["relocate-result"]
     assert events == [
         "gate",
         "open",
+        "plan",
         "clone",
+        "relocate",
         "configure",
         "wait:pve:UPID:pve:config",
         "start",

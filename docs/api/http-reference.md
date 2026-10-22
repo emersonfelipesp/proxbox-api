@@ -593,6 +593,51 @@ Other 403 shapes use `reason: "endpoint_id_required"` or `reason: "endpoint_not_
 
 `result` is one of `ok`, `already_running`, `already_stopped`, `accepted` (migrate dispatch), `cancel_requested`, `cancel_failed`, `rejected`, or `failed`. Error paths add `reason` and `detail`. The migrate 202 response also carries `sse_url`, `target`, `online`, and `source_node`.
 
+#### Create a Proxmox Backup Server storage
+
+`POST /proxmox/storage/pbs?endpoint_id={id}` registers one PBS datastore as a
+create-only Proxmox storage. The JSON body contains `storage`, `server`,
+optional `port` (default `8007`), `datastore`, optional `namespace`, `username`
+in `user@realm!tokenname` form, write-only `password`, required SHA-256
+`fingerprint`, and optional `nodes`. The server fixes `type=pbs`,
+`content=backup` and `prune-backups=keep-all=1`; callers cannot override these
+values. The retention is fixed because Proxmox otherwise applies the storage or
+node retention after every backup and can delete older PBS backups, which the
+PBS prune jobs own.
+
+The `allow_writes` gate runs before body validation. The verb compares the
+normalized existing storage first. An equal storage returns
+`result="already_present"` without a write. A difference returns HTTP 409 with
+`reason="storage_conflict"` and only the differing field names (an existing
+storage without `prune-backups=keep-all=1` differs). A timeout or
+connection loss after the single create request causes one configuration read;
+an equal storage then returns `result="created"`, and the POST is never retried
+within the request. The idempotency scope is `(endpoint_id,
+pbs_storage_create, storage, Idempotency-Key)` for 60 seconds.
+
+Every gated request uses one write-ahead NetBox journal entry and a terminal
+update assigned to the mirrored netbox-proxbox `ProxmoxEndpoint`; an invalid
+body, which dispatches nothing, gets one terminal entry. A request that is
+cancelled after the gate (for example by a client disconnect or a graceful
+shutdown) still completes its Proxmox call, its terminal journal update and its
+cache entry before the cancellation propagates. A failed terminal update is
+retried twice within the request. When it still fails, the answer is HTTP 502
+with `journal_finalized=false`; a replay with the same `Idempotency-Key` within
+the 60-second idempotency window retries the update of the original entry and
+then returns the terminal answer, without another Proxmox write. Like the other
+operational verbs, the repair metadata lives only in that in-memory window: after
+it, or after a restart, the original entry stays `in_progress` although the
+Proxmox write completed. The password
+is excluded from responses, logs, journals, exceptions, validation details,
+and idempotency cache entries. An invalid body returns HTTP 422 with
+`reason="request_validation_failed"` and the names of the invalid schema
+fields only (an unexpected key is reported as `unexpected field`, never by its
+name).
+A Proxmox refusal returns HTTP 502 with `reason="proxmox_dispatch_failed"`, the
+Proxmox HTTP status and the names of the rejected parameters, never their
+values. The generated `POST /proxmox/api2/storage` route remains read-only and
+returns HTTP 403.
+
 ### Firewall (read and write)
 
 Implemented in `proxbox_api/routes/proxmox/firewall.py`. All read endpoints are safe regardless of `allow_writes`. Write endpoints (POST/PUT/DELETE) are gated by `ProxmoxEndpoint.allow_writes` and require the `X-Proxbox-Actor` header. When `allow_writes` is `false`, write endpoints return HTTP 403:

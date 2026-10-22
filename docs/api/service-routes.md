@@ -309,6 +309,26 @@ pfSense and OPNsense.
 | `POST` | `/cloud/firecracker/provision` | Provision a Firecracker micro-VM through a host-agent |
 | `POST` | `/cloud/firecracker/provision/stream` | Provision a Firecracker micro-VM and stream host-agent progress as SSE |
 
+Cross-node QEMU provisioning reads the storage inventory once and requires the
+requested storage to exist on the target node with no explicit non-available
+status. A missing or unavailable destination is refused with
+`target_storage_unavailable`, and an inventory lookup failure is refused with
+`storage_lookup_failed`, before the clone is created. Shared storage present on
+the template node is passed directly to the clone. Otherwise, proxbox-api clones
+without a storage override and runs disk relocation as a separate REST
+`relocate_disk` step. It moves each non-Cloud-Init, non-CD-ROM data disk on the
+target node with `delete=0`; the source volumes remain as unused disks. JSON
+success responses return those task IDs in dispatch order in `relocate_upids`.
+If a move dispatch or task wait fails, `relocate_disk_failed` includes the
+failed disk and the per-disk UPIDs already dispatched. A failed or malformed
+read of the cloned VM config, or a config that lists no disk, returns the same
+refusal with `failed_disk` set to `null` before configuration or start. SSE error and completion
+events carry the same partial evidence. Requests may define up to eight `extra_networks` at
+`net1` through `net31`; existing MAC addresses are preserved. Extra networks
+are rejected with HTTP 422 when `enforce_cloud_network=true`, because the
+managed tenant network policy owns NIC placement. They also require a readable
+VM config; otherwise the request fails with HTTP 502 `config_read_failed`.
+
 ## SSH (`/ssh`)
 
 | Method | Path | Purpose |

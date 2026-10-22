@@ -236,7 +236,7 @@ For the complete HTTP route reference including schemas and error shapes, see [`
 
 Key route groups mounted in `proxbox_api/app/factory.py`:
 
-- **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`): start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for QEMU and LXC guests. All gated by `ProxmoxEndpoint.allow_writes`.
+- **Proxmox operational verbs** (`proxbox_api/routes/proxmox_actions.py`, mounted at `/proxmox`): start, stop, snapshot, migrate, reboot, delete, backup, and snapshot-delete for QEMU and LXC guests, plus the create-only `POST /proxmox/storage/pbs` verb. All are gated by `ProxmoxEndpoint.allow_writes`. The PBS storage verb fixes `type=pbs`, `content=backup` and `prune-backups=keep-all=1` (Proxmox otherwise prunes PBS backups after each backup), compares normalized existing configuration before writing, recovers a lost POST response with one read, keeps the token secret out of every response, log, journal entry, and cache entry, and audits against the mirrored NetBox `ProxmoxEndpoint` identified by the local endpoint name's `(nb:<pk>)` suffix.
 - **Browser console sessions** (`proxbox_api/routes/proxmox/console.py`): keep
   private `POST /proxmox/console/sessions` unchanged for the trusted management
   relay. The separate standalone `POST /proxmox/console/browser-sessions` and

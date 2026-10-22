@@ -36,7 +36,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+import re
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Literal, TypeVar
@@ -44,7 +45,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from proxmox_sdk.sdk.exceptions import ProxmoxConnectionError, ProxmoxTimeoutError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.database import ProxmoxEndpoint
@@ -52,11 +54,15 @@ from proxbox_api.exception import ProxboxException, ProxmoxAPIError
 from proxbox_api.logger import logger
 from proxbox_api.services.idempotency import CacheKey, IdempotencyCache, get_idempotency_cache
 from proxbox_api.services.proxmox_helpers import (
+    PBS_KEEP_ALL,
     backup_vm,
     cancel_task,
+    create_pbs_storage,
     create_vm_snapshot,
     delete_vm_snapshot,
     get_node_task_status,
+    get_storage_config,
+    get_storage_list,
     get_vm_status,
     migrate_preflight,
     migrate_vm,
@@ -93,6 +99,7 @@ Verb = Literal[
     "delete",
     "backup",
     "delete_snapshot",
+    "pbs_storage_create",
 ]
 
 LIFECYCLE_WRITES_DISABLED_REASON = "writes_disabled_for_endpoint"
@@ -313,6 +320,13 @@ def _journal_finalization_retry_metadata(
     return metadata
 
 
+def _log_target(vm_type: VmType | None, vmid: int | None) -> str:
+    """Name the guest of a VM verb in a log line; verbs without a guest have none."""
+    if vm_type is None or vmid is None:
+        return "-"
+    return f"{vm_type}/{vmid}"
+
+
 async def _best_effort_mark_journal_terminal(
     *,
     nb: object,
@@ -321,8 +335,8 @@ async def _best_effort_mark_journal_terminal(
     kind: JournalKind,
     comments: str,
     verb: Verb,
-    vm_type: VmType,
-    vmid: int,
+    vm_type: VmType | None,
+    vmid: int | None,
     cause: BaseException,
 ) -> None:
     try:
@@ -339,10 +353,9 @@ async def _best_effort_mark_journal_terminal(
     except BaseException as error:  # noqa: BLE001
         logger.error(
             "Best-effort terminal journal mark failed for entry id=%s "
-            "%s/%s verb=%s after finalization interruption %s: %s",
+            "%s verb=%s after finalization interruption %s: %s",
             journal_entry_id,
-            vm_type,
-            vmid,
+            _log_target(vm_type, vmid),
             verb,
             _error_detail(cause),
             _error_detail(error),
@@ -359,8 +372,8 @@ async def _update_journal_entry_resistant_to_cancellation(
     interrupted_comments: str,
     failed_comments: str,
     verb: Verb,
-    vm_type: VmType,
-    vmid: int,
+    vm_type: VmType | None,
+    vmid: int | None,
 ) -> dict[str, object] | None:
     task = asyncio.create_task(
         update_verb_journal_entry(
@@ -652,8 +665,8 @@ async def _retry_cached_journal_finalization(
     nb: object,
     metadata: dict[str, object],
     verb: Verb,
-    vm_type: VmType,
-    vmid: int,
+    vm_type: VmType | None,
+    vmid: int | None,
 ) -> JournalFinalizationResult:
     entry_id = _metadata_int(metadata, "journal_entry_id")
     kind = _metadata_kind(metadata)
@@ -690,10 +703,9 @@ async def _retry_cached_journal_finalization(
     except Exception as error:  # noqa: BLE001
         error_detail = _error_detail(error)
         logger.error(
-            "Retrying cached journal finalization failed for entry id=%s %s/%s verb=%s: %s",
+            "Retrying cached journal finalization failed for entry id=%s %s verb=%s: %s",
             entry_id,
-            vm_type,
-            vmid,
+            _log_target(vm_type, vmid),
             verb,
             error_detail,
         )
@@ -716,8 +728,8 @@ async def _cached_idempotency_response(
     cache_key: CacheKey,
     nb: object,
     verb: Verb,
-    vm_type: VmType,
-    vmid: int,
+    vm_type: VmType | None,
+    vmid: int | None,
 ) -> JSONResponse | None:
     cached = await cache.get_entry(cache_key)
     if cached is None:
@@ -2077,6 +2089,89 @@ class BackupRequest(BaseModel):
     notes: str | None = None
 
 
+_PBS_STORAGE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9._-]*$")
+_PBS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_PBS_USERNAME_RE = re.compile(r"^[^\s@!]+@[^\s@!]+![^\s@!]+$")
+_PBS_FINGERPRINT_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$")
+_NETBOX_ENDPOINT_SUFFIX_RE = re.compile(r"\(nb:(?P<id>[1-9][0-9]*)\)\s*$")
+
+
+class PBSStorageCreateRequest(BaseModel):
+    """Secret-safe input for the create-only PBS storage verb."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    storage: str = Field(min_length=1, max_length=100)
+    server: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=8007, ge=1, le=65535)
+    datastore: str = Field(min_length=1, max_length=255)
+    namespace: str | None = Field(default=None, max_length=255)
+    username: str = Field(min_length=1, max_length=255)
+    password: SecretStr
+    fingerprint: str
+    nodes: list[str] | None = None
+
+    @field_validator("storage")
+    @classmethod
+    def validate_storage(cls, value: str) -> str:
+        if not _PBS_STORAGE_ID_RE.fullmatch(value):
+            raise ValueError("Invalid Proxmox storage ID.")
+        return value
+
+    @field_validator("server")
+    @classmethod
+    def validate_server(cls, value: str) -> str:
+        if value != value.strip() or any(char.isspace() for char in value):
+            raise ValueError("Invalid PBS server.")
+        if "://" in value or "/" in value:
+            raise ValueError("PBS server must not contain a scheme or path.")
+        return value
+
+    @field_validator("datastore")
+    @classmethod
+    def validate_datastore(cls, value: str) -> str:
+        if not _PBS_NAME_RE.fullmatch(value):
+            raise ValueError("Invalid PBS datastore name.")
+        return value
+
+    @field_validator("namespace")
+    @classmethod
+    def validate_namespace(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return value
+        if any(part in {"", ".", ".."} for part in value.split("/")):
+            raise ValueError("Invalid PBS namespace.")
+        if not all(_PBS_NAME_RE.fullmatch(part) for part in value.split("/")):
+            raise ValueError("Invalid PBS namespace.")
+        return value
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        if not _PBS_USERNAME_RE.fullmatch(value):
+            raise ValueError("PBS username must be an API token ID.")
+        return value
+
+    @field_validator("fingerprint")
+    @classmethod
+    def validate_fingerprint(cls, value: str) -> str:
+        if not _PBS_FINGERPRINT_RE.fullmatch(value):
+            raise ValueError("Invalid SHA-256 fingerprint.")
+        return value.lower()
+
+    @field_validator("nodes")
+    @classmethod
+    def validate_nodes(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if not value or any(not _PBS_NAME_RE.fullmatch(node) for node in value):
+            raise ValueError("Invalid Proxmox node list.")
+        return value
+
+
+_PBS_REQUEST_FIELDS = frozenset(PBSStorageCreateRequest.model_fields)
+
+
 async def _dispatch_backup(
     *,
     endpoint: ProxmoxEndpoint,
@@ -2224,6 +2319,633 @@ async def _dispatch_backup(
         proxmox_task_upid=upid,
         error_detail=None,
         extra=extra,
+    )
+
+
+def _scrubbed_detail(text: str, secret: str) -> str:
+    """Return ``text`` without the secret; a very short secret cannot be scrubbed reliably."""
+    if len(secret) < 4:
+        return "Proxmox could not create the PBS storage."
+    return text.replace(secret, "[redacted]")[:512]
+
+
+def _invalid_fields_detail(error: ValidationError) -> str:
+    """Name the invalid schema fields only.
+
+    Pydantic error inputs and messages can echo the secret, and the location of an unexpected key
+    is client data (the key can even be the secret itself), so only declared field names are
+    reported and every other location becomes one fixed label.
+    """
+    fields = sorted({_invalid_field_label(item) for item in error.errors()})
+    return f"The PBS storage request body is invalid: {', '.join(fields)}."
+
+
+def _invalid_field_label(item: Mapping[str, object]) -> str:
+    if item.get("type") == "extra_forbidden":
+        return "unexpected field"
+    location = item.get("loc")
+    name = location[0] if isinstance(location, tuple) and location else None
+    return name if isinstance(name, str) and name in _PBS_REQUEST_FIELDS else "body"
+
+
+def _pbs_audit_target(endpoint: ProxmoxEndpoint) -> tuple[str, int] | None:
+    match = _NETBOX_ENDPOINT_SUFFIX_RE.search(endpoint.name)
+    if match is None:
+        return None
+    return "netbox_proxbox.proxmoxendpoint", int(match.group("id"))
+
+
+def _pbs_storage_extra(body: PBSStorageCreateRequest) -> dict[str, object]:
+    return {
+        "storage": body.storage,
+        "server": body.server,
+        "port": body.port,
+        "datastore": body.datastore,
+        "namespace": body.namespace or "",
+        "username": body.username,
+        "fingerprint": body.fingerprint.lower(),
+        "nodes": sorted(set(body.nodes or [])),
+    }
+
+
+def _pbs_comments(
+    *,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    result: str,
+    body: PBSStorageCreateRequest | None,
+    error_detail: str | None = None,
+) -> str:
+    lines = [
+        "Proxbox operational verb dispatched.",
+        "",
+        "- verb: pbs_storage_create",
+        f"- actor: {actor}",
+        f"- endpoint: {endpoint.name} (id={endpoint.id or 0})",
+    ]
+    if body is not None:
+        for key, value in _pbs_storage_extra(body).items():
+            lines.append(f"- {key}: {value}")
+    lines.extend((f"- result: {result}", f"- dispatched_at: {dispatched_at}"))
+    if error_detail is not None:
+        lines.append(f"- error_detail: {error_detail}")
+    return "\n".join(lines)
+
+
+def _pbs_journal_failure(endpoint: ProxmoxEndpoint, reason: str, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        content={
+            "reason": reason,
+            "detail": detail,
+            "verb": "pbs_storage_create",
+            "endpoint_id": endpoint.id,
+        },
+    )
+
+
+async def _pbs_write_journal(
+    *,
+    nb: object,
+    endpoint: ProxmoxEndpoint,
+    kind: JournalKind,
+    comments: str,
+) -> dict[str, object] | JSONResponse:
+    """Write one journal entry on the mirrored ProxmoxEndpoint, or answer why it cannot."""
+    target = _pbs_audit_target(endpoint)
+    if target is None:
+        return _pbs_journal_failure(
+            endpoint,
+            "netbox_audit_target_unavailable",
+            "The mirrored NetBox ProxmoxEndpoint audit target could not be resolved.",
+        )
+    try:
+        entry = await write_verb_journal_entry(
+            nb,
+            assigned_object_type=target[0],
+            assigned_object_id=target[1],
+            kind=kind,
+            comments=comments,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Blocking pbs_storage_create for endpoint=%s because the journal entry could not be "
+            "written: %s",
+            endpoint.id,
+            _error_detail(error),
+        )
+        return _pbs_journal_failure(
+            endpoint,
+            "netbox_journal_write_failed",
+            "The NetBox audit journal entry could not be created.",
+        )
+    if _journal_entry_id(entry) is None:
+        return _pbs_journal_failure(
+            endpoint,
+            "netbox_journal_write_failed",
+            "The NetBox audit journal entry returned no ID.",
+        )
+    return entry
+
+
+# The terminal journal update is idempotent, so a failed attempt is retried twice after these
+# pauses before the answer is left pending.
+_PBS_FINALIZE_BACKOFF_SECONDS: tuple[float, ...] = (0.5, 1.0)
+
+
+async def _pbs_update_journal(
+    nb: object, entry_id: int, kind: JournalKind, comments: str
+) -> dict[str, object] | None:
+    for delay in (*_PBS_FINALIZE_BACKOFF_SECONDS, None):
+        try:
+            return await update_verb_journal_entry(
+                nb, journal_entry_id=entry_id, kind=kind, comments=comments
+            )
+        except Exception:
+            if delay is None:
+                raise
+            await asyncio.sleep(delay)
+    return None
+
+
+@dataclass(frozen=True)
+class _PBSOutcome:
+    """The answer of one PBS storage request before its journal entry is finalized."""
+
+    result: str
+    status_code: int
+    reason: str | None = None
+    detail: str | None = None
+    differing_fields: list[str] | None = None
+
+
+async def _pbs_finalize(
+    *,
+    nb: object,
+    cache: IdempotencyCache,
+    cache_key: CacheKey | None,
+    entry: dict[str, object],
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    body: PBSStorageCreateRequest,
+    outcome: _PBSOutcome,
+) -> JSONResponse:
+    """Write the terminal journal update and publish the answer to the idempotency cache.
+
+    A failed update leaves the cached answer pending with the finalization metadata, so a replay
+    with the same key retries the update of the original entry without another Proxmox write.
+    """
+    entry_id = _journal_entry_id(entry)
+    assert entry_id is not None
+    kind: JournalKind = "info" if outcome.status_code < 400 else "warning"
+    comments = _pbs_comments(
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        result=outcome.result,
+        body=body,
+        error_detail=outcome.detail,
+    )
+    response = _pbs_response_body(
+        endpoint=endpoint,
+        body=body,
+        result=outcome.result,
+        dispatched_at=dispatched_at,
+        journal_entry_url=_journal_entry_url(entry),
+        status_code=outcome.status_code,
+        reason=outcome.reason,
+        detail=outcome.detail,
+        differing_fields=outcome.differing_fields,
+    )
+    try:
+        updated = await _pbs_update_journal(nb, entry_id, kind, comments)
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Failed to finalize PBS storage journal entry id=%s endpoint=%s: %s",
+            entry_id,
+            endpoint.id,
+            _error_detail(error),
+        )
+        metadata = _journal_finalization_retry_metadata(
+            journal_entry_id=entry_id,
+            journal_entry_url=_journal_entry_url(entry),
+            kind=kind,
+            comments=comments,
+            interrupted_comments=comments,
+            failed_comments=comments,
+            terminal_status_code=outcome.status_code,
+        )
+        return await _pbs_pending_finalization(
+            cache=cache, cache_key=cache_key, response=response, metadata=metadata
+        )
+    response["journal_entry_url"] = _journal_entry_url(updated) or response["journal_entry_url"]
+    if cache_key is not None:
+        await cache.store(cache_key, response, status_code=outcome.status_code)
+    return JSONResponse(status_code=outcome.status_code, content=response)
+
+
+async def _pbs_pending_finalization(
+    *,
+    cache: IdempotencyCache,
+    cache_key: CacheKey | None,
+    response: dict[str, object],
+    metadata: dict[str, object],
+) -> JSONResponse:
+    response["journal_finalized"] = False
+    response["finalization_error"] = "terminal journal finalization is pending"
+    response.setdefault("reason", "netbox_journal_finalization_failed")
+    if cache_key is not None:
+        await cache.store(
+            cache_key,
+            response,
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            journal_finalization=metadata,
+        )
+    return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content=response)
+
+
+async def _pbs_refuse_invalid(
+    *,
+    nb: object,
+    cache: IdempotencyCache,
+    cache_key: CacheKey | None,
+    endpoint: ProxmoxEndpoint,
+    actor: str,
+    dispatched_at: str,
+    error: ValidationError,
+) -> JSONResponse:
+    """Audit and answer an invalid body with one terminal journal entry; nothing is dispatched."""
+    detail = _invalid_fields_detail(error)
+    entry = await _pbs_write_journal(
+        nb=nb,
+        endpoint=endpoint,
+        kind="warning",
+        comments=_pbs_comments(
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            result="failed",
+            body=None,
+            error_detail=detail,
+        ),
+    )
+    if isinstance(entry, JSONResponse):
+        return entry
+    response = _pbs_response_body(
+        endpoint=endpoint,
+        body=None,
+        result="failed",
+        dispatched_at=dispatched_at,
+        journal_entry_url=_journal_entry_url(entry),
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        reason="request_validation_failed",
+        detail=detail,
+        differing_fields=None,
+    )
+    if cache_key is not None:
+        await cache.store(cache_key, response, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content=response)
+
+
+def _pbs_response_body(
+    *,
+    endpoint: ProxmoxEndpoint,
+    body: PBSStorageCreateRequest | None,
+    result: str,
+    dispatched_at: str,
+    journal_entry_url: str | None,
+    status_code: int,
+    reason: str | None,
+    detail: str | None,
+    differing_fields: list[str] | None,
+) -> dict[str, object]:
+    response: dict[str, object] = {
+        "verb": "pbs_storage_create",
+        "endpoint_id": endpoint.id or 0,
+        "storage": body.storage if body is not None else None,
+        "result": result,
+        "dispatched_at": dispatched_at,
+        "journal_entry_url": journal_entry_url,
+    }
+    if reason is not None:
+        response["reason"] = reason
+    if detail is not None and status_code >= 400:
+        response["detail"] = detail
+    if differing_fields is not None:
+        response["differing_fields"] = differing_fields
+    return response
+
+
+def _normalized_string_set(value: object) -> list[str]:
+    if isinstance(value, str):
+        return sorted({item for item in value.split(",") if item})
+    if isinstance(value, list):
+        return sorted({str(item) for item in value})
+    return []
+
+
+def _normalized_port(value: object) -> int:
+    try:
+        return int(value or 8007)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _normalize_pbs_storage(config: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": str(config.get("type") or ""),
+        "server": str(config.get("server") or ""),
+        "port": _normalized_port(config.get("port")),
+        "datastore": str(config.get("datastore") or ""),
+        "namespace": str(config.get("namespace") or ""),
+        "username": str(config.get("username") or ""),
+        "fingerprint": str(config.get("fingerprint") or "").lower(),
+        "content": _normalized_string_set(config.get("content")),
+        "prune-backups": str(config.get("prune-backups") or "").replace(" ", ""),
+        "nodes": _normalized_string_set(config.get("nodes")),
+    }
+
+
+def _requested_pbs_storage(body: PBSStorageCreateRequest) -> dict[str, object]:
+    return {
+        "type": "pbs",
+        "server": body.server,
+        "port": body.port,
+        "datastore": body.datastore,
+        "namespace": body.namespace or "",
+        "username": body.username,
+        "fingerprint": body.fingerprint.lower(),
+        "content": ["backup"],
+        "prune-backups": PBS_KEEP_ALL,
+        "nodes": sorted(set(body.nodes or [])),
+    }
+
+
+def _pbs_differing_fields(config: dict[str, object], body: PBSStorageCreateRequest) -> list[str]:
+    existing = _normalize_pbs_storage(config)
+    requested = _requested_pbs_storage(body)
+    return [field for field in requested if existing[field] != requested[field]]
+
+
+async def _existing_pbs_storage(
+    proxmox: object,
+    storage_id: str,
+) -> dict[str, object] | None:
+    storages = await get_storage_list(proxmox)
+    if not any(getattr(item, "storage", None) == storage_id for item in storages):
+        return None
+    return await get_storage_config(proxmox, storage_id)
+
+
+def _pbs_lost_answer(error: ProxmoxAPIError) -> bool:
+    if getattr(error, "lost_answer", False) is True:
+        return True
+    cause: BaseException | None = error.__cause__
+    while cause is not None:
+        if isinstance(cause, ProxmoxTimeoutError | ProxmoxConnectionError | TimeoutError):
+            return True
+        cause = cause.__cause__
+    return False
+
+
+async def _pbs_outcome(proxmox: object, body: PBSStorageCreateRequest) -> _PBSOutcome:
+    """Compare an existing storage of this id, or create the storage; never write twice."""
+    try:
+        existing = await _existing_pbs_storage(proxmox, body.storage)
+    except ProxmoxAPIError:
+        return _PBSOutcome(
+            "failed",
+            status.HTTP_502_BAD_GATEWAY,
+            "proxmox_dispatch_failed",
+            "Unable to verify the current Proxmox storage configuration.",
+        )
+    if existing is None:
+        return await _pbs_create_and_reconcile(proxmox, body)
+    differing_fields = _pbs_differing_fields(existing, body)
+    if differing_fields:
+        return _PBSOutcome(
+            "failed",
+            status.HTTP_409_CONFLICT,
+            "storage_conflict",
+            "A storage with this ID already exists with different configuration.",
+            differing_fields,
+        )
+    return _PBSOutcome("already_present", status.HTTP_200_OK)
+
+
+async def _pbs_create_and_reconcile(proxmox: object, body: PBSStorageCreateRequest) -> _PBSOutcome:
+    try:
+        await create_pbs_storage(
+            proxmox,
+            storage=body.storage,
+            server=body.server,
+            port=body.port,
+            datastore=body.datastore,
+            username=body.username,
+            password=body.password.get_secret_value(),
+            fingerprint=body.fingerprint,
+            namespace=body.namespace,
+            nodes=body.nodes,
+        )
+    except ProxmoxAPIError as error:
+        if _pbs_lost_answer(error) and await _pbs_landed(proxmox, body):
+            return _PBSOutcome("created", status.HTTP_200_OK)
+        logger.warning("PBS storage create failed for storage=%s", body.storage)
+        return _PBSOutcome(
+            "failed",
+            status.HTTP_502_BAD_GATEWAY,
+            "proxmox_dispatch_failed",
+            _scrubbed_detail(str(error.message), body.password.get_secret_value()),
+        )
+    return _PBSOutcome("created", status.HTTP_200_OK)
+
+
+async def _pbs_landed(proxmox: object, body: PBSStorageCreateRequest) -> bool:
+    """Read the storage once after a lost answer: did the single create request land?"""
+    try:
+        recovered = await _existing_pbs_storage(proxmox, body.storage)
+    except ProxmoxAPIError:
+        return False
+    return recovered is not None and not _pbs_differing_fields(recovered, body)
+
+
+async def _pbs_dispatch_outcome(
+    endpoint: ProxmoxEndpoint, body: PBSStorageCreateRequest
+) -> _PBSOutcome:
+    try:
+        proxmox = await _open_proxmox_session(endpoint)
+    except ProxboxException:
+        return _PBSOutcome(
+            "failed",
+            status.HTTP_502_BAD_GATEWAY,
+            "proxmox_session_unreachable",
+            "The Proxmox session could not be opened.",
+        )
+    try:
+        return await _pbs_outcome(proxmox, body)
+    except Exception as error:  # noqa: BLE001 - the write-ahead entry must still be finalized
+        logger.error(
+            "PBS storage request failed unexpectedly for endpoint=%s storage=%s: %s",
+            endpoint.id,
+            body.storage,
+            type(error).__name__,
+        )
+        return _PBSOutcome(
+            "failed",
+            status.HTTP_502_BAD_GATEWAY,
+            "proxmox_dispatch_failed",
+            "The PBS storage request failed unexpectedly.",
+        )
+
+
+async def _pbs_pipeline(
+    *,
+    endpoint: ProxmoxEndpoint,
+    nb: object,
+    actor: str,
+    raw_body: object,
+    cache: IdempotencyCache,
+    cache_key: CacheKey | None,
+) -> JSONResponse:
+    """Validate, audit, dispatch and finalize one request (run as one task by the caller)."""
+    dispatched_at = utcnow_iso()
+    try:
+        body = PBSStorageCreateRequest.model_validate(raw_body)
+    except ValidationError as error:
+        return await _pbs_refuse_invalid(
+            nb=nb,
+            cache=cache,
+            cache_key=cache_key,
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            error=error,
+        )
+    entry = await _pbs_write_journal(
+        nb=nb,
+        endpoint=endpoint,
+        kind="info",
+        comments=_pbs_comments(
+            endpoint=endpoint,
+            actor=actor,
+            dispatched_at=dispatched_at,
+            result="in_progress",
+            body=body,
+        ),
+    )
+    if isinstance(entry, JSONResponse):
+        return entry
+    outcome = await _pbs_dispatch_outcome(endpoint, body)
+    return await _pbs_finalize(
+        nb=nb,
+        cache=cache,
+        cache_key=cache_key,
+        entry=entry,
+        endpoint=endpoint,
+        actor=actor,
+        dispatched_at=dispatched_at,
+        body=body,
+        outcome=outcome,
+    )
+
+
+async def _dispatch_pbs_storage_create(
+    *,
+    endpoint: ProxmoxEndpoint,
+    nb: object,
+    actor: str,
+    raw_body: object,
+    cache_key: CacheKey | None,
+) -> JSONResponse:
+    """Replay a cached answer, or run the request to its end even when the caller is cancelled.
+
+    A cancelled request (a client that went away, a graceful shutdown) still completes its
+    Proxmox call, its terminal journal update and its cache entry before the cancellation
+    propagates, so no storage write is left without an audit outcome. A cached answer whose
+    journal update failed retries that update of the original entry first.
+    """
+    cache = get_idempotency_cache()
+    if cache_key is not None:
+        cached = await _cached_idempotency_response(
+            cache=cache,
+            cache_key=cache_key,
+            nb=nb,
+            verb="pbs_storage_create",
+            vm_type=None,
+            vmid=None,
+        )
+        if cached is not None:
+            return cached
+    task = asyncio.create_task(
+        _pbs_pipeline(
+            endpoint=endpoint,
+            nb=nb,
+            actor=actor,
+            raw_body=raw_body,
+            cache=cache,
+            cache_key=cache_key,
+        )
+    )
+    response, cancelled = await _await_to_completion(task)
+    logger.info(
+        "PBS storage create request completed endpoint=%s status=%s",
+        endpoint.id or 0,
+        response.status_code,
+    )
+    if cancelled:
+        raise asyncio.CancelledError
+    return response
+
+
+async def _handle_pbs_storage_create(
+    session: SessionDep,
+    endpoint_id: int | None,
+    idempotency_key: str | None,
+    actor: str,
+    raw_body: object,
+) -> JSONResponse:
+    gated = await _gate(
+        session,
+        endpoint_id,
+        writes_disabled_reason=LIFECYCLE_WRITES_DISABLED_REASON,
+    )
+    if isinstance(gated, JSONResponse):
+        return gated
+    try:
+        nb = await get_netbox_async_session(database_session=session)
+    except ProxboxException:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "reason": "netbox_session_unavailable",
+                "detail": "The NetBox session could not be opened.",
+                "verb": "pbs_storage_create",
+                "endpoint_id": gated.id,
+            },
+        )
+    cache_key = None
+    if idempotency_key and gated.id is not None:
+        storage_scope = "invalid"
+        if isinstance(raw_body, dict) and isinstance(raw_body.get("storage"), str):
+            storage_scope = raw_body["storage"]
+        cache_key = CacheKey(
+            endpoint_id=gated.id,
+            verb="pbs_storage_create",
+            vmid=None,
+            key=idempotency_key,
+            scope=storage_scope,
+        )
+    return await _run_with_idempotency_single_flight(
+        cache_key,
+        lambda: _dispatch_pbs_storage_create(
+            endpoint=gated,
+            nb=nb,
+            actor=actor,
+            raw_body=raw_body,
+            cache_key=cache_key,
+        ),
     )
 
 
@@ -3414,6 +4136,23 @@ async def _handle_stub(
 
 def _actor_label(value: str | None) -> str:
     return value or "proxbox-api"
+
+
+@router.post("/storage/pbs")
+async def create_pbs_storage_route(
+    session: SessionDep,
+    endpoint_id: int | None = Query(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    actor: str | None = Header(default=None, alias="X-Proxbox-Actor"),
+    body: object = Body(default=None),
+) -> JSONResponse:
+    return await _handle_pbs_storage_create(
+        session,
+        endpoint_id,
+        idempotency_key,
+        _actor_label(actor),
+        body,
+    )
 
 
 @router.post("/qemu/{vmid}/start")

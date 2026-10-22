@@ -105,8 +105,9 @@ def test_cloud_provision_openapi_exposes_extra_disks_and_metadata(monkeypatch):
     request_schema = schema["components"]["schemas"]["CloudVMProvisionRequest"]
     properties = request_schema["properties"]
 
-    assert {"extra_disks", "tags", "description"} <= properties.keys()
+    assert {"extra_disks", "extra_networks", "tags", "description"} <= properties.keys()
     assert properties["extra_disks"]["maxItems"] == 8
+    assert properties["extra_networks"]["maxItems"] == 8
     assert properties["tags"]["maxItems"] == 16
     assert properties["description"]["anyOf"][0]["maxLength"] == 512
     for path in ("/cloud/vm/provision", "/cloud/vm/provision/stream"):
@@ -171,6 +172,25 @@ def test_cloud_provision_request_accepts_qemu_topology_and_vlan_fields():
 def test_cloud_provision_request_rejects_invalid_vlan_tag():
     payload = _valid_request_payload()
     payload["vlan_tag"] = 4095
+
+    with pytest.raises(ValidationError):
+        CloudVMProvisionRequest.model_validate(payload)
+
+
+def test_cloud_provision_request_rejects_duplicate_extra_network_indices():
+    payload = _valid_request_payload()
+    payload["extra_networks"] = [
+        {"index": 1, "bridge": "vmbr1"},
+        {"index": 1, "bridge": "vmbr2"},
+    ]
+
+    with pytest.raises(ValidationError):
+        CloudVMProvisionRequest.model_validate(payload)
+
+
+def test_cloud_provision_request_rejects_net0_as_extra_network():
+    payload = _valid_request_payload()
+    payload["extra_networks"] = [{"index": 0, "bridge": "vmbr1"}]
 
     with pytest.raises(ValidationError):
         CloudVMProvisionRequest.model_validate(payload)
@@ -493,6 +513,167 @@ async def test_configure_cloud_init_vm_adds_disks_tags_and_description(monkeypat
     assert captured["scsi1"] == "clone-store:100,discard=on,ssd=1"
     assert captured["tags"] == "netbox;pbs-server"
     assert captured["description"] == "Managed by NetBox\nPBS datastore host"
+
+
+@pytest.mark.asyncio
+async def test_configure_cloud_init_vm_applies_extra_networks_and_preserves_mac(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _Config:
+        async def put(self, **kwargs):
+            captured.update(kwargs)
+
+    class _Qemu:
+        config = _Config()
+
+    class _Node:
+        def qemu(self, _vmid):
+            return _Qemu()
+
+    class _Session:
+        def nodes(self, _node):
+            return _Node()
+
+    class _Proxmox:
+        session = _Session()
+
+    async def _existing_config(*_args, **_kwargs):
+        return {
+            "ide2": "local-lvm:cloudinit",
+            "net1": "e1000=AA:BB:CC:DD:EE:FF,bridge=old,firewall=1",
+        }
+
+    monkeypatch.setattr(provision_route, "_get_qemu_config_best_effort", _existing_config)
+    request = CloudVMProvisionRequest.model_validate(
+        {
+            **_valid_request_payload(),
+            "extra_networks": [
+                {"index": 1, "bridge": "vmbr1", "vlan_tag": 101, "firewall": False},
+                {"index": 2, "bridge": "vmbr2", "model": "vmxnet3", "firewall": True},
+            ],
+        }
+    )
+
+    await provision_route._configure_cloud_init_vm(_Proxmox(), request)
+
+    assert captured["net1"] == "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr1,tag=101,firewall=0"
+    assert captured["net2"] == "vmxnet3,bridge=vmbr2,firewall=1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route", [provision_route.provision_vm, provision_stream_route.provision_vm_stream]
+)
+async def test_enforced_cloud_network_rejects_extra_networks_before_gate(monkeypatch, route):
+    gate_called = False
+
+    async def _gate(*_args, **_kwargs):
+        nonlocal gate_called
+        gate_called = True
+
+    monkeypatch.setattr(
+        provision_route if route is provision_route.provision_vm else provision_stream_route,
+        "_cloud_provision_gate",
+        _gate,
+    )
+    request = CloudVMProvisionRequest.model_validate(
+        {
+            **_valid_request_payload(),
+            "enforce_cloud_network": True,
+            "extra_networks": [{"index": 1, "bridge": "vmbr1"}],
+        }
+    )
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await route(request, object())
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == {"reason": "extra_networks_not_allowed_with_cloud_network"}
+    assert gate_called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("needs_relocation", [False, True])
+async def test_stream_emits_relocate_disk_status(monkeypatch, needs_relocation):
+    state = provision_stream_route._StreamProvisionState(
+        clone_plan=provision_route._ClonePlan("node01", needs_relocation)
+    )
+
+    async def _relocate(*_args, **_kwargs):
+        return ["UPID:node04:move:scsi0"]
+
+    monkeypatch.setattr(provision_stream_route, "_relocate_vm_disks", _relocate)
+    events = [
+        event
+        async for event in provision_stream_route._emit_relocate_disk_events(
+            object(), CloudVMProvisionRequest.model_validate(_valid_request_payload()), state
+        )
+    ]
+
+    expected = '"status": "done"' if needs_relocation else '"status": "skipped"'
+    assert any('"step": "relocate_disk"' in event and expected in event for event in events)
+    if needs_relocation:
+        assert any('"upids": ["UPID:node04:move:scsi0"]' in event for event in events)
+
+
+@pytest.mark.asyncio
+async def test_stream_relocation_failure_emits_partial_evidence_and_rolls_back(monkeypatch):
+    from fastapi import HTTPException
+
+    request = CloudVMProvisionRequest.model_validate(_valid_request_payload())
+    detail = {
+        "reason": "relocate_disk_failed",
+        "vmid": request.new_vmid,
+        "target_node": request.target_node,
+        "clone_upid": "UPID:node01:clone",
+        "relocate_upids": {"scsi0": "UPID:node04:move:scsi0"},
+        "failed_disk": "scsi1",
+        "error": "move failed",
+    }
+    lease = object()
+    released: list[object] = []
+
+    async def _prepare(req, _session):
+        return req, lease
+
+    async def _open(_gated):
+        class _Proxmox:
+            async def aclose(self):
+                return None
+
+        return _Proxmox()
+
+    async def _clone_events(_proxmox, _req, state):
+        state.clone_plan = provision_route._ClonePlan("node01", True)
+        state.clone_upid = detail["clone_upid"]
+        yield "clone\n"
+
+    async def _relocate(*_args, **_kwargs):
+        raise HTTPException(status_code=502, detail=detail)
+
+    async def _release(value):
+        released.append(value)
+
+    monkeypatch.setattr(provision_stream_route, "_prepare_qemu_cloud_network_request", _prepare)
+    monkeypatch.setattr(provision_stream_route, "_open_proxmox_session", _open)
+    monkeypatch.setattr(provision_stream_route, "_emit_clone_template_events", _clone_events)
+    monkeypatch.setattr(provision_stream_route, "_relocate_vm_disks", _relocate)
+    monkeypatch.setattr(provision_stream_route, "_release_cloud_network_lease", _release)
+
+    events = [
+        event
+        async for event in provision_stream_route._provision_stream_generator(
+            request, object(), None, object()
+        )
+    ]
+
+    relocation_events = [event for event in events if '"step": "relocate_disk"' in event]
+    assert len(relocation_events) == 3
+    assert all('"failed_disk": "scsi1"' in event for event in relocation_events[-2:])
+    assert all('"scsi0": "UPID:node04:move:scsi0"' in event for event in relocation_events[-2:])
+    assert released == [lease]
 
 
 @pytest.mark.asyncio
@@ -834,4 +1015,4 @@ def test_cloud_provision_route_reuses_required_helpers():
     assert "build_proxmox_ci_args" in source
     assert "_gate" in source
     assert "_wait_for_upid" in source
-    assert "await _wait_for_upid(proxmox, template_node, clone_upid)" in source
+    assert "await _wait_for_upid(proxmox, plan.template_node, clone_upid)" in source

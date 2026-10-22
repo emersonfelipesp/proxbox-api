@@ -346,6 +346,50 @@ Outros formatos de 403 usam `reason: "endpoint_id_required"` ou `reason: "endpoi
 
 `result` e um de `ok`, `already_running`, `already_stopped`, `accepted` (dispatch de migrate), `cancel_requested`, `cancel_failed`, `rejected` ou `failed`. Caminhos de erro adicionam `reason` e `detail`. A resposta 202 do migrate carrega tambem `sse_url`, `target`, `online` e `source_node`.
 
+#### Criar um storage do Proxmox Backup Server
+
+`POST /proxmox/storage/pbs?endpoint_id={id}` registra um datastore PBS como um
+storage Proxmox somente para criacao. O corpo JSON contem `storage`, `server`,
+`port` opcional (padrao `8007`), `datastore`, `namespace` opcional, `username`
+no formato `user@realm!tokenname`, `password` somente para escrita,
+`fingerprint` SHA-256 obrigatoria e `nodes` opcional. O servidor fixa
+`type=pbs`, `content=backup` e `prune-backups=keep-all=1`; o caller nao pode
+substituir esses valores. A retencao e fixa porque, sem ela, o Proxmox aplica a
+retencao do storage ou do node depois de cada backup e pode apagar backups PBS
+antigos, cuja retencao pertence aos prune jobs do PBS.
+
+O gate `allow_writes` executa antes da validacao do corpo. Primeiro, o verbo
+compara o storage existente normalizado. Um storage igual retorna
+`result="already_present"` sem escrita. Uma diferenca retorna HTTP 409 com
+`reason="storage_conflict"` e somente os nomes dos campos diferentes (um
+storage existente sem `prune-backups=keep-all=1` e diferente). Um
+timeout ou uma perda de conexao depois da unica requisicao de criacao causa
+uma leitura da configuracao; um storage igual entao retorna `result="created"`,
+e o POST nunca e repetido na mesma requisicao. O escopo de idempotencia e
+`(endpoint_id, pbs_storage_create, storage, Idempotency-Key)` por 60 segundos.
+
+Cada requisicao que passa pelo gate usa um journal entry write-ahead no NetBox
+e uma atualizacao terminal atribuida ao `ProxmoxEndpoint` espelhado do
+netbox-proxbox; um corpo invalido, que nao despacha nada, recebe um unico
+journal entry terminal. Uma requisicao cancelada depois do gate (por exemplo,
+desconexao do cliente ou shutdown gracioso) ainda conclui a chamada ao Proxmox,
+a atualizacao terminal do journal e a entrada de cache antes de propagar o
+cancelamento. Uma atualizacao terminal que falha e repetida duas vezes dentro da
+requisicao. Se ainda falhar, a resposta e HTTP 502 com `journal_finalized=false`;
+um replay com o mesmo `Idempotency-Key` dentro da janela de idempotencia de 60
+segundos repete a atualizacao do journal entry original e entao retorna a
+resposta terminal, sem outra escrita no Proxmox. Como nos outros verbos
+operacionais, os metadados de reparo vivem somente nessa janela em memoria:
+depois dela, ou depois de um restart, o journal entry original continua
+`in_progress` embora a escrita no Proxmox tenha terminado. O password e excluido de respostas, logs, journals, excecoes,
+detalhes de validacao e entradas do cache de idempotencia. Um corpo invalido
+retorna HTTP 422 com `reason="request_validation_failed"` e somente os nomes dos
+campos invalidos do schema (uma chave inesperada aparece como `unexpected field`,
+nunca pelo nome). Uma recusa do Proxmox retorna HTTP 502 com
+`reason="proxmox_dispatch_failed"`, o status HTTP do Proxmox e os nomes dos
+parametros rejeitados, nunca os valores. A rota gerada
+`POST /proxmox/api2/storage` continua somente leitura e retorna HTTP 403.
+
 ### Helpers do viewer e do contrato gerado
 
 - `POST /proxmox/viewer/generate` - Exclusivo para desenvolvimento. O endpoint nao existe e retorna HTTP 404, a menos que o processo inicie com `PROXBOX_RUNTIME_CODEGEN_ENABLED=true`. Quando habilitado, valores de `version_tag` invalidos ou que nao permanecem contidos retornam HTTP 422 antes do crawler ou de qualquer escrita. Com `persist=true`, tags do pacote sao imutaveis e retornam HTTP 409; atualize-as somente instalando outro pacote. Origens nao padrao ficam em `custom/<version_tag>/` apenas para inspecao.

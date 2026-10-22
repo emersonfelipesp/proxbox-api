@@ -2,7 +2,7 @@
 
 | Mode | Core | Sidecars | Registrations |
 |---|---|---|---|
-| default-all | True | pbs, ceph, pdm | 4056 |
+| default-all | True | pbs, ceph, pdm | 4057 |
 | pbs | False | pbs | 3767 |
 | ceph | False | ceph | 3789 |
 | pdm | False | pdm | 3767 |
@@ -10,20 +10,20 @@
 | pbs-pdm | False | pbs, pdm | 3778 |
 | ceph-pdm | False | ceph, pdm | 3800 |
 | all-sidecars | False | pbs, ceph, pdm | 3811 |
-| unknown-core | True |  | 4001 |
-| core-pbs | True | pbs | 4012 |
-| core-ceph | True | ceph | 4034 |
-| core-pdm | True | pdm | 4012 |
-| core-pbs-ceph | True | pbs, ceph | 4045 |
-| core-pbs-pdm | True | pbs, pdm | 4023 |
-| core-ceph-pdm | True | ceph, pdm | 4045 |
-| core-all | True | pbs, ceph, pdm | 4056 |
-| blank-tokens | True | pbs, ceph, pdm | 4056 |
+| unknown-core | True |  | 4002 |
+| core-pbs | True | pbs | 4013 |
+| core-ceph | True | ceph | 4035 |
+| core-pdm | True | pdm | 4013 |
+| core-pbs-ceph | True | pbs, ceph | 4046 |
+| core-pbs-pdm | True | pbs, pdm | 4024 |
+| core-ceph-pdm | True | ceph, pdm | 4046 |
+| core-all | True | pbs, ceph, pdm | 4057 |
+| blank-tokens | True | pbs, ceph, pdm | 4057 |
 | normalized-sidecar | False | pbs | 3767 |
 | normalized-subset | False | pbs, ceph | 3800 |
 | normalized-all | False | pbs, ceph, pdm | 3811 |
-| normalized-unknown | True |  | 4001 |
-| normalized-core | True | pbs | 4012 |
+| normalized-unknown | True |  | 4002 |
+| normalized-core | True | pbs | 4013 |
 
 ### Default registration detail (`PROXBOX_RUNTIME_CODEGEN_ENABLED=false`)
 
@@ -3904,195 +3904,196 @@
 | 3872 | http | POST | /proxmox/metrics/influx/query | proxbox&#95;api/routes/proxmox/metrics.py:47 query&#95;influx&#95;metrics | - |
 | 3873 | http | POST | /proxmox/metrics/pull/query | proxbox&#95;api/routes/proxmox/metrics.py:62 query&#95;proxmox&#95;metrics | - |
 | 3874 | http | PUT | /proxmox/metrics/influx/servers/{config&#95;id} | proxbox&#95;api/routes/proxmox/metrics.py:93 update&#95;influx&#95;metric&#95;server | - |
-| 3875 | http | POST | /proxmox/qemu/{vmid}/start | proxbox&#95;api/routes/proxmox&#95;actions.py:3419 start&#95;qemu | - |
-| 3876 | http | POST | /proxmox/lxc/{vmid}/start | proxbox&#95;api/routes/proxmox&#95;actions.py:3432 start&#95;lxc | - |
-| 3877 | http | POST | /proxmox/qemu/{vmid}/stop | proxbox&#95;api/routes/proxmox&#95;actions.py:3445 stop&#95;qemu | - |
-| 3878 | http | POST | /proxmox/lxc/{vmid}/stop | proxbox&#95;api/routes/proxmox&#95;actions.py:3458 stop&#95;lxc | - |
-| 3879 | http | POST | /proxmox/qemu/{vmid}/snapshot | proxbox&#95;api/routes/proxmox&#95;actions.py:3471 snapshot&#95;qemu | - |
-| 3880 | http | POST | /proxmox/lxc/{vmid}/snapshot | proxbox&#95;api/routes/proxmox&#95;actions.py:3485 snapshot&#95;lxc | - |
-| 3881 | http | POST | /proxmox/qemu/{vmid}/reboot | proxbox&#95;api/routes/proxmox&#95;actions.py:3499 reboot&#95;qemu | - |
-| 3882 | http | POST | /proxmox/lxc/{vmid}/reboot | proxbox&#95;api/routes/proxmox&#95;actions.py:3512 reboot&#95;lxc | - |
-| 3883 | http | DELETE | /proxmox/qemu/{vmid} | proxbox&#95;api/routes/proxmox&#95;actions.py:3525 delete&#95;qemu | - |
-| 3884 | http | DELETE | /proxmox/lxc/{vmid} | proxbox&#95;api/routes/proxmox&#95;actions.py:3538 delete&#95;lxc | - |
-| 3885 | http | POST | /proxmox/qemu/{vmid}/backup | proxbox&#95;api/routes/proxmox&#95;actions.py:3551 backup&#95;qemu | - |
-| 3886 | http | POST | /proxmox/lxc/{vmid}/backup | proxbox&#95;api/routes/proxmox&#95;actions.py:3565 backup&#95;lxc | - |
-| 3887 | http | DELETE | /proxmox/qemu/{vmid}/snapshot/{snapname} | proxbox&#95;api/routes/proxmox&#95;actions.py:3579 delete&#95;snapshot&#95;qemu | - |
-| 3888 | http | DELETE | /proxmox/lxc/{vmid}/snapshot/{snapname} | proxbox&#95;api/routes/proxmox&#95;actions.py:3593 delete&#95;snapshot&#95;lxc | - |
-| 3889 | http | POST | /proxmox/qemu/{vmid}/migrate | proxbox&#95;api/routes/proxmox&#95;actions.py:3607 migrate&#95;qemu | - |
-| 3890 | http | POST | /proxmox/lxc/{vmid}/migrate | proxbox&#95;api/routes/proxmox&#95;actions.py:3621 migrate&#95;lxc | - |
-| 3891 | http | DELETE | /proxmox/qemu/{vmid}/migrate/{task&#95;upid} | proxbox&#95;api/routes/proxmox&#95;actions.py:3635 migrate&#95;cancel&#95;qemu | - |
-| 3892 | http | DELETE | /proxmox/lxc/{vmid}/migrate/{task&#95;upid} | proxbox&#95;api/routes/proxmox&#95;actions.py:3648 migrate&#95;cancel&#95;lxc | - |
-| 3893 | http | GET | /proxmox/qemu/{vmid}/migrate/{task&#95;upid}/stream | proxbox&#95;api/routes/proxmox&#95;actions.py:3708 migrate&#95;stream&#95;qemu | - |
-| 3894 | http | GET | /proxmox/lxc/{vmid}/migrate/{task&#95;upid}/stream | proxbox&#95;api/routes/proxmox&#95;actions.py:3718 migrate&#95;stream&#95;lxc | - |
-| 3895 | http | PUT | /proxmox/{vm&#95;type}/{vmid}/tags | proxbox&#95;api/routes/proxmox&#95;tags.py:108 replace&#95;proxmox&#95;tags | - |
-| 3896 | http | PATCH | /proxmox/{vm&#95;type}/{vmid}/tags | proxbox&#95;api/routes/proxmox&#95;tags.py:135 patch&#95;proxmox&#95;tags | - |
-| 3897 | http | GET | /proxmox/viewer/openapi/embedded | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:291 proxmox&#95;viewer&#95;openapi&#95;embedded | - |
-| 3898 | http | GET | /proxmox/viewer/integration/contracts | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:310 proxmox&#95;netbox&#95;integration&#95;contracts | - |
-| 3899 | http | GET | /proxmox/viewer/schema-status | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:342 schema&#95;generation&#95;status | - |
-| 3900 | http | POST | /proxmox/endpoints | proxbox&#95;api/routes/proxmox/endpoints.py:458 create&#95;proxmox&#95;endpoint | - |
-| 3901 | http | GET | /proxmox/endpoints | proxbox&#95;api/routes/proxmox/endpoints.py:527 get&#95;proxmox&#95;endpoints | - |
-| 3902 | http | GET | /proxmox/endpoints/{endpoint&#95;id} | proxbox&#95;api/routes/proxmox/endpoints.py:538 get&#95;proxmox&#95;endpoint | - |
-| 3903 | http | PUT | /proxmox/endpoints/{endpoint&#95;id} | proxbox&#95;api/routes/proxmox/endpoints.py:546 update&#95;proxmox&#95;endpoint | - |
-| 3904 | http | DELETE | /proxmox/endpoints/{endpoint&#95;id} | proxbox&#95;api/routes/proxmox/endpoints.py:571 delete&#95;proxmox&#95;endpoint | - |
-| 3905 | http | POST | /proxmox/console/sessions | proxbox&#95;api/routes/proxmox/console.py:305 create&#95;console&#95;session | - |
-| 3906 | http | POST | /proxmox/console/browser-sessions | proxbox&#95;api/routes/proxmox/console.py:370 create&#95;browser&#95;console&#95;session | - |
-| 3907 | websocket |  | /proxmox/console/browser-stream | proxbox&#95;api/routes/proxmox/console.py:468 browser&#95;console&#95;stream | - |
-| 3908 | http | GET | /proxmox/sessions | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:42 proxmox&#95;sessions | - |
-| 3909 | http | GET | /proxmox/version | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:91 proxmox&#95;version | - |
-| 3910 | http | GET | /proxmox/ | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:149 proxmox | - |
-| 3911 | http | GET | /proxmox/storage | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:293 get&#95;proxmox&#95;storage | - |
-| 3912 | http | GET | /proxmox/nodes/{node}/storage/{storage}/content | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:310 get&#95;proxmox&#95;node&#95;storage&#95;content | - |
-| 3913 | http | GET | /proxmox/{top&#95;level} | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:371 top&#95;level&#95;endpoint | - |
-| 3914 | http | GET | /proxmox/{node}/{type}/{vmid}/config | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:398 get&#95;vm&#95;config | - |
-| 3915 | http | GET | /proxmox/viewer/openapi | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:269 proxmox&#95;viewer&#95;bundled&#95;openapi | - |
-| 3916 | http | GET | /proxmox/viewer/pydantic | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:480 proxmox&#95;viewer&#95;bundled&#95;pydantic&#95;models | - |
-| 3917 | http | GET | /dcim/devices | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:43 get&#95;devices | - |
-| 3918 | http | GET | /dcim/devices/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:48 create&#95;devices | - |
-| 3919 | http | GET | /dcim/devices/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:67 create&#95;devices&#95;stream | - |
-| 3920 | http | GET | /dcim/devices/{node}/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:372 create&#95;proxmox&#95;device&#95;interfaces | - |
-| 3921 | http | GET | /dcim/devices/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:814 create&#95;all&#95;devices&#95;interfaces | - |
-| 3922 | http | GET | /dcim/devices/interfaces/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:839 create&#95;all&#95;devices&#95;interfaces&#95;stream | - |
-| 3923 | http | GET | /virtualization/cluster-types/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:15 create&#95;cluster&#95;types | - |
-| 3924 | http | GET | /virtualization/clusters/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:20 create&#95;clusters | - |
-| 3925 | http | GET | /virtualization/virtual-machines/ | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:41 get&#95;virtual&#95;machines | - |
-| 3926 | http | GET | /virtualization/virtual-machines/summary/example | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:54 get&#95;virtual&#95;machine&#95;summary&#95;example | - |
-| 3927 | http | GET | /virtualization/virtual-machines/interfaces/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:163 create&#95;virtual&#95;machines&#95;interfaces | - |
-| 3928 | http | GET | /virtualization/virtual-machines/interfaces/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:233 create&#95;virtual&#95;machines&#95;interfaces&#95;stream | - |
-| 3929 | http | GET | /virtualization/virtual-machines/interfaces/ip-address/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:323 create&#95;virtual&#95;machines&#95;interfaces&#95;ip&#95;address | - |
-| 3930 | http | GET | /virtualization/virtual-machines/interfaces/ip-address/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:381 create&#95;virtual&#95;machines&#95;ip&#95;address&#95;stream | - |
-| 3931 | http | GET | /virtualization/virtual-machines/{id} | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:459 get&#95;virtual&#95;machine | - |
-| 3932 | http | GET | /virtualization/virtual-machines/{id}/summary | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:481 get&#95;virtual&#95;machine&#95;summary | - |
-| 3933 | http | GET | /virtualization/virtual-machines/storage/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/storages&#95;vm.py:32 create&#95;storages | - |
-| 3934 | http | GET | /virtualization/virtual-machines/storage/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/storages&#95;vm.py:59 create&#95;storages&#95;stream | - |
-| 3935 | http | GET | /virtualization/virtual-machines/virtual-disks/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/disks&#95;vm.py:30 create&#95;virtual&#95;disks | - |
-| 3936 | http | GET | /virtualization/virtual-machines/virtual-disks/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/disks&#95;vm.py:78 create&#95;virtual&#95;disks&#95;stream | - |
-| 3937 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/virtual-disks/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/disks&#95;vm.py:143 create&#95;virtual&#95;disks&#95;for&#95;vm&#95;stream | - |
-| 3938 | http | GET | /virtualization/virtual-machines/backups/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:964 create&#95;virtual&#95;machine&#95;backups | - |
-| 3939 | http | GET | /virtualization/virtual-machines/backups/all/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:1651 create&#95;all&#95;virtual&#95;machine&#95;backups | - |
-| 3940 | http | GET | /virtualization/virtual-machines/backups/all/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:1697 create&#95;all&#95;virtual&#95;machine&#95;backups&#95;stream | - |
-| 3941 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/backups/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:1763 create&#95;virtual&#95;machine&#95;backups&#95;by&#95;id&#95;stream | - |
-| 3942 | http | GET | /virtualization/virtual-machines/snapshots/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:121 create&#95;virtual&#95;machine&#95;snapshots | - |
-| 3943 | http | GET | /virtualization/virtual-machines/snapshots/all/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:157 create&#95;all&#95;virtual&#95;machine&#95;snapshots | - |
-| 3944 | http | GET | /virtualization/virtual-machines/snapshots/all/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:202 create&#95;all&#95;virtual&#95;machine&#95;snapshots&#95;stream | - |
-| 3945 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/snapshots/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:270 create&#95;virtual&#95;machine&#95;snapshots&#95;by&#95;id&#95;stream | - |
-| 3946 | http | GET | /virtualization/virtual-machines/task-history/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/task&#95;history&#95;vm.py:20 create&#95;all&#95;virtual&#95;machine&#95;task&#95;histories&#95;stream | - |
-| 3947 | http | GET | /virtualization/virtual-machines/orphans/sweep | proxbox&#95;api/routes/virtualization/virtual&#95;machines/orphans&#95;vm.py:181 sweep&#95;orphan&#95;virtual&#95;machines | - |
-| 3948 | http | GET | /virtualization/virtual-machines/orphans/sweep/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/orphans&#95;vm.py:211 sweep&#95;orphan&#95;virtual&#95;machines&#95;stream | - |
-| 3949 | http | GET | /virtualization/virtual-machines/create-test | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:2704 create&#95;test | - |
-| 3950 | http | GET | /virtualization/virtual-machines/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4974 create&#95;virtual&#95;machines | - |
-| 3951 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6694 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id | - |
-| 3952 | http | GET | /virtualization/virtual-machines/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6774 create&#95;virtual&#95;machines&#95;stream | - |
-| 3953 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:7100 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id&#95;stream | - |
-| 3954 | http | GET | /extras/bootstrap-status | proxbox&#95;api/routes/extras/&#95;&#95;init&#95;&#95;.py:12 get&#95;netbox&#95;bootstrap&#95;status | - |
-| 3955 | http | POST | /intent/plan | proxbox&#95;api/routes/intent/plan.py:79 plan | - |
-| 3956 | http | POST | /intent/apply | proxbox&#95;api/routes/intent/apply.py:129 apply&#95;intent | - |
-| 3957 | http | POST | /intent/deletion-requests/{deletion&#95;request&#95;id}/approve | proxbox&#95;api/routes/intent/deletion&#95;requests.py:144 approve&#95;deletion&#95;request | - |
-| 3958 | http | POST | /intent/deletion-requests/{deletion&#95;request&#95;id}/reject | proxbox&#95;api/routes/intent/deletion&#95;requests.py:215 reject&#95;deletion&#95;request | - |
-| 3959 | http | POST | /intent/deletion-requests/{deletion&#95;request&#95;id}/execute | proxbox&#95;api/routes/intent/deletion&#95;requests.py:271 execute&#95;deletion&#95;request | - |
-| 3960 | http | PUT | /intent/tag-pending-deletion | proxbox&#95;api/routes/intent/vm&#95;tags.py:186 tag&#95;pending&#95;deletion | - |
-| 3961 | http | PUT | /intent/untag-pending-deletion | proxbox&#95;api/routes/intent/vm&#95;tags.py:203 untag&#95;pending&#95;deletion | - |
-| 3962 | http | GET | /cloud/lxc/templates | proxbox&#95;api/routes/cloud/lxc.py:384 list&#95;lxc&#95;templates | - |
-| 3963 | http | POST | /cloud/lxc/provision | proxbox&#95;api/routes/cloud/lxc.py:425 provision&#95;lxc | - |
-| 3964 | http | POST | /cloud/vm/provision | proxbox&#95;api/routes/cloud/provision.py:791 provision&#95;vm | - |
-| 3965 | http | POST | /cloud/vm/provision/stream | proxbox&#95;api/routes/cloud/provision&#95;stream.py:418 provision&#95;vm&#95;stream | - |
-| 3966 | http | POST | /cloud/firecracker/provision | proxbox&#95;api/routes/cloud/firecracker.py:215 provision&#95;firecracker&#95;microvm | - |
-| 3967 | http | POST | /cloud/firecracker/provision/stream | proxbox&#95;api/routes/cloud/firecracker.py:223 provision&#95;firecracker&#95;microvm&#95;stream | - |
-| 3968 | http | POST | /cloud/azure/vhd-imports | proxbox&#95;api/routes/cloud/azure&#95;vhd&#95;imports.py:60 import&#95;azure&#95;vhd | - |
-| 3969 | http | GET | /cloud/network/available-ips | proxbox&#95;api/routes/cloud/network.py:39 cloud&#95;network&#95;available&#95;ips | - |
-| 3970 | http | GET | /cloud/proxmox-endpoint/by-url | proxbox&#95;api/routes/cloud/image&#95;factory.py:220 get&#95;endpoint&#95;by&#95;url | - |
-| 3971 | http | POST | /cloud/image-factory/builds | proxbox&#95;api/routes/cloud/image&#95;factory.py:245 create&#95;image&#95;factory&#95;build | - |
-| 3972 | http | GET | /cloud/image-factory/builds/{build&#95;id} | proxbox&#95;api/routes/cloud/image&#95;factory.py:272 get&#95;image&#95;factory&#95;build | - |
-| 3973 | http | GET | /cloud/image-factory/builds/{build&#95;id}/stream | proxbox&#95;api/routes/cloud/image&#95;factory.py:433 stream&#95;image&#95;factory&#95;build | - |
-| 3974 | http | POST | /cloud/image-factory/builds/{build&#95;id}/cancel | proxbox&#95;api/routes/cloud/image&#95;factory.py:464 cancel&#95;image&#95;factory&#95;build | - |
-| 3975 | http | POST | /cloud/image-factory/validate | proxbox&#95;api/routes/cloud/image&#95;factory.py:488 validate&#95;image&#95;factory&#95;build | - |
-| 3976 | http | POST | /cloud/templates/images/preflight | proxbox&#95;api/routes/cloud/template&#95;images.py:442 preflight&#95;cloud&#95;image&#95;template | - |
-| 3977 | http | GET | /cloud/templates/images/operations/{operation&#95;id} | proxbox&#95;api/routes/cloud/template&#95;images.py:480 get&#95;cloud&#95;image&#95;build&#95;operation | - |
-| 3978 | http | POST | /cloud/templates/images/operations/{operation&#95;id}/cancel | proxbox&#95;api/routes/cloud/template&#95;images.py:503 cancel&#95;cloud&#95;image&#95;build&#95;operation | - |
-| 3979 | http | POST | /cloud/templates/images | proxbox&#95;api/routes/cloud/template&#95;images.py:890 build&#95;cloud&#95;image&#95;template | - |
-| 3980 | http | POST | /cloud/templates/pve | proxbox&#95;api/routes/cloud/pve&#95;template.py:144 build&#95;pve&#95;template | - |
-| 3981 | http | GET | /cloud/vm/templates | proxbox&#95;api/routes/cloud/qemu&#95;templates.py:204 qemu&#95;cloud&#95;init&#95;templates | - |
-| 3982 | http | GET | /cloud/templates | proxbox&#95;api/routes/cloud/templates.py:91 list&#95;cloud&#95;templates | - |
-| 3983 | http | GET | /cloud/templates/versions | proxbox&#95;api/routes/cloud/catalog.py:252 list&#95;product&#95;versions | - |
-| 3984 | http | GET | /ssh/host-key-fingerprint | proxbox&#95;api/routes/ssh&#95;terminal.py:43 get&#95;host&#95;key&#95;fingerprint | - |
-| 3985 | http | POST | /ssh/sessions | proxbox&#95;api/routes/ssh&#95;terminal.py:137 create&#95;terminal&#95;session | - |
-| 3986 | websocket |  | /ssh/sessions/{session&#95;id}/ws | proxbox&#95;api/routes/ssh&#95;terminal.py:204 ssh&#95;terminal&#95;websocket | - |
-| 3987 | http | GET,POST | /sync/individual/backup | proxbox&#95;api/routes/sync/individual/backup.py:13 sync&#95;backup | - |
-| 3988 | http | GET,POST | /sync/individual/backup-routines | proxbox&#95;api/routes/sync/individual/backup&#95;routine.py:15 sync&#95;backup&#95;routine | - |
-| 3989 | http | GET | /sync/individual/cluster | proxbox&#95;api/routes/sync/individual/cluster.py:20 sync&#95;cluster | - |
-| 3990 | http | GET | /sync/individual/node | proxbox&#95;api/routes/sync/individual/device.py:13 sync&#95;node | - |
-| 3991 | http | GET | /sync/individual/vm | proxbox&#95;api/routes/sync/individual/vm.py:20 sync&#95;vm | - |
-| 3992 | http | GET | /sync/individual/vm/{cluster&#95;name}/{node}/{type}/{vmid} | proxbox&#95;api/routes/sync/individual/vm.py:43 sync&#95;vm&#95;by&#95;path | - |
-| 3993 | http | GET,POST | /sync/individual/interface | proxbox&#95;api/routes/sync/individual/interface.py:15 sync&#95;interface | - |
-| 3994 | http | GET,POST | /sync/individual/ip | proxbox&#95;api/routes/sync/individual/ip.py:15 sync&#95;ip | - |
-| 3995 | http | GET,POST | /sync/individual/disk | proxbox&#95;api/routes/sync/individual/disk.py:15 sync&#95;disk | - |
-| 3996 | http | GET | /sync/individual/storage | proxbox&#95;api/routes/sync/individual/storage.py:13 sync&#95;storage | - |
-| 3997 | http | GET,POST | /sync/individual/snapshot | proxbox&#95;api/routes/sync/individual/snapshot.py:15 sync&#95;snapshot | - |
-| 3998 | http | GET | /sync/individual/task-history | proxbox&#95;api/routes/sync/individual/task&#95;history.py:15 sync&#95;task&#95;history | - |
-| 3999 | http | GET,POST | /sync/individual/replication | proxbox&#95;api/routes/sync/individual/replication.py:13 sync&#95;replication | - |
-| 4000 | http | GET | /sync/active | proxbox&#95;api/routes/sync/active.py:13 sync&#95;active | - |
-| 4001 | http | POST | /pbs/endpoints | proxbox&#95;api/pbs/admin.py:64 create&#95;pbs&#95;endpoint | - |
-| 4002 | http | GET | /pbs/endpoints | proxbox&#95;api/pbs/admin.py:87 list&#95;pbs&#95;endpoints | - |
-| 4003 | http | GET | /pbs/endpoints/{endpoint&#95;id} | proxbox&#95;api/pbs/admin.py:97 get&#95;pbs&#95;endpoint | - |
-| 4004 | http | PUT | /pbs/endpoints/{endpoint&#95;id} | proxbox&#95;api/pbs/admin.py:105 update&#95;pbs&#95;endpoint | - |
-| 4005 | http | DELETE | /pbs/endpoints/{endpoint&#95;id} | proxbox&#95;api/pbs/admin.py:142 delete&#95;pbs&#95;endpoint | - |
-| 4006 | http | GET | /pbs/status | proxbox&#95;api/pbs/routes.py:63 pbs&#95;status | - |
-| 4007 | http | GET | /pbs/sync/full | proxbox&#95;api/pbs/routes.py:159 pbs&#95;sync&#95;full | - |
-| 4008 | http | GET | /pbs/sync/datastores | proxbox&#95;api/pbs/routes.py:167 pbs&#95;sync&#95;datastores | - |
-| 4009 | http | GET | /pbs/sync/snapshots | proxbox&#95;api/pbs/routes.py:175 pbs&#95;sync&#95;snapshots | - |
-| 4010 | http | GET | /pbs/sync/jobs | proxbox&#95;api/pbs/routes.py:183 pbs&#95;sync&#95;jobs | - |
-| 4011 | http | GET | /pbs/sync/node | proxbox&#95;api/pbs/routes.py:191 pbs&#95;sync&#95;node | - |
-| 4012 | http | GET | /ceph/status | proxbox&#95;api/ceph/routes.py:134 ceph&#95;status | - |
-| 4013 | http | GET | /ceph/sync/full | proxbox&#95;api/ceph/routes.py:386 ceph&#95;sync&#95;full | - |
-| 4014 | http | GET | /ceph/sync/status | proxbox&#95;api/ceph/routes.py:394 ceph&#95;sync&#95;status | - |
-| 4015 | http | GET | /ceph/sync/daemons | proxbox&#95;api/ceph/routes.py:402 ceph&#95;sync&#95;daemons | - |
-| 4016 | http | GET | /ceph/sync/osds | proxbox&#95;api/ceph/routes.py:410 ceph&#95;sync&#95;osds | - |
-| 4017 | http | GET | /ceph/sync/pools | proxbox&#95;api/ceph/routes.py:418 ceph&#95;sync&#95;pools | - |
-| 4018 | http | GET | /ceph/sync/filesystems | proxbox&#95;api/ceph/routes.py:426 ceph&#95;sync&#95;filesystems | - |
-| 4019 | http | GET | /ceph/sync/crush | proxbox&#95;api/ceph/routes.py:434 ceph&#95;sync&#95;crush | - |
-| 4020 | http | GET | /ceph/sync/flags | proxbox&#95;api/ceph/routes.py:442 ceph&#95;sync&#95;flags | - |
-| 4021 | http | GET | /ceph/sync/rgw | proxbox&#95;api/ceph/routes.py:450 ceph&#95;sync&#95;rgw | - |
-| 4022 | http | GET | /ceph/sync/rbd | proxbox&#95;api/ceph/routes.py:458 ceph&#95;sync&#95;rbd | - |
-| 4023 | http | GET | /ceph/v2/capabilities | proxbox&#95;api/ceph/v2&#95;routes.py:411 ceph&#95;v2&#95;capabilities | - |
-| 4024 | http | POST | /ceph/v2/validate | proxbox&#95;api/ceph/v2&#95;routes.py:469 ceph&#95;v2&#95;validate | - |
-| 4025 | http | POST | /ceph/v2/plans | proxbox&#95;api/ceph/v2&#95;routes.py:603 ceph&#95;v2&#95;create&#95;plan | - |
-| 4026 | http | GET | /ceph/v2/plans/{plan&#95;id} | proxbox&#95;api/ceph/v2&#95;routes.py:617 ceph&#95;v2&#95;get&#95;plan | - |
-| 4027 | http | POST | /ceph/v2/plans/{plan&#95;id}/apply | proxbox&#95;api/ceph/v2&#95;routes.py:627 ceph&#95;v2&#95;apply&#95;plan | - |
-| 4028 | http | POST | /ceph/v2/plans/{plan&#95;id}/approvals | proxbox&#95;api/ceph/v2&#95;routes.py:731 ceph&#95;v2&#95;approve&#95;plan | - |
-| 4029 | http | GET | /ceph/v2/approvals/{approval&#95;id} | proxbox&#95;api/ceph/v2&#95;routes.py:839 ceph&#95;v2&#95;approval&#95;status | - |
-| 4030 | http | POST | /ceph/v2/plan | proxbox&#95;api/ceph/v2&#95;routes.py:881 ceph&#95;v2&#95;plan&#95;compat | - |
-| 4031 | http | POST | /ceph/v2/apply | proxbox&#95;api/ceph/v2&#95;routes.py:895 ceph&#95;v2&#95;apply&#95;compat | - |
-| 4032 | http | GET | /ceph/v2/operations/{operation&#95;id} | proxbox&#95;api/ceph/v2&#95;routes.py:934 ceph&#95;v2&#95;operation | - |
-| 4033 | http | GET | /ceph/v2/operations/{operation&#95;id}/events | proxbox&#95;api/ceph/v2&#95;routes.py:944 ceph&#95;v2&#95;operation&#95;events | - |
-| 4034 | http | POST | /ceph/v2/reconcile | proxbox&#95;api/ceph/v2&#95;routes.py:988 ceph&#95;v2&#95;reconcile | - |
-| 4035 | http | GET | /ceph/v2/metrics | proxbox&#95;api/ceph/v2&#95;routes.py:1016 ceph&#95;v2&#95;metrics | - |
-| 4036 | http | GET | /ceph/v2/metrics/sources | proxbox&#95;api/ceph/v2&#95;routes.py:1133 ceph&#95;v2&#95;list&#95;prometheus&#95;sources | - |
-| 4037 | http | POST | /ceph/v2/metrics/sources | proxbox&#95;api/ceph/v2&#95;routes.py:1143 ceph&#95;v2&#95;create&#95;prometheus&#95;source | - |
-| 4038 | http | POST | /ceph/v2/metrics/sources/{source&#95;id}/validate | proxbox&#95;api/ceph/v2&#95;routes.py:1173 ceph&#95;v2&#95;validate&#95;prometheus&#95;source | - |
-| 4039 | http | GET | /ceph/v2/dashboard/endpoints | proxbox&#95;api/ceph/v2&#95;routes.py:1247 ceph&#95;v2&#95;list&#95;dashboard&#95;endpoints | - |
-| 4040 | http | POST | /ceph/v2/dashboard/endpoints | proxbox&#95;api/ceph/v2&#95;routes.py:1257 ceph&#95;v2&#95;create&#95;dashboard&#95;endpoint | - |
-| 4041 | http | POST | /ceph/v2/dashboard/endpoints/{endpoint&#95;id}/validate | proxbox&#95;api/ceph/v2&#95;routes.py:1291 ceph&#95;v2&#95;validate&#95;dashboard&#95;endpoint | - |
-| 4042 | http | GET | /ceph/v2/external/clusters | proxbox&#95;api/ceph/v2&#95;routes.py:1369 ceph&#95;v2&#95;list&#95;external&#95;clusters | - |
-| 4043 | http | POST | /ceph/v2/external/clusters | proxbox&#95;api/ceph/v2&#95;routes.py:1379 ceph&#95;v2&#95;create&#95;external&#95;cluster | - |
-| 4044 | http | POST | /ceph/v2/external/clusters/{cluster&#95;id}/capabilities | proxbox&#95;api/ceph/v2&#95;routes.py:1415 ceph&#95;v2&#95;external&#95;cluster&#95;capabilities | - |
-| 4045 | http | POST | /pdm/endpoints | proxbox&#95;api/pdm/admin.py:64 create&#95;pdm&#95;endpoint | - |
-| 4046 | http | GET | /pdm/endpoints | proxbox&#95;api/pdm/admin.py:87 list&#95;pdm&#95;endpoints | - |
-| 4047 | http | GET | /pdm/endpoints/{endpoint&#95;id} | proxbox&#95;api/pdm/admin.py:97 get&#95;pdm&#95;endpoint | - |
-| 4048 | http | PUT | /pdm/endpoints/{endpoint&#95;id} | proxbox&#95;api/pdm/admin.py:105 update&#95;pdm&#95;endpoint | - |
-| 4049 | http | DELETE | /pdm/endpoints/{endpoint&#95;id} | proxbox&#95;api/pdm/admin.py:142 delete&#95;pdm&#95;endpoint | - |
-| 4050 | http | GET | /pdm/status | proxbox&#95;api/pdm/routes.py:63 pdm&#95;status | - |
-| 4051 | http | GET | /pdm/sync/full | proxbox&#95;api/pdm/routes.py:177 pdm&#95;sync&#95;full | - |
-| 4052 | http | GET | /pdm/sync/remotes | proxbox&#95;api/pdm/routes.py:185 pdm&#95;sync&#95;remotes | - |
-| 4053 | http | GET | /pdm/sync/guests | proxbox&#95;api/pdm/routes.py:193 pdm&#95;sync&#95;guests | - |
-| 4054 | http | GET | /pdm/sync/datastores | proxbox&#95;api/pdm/routes.py:201 pdm&#95;sync&#95;datastores | - |
-| 4055 | http | GET | /pdm/sync/resources | proxbox&#95;api/pdm/routes.py:209 pdm&#95;sync&#95;resources | - |
+| 3875 | http | POST | /proxmox/storage/pbs | proxbox&#95;api/routes/proxmox&#95;actions.py:4141 create&#95;pbs&#95;storage&#95;route | - |
+| 3876 | http | POST | /proxmox/qemu/{vmid}/start | proxbox&#95;api/routes/proxmox&#95;actions.py:4158 start&#95;qemu | - |
+| 3877 | http | POST | /proxmox/lxc/{vmid}/start | proxbox&#95;api/routes/proxmox&#95;actions.py:4171 start&#95;lxc | - |
+| 3878 | http | POST | /proxmox/qemu/{vmid}/stop | proxbox&#95;api/routes/proxmox&#95;actions.py:4184 stop&#95;qemu | - |
+| 3879 | http | POST | /proxmox/lxc/{vmid}/stop | proxbox&#95;api/routes/proxmox&#95;actions.py:4197 stop&#95;lxc | - |
+| 3880 | http | POST | /proxmox/qemu/{vmid}/snapshot | proxbox&#95;api/routes/proxmox&#95;actions.py:4210 snapshot&#95;qemu | - |
+| 3881 | http | POST | /proxmox/lxc/{vmid}/snapshot | proxbox&#95;api/routes/proxmox&#95;actions.py:4224 snapshot&#95;lxc | - |
+| 3882 | http | POST | /proxmox/qemu/{vmid}/reboot | proxbox&#95;api/routes/proxmox&#95;actions.py:4238 reboot&#95;qemu | - |
+| 3883 | http | POST | /proxmox/lxc/{vmid}/reboot | proxbox&#95;api/routes/proxmox&#95;actions.py:4251 reboot&#95;lxc | - |
+| 3884 | http | DELETE | /proxmox/qemu/{vmid} | proxbox&#95;api/routes/proxmox&#95;actions.py:4264 delete&#95;qemu | - |
+| 3885 | http | DELETE | /proxmox/lxc/{vmid} | proxbox&#95;api/routes/proxmox&#95;actions.py:4277 delete&#95;lxc | - |
+| 3886 | http | POST | /proxmox/qemu/{vmid}/backup | proxbox&#95;api/routes/proxmox&#95;actions.py:4290 backup&#95;qemu | - |
+| 3887 | http | POST | /proxmox/lxc/{vmid}/backup | proxbox&#95;api/routes/proxmox&#95;actions.py:4304 backup&#95;lxc | - |
+| 3888 | http | DELETE | /proxmox/qemu/{vmid}/snapshot/{snapname} | proxbox&#95;api/routes/proxmox&#95;actions.py:4318 delete&#95;snapshot&#95;qemu | - |
+| 3889 | http | DELETE | /proxmox/lxc/{vmid}/snapshot/{snapname} | proxbox&#95;api/routes/proxmox&#95;actions.py:4332 delete&#95;snapshot&#95;lxc | - |
+| 3890 | http | POST | /proxmox/qemu/{vmid}/migrate | proxbox&#95;api/routes/proxmox&#95;actions.py:4346 migrate&#95;qemu | - |
+| 3891 | http | POST | /proxmox/lxc/{vmid}/migrate | proxbox&#95;api/routes/proxmox&#95;actions.py:4360 migrate&#95;lxc | - |
+| 3892 | http | DELETE | /proxmox/qemu/{vmid}/migrate/{task&#95;upid} | proxbox&#95;api/routes/proxmox&#95;actions.py:4374 migrate&#95;cancel&#95;qemu | - |
+| 3893 | http | DELETE | /proxmox/lxc/{vmid}/migrate/{task&#95;upid} | proxbox&#95;api/routes/proxmox&#95;actions.py:4387 migrate&#95;cancel&#95;lxc | - |
+| 3894 | http | GET | /proxmox/qemu/{vmid}/migrate/{task&#95;upid}/stream | proxbox&#95;api/routes/proxmox&#95;actions.py:4447 migrate&#95;stream&#95;qemu | - |
+| 3895 | http | GET | /proxmox/lxc/{vmid}/migrate/{task&#95;upid}/stream | proxbox&#95;api/routes/proxmox&#95;actions.py:4457 migrate&#95;stream&#95;lxc | - |
+| 3896 | http | PUT | /proxmox/{vm&#95;type}/{vmid}/tags | proxbox&#95;api/routes/proxmox&#95;tags.py:108 replace&#95;proxmox&#95;tags | - |
+| 3897 | http | PATCH | /proxmox/{vm&#95;type}/{vmid}/tags | proxbox&#95;api/routes/proxmox&#95;tags.py:135 patch&#95;proxmox&#95;tags | - |
+| 3898 | http | GET | /proxmox/viewer/openapi/embedded | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:291 proxmox&#95;viewer&#95;openapi&#95;embedded | - |
+| 3899 | http | GET | /proxmox/viewer/integration/contracts | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:310 proxmox&#95;netbox&#95;integration&#95;contracts | - |
+| 3900 | http | GET | /proxmox/viewer/schema-status | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:342 schema&#95;generation&#95;status | - |
+| 3901 | http | POST | /proxmox/endpoints | proxbox&#95;api/routes/proxmox/endpoints.py:458 create&#95;proxmox&#95;endpoint | - |
+| 3902 | http | GET | /proxmox/endpoints | proxbox&#95;api/routes/proxmox/endpoints.py:527 get&#95;proxmox&#95;endpoints | - |
+| 3903 | http | GET | /proxmox/endpoints/{endpoint&#95;id} | proxbox&#95;api/routes/proxmox/endpoints.py:538 get&#95;proxmox&#95;endpoint | - |
+| 3904 | http | PUT | /proxmox/endpoints/{endpoint&#95;id} | proxbox&#95;api/routes/proxmox/endpoints.py:546 update&#95;proxmox&#95;endpoint | - |
+| 3905 | http | DELETE | /proxmox/endpoints/{endpoint&#95;id} | proxbox&#95;api/routes/proxmox/endpoints.py:571 delete&#95;proxmox&#95;endpoint | - |
+| 3906 | http | POST | /proxmox/console/sessions | proxbox&#95;api/routes/proxmox/console.py:305 create&#95;console&#95;session | - |
+| 3907 | http | POST | /proxmox/console/browser-sessions | proxbox&#95;api/routes/proxmox/console.py:370 create&#95;browser&#95;console&#95;session | - |
+| 3908 | websocket |  | /proxmox/console/browser-stream | proxbox&#95;api/routes/proxmox/console.py:468 browser&#95;console&#95;stream | - |
+| 3909 | http | GET | /proxmox/sessions | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:42 proxmox&#95;sessions | - |
+| 3910 | http | GET | /proxmox/version | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:91 proxmox&#95;version | - |
+| 3911 | http | GET | /proxmox/ | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:149 proxmox | - |
+| 3912 | http | GET | /proxmox/storage | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:293 get&#95;proxmox&#95;storage | - |
+| 3913 | http | GET | /proxmox/nodes/{node}/storage/{storage}/content | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:310 get&#95;proxmox&#95;node&#95;storage&#95;content | - |
+| 3914 | http | GET | /proxmox/{top&#95;level} | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:371 top&#95;level&#95;endpoint | - |
+| 3915 | http | GET | /proxmox/{node}/{type}/{vmid}/config | proxbox&#95;api/routes/proxmox/&#95;&#95;init&#95;&#95;.py:398 get&#95;vm&#95;config | - |
+| 3916 | http | GET | /proxmox/viewer/openapi | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:269 proxmox&#95;viewer&#95;bundled&#95;openapi | - |
+| 3917 | http | GET | /proxmox/viewer/pydantic | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:480 proxmox&#95;viewer&#95;bundled&#95;pydantic&#95;models | - |
+| 3918 | http | GET | /dcim/devices | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:43 get&#95;devices | - |
+| 3919 | http | GET | /dcim/devices/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:48 create&#95;devices | - |
+| 3920 | http | GET | /dcim/devices/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:67 create&#95;devices&#95;stream | - |
+| 3921 | http | GET | /dcim/devices/{node}/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:372 create&#95;proxmox&#95;device&#95;interfaces | - |
+| 3922 | http | GET | /dcim/devices/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:814 create&#95;all&#95;devices&#95;interfaces | - |
+| 3923 | http | GET | /dcim/devices/interfaces/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:839 create&#95;all&#95;devices&#95;interfaces&#95;stream | - |
+| 3924 | http | GET | /virtualization/cluster-types/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:15 create&#95;cluster&#95;types | - |
+| 3925 | http | GET | /virtualization/clusters/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:20 create&#95;clusters | - |
+| 3926 | http | GET | /virtualization/virtual-machines/ | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:41 get&#95;virtual&#95;machines | - |
+| 3927 | http | GET | /virtualization/virtual-machines/summary/example | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:54 get&#95;virtual&#95;machine&#95;summary&#95;example | - |
+| 3928 | http | GET | /virtualization/virtual-machines/interfaces/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:163 create&#95;virtual&#95;machines&#95;interfaces | - |
+| 3929 | http | GET | /virtualization/virtual-machines/interfaces/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:233 create&#95;virtual&#95;machines&#95;interfaces&#95;stream | - |
+| 3930 | http | GET | /virtualization/virtual-machines/interfaces/ip-address/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:323 create&#95;virtual&#95;machines&#95;interfaces&#95;ip&#95;address | - |
+| 3931 | http | GET | /virtualization/virtual-machines/interfaces/ip-address/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:381 create&#95;virtual&#95;machines&#95;ip&#95;address&#95;stream | - |
+| 3932 | http | GET | /virtualization/virtual-machines/{id} | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:459 get&#95;virtual&#95;machine | - |
+| 3933 | http | GET | /virtualization/virtual-machines/{id}/summary | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:481 get&#95;virtual&#95;machine&#95;summary | - |
+| 3934 | http | GET | /virtualization/virtual-machines/storage/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/storages&#95;vm.py:32 create&#95;storages | - |
+| 3935 | http | GET | /virtualization/virtual-machines/storage/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/storages&#95;vm.py:59 create&#95;storages&#95;stream | - |
+| 3936 | http | GET | /virtualization/virtual-machines/virtual-disks/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/disks&#95;vm.py:30 create&#95;virtual&#95;disks | - |
+| 3937 | http | GET | /virtualization/virtual-machines/virtual-disks/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/disks&#95;vm.py:78 create&#95;virtual&#95;disks&#95;stream | - |
+| 3938 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/virtual-disks/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/disks&#95;vm.py:143 create&#95;virtual&#95;disks&#95;for&#95;vm&#95;stream | - |
+| 3939 | http | GET | /virtualization/virtual-machines/backups/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:964 create&#95;virtual&#95;machine&#95;backups | - |
+| 3940 | http | GET | /virtualization/virtual-machines/backups/all/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:1651 create&#95;all&#95;virtual&#95;machine&#95;backups | - |
+| 3941 | http | GET | /virtualization/virtual-machines/backups/all/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:1697 create&#95;all&#95;virtual&#95;machine&#95;backups&#95;stream | - |
+| 3942 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/backups/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/backups&#95;vm.py:1763 create&#95;virtual&#95;machine&#95;backups&#95;by&#95;id&#95;stream | - |
+| 3943 | http | GET | /virtualization/virtual-machines/snapshots/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:121 create&#95;virtual&#95;machine&#95;snapshots | - |
+| 3944 | http | GET | /virtualization/virtual-machines/snapshots/all/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:157 create&#95;all&#95;virtual&#95;machine&#95;snapshots | - |
+| 3945 | http | GET | /virtualization/virtual-machines/snapshots/all/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:202 create&#95;all&#95;virtual&#95;machine&#95;snapshots&#95;stream | - |
+| 3946 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/snapshots/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/snapshots&#95;vm.py:270 create&#95;virtual&#95;machine&#95;snapshots&#95;by&#95;id&#95;stream | - |
+| 3947 | http | GET | /virtualization/virtual-machines/task-history/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/task&#95;history&#95;vm.py:20 create&#95;all&#95;virtual&#95;machine&#95;task&#95;histories&#95;stream | - |
+| 3948 | http | GET | /virtualization/virtual-machines/orphans/sweep | proxbox&#95;api/routes/virtualization/virtual&#95;machines/orphans&#95;vm.py:181 sweep&#95;orphan&#95;virtual&#95;machines | - |
+| 3949 | http | GET | /virtualization/virtual-machines/orphans/sweep/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/orphans&#95;vm.py:211 sweep&#95;orphan&#95;virtual&#95;machines&#95;stream | - |
+| 3950 | http | GET | /virtualization/virtual-machines/create-test | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:2704 create&#95;test | - |
+| 3951 | http | GET | /virtualization/virtual-machines/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4974 create&#95;virtual&#95;machines | - |
+| 3952 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6694 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id | - |
+| 3953 | http | GET | /virtualization/virtual-machines/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6774 create&#95;virtual&#95;machines&#95;stream | - |
+| 3954 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:7100 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id&#95;stream | - |
+| 3955 | http | GET | /extras/bootstrap-status | proxbox&#95;api/routes/extras/&#95;&#95;init&#95;&#95;.py:12 get&#95;netbox&#95;bootstrap&#95;status | - |
+| 3956 | http | POST | /intent/plan | proxbox&#95;api/routes/intent/plan.py:79 plan | - |
+| 3957 | http | POST | /intent/apply | proxbox&#95;api/routes/intent/apply.py:129 apply&#95;intent | - |
+| 3958 | http | POST | /intent/deletion-requests/{deletion&#95;request&#95;id}/approve | proxbox&#95;api/routes/intent/deletion&#95;requests.py:144 approve&#95;deletion&#95;request | - |
+| 3959 | http | POST | /intent/deletion-requests/{deletion&#95;request&#95;id}/reject | proxbox&#95;api/routes/intent/deletion&#95;requests.py:215 reject&#95;deletion&#95;request | - |
+| 3960 | http | POST | /intent/deletion-requests/{deletion&#95;request&#95;id}/execute | proxbox&#95;api/routes/intent/deletion&#95;requests.py:271 execute&#95;deletion&#95;request | - |
+| 3961 | http | PUT | /intent/tag-pending-deletion | proxbox&#95;api/routes/intent/vm&#95;tags.py:186 tag&#95;pending&#95;deletion | - |
+| 3962 | http | PUT | /intent/untag-pending-deletion | proxbox&#95;api/routes/intent/vm&#95;tags.py:203 untag&#95;pending&#95;deletion | - |
+| 3963 | http | GET | /cloud/lxc/templates | proxbox&#95;api/routes/cloud/lxc.py:384 list&#95;lxc&#95;templates | - |
+| 3964 | http | POST | /cloud/lxc/provision | proxbox&#95;api/routes/cloud/lxc.py:425 provision&#95;lxc | - |
+| 3965 | http | POST | /cloud/vm/provision | proxbox&#95;api/routes/cloud/provision.py:1024 provision&#95;vm | - |
+| 3966 | http | POST | /cloud/vm/provision/stream | proxbox&#95;api/routes/cloud/provision&#95;stream.py:508 provision&#95;vm&#95;stream | - |
+| 3967 | http | POST | /cloud/firecracker/provision | proxbox&#95;api/routes/cloud/firecracker.py:215 provision&#95;firecracker&#95;microvm | - |
+| 3968 | http | POST | /cloud/firecracker/provision/stream | proxbox&#95;api/routes/cloud/firecracker.py:223 provision&#95;firecracker&#95;microvm&#95;stream | - |
+| 3969 | http | POST | /cloud/azure/vhd-imports | proxbox&#95;api/routes/cloud/azure&#95;vhd&#95;imports.py:60 import&#95;azure&#95;vhd | - |
+| 3970 | http | GET | /cloud/network/available-ips | proxbox&#95;api/routes/cloud/network.py:39 cloud&#95;network&#95;available&#95;ips | - |
+| 3971 | http | GET | /cloud/proxmox-endpoint/by-url | proxbox&#95;api/routes/cloud/image&#95;factory.py:220 get&#95;endpoint&#95;by&#95;url | - |
+| 3972 | http | POST | /cloud/image-factory/builds | proxbox&#95;api/routes/cloud/image&#95;factory.py:245 create&#95;image&#95;factory&#95;build | - |
+| 3973 | http | GET | /cloud/image-factory/builds/{build&#95;id} | proxbox&#95;api/routes/cloud/image&#95;factory.py:272 get&#95;image&#95;factory&#95;build | - |
+| 3974 | http | GET | /cloud/image-factory/builds/{build&#95;id}/stream | proxbox&#95;api/routes/cloud/image&#95;factory.py:433 stream&#95;image&#95;factory&#95;build | - |
+| 3975 | http | POST | /cloud/image-factory/builds/{build&#95;id}/cancel | proxbox&#95;api/routes/cloud/image&#95;factory.py:464 cancel&#95;image&#95;factory&#95;build | - |
+| 3976 | http | POST | /cloud/image-factory/validate | proxbox&#95;api/routes/cloud/image&#95;factory.py:488 validate&#95;image&#95;factory&#95;build | - |
+| 3977 | http | POST | /cloud/templates/images/preflight | proxbox&#95;api/routes/cloud/template&#95;images.py:442 preflight&#95;cloud&#95;image&#95;template | - |
+| 3978 | http | GET | /cloud/templates/images/operations/{operation&#95;id} | proxbox&#95;api/routes/cloud/template&#95;images.py:480 get&#95;cloud&#95;image&#95;build&#95;operation | - |
+| 3979 | http | POST | /cloud/templates/images/operations/{operation&#95;id}/cancel | proxbox&#95;api/routes/cloud/template&#95;images.py:503 cancel&#95;cloud&#95;image&#95;build&#95;operation | - |
+| 3980 | http | POST | /cloud/templates/images | proxbox&#95;api/routes/cloud/template&#95;images.py:890 build&#95;cloud&#95;image&#95;template | - |
+| 3981 | http | POST | /cloud/templates/pve | proxbox&#95;api/routes/cloud/pve&#95;template.py:144 build&#95;pve&#95;template | - |
+| 3982 | http | GET | /cloud/vm/templates | proxbox&#95;api/routes/cloud/qemu&#95;templates.py:204 qemu&#95;cloud&#95;init&#95;templates | - |
+| 3983 | http | GET | /cloud/templates | proxbox&#95;api/routes/cloud/templates.py:91 list&#95;cloud&#95;templates | - |
+| 3984 | http | GET | /cloud/templates/versions | proxbox&#95;api/routes/cloud/catalog.py:252 list&#95;product&#95;versions | - |
+| 3985 | http | GET | /ssh/host-key-fingerprint | proxbox&#95;api/routes/ssh&#95;terminal.py:43 get&#95;host&#95;key&#95;fingerprint | - |
+| 3986 | http | POST | /ssh/sessions | proxbox&#95;api/routes/ssh&#95;terminal.py:137 create&#95;terminal&#95;session | - |
+| 3987 | websocket |  | /ssh/sessions/{session&#95;id}/ws | proxbox&#95;api/routes/ssh&#95;terminal.py:204 ssh&#95;terminal&#95;websocket | - |
+| 3988 | http | GET,POST | /sync/individual/backup | proxbox&#95;api/routes/sync/individual/backup.py:13 sync&#95;backup | - |
+| 3989 | http | GET,POST | /sync/individual/backup-routines | proxbox&#95;api/routes/sync/individual/backup&#95;routine.py:15 sync&#95;backup&#95;routine | - |
+| 3990 | http | GET | /sync/individual/cluster | proxbox&#95;api/routes/sync/individual/cluster.py:20 sync&#95;cluster | - |
+| 3991 | http | GET | /sync/individual/node | proxbox&#95;api/routes/sync/individual/device.py:13 sync&#95;node | - |
+| 3992 | http | GET | /sync/individual/vm | proxbox&#95;api/routes/sync/individual/vm.py:20 sync&#95;vm | - |
+| 3993 | http | GET | /sync/individual/vm/{cluster&#95;name}/{node}/{type}/{vmid} | proxbox&#95;api/routes/sync/individual/vm.py:43 sync&#95;vm&#95;by&#95;path | - |
+| 3994 | http | GET,POST | /sync/individual/interface | proxbox&#95;api/routes/sync/individual/interface.py:15 sync&#95;interface | - |
+| 3995 | http | GET,POST | /sync/individual/ip | proxbox&#95;api/routes/sync/individual/ip.py:15 sync&#95;ip | - |
+| 3996 | http | GET,POST | /sync/individual/disk | proxbox&#95;api/routes/sync/individual/disk.py:15 sync&#95;disk | - |
+| 3997 | http | GET | /sync/individual/storage | proxbox&#95;api/routes/sync/individual/storage.py:13 sync&#95;storage | - |
+| 3998 | http | GET,POST | /sync/individual/snapshot | proxbox&#95;api/routes/sync/individual/snapshot.py:15 sync&#95;snapshot | - |
+| 3999 | http | GET | /sync/individual/task-history | proxbox&#95;api/routes/sync/individual/task&#95;history.py:15 sync&#95;task&#95;history | - |
+| 4000 | http | GET,POST | /sync/individual/replication | proxbox&#95;api/routes/sync/individual/replication.py:13 sync&#95;replication | - |
+| 4001 | http | GET | /sync/active | proxbox&#95;api/routes/sync/active.py:13 sync&#95;active | - |
+| 4002 | http | POST | /pbs/endpoints | proxbox&#95;api/pbs/admin.py:64 create&#95;pbs&#95;endpoint | - |
+| 4003 | http | GET | /pbs/endpoints | proxbox&#95;api/pbs/admin.py:87 list&#95;pbs&#95;endpoints | - |
+| 4004 | http | GET | /pbs/endpoints/{endpoint&#95;id} | proxbox&#95;api/pbs/admin.py:97 get&#95;pbs&#95;endpoint | - |
+| 4005 | http | PUT | /pbs/endpoints/{endpoint&#95;id} | proxbox&#95;api/pbs/admin.py:105 update&#95;pbs&#95;endpoint | - |
+| 4006 | http | DELETE | /pbs/endpoints/{endpoint&#95;id} | proxbox&#95;api/pbs/admin.py:142 delete&#95;pbs&#95;endpoint | - |
+| 4007 | http | GET | /pbs/status | proxbox&#95;api/pbs/routes.py:63 pbs&#95;status | - |
+| 4008 | http | GET | /pbs/sync/full | proxbox&#95;api/pbs/routes.py:159 pbs&#95;sync&#95;full | - |
+| 4009 | http | GET | /pbs/sync/datastores | proxbox&#95;api/pbs/routes.py:167 pbs&#95;sync&#95;datastores | - |
+| 4010 | http | GET | /pbs/sync/snapshots | proxbox&#95;api/pbs/routes.py:175 pbs&#95;sync&#95;snapshots | - |
+| 4011 | http | GET | /pbs/sync/jobs | proxbox&#95;api/pbs/routes.py:183 pbs&#95;sync&#95;jobs | - |
+| 4012 | http | GET | /pbs/sync/node | proxbox&#95;api/pbs/routes.py:191 pbs&#95;sync&#95;node | - |
+| 4013 | http | GET | /ceph/status | proxbox&#95;api/ceph/routes.py:134 ceph&#95;status | - |
+| 4014 | http | GET | /ceph/sync/full | proxbox&#95;api/ceph/routes.py:386 ceph&#95;sync&#95;full | - |
+| 4015 | http | GET | /ceph/sync/status | proxbox&#95;api/ceph/routes.py:394 ceph&#95;sync&#95;status | - |
+| 4016 | http | GET | /ceph/sync/daemons | proxbox&#95;api/ceph/routes.py:402 ceph&#95;sync&#95;daemons | - |
+| 4017 | http | GET | /ceph/sync/osds | proxbox&#95;api/ceph/routes.py:410 ceph&#95;sync&#95;osds | - |
+| 4018 | http | GET | /ceph/sync/pools | proxbox&#95;api/ceph/routes.py:418 ceph&#95;sync&#95;pools | - |
+| 4019 | http | GET | /ceph/sync/filesystems | proxbox&#95;api/ceph/routes.py:426 ceph&#95;sync&#95;filesystems | - |
+| 4020 | http | GET | /ceph/sync/crush | proxbox&#95;api/ceph/routes.py:434 ceph&#95;sync&#95;crush | - |
+| 4021 | http | GET | /ceph/sync/flags | proxbox&#95;api/ceph/routes.py:442 ceph&#95;sync&#95;flags | - |
+| 4022 | http | GET | /ceph/sync/rgw | proxbox&#95;api/ceph/routes.py:450 ceph&#95;sync&#95;rgw | - |
+| 4023 | http | GET | /ceph/sync/rbd | proxbox&#95;api/ceph/routes.py:458 ceph&#95;sync&#95;rbd | - |
+| 4024 | http | GET | /ceph/v2/capabilities | proxbox&#95;api/ceph/v2&#95;routes.py:411 ceph&#95;v2&#95;capabilities | - |
+| 4025 | http | POST | /ceph/v2/validate | proxbox&#95;api/ceph/v2&#95;routes.py:469 ceph&#95;v2&#95;validate | - |
+| 4026 | http | POST | /ceph/v2/plans | proxbox&#95;api/ceph/v2&#95;routes.py:603 ceph&#95;v2&#95;create&#95;plan | - |
+| 4027 | http | GET | /ceph/v2/plans/{plan&#95;id} | proxbox&#95;api/ceph/v2&#95;routes.py:617 ceph&#95;v2&#95;get&#95;plan | - |
+| 4028 | http | POST | /ceph/v2/plans/{plan&#95;id}/apply | proxbox&#95;api/ceph/v2&#95;routes.py:627 ceph&#95;v2&#95;apply&#95;plan | - |
+| 4029 | http | POST | /ceph/v2/plans/{plan&#95;id}/approvals | proxbox&#95;api/ceph/v2&#95;routes.py:731 ceph&#95;v2&#95;approve&#95;plan | - |
+| 4030 | http | GET | /ceph/v2/approvals/{approval&#95;id} | proxbox&#95;api/ceph/v2&#95;routes.py:839 ceph&#95;v2&#95;approval&#95;status | - |
+| 4031 | http | POST | /ceph/v2/plan | proxbox&#95;api/ceph/v2&#95;routes.py:881 ceph&#95;v2&#95;plan&#95;compat | - |
+| 4032 | http | POST | /ceph/v2/apply | proxbox&#95;api/ceph/v2&#95;routes.py:895 ceph&#95;v2&#95;apply&#95;compat | - |
+| 4033 | http | GET | /ceph/v2/operations/{operation&#95;id} | proxbox&#95;api/ceph/v2&#95;routes.py:934 ceph&#95;v2&#95;operation | - |
+| 4034 | http | GET | /ceph/v2/operations/{operation&#95;id}/events | proxbox&#95;api/ceph/v2&#95;routes.py:944 ceph&#95;v2&#95;operation&#95;events | - |
+| 4035 | http | POST | /ceph/v2/reconcile | proxbox&#95;api/ceph/v2&#95;routes.py:988 ceph&#95;v2&#95;reconcile | - |
+| 4036 | http | GET | /ceph/v2/metrics | proxbox&#95;api/ceph/v2&#95;routes.py:1016 ceph&#95;v2&#95;metrics | - |
+| 4037 | http | GET | /ceph/v2/metrics/sources | proxbox&#95;api/ceph/v2&#95;routes.py:1133 ceph&#95;v2&#95;list&#95;prometheus&#95;sources | - |
+| 4038 | http | POST | /ceph/v2/metrics/sources | proxbox&#95;api/ceph/v2&#95;routes.py:1143 ceph&#95;v2&#95;create&#95;prometheus&#95;source | - |
+| 4039 | http | POST | /ceph/v2/metrics/sources/{source&#95;id}/validate | proxbox&#95;api/ceph/v2&#95;routes.py:1173 ceph&#95;v2&#95;validate&#95;prometheus&#95;source | - |
+| 4040 | http | GET | /ceph/v2/dashboard/endpoints | proxbox&#95;api/ceph/v2&#95;routes.py:1247 ceph&#95;v2&#95;list&#95;dashboard&#95;endpoints | - |
+| 4041 | http | POST | /ceph/v2/dashboard/endpoints | proxbox&#95;api/ceph/v2&#95;routes.py:1257 ceph&#95;v2&#95;create&#95;dashboard&#95;endpoint | - |
+| 4042 | http | POST | /ceph/v2/dashboard/endpoints/{endpoint&#95;id}/validate | proxbox&#95;api/ceph/v2&#95;routes.py:1291 ceph&#95;v2&#95;validate&#95;dashboard&#95;endpoint | - |
+| 4043 | http | GET | /ceph/v2/external/clusters | proxbox&#95;api/ceph/v2&#95;routes.py:1369 ceph&#95;v2&#95;list&#95;external&#95;clusters | - |
+| 4044 | http | POST | /ceph/v2/external/clusters | proxbox&#95;api/ceph/v2&#95;routes.py:1379 ceph&#95;v2&#95;create&#95;external&#95;cluster | - |
+| 4045 | http | POST | /ceph/v2/external/clusters/{cluster&#95;id}/capabilities | proxbox&#95;api/ceph/v2&#95;routes.py:1415 ceph&#95;v2&#95;external&#95;cluster&#95;capabilities | - |
+| 4046 | http | POST | /pdm/endpoints | proxbox&#95;api/pdm/admin.py:64 create&#95;pdm&#95;endpoint | - |
+| 4047 | http | GET | /pdm/endpoints | proxbox&#95;api/pdm/admin.py:87 list&#95;pdm&#95;endpoints | - |
+| 4048 | http | GET | /pdm/endpoints/{endpoint&#95;id} | proxbox&#95;api/pdm/admin.py:97 get&#95;pdm&#95;endpoint | - |
+| 4049 | http | PUT | /pdm/endpoints/{endpoint&#95;id} | proxbox&#95;api/pdm/admin.py:105 update&#95;pdm&#95;endpoint | - |
+| 4050 | http | DELETE | /pdm/endpoints/{endpoint&#95;id} | proxbox&#95;api/pdm/admin.py:142 delete&#95;pdm&#95;endpoint | - |
+| 4051 | http | GET | /pdm/status | proxbox&#95;api/pdm/routes.py:63 pdm&#95;status | - |
+| 4052 | http | GET | /pdm/sync/full | proxbox&#95;api/pdm/routes.py:177 pdm&#95;sync&#95;full | - |
+| 4053 | http | GET | /pdm/sync/remotes | proxbox&#95;api/pdm/routes.py:185 pdm&#95;sync&#95;remotes | - |
+| 4054 | http | GET | /pdm/sync/guests | proxbox&#95;api/pdm/routes.py:193 pdm&#95;sync&#95;guests | - |
+| 4055 | http | GET | /pdm/sync/datastores | proxbox&#95;api/pdm/routes.py:201 pdm&#95;sync&#95;datastores | - |
+| 4056 | http | GET | /pdm/sync/resources | proxbox&#95;api/pdm/routes.py:209 pdm&#95;sync&#95;resources | - |
 
 ### Runtime codegen opt-in additions (`PROXBOX_RUNTIME_CODEGEN_ENABLED=true`)
 
-The complete opt-in application has 4058 registrations; the table below lists its 4 non-default operation identities.
+The complete opt-in application has 4059 registrations; the table below lists its 4 non-default operation identities.
 
 | Index | Protocol | Methods | Effective path | Handler | Generated identity |
 |---|---|---|---|---|---|
-| 3915 | http | POST | /proxmox/viewer/generate | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:75 generate&#95;viewer&#95;codegen&#95;artifacts | - |
-| 3916 | http | GET | /proxmox/viewer/openapi | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:192 proxmox&#95;viewer&#95;openapi | - |
-| 3917 | http | POST | /proxmox/viewer/routes/refresh | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:322 refresh&#95;generated&#95;proxmox&#95;routes | - |
-| 3918 | http | GET | /proxmox/viewer/pydantic | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:378 proxmox&#95;viewer&#95;pydantic&#95;models | - |
+| 3916 | http | POST | /proxmox/viewer/generate | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:75 generate&#95;viewer&#95;codegen&#95;artifacts | - |
+| 3917 | http | GET | /proxmox/viewer/openapi | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:192 proxmox&#95;viewer&#95;openapi | - |
+| 3918 | http | POST | /proxmox/viewer/routes/refresh | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:322 refresh&#95;generated&#95;proxmox&#95;routes | - |
+| 3919 | http | GET | /proxmox/viewer/pydantic | proxbox&#95;api/routes/proxmox/viewer&#95;codegen.py:378 proxmox&#95;viewer&#95;pydantic&#95;models | - |

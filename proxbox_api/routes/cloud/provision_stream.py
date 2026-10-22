@@ -14,12 +14,16 @@ from proxbox_api.database import AsyncDatabaseSessionDep as SessionDep
 from proxbox_api.logger import logger
 from proxbox_api.routes.cloud.provision import (
     _bind_allocated_ip_to_vm_best_effort,
-    _clone_template_vm,
+    _ClonePlan,
     _cloud_provision_gate,
     _configure_cloud_init_vm,
+    _dispatch_template_clone,
     _journal_provision_best_effort,
+    _plan_template_clone,
     _prepare_qemu_cloud_network_request,
+    _reject_managed_extra_networks,
     _release_cloud_network_lease,
+    _relocate_vm_disks,
     _require_resolved_cloud_network,
     _resize_vm_disk,
     _start_vm_after_provision,
@@ -43,6 +47,7 @@ _SSE_HEADERS = {
 
 _STEPS = [
     ("clone_template", "Clone template VM"),
+    ("relocate_disk", "Relocate VM disk"),
     ("configure_cloud_init", "Configure cloud-init"),
     ("resize_disk", "Resize VM disk"),
     ("start_vm", "Start virtual machine"),
@@ -52,20 +57,23 @@ _STEPS = [
 @dataclass
 class _StreamProvisionState:
     clone_upid: str | None = None
+    clone_plan: _ClonePlan | None = None
+    relocate_upids: list[str] | None = None
     config_upid: str | None = None
     resize_upid: str | None = None
     start_upid: str | None = None
     failed: bool = False
 
 
-async def _clone_template_for_stream(
-    proxmox: ProxmoxSession,
-    req: CloudVMProvisionRequest,
-) -> tuple[str | None, str | None]:
-    try:
-        return await _clone_template_vm(proxmox, req), None
-    except Exception as error:  # noqa: BLE001
-        return None, scrub_cloud_init({"e": str(error)})["e"]
+@dataclass
+class _StreamLeaseState:
+    lease: object | None = None
+    settled: bool = False
+
+    async def release(self) -> None:
+        if self.lease is not None and not self.settled:
+            await _release_cloud_network_lease(self.lease)
+        self.settled = True
 
 
 async def _configure_cloud_init_for_stream(
@@ -117,7 +125,12 @@ async def _emit_clone_template_events(
             "status": "started",
         },
     )
-    state.clone_upid, clone_error = await _clone_template_for_stream(proxmox, req)
+    try:
+        state.clone_plan = await _plan_template_clone(proxmox, req)
+        state.clone_upid = await _dispatch_template_clone(proxmox, req, state.clone_plan)
+        clone_error = None
+    except Exception as error:  # noqa: BLE001
+        clone_error = scrub_cloud_init({"e": str(error)})["e"]
     if clone_error is not None:
         state.failed = True
         yield sse_event(
@@ -142,6 +155,95 @@ async def _emit_clone_template_events(
             "upid": state.clone_upid,
         },
     )
+
+
+async def _emit_relocate_disk_events(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    state: _StreamProvisionState,
+) -> AsyncIterator[str]:
+    if state.clone_plan is None or not state.clone_plan.needs_relocation:
+        state.relocate_upids = []
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "relocate_disk",
+                "label": "Relocate VM disk",
+                "status": "skipped",
+            },
+        )
+        return
+
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "relocate_disk",
+            "label": "Relocate VM disk",
+            "status": "started",
+        },
+    )
+    try:
+        state.relocate_upids = await _relocate_vm_disks(
+            proxmox, req, state.clone_plan, state.clone_upid
+        )
+    except Exception as error:  # noqa: BLE001
+        relocation_error = scrub_cloud_init({"e": str(error)})["e"]
+        evidence = _relocation_failure_evidence(error)
+        state.failed = True
+        yield sse_event(
+            "provision_step",
+            {
+                "step": "relocate_disk",
+                "label": "Relocate VM disk",
+                "status": "error",
+                "error": relocation_error,
+                **evidence,
+            },
+        )
+        yield sse_event(
+            "complete",
+            {"ok": False, "error": relocation_error, "step": "relocate_disk", **evidence},
+        )
+        return
+
+    yield sse_event(
+        "provision_step",
+        {
+            "step": "relocate_disk",
+            "label": "Relocate VM disk",
+            "status": "done",
+            "upids": state.relocate_upids,
+        },
+    )
+
+
+def _relocation_failure_evidence(error: Exception) -> dict[str, object]:
+    detail = getattr(error, "detail", None)
+    if not isinstance(detail, dict) or detail.get("reason") != "relocate_disk_failed":
+        return {}
+    return {
+        key: detail[key]
+        for key in ("vmid", "target_node", "clone_upid", "relocate_upids", "failed_disk")
+        if key in detail
+    }
+
+
+async def _emit_provision_phases(
+    proxmox: ProxmoxSession,
+    req: CloudVMProvisionRequest,
+    state: _StreamProvisionState,
+) -> AsyncIterator[str]:
+    for emit_phase in (
+        _emit_clone_template_events,
+        _emit_relocate_disk_events,
+        _emit_configure_cloud_init_events,
+        _emit_resize_disk_events,
+        _emit_start_vm_events,
+    ):
+        async for event in emit_phase(proxmox, req, state):
+            yield event
+        if state.failed:
+            return
 
 
 async def _emit_configure_cloud_init_events(
@@ -301,21 +403,13 @@ async def _provision_stream_generator(
     gated: object,
 ) -> AsyncIterator[str]:
     proxmox: ProxmoxSession | None = None
-    lease = None
+    lease_state = _StreamLeaseState()
     # True once the lease has been released OR bound to the VM. The finally block
     # releases an unsettled lease so an allocated IP is never leaked, including on
     # GeneratorExit (client disconnects while the generator is suspended at a
     # yield) which is a BaseException and bypasses the except clauses below.
-    lease_settled = False
-
-    async def _settle_lease_release() -> None:
-        nonlocal lease_settled
-        if lease is not None and not lease_settled:
-            await _release_cloud_network_lease(lease)
-        lease_settled = True
-
     try:
-        req, lease = await _prepare_qemu_cloud_network_request(req, session)
+        req, lease_state.lease = await _prepare_qemu_cloud_network_request(req, session)
         yield sse_event(
             "provision_step",
             {
@@ -327,7 +421,7 @@ async def _provision_stream_generator(
         try:
             proxmox = await _open_proxmox_session(gated)
         except Exception as error:  # noqa: BLE001
-            await _settle_lease_release()
+            await lease_state.release()
             safe = scrub_cloud_init({"e": str(error)})["e"]
             yield sse_event(
                 "provision_step",
@@ -351,17 +445,11 @@ async def _provision_stream_generator(
         )
 
         stream_state = _StreamProvisionState()
-        for emit_phase in (
-            _emit_clone_template_events,
-            _emit_configure_cloud_init_events,
-            _emit_resize_disk_events,
-            _emit_start_vm_events,
-        ):
-            async for event in emit_phase(proxmox, req, stream_state):
-                yield event
-            if stream_state.failed:
-                await _settle_lease_release()
-                return
+        async for event in _emit_provision_phases(proxmox, req, stream_state):
+            yield event
+        if stream_state.failed:
+            await lease_state.release()
+            return
 
         vm_status = "started" if req.start_after_provision else "stopped"
         yield sse_event(
@@ -371,6 +459,7 @@ async def _provision_stream_generator(
         provision_response = CloudVMProvisionResponse(
             new_vmid=req.new_vmid,
             clone_upid=stream_state.clone_upid,
+            relocate_upids=stream_state.relocate_upids or [],
             config_upid=stream_state.config_upid,
             resize_upid=stream_state.resize_upid,
             start_upid=stream_state.start_upid,
@@ -384,8 +473,8 @@ async def _provision_stream_generator(
             response=provision_response,
             actor=actor,
         )
-        await _bind_allocated_ip_to_vm_best_effort(req=req, lease=lease)
-        lease_settled = True  # IP now belongs to the VM; do not release it
+        await _bind_allocated_ip_to_vm_best_effort(req=req, lease=lease_state.lease)
+        lease_state.settled = True  # IP now belongs to the VM; do not release it
 
         yield sse_event(
             "complete",
@@ -393,6 +482,7 @@ async def _provision_stream_generator(
                 "ok": True,
                 "new_vmid": req.new_vmid,
                 "clone_upid": stream_state.clone_upid,
+                "relocate_upids": stream_state.relocate_upids or [],
                 "config_upid": stream_state.config_upid,
                 "resize_upid": stream_state.resize_upid,
                 "start_upid": stream_state.start_upid,
@@ -402,15 +492,15 @@ async def _provision_stream_generator(
 
     except asyncio.CancelledError:
         logger.info("cloud provision stream cancelled for vmid=%s", req.new_vmid)
-        await _settle_lease_release()
+        await lease_state.release()
         yield sse_event("complete", {"ok": False, "error": "Stream cancelled."})
     except Exception as error:  # noqa: BLE001
-        await _settle_lease_release()
+        await lease_state.release()
         safe = scrub_cloud_init({"e": str(error)})["e"]
         logger.warning("cloud provision stream unexpected error vmid=%s: %s", req.new_vmid, safe)
         yield sse_event("complete", {"ok": False, "error": safe})
     finally:
-        await _settle_lease_release()
+        await lease_state.release()
         if proxmox is not None:
             await proxmox.aclose()
 
@@ -421,6 +511,7 @@ async def provision_vm_stream(
     session: SessionDep,
     actor: Annotated[str | None, Header(alias="X-Proxbox-Actor")] = None,
 ) -> StreamingResponse | JSONResponse:
+    _reject_managed_extra_networks(req)
     gated = await _cloud_provision_gate(session, req.endpoint_id)
     if isinstance(gated, JSONResponse):
         return gated

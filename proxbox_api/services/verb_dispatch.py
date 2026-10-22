@@ -204,7 +204,9 @@ def build_journal_comments(
 async def write_verb_journal_entry(
     nb: object,
     *,
-    netbox_vm_id: int,
+    netbox_vm_id: int | None = None,
+    assigned_object_type: str = "virtualization.virtualmachine",
+    assigned_object_id: int | None = None,
     kind: JournalKind,
     comments: str,
 ) -> dict[str, object] | None:
@@ -213,10 +215,13 @@ async def write_verb_journal_entry(
     Raises on write failure so operational verbs fail closed instead of
     succeeding without a durable audit record.
     """
+    target_id = assigned_object_id if assigned_object_id is not None else netbox_vm_id
+    if target_id is None:
+        raise ValueError("A journal target object ID is required.")
     payload = scrub_cloud_init(
         {
-            "assigned_object_type": "virtualization.virtualmachine",
-            "assigned_object_id": netbox_vm_id,
+            "assigned_object_type": assigned_object_type,
+            "assigned_object_id": target_id,
             "kind": kind,
             "comments": comments,
         }
@@ -229,15 +234,17 @@ async def write_verb_journal_entry(
         )
     except ProxboxException as error:
         logger.warning(
-            "Failed to write verb journal entry for netbox_vm_id=%s: %s",
-            netbox_vm_id,
+            "Failed to write verb journal entry for target=%s:%s: %s",
+            assigned_object_type,
+            target_id,
             error,
         )
         raise
     except Exception as error:  # noqa: BLE001
         logger.warning(
-            "Failed to write verb journal entry for netbox_vm_id=%s: %s",
-            netbox_vm_id,
+            "Failed to write verb journal entry for target=%s:%s: %s",
+            assigned_object_type,
+            target_id,
             error,
         )
         raise NetBoxAPIError(

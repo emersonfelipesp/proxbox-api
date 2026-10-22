@@ -43,8 +43,9 @@ T = TypeVar("T")
 class CacheKey:
     endpoint_id: int
     verb: str
-    vmid: int
+    vmid: int | None
     key: str
+    scope: str | None = None
 
 
 @dataclass
