@@ -80,8 +80,3 @@ enforced.
 Like the other operational verbs, a pending terminal journal update is kept only in the
 in-memory idempotency window. After 60 seconds, or after a restart, an entry whose terminal
 update failed stays `in_progress` although the Proxmox write completed.
-
-## Release status
-
-`0.0.30rc1` is the release candidate of this version. Package and production availability
-follow the release gates.

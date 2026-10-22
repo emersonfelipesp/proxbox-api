@@ -84,10 +84,10 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
-- The planned `0.0.30` release notes cover the typed, audited `POST /proxmox/storage/pbs`
-  verb and cross-node cloud clones onto non-shared storage with extra NICs. Keep the
-  candidate status, unchanged dependency pins and both language versions aligned; source
-  preparation does not establish package or production availability.
+- The `0.0.30` release notes cover the typed, audited `POST /proxmox/storage/pbs` verb and
+  cross-node cloud clones onto non-shared storage with extra NICs. Keep the unchanged
+  dependency pins and both language versions aligned; source preparation does not establish
+  package or production availability.
 - The `0.0.29` release notes cover endpoint-owned native clusters and
   guest-type-safe VM node resolution, including cross-node template cloning.
 - Public release documentation ends at the verified package-manifest handoff.

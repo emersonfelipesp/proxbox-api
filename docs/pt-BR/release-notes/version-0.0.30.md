@@ -86,8 +86,3 @@ Como nos outros verbos operacionais, uma atualização terminal de journal pende
 na janela de idempotência em memória. Depois de 60 segundos, ou depois de um restart, um entry
 cuja atualização terminal falhou continua `in_progress` embora a escrita no Proxmox tenha
 terminado.
-
-## Status da versão
-
-`0.0.30rc1` é o release candidate desta versão. A disponibilidade do pacote e em produção
-segue os gates de release.
