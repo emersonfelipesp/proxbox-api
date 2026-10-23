@@ -45,12 +45,35 @@ inventory or placement before retrying.
 Backend endpoint IDs and NetBox endpoint IDs use separate ID spaces.
 Synchronization checks the session source and corroborates the exact host and
 port before selecting the plugin endpoint. Missing identity, conflicting
-hosts, duplicate matches, disabled endpoints, missing plugin action support,
-and invalid action responses stop cluster writes. There is no name-only or
-single-endpoint fallback. The paired plugin release must provide the atomic
-action before successful cluster synchronization can resume. Omitted site or tenant fields preserve
-existing placement; normal dependency synchronization sends resolved placement
-IDs when available.
+hosts, duplicate matches, disabled endpoints, and invalid action responses
+stop cluster writes. There is no name-only or single-endpoint fallback.
+Omitted site or tenant fields preserve existing placement; normal dependency
+synchronization sends resolved placement IDs when available.
+
+A netbox-proxbox release without the `sync-cluster` action (before 0.0.31rc2)
+cannot create or claim a cluster. Before the claim, synchronization sends one
+uncached, non-redirecting GET to the action URL. Only an HTTP 404 with an HTML
+body proves that the route is absent; every other answer, including a JSON 404,
+keeps the atomic claim. When the route is absent, synchronization adopts an
+existing native cluster read-only through the plugin's endpoint-scoped tracking
+rows. Every read in this path bypasses all caches. The backend's NetBox token
+must belong to a superuser, proven by matching `is_superuser=true` and not
+`is_superuser=false` for its own user, so that the tracking rows it reads are
+the complete set. The endpoint is resolved again from a complete page and must be
+the same enabled endpoint with the same transport identity, all tracking rows
+come from one complete page, and the cluster is read by ID with its identity
+validated. It adopts a cluster only when exactly one tracking row of the endpoint has
+the exact cluster name and links that cluster, every linked row of the endpoint
+links the same cluster, no row of another endpoint links it, and its current
+name equals the cluster name. This is the uniqueness rule of the netbox-proxbox
+0.0.31 binding migration. In every other case cluster writes stop with a message
+that names the missing action. The compatibility path never creates, links,
+renames, or matches clusters by name across endpoints. It also never writes the
+adopted cluster or its sync-state sidecar: it only lets this endpoint's devices
+and VMs reference the cluster. The complete superuser view is what makes it safe
+for the endpoint's device synchronization to adopt unclaimed devices in that
+cluster; any other token refuses adoption. The path will be removed when every supported
+environment runs a plugin with the action.
 
 Host identity follows the actual connection precedence: a configured domain wins
 over an IP address. An unused secondary IP cannot authorize a different effective

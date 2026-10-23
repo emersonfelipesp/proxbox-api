@@ -147,6 +147,9 @@ async def upsert_cluster(
         mode=mode,
         cluster_type_id=cluster_type_id,
     )
+    if getattr(claim, "read_only", False) is True:
+        # Adopted without the plugin's ownership claim: never write it.
+        return UpsertResult(record=claim.record, status="unchanged")
     cluster_tags = merge_tag_refs(tag_refs, claim.record.get("tags"))
     if claim.created and await resolve_discovery_tag_id(nb, DISCOVERY_TAG_CLUSTER) is not None:
         cluster_tags.append(discovery_tag_ref(DISCOVERY_TAG_CLUSTER))

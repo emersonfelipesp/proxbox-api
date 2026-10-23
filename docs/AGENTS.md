@@ -88,6 +88,11 @@ uv run mkdocs build
   cross-node cloud clones onto non-shared storage with extra NICs. Keep the unchanged
   dependency pins and both language versions aligned; source preparation does not establish
   package or production availability.
+- The `0.0.30.post2` release notes cover read-only adoption of tracking-linked
+  clusters for netbox-proxbox plugins without the `sync-cluster` action. Keep the
+  probe rule (only an HTML 404 selects it), the 0.0.31 backfill uniqueness rule,
+  and the removal condition aligned with `services/sync/cluster_links.py` in both
+  languages.
 - The `0.0.29` release notes cover endpoint-owned native clusters and
   guest-type-safe VM node resolution, including cross-node template cloning.
 - Public release documentation ends at the verified package-manifest handoff.

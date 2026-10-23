@@ -1616,6 +1616,9 @@ async def _ensure_cluster(
         tenant_id=tenant_id,
     )
     existing_cluster = claim.record
+    if getattr(claim, "read_only", False) is True:
+        # Adopted without the plugin's ownership claim: no native or sidecar write.
+        return existing_cluster
     if claim.created:
         effective_tag_refs: list[dict[str, object]] = list(tag_refs)
         # Soft contract (issue #362): only stamp the discovery slug when the tag

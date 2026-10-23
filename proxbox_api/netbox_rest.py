@@ -1420,6 +1420,59 @@ async def rest_first_async(
     return records[0]
 
 
+_PROBE_MAX_RESPONSE_BYTES = 1_048_576
+
+
+@dataclass(frozen=True)
+class RestProbe:
+    """HTTP status and content type of one uncached, non-redirecting GET."""
+
+    status: int
+    content_type: str
+
+
+async def rest_probe_async(nb: object, path: str) -> RestProbe:
+    """GET ``path`` once and report its status and content type.
+
+    Unlike the other helpers, an HTTP error status is a result rather than an
+    exception, so a caller can detect a route that does not exist. The request
+    bypasses the client cache, never follows a redirect, and bounds the body it
+    reads, so a capability decision always uses a current answer from the exact
+    URL. Transport failures and an oversized body still raise. Nothing is retried.
+    """
+    api = _unwrap_api(nb)
+    async with _get_netbox_semaphore():
+        response = await api.client.request_bounded(
+            "GET", _normalize_path(path), max_response_bytes=_PROBE_MAX_RESPONSE_BYTES
+        )
+    content_type = next(
+        (str(value) for key, value in response.headers.items() if key.lower() == "content-type"),
+        "",
+    )
+    return RestProbe(status=response.status, content_type=content_type)
+
+
+async def rest_get_fresh_json(
+    nb: object, path: str, *, query: dict[str, object] | None = None
+) -> object:
+    """GET ``path`` once without any cache or redirect and return the parsed JSON body.
+
+    Use it when a decision must rest on current NetBox state: the backend GET
+    cache and the SDK client cache are both bypassed, and the body is bounded.
+    A non-2xx status, a non-JSON body, an oversized body, or a transport failure
+    raises.
+    """
+    api = _unwrap_api(nb)
+    async with _get_netbox_semaphore():
+        response = await api.client.request_bounded(
+            "GET",
+            _normalize_path(path),
+            query=query,
+            max_response_bytes=_PROBE_MAX_RESPONSE_BYTES,
+        )
+    return _extract_payload(response)
+
+
 async def rest_create_async(
     nb: object,
     path: str,

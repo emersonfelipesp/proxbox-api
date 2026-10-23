@@ -45,12 +45,39 @@ localizacao conflitante antes de repetir.
 Os IDs de endpoint do backend e do NetBox pertencem a espacos independentes.
 A sincronizacao verifica a origem da sessao e confirma host e porta antes de
 selecionar o endpoint do plugin. Identidade ausente, hosts conflitantes,
-correspondencias duplicadas, endpoints desativados, ausencia da acao no plugin
-ou resposta invalida interrompem as escritas de cluster. Nao existe fallback
-por nome ou por endpoint unico. A versao pareada do plugin deve fornecer a acao
-atomica antes de retomar sincronizacoes de cluster bem-sucedidas. A omissao de site ou tenant preserva a localizacao
-existente; a sincronizacao normal de dependencias envia os IDs resolvidos
-quando disponiveis.
+correspondencias duplicadas, endpoints desativados ou resposta invalida da acao
+interrompem as escritas de cluster. Nao existe fallback por nome ou por
+endpoint unico. A omissao de site ou tenant preserva a localizacao existente; a
+sincronizacao normal de dependencias envia os IDs resolvidos quando disponiveis.
+
+Uma versao do netbox-proxbox sem a acao `sync-cluster` (anterior a 0.0.31rc2)
+nao consegue criar nem fazer o claim de um cluster. Antes do claim, a
+sincronizacao envia um GET sem cache e sem redirecionamento para a URL da acao.
+Somente um HTTP 404 com corpo HTML prova que a rota nao existe; qualquer outra
+resposta, incluindo um 404 JSON, mantem o claim atomico. Quando a rota nao
+existe, a sincronizacao adota um cluster nativo existente somente para leitura,
+pelos registros de acompanhamento do plugin que pertencem a cada endpoint. Toda
+leitura desse caminho ignora os caches. O token NetBox do backend precisa
+pertencer a um superusuario, comprovado quando o proprio usuario corresponde a
+`is_superuser=true` e nao corresponde a `is_superuser=false`, para que os
+registros lidos sejam o conjunto completo. O endpoint e resolvido de novo a
+partir de uma pagina completa e precisa ser o mesmo endpoint ativo com a mesma
+identidade de transporte, todos os registros de acompanhamento vem de uma unica
+pagina completa e o cluster e lido pelo ID com a identidade validada. Ela
+adota um cluster somente quando exatamente um registro do endpoint tem o nome
+exato do cluster e aponta para esse cluster, todo registro vinculado do
+endpoint aponta para o mesmo cluster, nenhum registro de outro endpoint aponta
+para ele e o nome atual dele e igual ao nome do cluster. Essa e a regra de
+unicidade da migracao de vinculo do netbox-proxbox 0.0.31. Em todos os outros
+casos, as escritas de cluster param com uma mensagem que cita a acao ausente. O
+caminho de compatibilidade nunca cria, vincula, renomeia ou associa clusters
+por nome entre endpoints. Ele tambem nunca grava o cluster adotado nem o sidecar
+de estado de sincronizacao dele: apenas permite que devices e VMs deste
+endpoint referenciem o cluster. A visao completa de superusuario e o que torna
+seguro que a sincronizacao de devices do endpoint adote devices sem dono nesse
+cluster; qualquer outro token recusa a adocao. O
+caminho sera removido quando todos os ambientes suportados executarem um plugin
+com a acao.
 
 A identidade do host segue a precedencia real da conexao: o dominio configurado
 tem prioridade sobre o endereco IP. Um IP secundario nao utilizado nao autoriza

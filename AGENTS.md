@@ -280,16 +280,26 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
   port metadata; backend database IDs and NetBox endpoint IDs are independent.
   Reconcile native cluster metadata by the returned primary key, preserve that
   identity on rename and retry, and never repair tracking links by cluster name.
-  A missing action, ambiguous endpoint, disabled endpoint, or failed ownership
-  claim must stop native cluster writes. Both cluster and standalone modes use
-  this contract, including device and VM dependency creation.
+  An ambiguous endpoint, disabled endpoint, or failed ownership claim must stop
+  native cluster writes. A plugin without the action is proven only by an HTML
+  404 from one uncached, non-redirecting GET of the action URL; any other answer
+  keeps the claim. Such a plugin may only adopt, read-only, an existing native
+  cluster that its tracking rows bind to exactly this endpoint under the 0.0.31
+  backfill uniqueness rule with an exact name match, using only uncached reads,
+  a proven superuser token (complete tracking visibility), and a fresh
+  re-resolution of the same endpoint transport identity.
+  The claim is `read_only`: callers never write that cluster or its sidecar. It
+  never creates, links, renames, or matches clusters by name across endpoints; anything else stops
+  native cluster writes. Both cluster and standalone modes use this contract,
+  including device and VM dependency creation.
   Match effective connection hosts using domain-before-IP precedence. Refuse
   ambiguous individual names and missing or repeated bulk endpoint IDs before
   prerequisite writes. Validate strict native response IDs and construct detail
   paths from those IDs. Preserve the action's substantive `changed` outcome.
   Deploy the backend guard first and prove its exact revision and replacement
-  or drain of old-code work before installing the new plugin. Missing action
-  support causes transient failures before native metadata writes. Verify the
+  or drain of old-code work before installing the new plugin. Without action
+  support only tracking-linked adoption works; cluster creation and unlinked
+  clusters fail before native metadata writes. Verify the
   action capability, runtime permissions, and successful synchronization next.
   Proxmox node Device names use the effective endpoint/global
   `node_device_name_template`, while Proxmox API paths and typed sync-state

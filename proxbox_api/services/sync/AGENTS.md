@@ -24,6 +24,10 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   fallback does not disqualify an IP-only source. Native responses
   require strict positive IDs and matching detail URLs; mutable record paths
   use the validated ID. The additive `changed` flag preserves actual outcomes.
+  For a plugin without the action (an HTML 404 from `rest_probe_async` on the
+  action URL, nothing else), `_adopt_tracked_cluster` adopts read-only the one
+  native cluster that the plugin's tracking rows bind to the endpoint; see the
+  ownership invariant below.
 - `clusters.py`: cluster synchronization helpers.
 - `device_ensure.py`: device creation and reconciliation helpers. When several
   bulk statuses have missing or repeated endpoint IDs, reject the entire batch
@@ -220,6 +224,25 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   failed actions, and malformed responses are fatal. There is no name-only or
   singleton fallback and no name-wide tracking-link repair. The request omits
   null placement values, preserving an existing cluster's placement.
+  The single exception is a plugin that verifiably lacks the action:
+  `_claim_action_absent` accepts only an HTML 404 from one uncached,
+  non-redirecting GET of the action URL, and every other answer or failure
+  keeps the claim. Then `_tracked_cluster_id` applies the netbox-proxbox 0.0.31
+  `backfill_cluster_bindings` rule client-side over all tracking rows: exactly
+  one row of the endpoint with the exact name links native cluster C, every
+  linked row of the endpoint links C, and no other endpoint links C. C's current
+  name must equal the cluster name. Every adoption read uses `rest_get_fresh_json`
+  (no backend or SDK cache): `_require_unrestricted_visibility` proves a superuser
+  token (own user matches `is_superuser=true` and not `is_superuser=false`), so
+  the tracking rows are the complete set and adopting unclaimed devices in the
+  cluster is safe; `_require_fresh_endpoint` re-runs `_select_plugin_endpoint`
+  over one complete fresh page and requires the same enabled endpoint; tracking
+  rows come from one complete page, and the cluster detail is validated with
+  `NativeClusterResponse` and rebuilt with a canonical URL. The claim carries
+  `read_only=True`, so `netbox_writers.upsert_cluster` and
+  `device_ensure._ensure_cluster` skip the native reconcile and the cluster
+  sidecar write. The path never creates, links, renames, or repairs anything. Never widen it, and
+  remove it when the minimum supported plugin has the action.
 - **Shared-MAC guest interfaces.** Guest-agent interfaces that share a Proxmox
   config NIC MAC are aggregated onto the single NetBox VMInterface for that
   config NIC. The merge is keyed by the authoritative config NIC MAC, so VRRP
