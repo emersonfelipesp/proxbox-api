@@ -456,6 +456,97 @@ def test_guest_plugin_ignored_filter_foreign_record_is_not_patched(monkeypatch):
     assert [call["kind"] for call in calls] == ["plugin_get"]
 
 
+def _netbox_guest_row(tags: list[dict[str, object]]) -> dict[str, object]:
+    """A guest-vm-interfaces row as NetBox returns it, with nested tag objects."""
+    return {
+        "id": 321,
+        "virtual_machine": {"id": 55},
+        "vm_interface": {"id": 66},
+        "name": "ens18",
+        "mac_address": "aa:bb:cc:dd:ee:ff",
+        "enabled": True,
+        "mtu": None,
+        "tags": tags,
+        "custom_fields": {},
+    }
+
+
+_NETBOX_PROXBOX_TAG = {
+    "id": 133,
+    "url": "https://netbox.example.com/api/extras/tags/133/",
+    "display_url": "https://netbox.example.com/extras/tags/133/",
+    "display": "Proxbox",
+    "name": "Proxbox",
+    "slug": "proxbox",
+    "color": "ff5722",
+}
+
+
+def _run_guest_reconcile_against(monkeypatch, existing_row, tag_refs):
+    patches: list[dict[str, object]] = []
+
+    async def _existing_first(_nb, path, *, query=None, **kwargs):
+        _ = (query, kwargs)
+        if path == "/api/plugins/proxbox/guest-vm-interfaces/":
+            return existing_row
+        return None
+
+    async def _forbidden_create(*args, **kwargs):
+        raise AssertionError("an existing guest row must not be re-created")
+
+    async def _record_patch(_nb, path, record_id, payload, **kwargs):
+        _ = kwargs
+        patches.append({"path": path, "id": record_id, "payload": payload})
+        return {**existing_row, **payload}
+
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.guest_vm_interface.rest_first_async",
+        _existing_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.guest_vm_interface.rest_create_async",
+        _forbidden_create,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.guest_vm_interface.rest_patch_async",
+        _record_patch,
+    )
+    asyncio.run(
+        reconcile_guest_vm_interfaces(
+            nb=SimpleNamespace(),
+            vm_id=55,
+            guest_interfaces=[{"name": "ens18", "mac_address": "aa:bb:cc:dd:ee:ff"}],
+            core_interface_id_by_mac={"aa:bb:cc:dd:ee:ff": 66},
+            ip_ids_by_interface_id={},
+            tag_refs=tag_refs,
+            strategy="guest_os_model",
+        )
+    )
+    return [p for p in patches if p["path"] == "/api/plugins/proxbox/guest-vm-interfaces/"]
+
+
+def test_unchanged_guest_row_with_netbox_nested_tags_is_not_patched(monkeypatch):
+    """Regression: nested NetBox tags vs {name, slug, color} refs PATCHed every row."""
+    patches = _run_guest_reconcile_against(
+        monkeypatch,
+        _netbox_guest_row([_NETBOX_PROXBOX_TAG]),
+        tag_refs=[{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+    )
+
+    assert patches == []
+
+
+def test_guest_row_tag_change_is_still_patched(monkeypatch):
+    patches = _run_guest_reconcile_against(
+        monkeypatch,
+        _netbox_guest_row([]),
+        tag_refs=[{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
+    )
+
+    assert len(patches) == 1
+    assert set(patches[0]["payload"]) == {"tags"}
+
+
 def _iter_registered_routes(routes, prefix: str = ""):
     for route in routes:
         include_context = getattr(route, "include_context", None)
