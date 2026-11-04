@@ -38,6 +38,7 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.netbox_version import detect_netbox_version, supports_virtual_machine_type
 from proxbox_api.proxmox_to_netbox.models import (
+    NETBOX_VLAN_PATCHABLE_FIELDS,
     NetBoxDeviceRoleSyncState,
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineCreateBody,
@@ -2403,6 +2404,7 @@ async def _create_vm_interface_parallel(
                     "tags": tag_refs,
                 },
                 schema=NetBoxVlanSyncState,
+                patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
                 current_normalizer=lambda record: {
                     "vid": record.get("vid"),
                     "name": record.get("name"),
