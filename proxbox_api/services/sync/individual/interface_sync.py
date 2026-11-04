@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import (
+    NETBOX_VLAN_PATCHABLE_FIELDS,
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
@@ -94,6 +95,7 @@ async def _resolve_vlan_id(
                 "tags": tag_refs,
             },
             schema=NetBoxVlanSyncState,
+            patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
                 "name": record.get("name"),
