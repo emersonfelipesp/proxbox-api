@@ -23,7 +23,9 @@ from proxbox_api.services.sync.orphan_sweep import exclude_soft_deleted_vms
 from proxbox_api.services.sync.stage_result import (
     attach_skips_to_dict,
     degraded_suffix,
+    stage_tag_refs,
 )
+from proxbox_api.services.sync.stage_timing import log_stage_timing
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -46,6 +48,7 @@ from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
     normalize_vmid,
+    scope_vms_to_proxmox_sessions,
     select_proxmox_sessions_by_endpoint,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -633,6 +636,178 @@ async def _list_all_vms_with_proxmox_id(
     )
 
 
+def _require_selected_snapshot_vms(
+    vms: list[object],
+    netbox_vm_ids: list[int],
+) -> list[object]:
+    """Return the selected VMs, or fail when NetBox did not return all of them."""
+    selected_netbox_ids = set(netbox_vm_ids)
+    vms = [vm for vm in vms if relation_id(to_mapping(vm).get("id")) in selected_netbox_ids]
+    resolved_netbox_ids = {
+        vm_id for vm in vms if (vm_id := relation_id(to_mapping(vm).get("id"))) is not None
+    }
+    missing_netbox_ids = selected_netbox_ids - resolved_netbox_ids
+    if missing_netbox_ids:
+        raise ProxboxException(
+            message="Unable to resolve explicitly selected NetBox VMs",
+            detail=f"NetBox did not return selected VM id(s): {sorted(missing_netbox_ids)}.",
+            http_status_code=502,
+        )
+    return vms
+
+
+def _filter_snapshot_vms_by_vmid(
+    vms: list[dict[str, object]],
+    vmid: int | list[int] | None,
+) -> list[dict[str, object]]:
+    """Keep VMs with a Proxmox VMID; with ``vmid`` given, only the named ones."""
+    if vmid is None:
+        return [vm for vm in vms if extract_proxmox_vmid(vm)]
+    selected_vmids = {
+        normalized
+        for value in (vmid if isinstance(vmid, list) else [vmid])
+        if (normalized := normalize_vmid(value)) is not None
+    }
+    return [vm for vm in vms if extract_proxmox_vmid(vm) in selected_vmids]
+
+
+async def _select_snapshot_stage_vms(
+    nb: object,
+    vms: list[object],
+    pxs: object,
+    *,
+    netbox_vm_ids: list[int] | None,
+    vmid: int | list[int] | None,
+    selection_mode: SelectionMode,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Resolve the VMs this run must scan and the VMs that selection dropped.
+
+    An explicit NetBox selection is processed as given. An estate run is
+    limited to the VMs that the Proxmox endpoints of this run can own.
+    """
+    if netbox_vm_ids is not None:
+        vms = _require_selected_snapshot_vms(vms, netbox_vm_ids)
+
+    hydrated = await hydrate_vm_identities_from_sidecars(
+        nb,
+        [to_mapping(vm) for vm in vms],
+        require_all=netbox_vm_ids is not None,
+        mode=selection_mode,
+    )
+    selection_skipped = selection_skips(hydrated)
+
+    scoped: list[dict[str, object]] = hydrated
+    if netbox_vm_ids is None:
+        scoped = _filter_snapshot_vms_by_vmid(hydrated, vmid)
+        scoped = scope_vms_to_proxmox_sessions(scoped, pxs, stage="Snapshot")
+
+    return exclude_soft_deleted_vms(scoped, stage="snapshot"), selection_skipped
+
+
+async def _collect_snapshot_scan_results(
+    vms: list[dict[str, object]],
+    results: list[object],
+    *,
+    websocket: object | None,
+    use_websocket: bool,
+) -> tuple[list[dict], dict[int, set[str]], int]:
+    """Merge per-VM scan results; return payloads, complete scans by VM id, and failures."""
+    total_vms = len(vms)
+    # Collect all snapshot payloads from all VMs, emit per-VM item_progress
+    all_snapshot_payloads: list[dict] = []
+    proxmox_snapshot_names_by_vm_id: dict[int, set[str]] = {}
+    vm_failed = 0
+
+    for idx, (vm, result) in enumerate(zip(vms, results), start=1):
+        vm_data = to_mapping(vm)
+        vm_name = str(vm_data.get("name", ""))
+        if isinstance(result, Exception):
+            logger.warning("Snapshot sync task failed: %s", result)
+            vm_failed += 1
+            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
+                await websocket.emit_item_progress(
+                    phase="vm-snapshots",
+                    item={"name": vm_name, "type": "virtual-machine"},
+                    operation="failed",
+                    status="failed",
+                    message=f"Snapshot fetch failed for VM '{vm_name}': {result}",
+                    progress_current=idx,
+                    progress_total=total_vms,
+                    error=str(result),
+                )
+        else:
+            snapshot_payloads, snapshot_names, discovery_complete = result
+            all_snapshot_payloads.extend(snapshot_payloads)
+            netbox_vm_id = vm_data.get("id")
+            if discovery_complete:
+                try:
+                    if netbox_vm_id is not None:
+                        proxmox_snapshot_names_by_vm_id[int(netbox_vm_id)] = snapshot_names
+                except (ValueError, TypeError):
+                    pass
+            else:
+                vm_failed += 1
+            snap_count = len(snapshot_payloads)
+            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
+                await websocket.emit_item_progress(
+                    phase="vm-snapshots",
+                    item={"name": vm_name, "type": "virtual-machine"},
+                    operation="updated",
+                    status="completed",
+                    message=f"Scanned VM '{vm_name}': {snap_count} snapshot(s) found",
+                    progress_current=idx,
+                    progress_total=total_vms,
+                )
+    return all_snapshot_payloads, proxmox_snapshot_names_by_vm_id, vm_failed
+
+
+async def _delete_orphaned_snapshots(
+    nb: object,
+    proxmox_snapshot_names_by_vm_id: dict[int, set[str]],
+) -> int:
+    """Delete NetBox snapshot rows that Proxmox no longer has, for fully scanned VMs only."""
+    deleted = 0
+    try:
+        netbox_snapshots = await rest_list_async(nb, "/api/plugins/proxbox/snapshots/")
+        orphan_ids: list[int] = []
+        for nb_snapshot in netbox_snapshots or []:
+            snapshot_data = to_mapping(nb_snapshot)
+            snapshot_name = snapshot_data.get("name")
+            snapshot_vm_id = _extract_fk_id(snapshot_data.get("virtual_machine"))
+            snapshot_id = (
+                getattr(nb_snapshot, "id", None)
+                if not isinstance(nb_snapshot, dict)
+                else nb_snapshot.get("id")
+            )
+            if (
+                snapshot_vm_id
+                and snapshot_name
+                and snapshot_id
+                and snapshot_vm_id in proxmox_snapshot_names_by_vm_id
+            ):
+                proxmox_names = proxmox_snapshot_names_by_vm_id[snapshot_vm_id]
+                if snapshot_name not in proxmox_names:
+                    orphan_ids.append(int(snapshot_id))
+                    logger.info(
+                        "Marking orphaned snapshot %s (id=%s) for NetBox VM id=%s for bulk deletion",
+                        snapshot_name,
+                        snapshot_id,
+                        snapshot_vm_id,
+                    )
+        if orphan_ids:
+            try:
+                deleted = await rest_bulk_delete_async(
+                    nb, "/api/plugins/proxbox/snapshots/", orphan_ids
+                )
+                logger.info("Bulk deleted %d orphaned snapshot(s)", deleted)
+            except Exception as del_err:
+                logger.warning("Bulk delete of orphaned snapshots failed: %s", del_err)
+    except Exception as list_err:
+        logger.warning("Error loading NetBox snapshots for cleanup: %s", list_err)
+    return deleted
+
+
+@log_stage_timing("vm-snapshots")
 async def create_virtual_machine_snapshots(  # noqa: C901
     netbox_session: object,
     pxs: ProxmoxSessionsDep,
@@ -666,16 +841,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     completed_html = return_status_html("completed", use_css)
     failed_html = return_status_html("failed", use_css)
 
-    tag_refs = []
-    if tag:
-        tag_refs = [
-            {
-                "name": getattr(tag, "name", None),
-                "slug": getattr(tag, "slug", None),
-                "color": getattr(tag, "color", None),
-            }
-        ]
-        tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+    tag_refs = stage_tag_refs(tag)
 
     logger.info("Starting virtual machine snapshots sync")
 
@@ -710,41 +876,14 @@ async def create_virtual_machine_snapshots(  # noqa: C901
 
     logger.info("Fetched %d VMs from NetBox before proxmox_vm_id filtering", len(vms))
 
-    if netbox_vm_ids is not None:
-        selected_netbox_ids = set(netbox_vm_ids)
-        vms = [vm for vm in vms if relation_id(to_mapping(vm).get("id")) in selected_netbox_ids]
-        resolved_netbox_ids = {
-            vm_id for vm in vms if (vm_id := relation_id(to_mapping(vm).get("id"))) is not None
-        }
-        missing_netbox_ids = selected_netbox_ids - resolved_netbox_ids
-        if missing_netbox_ids:
-            raise ProxboxException(
-                message="Unable to resolve explicitly selected NetBox VMs",
-                detail=f"NetBox did not return selected VM id(s): {sorted(missing_netbox_ids)}.",
-                http_status_code=502,
-            )
-
-    vms = await hydrate_vm_identities_from_sidecars(
+    vms, selection_skipped = await _select_snapshot_stage_vms(
         nb,
-        [to_mapping(vm) for vm in vms],
-        require_all=netbox_vm_ids is not None,
-        mode=selection_mode,
+        vms,
+        pxs,
+        netbox_vm_ids=netbox_vm_ids,
+        vmid=vmid,
+        selection_mode=selection_mode,
     )
-    selection_skipped = selection_skips(vms)
-
-    if netbox_vm_ids is not None:
-        selected_netbox_ids = set(netbox_vm_ids)
-    elif vmid is not None:
-        selected_vmids = {
-            normalized
-            for value in (vmid if isinstance(vmid, list) else [vmid])
-            if (normalized := normalize_vmid(value)) is not None
-        }
-        vms = [vm for vm in vms if extract_proxmox_vmid(vm) in selected_vmids]
-    else:
-        vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
-
-    vms = exclude_soft_deleted_vms(vms, stage="snapshot")
 
     logger.info("After proxmox_vm_id filtering: %d VMs remain for snapshot sync", len(vms))
 
@@ -817,53 +956,17 @@ async def create_virtual_machine_snapshots(  # noqa: C901
     sync_tasks = [_sync_vm_with_semaphore(vm) for vm in vms]
     results = await asyncio.gather(*sync_tasks, return_exceptions=True)
 
-    # Collect all snapshot payloads from all VMs, emit per-VM item_progress
-    all_snapshot_payloads: list[dict] = []
-    proxmox_snapshot_names_by_vm_id: dict[int, set[str]] = {}
-    vm_failed = 0
-
-    for idx, (vm, result) in enumerate(zip(vms, results), start=1):
-        vm_data = to_mapping(vm)
-        vm_name = str(vm_data.get("name", ""))
-        if isinstance(result, Exception):
-            logger.warning("Snapshot sync task failed: %s", result)
-            skipped += 1
-            vm_failed += 1
-            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
-                await websocket.emit_item_progress(
-                    phase="vm-snapshots",
-                    item={"name": vm_name, "type": "virtual-machine"},
-                    operation="failed",
-                    status="failed",
-                    message=f"Snapshot fetch failed for VM '{vm_name}': {result}",
-                    progress_current=idx,
-                    progress_total=total_vms,
-                    error=str(result),
-                )
-        else:
-            snapshot_payloads, snapshot_names, discovery_complete = result
-            all_snapshot_payloads.extend(snapshot_payloads)
-            netbox_vm_id = vm_data.get("id")
-            if discovery_complete:
-                try:
-                    if netbox_vm_id is not None:
-                        proxmox_snapshot_names_by_vm_id[int(netbox_vm_id)] = snapshot_names
-                except (ValueError, TypeError):
-                    pass
-            else:
-                skipped += 1
-                vm_failed += 1
-            snap_count = len(snapshot_payloads)
-            if use_websocket and websocket and hasattr(websocket, "emit_item_progress"):
-                await websocket.emit_item_progress(
-                    phase="vm-snapshots",
-                    item={"name": vm_name, "type": "virtual-machine"},
-                    operation="updated",
-                    status="completed",
-                    message=f"Scanned VM '{vm_name}': {snap_count} snapshot(s) found",
-                    progress_current=idx,
-                    progress_total=total_vms,
-                )
+    (
+        all_snapshot_payloads,
+        proxmox_snapshot_names_by_vm_id,
+        vm_failed,
+    ) = await _collect_snapshot_scan_results(
+        vms,
+        results,
+        websocket=websocket,
+        use_websocket=use_websocket,
+    )
+    skipped += vm_failed
 
     logger.info(
         "Collected %d total snapshot payload(s) from %d VM(s) (%d failed/skipped)",
@@ -903,43 +1006,7 @@ async def create_virtual_machine_snapshots(  # noqa: C901
             vm_failed += 1
 
     if delete_nonexistent_snapshot and proxmox_snapshot_names_by_vm_id:
-        try:
-            netbox_snapshots = await rest_list_async(nb, "/api/plugins/proxbox/snapshots/")
-            orphan_ids: list[int] = []
-            for nb_snapshot in netbox_snapshots or []:
-                snapshot_data = to_mapping(nb_snapshot)
-                snapshot_name = snapshot_data.get("name")
-                snapshot_vm_id = _extract_fk_id(snapshot_data.get("virtual_machine"))
-                snapshot_id = (
-                    getattr(nb_snapshot, "id", None)
-                    if not isinstance(nb_snapshot, dict)
-                    else nb_snapshot.get("id")
-                )
-                if (
-                    snapshot_vm_id
-                    and snapshot_name
-                    and snapshot_id
-                    and snapshot_vm_id in proxmox_snapshot_names_by_vm_id
-                ):
-                    proxmox_names = proxmox_snapshot_names_by_vm_id[snapshot_vm_id]
-                    if snapshot_name not in proxmox_names:
-                        orphan_ids.append(int(snapshot_id))
-                        logger.info(
-                            "Marking orphaned snapshot %s (id=%s) for NetBox VM id=%s for bulk deletion",
-                            snapshot_name,
-                            snapshot_id,
-                            snapshot_vm_id,
-                        )
-            if orphan_ids:
-                try:
-                    deleted = await rest_bulk_delete_async(
-                        nb, "/api/plugins/proxbox/snapshots/", orphan_ids
-                    )
-                    logger.info("Bulk deleted %d orphaned snapshot(s)", deleted)
-                except Exception as del_err:
-                    logger.warning("Bulk delete of orphaned snapshots failed: %s", del_err)
-        except Exception as list_err:
-            logger.warning("Error loading NetBox snapshots for cleanup: %s", list_err)
+        deleted = await _delete_orphaned_snapshots(nb, proxmox_snapshot_names_by_vm_id)
 
     logger.info(
         f"Snapshot sync completed: {created} created/updated, {skipped} skipped, {deleted} deleted"

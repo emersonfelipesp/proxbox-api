@@ -111,7 +111,13 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   of at most 100 for NetBox repeated multi-value query parameters.
 - `vm_network.py`: VM network sync helpers.
 - `vm_network_processor.py`: VM network parsing and processing helpers.
-- `vmid_helpers.py`: VMID lookup and coordination helpers.
+- `vmid_helpers.py`: VMID lookup and coordination helpers. It owns
+  `scope_vms_to_proxmox_sessions()`, the endpoint scope of estate VM stages
+  (see "Endpoint scope of estate VM stages" below).
+- `stage_timing.py`: `log_stage_timing(stage)` decorator. It writes one INFO
+  line when an async stage ends (completed or failed) with the wall time and
+  the NetBox request count, NetBox seconds, and slow-request count from
+  `netbox_rest.get_request_timing_totals()`. Those counters are process-wide.
 - `individual/`: targeted single-object sync workflows.
 
 ## How These Services Work
@@ -332,6 +338,44 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   `platform` to an existing VM's patchable fields. Omitted flags and the default
   `false` preserve operator-managed NetBox platform assignments; the resolved
   platform remains part of the create payload for new VMs.
+
+## Endpoint scope of estate VM stages
+
+**What changed.** `create_virtual_disks` and `create_virtual_machine_snapshots`
+call `vmid_helpers.scope_vms_to_proxmox_sessions(vms, pxs, stage=...)` after
+sidecar hydration when the caller gave no explicit VM selection. A VM is
+dropped only on proof: its sync-state endpoint id is known, every session
+exposes an endpoint id, and none matches. One INFO line reports the count.
+
+**Why.** An estate run lists every NetBox VM. A run for one endpoint spent
+task setup, progress messages, and one skip warning on each VM of all other
+endpoints (5,102 per stage on a 30-cluster estate), and a run for all endpoints
+repeated that once per endpoint.
+
+**Downstream effect.** Out-of-scope VMs are no longer in `count` or `skipped`
+and produce no progress rows. They were already skipped before any write or
+stale cleanup, so NetBox writes and cleanup are unchanged. A VM without an
+endpoint id, a session without an endpoint id, and every explicit selection
+keep the previous behavior. Apply the scope after hydration, never before:
+shared-owner detection needs the full sidecar scan. Do not scope by cluster
+name; a NetBox cluster can be renamed. Add the same call to any new estate VM
+stage that reads Proxmox per VM.
+
+**Text lookups are not relations.** `guest_vm_interface._lookup_matches()`
+compares a `str` lookup value (the interface `name`) as text and every other
+value as a relation id. `vm_helpers.record_id()` returns `None` for a scalar
+and never hands it to `to_mapping()`. Before this, each valid guest interface
+name logged two `to_mapping() could not coerce str` warnings.
+
+**NetBox request timing.** Every NetBox request in `netbox_rest.py` goes
+through `_timed_client_request()`. Do not call `api.client.request` directly
+in that module: the request would be missing from the stage timing line and
+from the slow-request WARNING (5 s, path only, no query values).
+
+**Node naming logs.** `device_ensure._build_device_targets()` logs the
+effective name template per endpoint and warns when a template renders an
+invalid name. `_prepare_device_targets()` warns, with the reason and the
+remedy, when it keeps an operator-set device name.
 
 ## Strict vs lenient VM selection
 

@@ -19,7 +19,8 @@ from proxbox_api.proxmox_to_netbox.schemas.disks import DISK_KEY_PATTERN
 from proxbox_api.runtime_settings import get_int
 from proxbox_api.services.proxmox.config import is_guest_not_found_error, resolve_vm_config
 from proxbox_api.services.sync.orphan_sweep import exclude_soft_deleted_vms
-from proxbox_api.services.sync.stage_result import attach_skips_to_dict
+from proxbox_api.services.sync.stage_result import attach_skips_to_dict, stage_tag_refs
+from proxbox_api.services.sync.stage_timing import log_stage_timing
 from proxbox_api.services.sync.storage_links import (
     build_storage_index,
     find_storage_record,
@@ -44,6 +45,7 @@ from proxbox_api.services.sync.vmid_helpers import (
     extract_proxmox_vm_type,
     extract_proxmox_vmid,
     normalize_vmid,
+    scope_vms_to_proxmox_sessions,
     select_proxmox_sessions_by_endpoint,
 )
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -699,6 +701,43 @@ async def _sync_virtual_disks_for_vm(
         return VmDiskSyncOutcome(state="skipped")
 
 
+async def _load_disk_stage_vms(
+    nb: object,
+    target_vm_ids: list[int] | None,
+    selection_mode: SelectionMode,
+) -> list[dict[str, object]]:
+    """List the selected (or all) NetBox VMs and join their sync-state identity."""
+    if target_vm_ids is not None:
+        vms = await list_netbox_virtual_machines_by_ids(nb, target_vm_ids)
+        vms = require_selected_netbox_vm_coverage(
+            vms,
+            target_vm_ids,
+            operation="virtual-disk sync",
+        )
+    else:
+        vms = await _list_all_vms_with_proxmox_id(nb)
+    return await hydrate_vm_identities_from_sidecars(
+        nb,
+        [to_mapping(vm) for vm in vms],
+        require_all=target_vm_ids is not None,
+        mode=selection_mode,
+    )
+
+
+def _disk_stage_vms_in_scope(
+    vms: list[dict[str, object]],
+    pxs: object,
+    *,
+    explicit_selection: bool,
+) -> list[dict[str, object]]:
+    """Keep the VMs this run must process: identified, in endpoint scope, and live."""
+    vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
+    if not explicit_selection:
+        vms = scope_vms_to_proxmox_sessions(vms, pxs, stage="Virtual disk")
+    return exclude_soft_deleted_vms(vms, stage="virtual disk")
+
+
+@log_stage_timing("virtual-disks")
 async def create_virtual_disks(  # noqa: C901
     netbox_session: object,
     pxs: ProxmoxSessionsDep,
@@ -733,16 +772,7 @@ async def create_virtual_disks(  # noqa: C901
     completed_html = return_status_html("completed", use_css)
     failed_html = return_status_html("failed", use_css)
 
-    tag_refs = []
-    if tag:
-        tag_refs = [
-            {
-                "name": getattr(tag, "name", None),
-                "slug": getattr(tag, "slug", None),
-                "color": getattr(tag, "color", None),
-            }
-        ]
-        tag_refs = [t for t in tag_refs if t.get("name") and t.get("slug")]
+    tag_refs = stage_tag_refs(tag)
 
     target_vm_ids: list[int] | None = None
     if netbox_vm_ids is not None:
@@ -756,21 +786,7 @@ async def create_virtual_disks(  # noqa: C901
         logger.info("Starting virtual disks sync for existing VMs")
 
     try:
-        if target_vm_ids is not None:
-            vms = await list_netbox_virtual_machines_by_ids(nb, target_vm_ids)
-            vms = require_selected_netbox_vm_coverage(
-                vms,
-                target_vm_ids,
-                operation="virtual-disk sync",
-            )
-        else:
-            vms = await _list_all_vms_with_proxmox_id(nb)
-        vms = await hydrate_vm_identities_from_sidecars(
-            nb,
-            [to_mapping(vm) for vm in vms],
-            require_all=target_vm_ids is not None,
-            mode=selection_mode,
-        )
+        vms = await _load_disk_stage_vms(nb, target_vm_ids, selection_mode)
         selection_skipped = selection_skips(vms)
     except Exception as e:
         if target_vm_ids is not None:
@@ -789,8 +805,7 @@ async def create_virtual_disks(  # noqa: C901
             )
         return {"count": 0, "created": 0, "updated": 0, "skipped": 0, "error": str(e)}
 
-    vms = [vm for vm in vms if extract_proxmox_vmid(vm)]
-    vms = exclude_soft_deleted_vms(vms, stage="virtual disk")
+    vms = _disk_stage_vms_in_scope(vms, pxs, explicit_selection=target_vm_ids is not None)
 
     storage_index: dict[tuple[str, str], dict] = {}
     try:

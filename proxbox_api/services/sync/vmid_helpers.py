@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from proxbox_api.logger import logger
+
 
 def _coerce_mapping(value: object) -> dict[str, object]:
     if isinstance(value, dict):
@@ -105,6 +107,53 @@ def select_proxmox_sessions_by_endpoint(
         for session in session_list
         if extract_proxmox_session_endpoint_id(session) == endpoint_id
     ]
+
+
+def scope_vms_to_proxmox_sessions(
+    vms: list[dict[str, object]],
+    sessions: object,
+    *,
+    stage: str,
+) -> list[dict[str, object]]:
+    """Keep the VMs that the Proxmox sessions of this run can own.
+
+    An estate run lists every NetBox VM. When the caller selected one Proxmox
+    endpoint, the VMs of all other endpoints cannot be read through the selected
+    sessions: each one costs task setup, progress messages and a skip warning,
+    and a multi-endpoint run repeats that work once per endpoint.
+
+    A VM is dropped only on proof that it is out of scope: its sync-state
+    endpoint id is known, every session exposes an endpoint id, and none of
+    them matches. A VM without an endpoint id, and a run in which a session
+    has no endpoint id, keep the previous unscoped behaviour.
+    """
+    session_list = list(sessions or [])
+    session_endpoint_ids = {
+        extract_proxmox_session_endpoint_id(session) for session in session_list
+    }
+    if not session_list or None in session_endpoint_ids:
+        return vms
+
+    in_scope: list[dict[str, object]] = []
+    out_of_scope_endpoint_ids: set[int] = set()
+    for vm in vms:
+        endpoint_id = extract_proxmox_endpoint_id(vm)
+        if endpoint_id is None or endpoint_id in session_endpoint_ids:
+            in_scope.append(vm)
+        else:
+            out_of_scope_endpoint_ids.add(endpoint_id)
+
+    dropped = len(vms) - len(in_scope)
+    if dropped:
+        logger.info(
+            "%s sync: %d VM(s) of %d other Proxmox endpoint id(s) are outside the "
+            "selected endpoint id(s) %s and were not processed",
+            stage,
+            dropped,
+            len(out_of_scope_endpoint_ids),
+            sorted(session_endpoint_ids),
+        )
+    return in_scope
 
 
 def extract_proxmox_vm_type(vm: dict[str, object]) -> str | None:

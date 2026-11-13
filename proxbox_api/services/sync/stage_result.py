@@ -30,6 +30,18 @@ class WarningList(list):
         return bool(self.warnings)
 
 
+def stage_tag_refs(tag: object | None) -> list[dict[str, object]]:
+    """Return the nested NetBox tag reference of a stage tag, or no reference."""
+    if not tag:
+        return []
+    ref = {
+        "name": getattr(tag, "name", None),
+        "slug": getattr(tag, "slug", None),
+        "color": getattr(tag, "color", None),
+    }
+    return [ref] if ref["name"] and ref["slug"] else []
+
+
 def result_warnings(value: object) -> list[StageWarning]:
     """Read warnings from a stage result, whether a list carrier or a dict payload."""
 

@@ -293,6 +293,28 @@ gravador registra um aviso que nomeia a VM sempre que o endpoint, o cluster, o
 VMID ou o tipo de VM ao vivo estiver ausente ou o tipo for `unknown`, tornando a
 causa visivel onde ocorre; o que e persistido nao muda.
 
+### Escopo por endpoint nas etapas de discos e snapshots de VM
+
+Uma execucao da etapa de discos ou de snapshots de VM sem selecao explicita de
+VMs lista todas as VMs do NetBox. A etapa entao mantem somente as VMs que os
+endpoints Proxmox da execucao podem possuir, antes de iniciar qualquer trabalho
+por VM.
+
+Uma VM e deixada de fora somente quando todas estas condicoes sao verdadeiras:
+
+- o sidecar de sync-state da VM tem um id de endpoint;
+- toda sessao Proxmox da execucao expoe um id de endpoint;
+- nenhuma sessao tem o id de endpoint da VM.
+
+A etapa grava uma linha `INFO` com a quantidade de VMs deixadas de fora. Essa
+VM nao e contada, nao recebe mensagem de progresso e nao gera aviso de skip.
+Uma VM sem id de endpoint continua sendo processada, como antes. Uma selecao
+explicita de VMs (`netbox_vm_ids` ou rota de VM unica) nao e filtrada.
+
+Antes desta regra, uma execucao para um endpoint em um ambiente com 30 clusters
+relatava milhares de VMs ignoradas em cada uma das duas etapas, e uma execucao
+para todos os endpoints repetia esse trabalho uma vez por endpoint.
+
 ### Regras de Paralelismo
 
 Permitido em paralelo:
@@ -571,6 +593,39 @@ O comando `Full Update Sync` dispara a mesma logica de sync, mas envia mensagens
 - Os sync-process records sao criados em objetos do plugin NetBox.
 - Journal entries sao escritos com resumo e erros.
 - Fluxos WebSocket e SSE fornecem status em tempo real.
+
+### Tempo das etapas e das requisicoes ao NetBox
+
+As etapas de discos e de snapshots de VM gravam uma linha ao terminar, tambem
+quando falham:
+
+```text
+Sync stage virtual-disks completed in 41.3s; NetBox requests during stage: 212 (33.9s waiting on NetBox, 2 slow)
+```
+
+Os numeros do NetBox sao do processo inteiro. Quando duas etapas rodam ao mesmo
+tempo, cada linha inclui as requisicoes das duas. Uma requisicao ao NetBox que
+leva 5 segundos ou mais tambem grava
+`Slow NetBox request: <METHOD> <path> took <N>s` em `WARNING`. A linha contem
+somente o caminho, nunca os valores da query.
+
+Use essas linhas para decidir se uma execucao longa espera pelo NetBox ou pelo
+Proxmox antes de alterar um timeout ou uma configuracao de concorrencia.
+
+### Decisoes de nome de device de no
+
+A sincronizacao de devices registra, em `INFO`, o
+`node_device_name_template` efetivo de cada endpoint. Um template de endpoint
+em branco herda o template global.
+
+Um device existente mantem o nome quando o nome nao e o nome do no Proxmox e o
+device nao tem a tag Proxbox junto com a descricao
+`Proxmox Node <nome atual>`. O Proxbox trata esse nome como definido por um
+operador e grava um `WARNING` com o device, o nome do template que nao foi
+aplicado e as duas formas de permitir a aplicacao do template. Um template que
+nao gera um nome de device valido no NetBox tambem grava um `WARNING`; o no e
+ignorado. Um nome ja usado por outro device no mesmo site e relatado em
+`ERROR`, como antes.
 
 ## Tratamento de falhas
 

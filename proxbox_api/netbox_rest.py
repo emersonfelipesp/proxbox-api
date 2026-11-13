@@ -636,6 +636,46 @@ def _invalidate_get_cache_for_record(
         _invalidate_get_cache_for_path(api, _detail_path(list_path, record_id))
 
 
+# A single NetBox request slower than this is logged, so an operator can tell a
+# slow NetBox apart from slow Proxbox processing without enabling DEBUG tracing.
+SLOW_NETBOX_REQUEST_SECONDS = 5.0
+
+_request_timing_count = 0
+_request_timing_seconds = 0.0
+_request_timing_slow = 0
+
+
+def get_request_timing_totals() -> tuple[int, float, int]:
+    """Return process-wide ``(requests, total seconds, slow requests)`` sent to NetBox."""
+    return _request_timing_count, _request_timing_seconds, _request_timing_slow
+
+
+def _record_request_timing(method: object, path: object, elapsed: float) -> None:
+    global _request_timing_count, _request_timing_seconds, _request_timing_slow
+
+    _request_timing_count += 1
+    _request_timing_seconds += elapsed
+    if elapsed < SLOW_NETBOX_REQUEST_SECONDS:
+        return
+    _request_timing_slow += 1
+    # Log the path only: query values can carry names and are not needed here.
+    logger.warning(
+        "Slow NetBox request: %s %s took %.1fs",
+        method,
+        urlsplit(str(path)).path,
+        elapsed,
+    )
+
+
+async def _timed_client_request(api: object, method: str, path: str, **kwargs: object) -> object:
+    """Send one NetBox request and record how long NetBox took to answer."""
+    started = time.perf_counter()
+    try:
+        return await api.client.request(method, path, **kwargs)
+    finally:
+        _record_request_timing(method, path, time.perf_counter() - started)
+
+
 def _get_netbox_semaphore() -> asyncio.Semaphore:
     """Get or create the global NetBox request semaphore."""
     global _netbox_request_semaphore, _netbox_request_semaphore_loop_id
@@ -942,7 +982,8 @@ class RestRecord:
         if not payload:
             return self
         try:
-            response = await self._api.client.request(
+            response = await _timed_client_request(
+                self._api,
                 "PATCH",
                 self._detail_path,
                 payload=payload,
@@ -972,8 +1013,8 @@ class RestRecord:
 
     async def delete(self) -> bool:
         try:
-            response = await self._api.client.request(
-                "DELETE", self._detail_path, expect_json=False
+            response = await _timed_client_request(
+                self._api, "DELETE", self._detail_path, expect_json=False
             )
         except Exception as e:
             _handle_netbox_error(e, f"delete record {self._detail_path}")
@@ -1106,6 +1147,180 @@ def _pagination_count(path: str, payload: dict[str, object]) -> int:
     return count
 
 
+def _reject_overlapping_page_records(
+    path: str,
+    page_results: list[dict[str, object]],
+    seen_records: set[tuple[str, str]],
+) -> None:
+    """Fail when a page repeats a record; otherwise remember the page's records."""
+    page_record_signatures = tuple(_pagination_record_signature(record) for record in page_results)
+    if not page_record_signatures:
+        return
+    unique_page_signatures = set(page_record_signatures)
+    if len(unique_page_signatures) != len(page_record_signatures) or (
+        unique_page_signatures & seen_records
+    ):
+        raise ProxboxException(
+            message="NetBox pagination did not advance",
+            detail=(
+                f"Overlapping record content while listing {path}; "
+                "refusing to return a partial collection."
+            ),
+            http_status_code=502,
+        )
+    seen_records.update(unique_page_signatures)
+
+
+def _reject_page_over_record_limits(
+    path: str,
+    record_count: int,
+    max_records: int | None,
+) -> None:
+    """Fail when adding the page would pass the hard or the caller record limit."""
+    if record_count > NETBOX_REST_LIST_HARD_MAX_RECORDS:
+        raise _pagination_protocol_error(
+            path,
+            f"Pagination exceeded the hard record limit of {NETBOX_REST_LIST_HARD_MAX_RECORDS}",
+        )
+
+    if max_records is not None and record_count > max_records:
+        raise _pagination_protocol_error(
+            path,
+            f"Pagination exceeded the explicit record limit of {max_records}",
+        )
+
+
+def _validated_next_page(
+    path: str,
+    nxt: tuple[str, dict[str, object]],
+    *,
+    normalized_path: str,
+    invariant_query: object,
+    expected_next_offset: int,
+    max_offset: int | None,
+    max_records: int | None,
+    aggregated_count: int,
+    page_count: int,
+) -> tuple[dict[str, object], int]:
+    """Validate the ``next`` link of a non-final page; return its query and offset."""
+    next_path, next_query = nxt
+    if _normalize_path(next_path) != normalized_path:
+        raise _pagination_protocol_error(
+            path,
+            f"Pagination next link changed resource path to {next_path}",
+        )
+    if _pagination_query_multimap(next_query) != invariant_query:
+        raise _pagination_protocol_error(
+            path,
+            "Pagination next link changed non-pagination query parameters",
+        )
+    next_offset = _validated_pagination_offset(
+        path,
+        next_query,
+        required=True,
+        label="Pagination next link",
+    )
+    if next_offset != expected_next_offset:
+        raise _pagination_protocol_error(
+            path,
+            "NetBox pagination did not advance continuously: "
+            f"next offset {next_offset}, expected {expected_next_offset}",
+        )
+    if max_offset is not None and next_offset > max_offset:
+        raise _pagination_protocol_error(
+            path,
+            f"Pagination next offset {next_offset} exceeded the explicit maximum {max_offset}",
+        )
+    if max_records is not None and aggregated_count >= max_records:
+        raise _pagination_protocol_error(
+            path,
+            f"Pagination reached the explicit record limit of {max_records} before the final page",
+        )
+    if aggregated_count >= NETBOX_REST_LIST_HARD_MAX_RECORDS:
+        raise _pagination_protocol_error(
+            path,
+            "Pagination reached the hard record limit of "
+            f"{NETBOX_REST_LIST_HARD_MAX_RECORDS} before the final page",
+        )
+    if page_count >= NETBOX_REST_LIST_HARD_MAX_PAGES:
+        raise _pagination_protocol_error(
+            path,
+            f"Pagination reached the hard limit of {NETBOX_REST_LIST_HARD_MAX_PAGES} pages before the final page",
+        )
+    return next_query, next_offset
+
+
+async def _request_list_page(
+    api: object,
+    path: str,
+    page_path: str,
+    page_query: dict[str, object] | None,
+) -> tuple[
+    list[dict[str, object]],
+    tuple[str, dict[str, object]] | None,
+    int | None,
+]:
+    """Request one list page and validate its pagination shape.
+
+    Returns the page records, the parsed ``next`` link, and the reported count.
+    """
+    try:
+        response = await _timed_client_request(api, "GET", page_path, query=page_query)
+    except Exception as e:
+        _handle_netbox_error(e, f"list {path}")
+        raise
+
+    try:
+        payload = _extract_payload(response)
+    except ProxboxException:
+        raise
+    except Exception as e:
+        _handle_netbox_error(e, f"parse list {path}")
+        raise
+
+    if isinstance(payload, dict):
+        if "results" not in payload:
+            raise _pagination_protocol_error(
+                path,
+                "NetBox returned an object without a results field",
+            )
+        results = payload.get("results")
+        next_link = payload.get("next")
+        count: int | None = _pagination_count(path, payload)
+    elif isinstance(payload, list):
+        results = payload
+        next_link = None
+        count = None
+    else:
+        raise _pagination_protocol_error(
+            path,
+            "NetBox REST list response was not a JSON array/object",
+        )
+    if not isinstance(results, list):
+        raise _pagination_protocol_error(
+            path,
+            "NetBox REST list response did not contain a results list",
+        )
+
+    parsed_next = _parse_next_link(next_link)
+    if next_link is not None and parsed_next is None:
+        raise _pagination_protocol_error(
+            path,
+            "NetBox returned a non-null invalid next link",
+        )
+
+    normalized_results: list[dict[str, object]] = []
+    for item in results:
+        normalized_item = item if isinstance(item, dict) else to_dict(item)
+        if not isinstance(normalized_item, dict):
+            raise _pagination_protocol_error(
+                path,
+                "NetBox returned a non-object item in results",
+            )
+        normalized_results.append(normalized_item)
+    return normalized_results, parsed_next, count
+
+
 async def _rest_list_traverse_async(
     nb: object,
     path: str,
@@ -1153,71 +1368,11 @@ async def _rest_list_traverse_async(
         tuple[str, dict[str, object]] | None,
         int | None,
     ]:
-        async def _do_request() -> tuple[
-            list[dict[str, object]],
-            tuple[str, dict[str, object]] | None,
-            int | None,
-        ]:
-            try:
-                response = await api.client.request("GET", page_path, query=page_query)
-            except Exception as e:
-                _handle_netbox_error(e, f"list {path}")
-                raise
-
-            try:
-                payload = _extract_payload(response)
-            except ProxboxException:
-                raise
-            except Exception as e:
-                _handle_netbox_error(e, f"parse list {path}")
-                raise
-
-            if isinstance(payload, dict):
-                if "results" not in payload:
-                    raise _pagination_protocol_error(
-                        path,
-                        "NetBox returned an object without a results field",
-                    )
-                results = payload.get("results")
-                next_link = payload.get("next")
-                count: int | None = _pagination_count(path, payload)
-            elif isinstance(payload, list):
-                results = payload
-                next_link = None
-                count = None
-            else:
-                raise _pagination_protocol_error(
-                    path,
-                    "NetBox REST list response was not a JSON array/object",
-                )
-            if not isinstance(results, list):
-                raise _pagination_protocol_error(
-                    path,
-                    "NetBox REST list response did not contain a results list",
-                )
-
-            parsed_next = _parse_next_link(next_link)
-            if next_link is not None and parsed_next is None:
-                raise _pagination_protocol_error(
-                    path,
-                    "NetBox returned a non-null invalid next link",
-                )
-
-            normalized_results: list[dict[str, object]] = []
-            for item in results:
-                normalized_item = item if isinstance(item, dict) else to_dict(item)
-                if not isinstance(normalized_item, dict):
-                    raise _pagination_protocol_error(
-                        path,
-                        "NetBox returned a non-object item in results",
-                    )
-                normalized_results.append(normalized_item)
-            return normalized_results, parsed_next, count
 
         for attempt in range(max_retries + 1):
             async with semaphore:
                 try:
-                    return await _do_request()
+                    return await _request_list_page(api, path, page_path, page_query)
                 except Exception as e:
                     if attempt == max_retries or not _is_transient_netbox_error(e):
                         raise
@@ -1234,7 +1389,7 @@ async def _rest_list_traverse_async(
                         str(e)[:200],
                     )
             await asyncio.sleep(delay)
-        return await _do_request()
+        return await _request_list_page(api, path, page_path, page_query)
 
     aggregated: list[dict[str, object]] = []
     current_path: str = normalized_path
@@ -1278,35 +1433,12 @@ async def _rest_list_traverse_async(
                 path,
                 "Page results extended beyond the declared pagination count",
             )
-        page_record_signatures = tuple(
-            _pagination_record_signature(record) for record in page_results
+        _reject_overlapping_page_records(path, page_results, seen_records)
+        _reject_page_over_record_limits(
+            path,
+            len(aggregated) + len(page_results),
+            max_records,
         )
-        if page_record_signatures:
-            unique_page_signatures = set(page_record_signatures)
-            if len(unique_page_signatures) != len(page_record_signatures) or (
-                unique_page_signatures & seen_records
-            ):
-                raise ProxboxException(
-                    message="NetBox pagination did not advance",
-                    detail=(
-                        f"Overlapping record content while listing {path}; "
-                        "refusing to return a partial collection."
-                    ),
-                    http_status_code=502,
-                )
-            seen_records.update(unique_page_signatures)
-
-        if len(aggregated) + len(page_results) > NETBOX_REST_LIST_HARD_MAX_RECORDS:
-            raise _pagination_protocol_error(
-                path,
-                f"Pagination exceeded the hard record limit of {NETBOX_REST_LIST_HARD_MAX_RECORDS}",
-            )
-
-        if max_records is not None and len(aggregated) + len(page_results) > max_records:
-            raise _pagination_protocol_error(
-                path,
-                f"Pagination exceeded the explicit record limit of {max_records}",
-            )
         aggregated.extend(page_results)
 
         if nxt is None:
@@ -1330,51 +1462,17 @@ async def _rest_list_traverse_async(
                 ),
                 http_status_code=502,
             )
-        next_path, next_query = nxt
-        if _normalize_path(next_path) != normalized_path:
-            raise _pagination_protocol_error(
-                path,
-                f"Pagination next link changed resource path to {next_path}",
-            )
-        if _pagination_query_multimap(next_query) != invariant_query:
-            raise _pagination_protocol_error(
-                path,
-                "Pagination next link changed non-pagination query parameters",
-            )
-        next_offset = _validated_pagination_offset(
+        next_query, next_offset = _validated_next_page(
             path,
-            next_query,
-            required=True,
-            label="Pagination next link",
+            nxt,
+            normalized_path=normalized_path,
+            invariant_query=invariant_query,
+            expected_next_offset=current_offset + len(page_results),
+            max_offset=max_offset,
+            max_records=max_records,
+            aggregated_count=len(aggregated),
+            page_count=page_count,
         )
-        expected_next_offset = current_offset + len(page_results)
-        if next_offset != expected_next_offset:
-            raise _pagination_protocol_error(
-                path,
-                "NetBox pagination did not advance continuously: "
-                f"next offset {next_offset}, expected {expected_next_offset}",
-            )
-        if max_offset is not None and next_offset > max_offset:
-            raise _pagination_protocol_error(
-                path,
-                f"Pagination next offset {next_offset} exceeded the explicit maximum {max_offset}",
-            )
-        if max_records is not None and len(aggregated) >= max_records:
-            raise _pagination_protocol_error(
-                path,
-                f"Pagination reached the explicit record limit of {max_records} before the final page",
-            )
-        if len(aggregated) >= NETBOX_REST_LIST_HARD_MAX_RECORDS:
-            raise _pagination_protocol_error(
-                path,
-                "Pagination reached the hard record limit of "
-                f"{NETBOX_REST_LIST_HARD_MAX_RECORDS} before the final page",
-            )
-        if page_count >= NETBOX_REST_LIST_HARD_MAX_PAGES:
-            raise _pagination_protocol_error(
-                path,
-                f"Pagination reached the hard limit of {NETBOX_REST_LIST_HARD_MAX_PAGES} pages before the final page",
-            )
 
         page_signature = (normalized_path, _serialize_query(next_query))
         if page_signature in seen_pages:
@@ -1501,7 +1599,7 @@ async def rest_create_async(
 
     async def _do_request() -> RestRecord:
         try:
-            response = await api.client.request("POST", normalized_path, payload=payload)
+            response = await _timed_client_request(api, "POST", normalized_path, payload=payload)
         except Exception as e:
             _handle_netbox_error(e, f"create {path}")
             raise  # Early return via exception
@@ -1871,7 +1969,7 @@ async def rest_patch_async(
 
     async def _do_request() -> dict[str, object]:
         try:
-            response = await api.client.request("PATCH", detail_path, payload=payload)
+            response = await _timed_client_request(api, "PATCH", detail_path, payload=payload)
         except Exception as e:
             _handle_netbox_error(e, f"patch {path}")
             raise  # Early return via exception
@@ -1924,7 +2022,7 @@ async def rest_bulk_create_async(
 
     async def _do_request() -> list[RestRecord]:
         try:
-            response = await api.client.request("POST", normalized_path, payload=payloads)
+            response = await _timed_client_request(api, "POST", normalized_path, payload=payloads)
         except Exception as e:
             _handle_netbox_error(e, f"bulk create {path}")
             raise
@@ -1993,7 +2091,7 @@ async def rest_bulk_patch_async(
 
     async def _do_request() -> list[RestRecord]:
         try:
-            response = await api.client.request("PATCH", normalized_path, payload=updates)
+            response = await _timed_client_request(api, "PATCH", normalized_path, payload=updates)
         except Exception as e:
             _handle_netbox_error(e, f"bulk patch {path}")
             raise
@@ -2052,7 +2150,8 @@ async def _delete_single_record_async(
 
     async def _do_request() -> int:
         try:
-            response = await api.client.request(
+            response = await _timed_client_request(
+                api,
                 "DELETE",
                 detail_path,
                 expect_json=False,
@@ -2134,7 +2233,8 @@ async def rest_bulk_delete_async(
 
     async def _do_request() -> int:
         try:
-            response = await api.client.request(
+            response = await _timed_client_request(
+                api,
                 "DELETE",
                 normalized_path,
                 payload=body,

@@ -239,6 +239,85 @@ def test_create_virtual_machine_snapshots_scopes_fetch_by_endpoint(monkeypatch):
     ]
 
 
+def test_estate_snapshots_process_only_vms_of_the_selected_endpoint(monkeypatch):
+    """A run for one endpoint must not scan, count, or skip another endpoint's VMs."""
+    endpoint_a = SimpleNamespace(db_endpoint_id=1, name="pve")
+    calls = {"get_vm_snapshots": []}
+
+    async def _fake_rest_list(_nb, _path, query=None):
+        if _path == "/api/virtualization/virtual-machines/":
+            return [
+                {
+                    "id": 7,
+                    "name": "vm-105-a",
+                    "cluster": {"name": "pve"},
+                    "proxmox_endpoint_id": 1,
+                    "proxmox_vm_id": 105,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_node": "pve",
+                },
+                {
+                    "id": 8,
+                    "name": "vm-105-b",
+                    "cluster": {"name": "astro"},
+                    "proxmox_endpoint_id": 2,
+                    "proxmox_vm_id": 105,
+                    "proxmox_vm_type": "qemu",
+                    "proxmox_node": "astro",
+                },
+            ]
+        if _path in {"/api/plugins/proxbox/storage/", "/api/virtualization/virtual-disks/"}:
+            return []
+        return []
+
+    def _fake_get_vm_snapshots(*, session, node, vm_type, vmid, raise_on_error=False):
+        assert raise_on_error is True
+        calls["get_vm_snapshots"].append(
+            {"session": session, "node": node, "vm_type": vm_type, "vmid": vmid}
+        )
+        return [{"name": f"snap-{node}", "type": "qemu"}]
+
+    async def _fake_bulk_reconcile(_nb, _path, *, payloads, **kwargs):
+        from proxbox_api.netbox_rest import BulkReconcileResult
+
+        return BulkReconcileResult(
+            records=[{"id": index, **payload} for index, payload in enumerate(payloads, start=1)],
+            created=len(payloads),
+            updated=0,
+            unchanged=0,
+            failed=0,
+        )
+
+    monkeypatch.setattr("proxbox_api.services.sync.snapshots.rest_list_async", _fake_rest_list)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.snapshots.get_vm_snapshots",
+        _fake_get_vm_snapshots,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.snapshots.rest_bulk_reconcile_async",
+        _fake_bulk_reconcile,
+    )
+
+    result = asyncio.run(
+        create_virtual_machine_snapshots(
+            netbox_session=object(),
+            pxs=[endpoint_a],
+            cluster_status=[],
+            cluster_resources=[
+                {"pve": [{"type": "qemu", "name": "vm-105-a", "vmid": "105", "node": "pve"}]},
+                {"astro": [{"type": "qemu", "name": "vm-105-b", "vmid": "105", "node": "astro"}]},
+            ],
+            tag=None,
+            use_websocket=False,
+        )
+    )
+
+    assert result == {"count": 1, "created": 1, "updated": 0, "skipped": 0, "deleted": 0}
+    assert calls["get_vm_snapshots"] == [
+        {"session": endpoint_a, "node": "pve", "vm_type": "qemu", "vmid": 105},
+    ]
+
+
 def _snapshot_vm(
     *,
     netbox_id: int = 7,

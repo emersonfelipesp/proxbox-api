@@ -385,6 +385,10 @@ def record_id(value: object) -> int | None:
     direct_id = relation_id(value)
     if direct_id is not None:
         return direct_id
+    if value is None or isinstance(value, (str, bytes, int, float)):
+        # A scalar is never a record. Do not hand it to ``to_mapping()``, which
+        # logs a warning for every value that it cannot read as a record.
+        return None
 
     attr_id = getattr(value, "id", None)
     attr_id_int = relation_id(attr_id)

@@ -177,13 +177,13 @@ def _record_to_dict(record: object) -> dict[str, object]:
 def _lookup_matches(current_payload: dict[str, object], lookup: dict[str, object]) -> bool:
     for key, expected in lookup.items():
         current = current_payload.get(key)
-        if key.endswith("_id"):
-            current = _relation_id(current)
-        if _relation_id(current) is not None or _relation_id(expected) is not None:
-            if _relation_id(current) != _relation_id(expected):
+        if isinstance(expected, str):
+            # A text lookup value, such as the interface name ``eth0``, is never a
+            # NetBox relation. Compare it as text and do not read an id from it.
+            if current != expected:
                 return False
             continue
-        if current != expected:
+        if _relation_id(current) != _relation_id(expected):
             return False
     return True
 

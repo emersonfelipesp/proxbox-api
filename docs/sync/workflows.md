@@ -287,6 +287,27 @@ writer logs a warning naming the VM whenever the live endpoint, cluster, VMID,
 or VM type is absent or the type is `unknown`, so the cause is visible where it
 happens; what is persisted is unchanged.
 
+### Endpoint scope of the VM disk and VM snapshot stages
+
+A run of the VM disk or VM snapshot stage with no explicit VM selection lists
+every NetBox VM. The stage then keeps only the VMs that the Proxmox endpoints
+of the run can own, and it does this before any per-VM work starts.
+
+A VM is left out only when all of these conditions are true:
+
+- its sync-state sidecar has an endpoint id;
+- every Proxmox session of the run exposes an endpoint id;
+- no session has the endpoint id of the VM.
+
+The stage writes one `INFO` line with the number of VMs that it left out. Such
+a VM is not counted, gets no progress message, and gets no skip warning. A VM
+with no endpoint id is still processed, as before. An explicit VM selection
+(`netbox_vm_ids` or a single-VM path) is not filtered.
+
+Before this rule, a run for one endpoint on a 30-cluster estate reported
+thousands of skipped VMs in each of the two stages, and a run for all
+endpoints repeated that work once per endpoint.
+
 ### Parallelism Rules
 
 Allowed in parallel:
@@ -708,6 +729,38 @@ The `full-update` command triggers the same sync logic but sends JSON messages d
 - Sync process records are created in NetBox plugin objects.
 - Journal entries are written with summaries and errors.
 - WebSocket and SSE workflows provide interactive, real-time status output.
+
+### Stage and NetBox request timing
+
+The VM disk and VM snapshot stages write one line when they end, also when
+they fail:
+
+```text
+Sync stage virtual-disks completed in 41.3s; NetBox requests during stage: 212 (33.9s waiting on NetBox, 2 slow)
+```
+
+The NetBox numbers are process-wide. When two stages run at the same time,
+each line includes the requests of both. A NetBox request that takes 5 seconds
+or more also writes `Slow NetBox request: <METHOD> <path> took <N>s` at
+`WARNING`. The line contains the path only, never the query values.
+
+Use these lines to decide whether a long run waits on NetBox or on Proxmox
+before you change a timeout or a concurrency setting.
+
+### Node device naming decisions
+
+Device synchronization logs, at `INFO`, the effective
+`node_device_name_template` of each endpoint. A blank endpoint template
+inherits the global template.
+
+An existing device keeps its name when the name is not the Proxmox node name
+and the device does not have the Proxbox tag together with the description
+`Proxmox Node <current name>`. Proxbox treats such a name as set by an
+operator and writes a `WARNING` that names the device, the template name that
+was not applied, and the two ways to let the template apply. A template that
+does not render a valid NetBox device name also writes a `WARNING`; the node
+is skipped. A name that another device in the same site already uses is
+reported at `ERROR`, as before.
 
 ## Failure Handling
 

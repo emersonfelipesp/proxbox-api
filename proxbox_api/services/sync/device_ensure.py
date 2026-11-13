@@ -694,6 +694,13 @@ def _build_device_targets(
         cluster_id = _relation_id_or_none(getattr(cluster_record, "id", None))
         template = str(getattr(cluster_status, "node_device_name_template", "{node}") or "{node}")
         endpoint = str(getattr(cluster_status, "endpoint_name", "") or cluster_name)
+        logger.info(
+            "Proxmox endpoint %r (id=%r, cluster %r): effective node device name template is %r",
+            endpoint,
+            endpoint_id,
+            cluster_name,
+            template,
+        )
         for node in getattr(cluster_status, "node_list", None) or []:
             node_name = str(getattr(node, "name", "") or "").strip()
             if node_name:
@@ -701,7 +708,15 @@ def _build_device_targets(
                     desired_name = render_node_device_name(
                         node_name, cluster_name, endpoint, template
                     )
-                except NodeDeviceNameError:
+                except NodeDeviceNameError as error:
+                    logger.warning(
+                        "Skipping Proxmox node %r in cluster %r: template %r does not "
+                        "render a valid NetBox device name: %s",
+                        node_name,
+                        cluster_name,
+                        template,
+                        error,
+                    )
                     continue
                 targets.append(
                     _DeviceTarget(
@@ -1136,6 +1151,20 @@ async def _prepare_device_targets(
         if not _device_name_is_proxbox_managed(existing, target.node_name):
             target.effective_name = current_name
             target.preserve_manual_name = True
+            logger.warning(
+                "Keeping NetBox device name %r (id=%r) for Proxmox node %r in cluster %r "
+                "instead of the template name %r: the current name is not the Proxmox "
+                "node name and the device does not carry the Proxbox tag together with "
+                "the description %r, so it is treated as set by an operator. Rename the "
+                "device to the Proxmox node name, or restore that tag and description, "
+                "to let the template apply.",
+                current_name,
+                existing.get("id"),
+                target.node_name,
+                target.cluster_name,
+                target.desired_name,
+                f"Proxmox Node {current_name}",
+            )
             continue
         pending_renames.append((existing, target.desired_name))
 
