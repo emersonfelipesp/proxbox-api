@@ -145,6 +145,14 @@ vez de serem limpos, entao uma falha transitoria nao apaga atribuicoes de VLAN.
 As demais interfaces continuam tendo a topologia obsoleta limpa quando o Proxmox
 a remove.
 
+As escritas de VLAN sao somente de criacao. O Proxmox so conhece uma VLAN pelo
+seu VID; quando uma interface de no ou de VM carrega um VID ausente no NetBox, o
+sync cria `VLAN <vid>`; quando uma VLAN com esse VID ja existe, a interface e
+ligada a ela e a VLAN em si nao e alterada (nome, status e tags nunca recebem
+patch). Toda reconciliacao de VLAN passa `NETBOX_VLAN_PATCHABLE_FIELDS` (um
+conjunto vazio), e `tests/test_vlan_reconcile_create_only.py` protege novos
+pontos de chamada.
+
 ## Fluxo de Sync de VM
 
 Endpoint principal:

@@ -22,6 +22,7 @@ from proxbox_api.netbox_rest import (
 )
 from proxbox_api.proxmox_async import resolve_async
 from proxbox_api.proxmox_to_netbox.models import (
+    NETBOX_VLAN_PATCHABLE_FIELDS,
     NetBoxInterfaceSyncState,
     NetBoxIpAddressSyncState,
     NetBoxVirtualMachineInterfaceSyncState,
@@ -325,6 +326,7 @@ async def _sync_legacy_node_vlan(
                 "tags": tag_refs,
             },
             schema=NetBoxVlanSyncState,
+            patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
             current_normalizer=lambda row: {
                 "vid": row.get("vid"),
                 "name": row.get("name"),
@@ -569,6 +571,7 @@ async def _sync_node_interface_vlan(
             lookup={"vid": vid},
             payload={"vid": vid, "name": f"VLAN {vid}", "status": "active", "tags": tag_refs},
             schema=NetBoxVlanSyncState,
+            patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
             current_normalizer=lambda row: {
                 "vid": row.get("vid"),
                 "name": row.get("name"),
@@ -1050,6 +1053,7 @@ async def _resolve_vm_interface_vlan(
                 "tags": tag_refs,
             },
             schema=NetBoxVlanSyncState,
+            patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
                 "name": record.get("name"),
@@ -1223,6 +1227,7 @@ async def bulk_reconcile_vlans(
             # the reconcile can match/patch the wrong VLAN (or recreate one).
             lookup_query_field_map={"site": "site_id", "tenant": "tenant_id"},
             schema=NetBoxVlanSyncState,
+            patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
             current_normalizer=lambda record: {
                 "vid": record.get("vid"),
                 "name": record.get("name"),

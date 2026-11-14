@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from proxbox_api.dependencies import NetBoxSessionDep
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_reconcile_async
-from proxbox_api.proxmox_to_netbox.models import NetBoxVlanSyncState
+from proxbox_api.proxmox_to_netbox.models import (
+    NETBOX_VLAN_PATCHABLE_FIELDS,
+    NetBoxVlanSyncState,
+)
 from proxbox_api.services.sync.vm_helpers import merged_guest_iface_from_mac_index
 
 
@@ -126,6 +129,7 @@ async def process_vm_network_interface(  # noqa: C901
                     "tags": tag_refs,
                 },
                 schema=NetBoxVlanSyncState,
+                patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
                 current_normalizer=lambda record: {
                     "vid": record.get("vid"),
                     "name": record.get("name"),

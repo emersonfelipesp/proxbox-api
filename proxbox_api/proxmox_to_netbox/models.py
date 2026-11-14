@@ -508,6 +508,12 @@ class NetBoxVlanSyncState(BaseModel):
         return _normalized_tag_list(value)
 
 
+# VLANs are operator-owned in NetBox: Proxmox only knows a VID, so the sync
+# creates a missing ``VLAN <vid>`` but must never rename, re-status or re-tag
+# an existing VLAN that it merely links an interface to.
+NETBOX_VLAN_PATCHABLE_FIELDS: frozenset[str] = frozenset()
+
+
 class NetBoxBackupSyncState(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
