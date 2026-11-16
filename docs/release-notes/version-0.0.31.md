@@ -13,7 +13,7 @@ The release adds no backend database migration, API contract change, or dependen
 
 | Component | Release or contract |
 | --- | --- |
-| proxbox-api | `0.0.31rc1` |
+| proxbox-api | `0.0.31` |
 | Proxmox SDK | `proxmox-sdk 0.0.15` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 and 3.13 |
@@ -62,7 +62,7 @@ configuration is unavailable, synchronization leaves the NetBox field unchanged.
 
 ## Upgrade and deployment
 
-Deploy the exact `proxbox-api 0.0.31rc1` package or candidate container through the approved
+Deploy the exact `proxbox-api 0.0.31` package or published container through the approved
 release workflow and restart every backend worker so each process begins with the new version and
 an empty in-memory schema-contract cache. Deploy this backend first, then the paired
 `netbox-proxbox 0.0.32` release; the latest releases of the two projects are always paired. Keep `proxmox-sdk 0.0.15` and `netbox-sdk 0.0.13`;
@@ -85,8 +85,3 @@ validating the new contract.
   synchronization clear an operator-managed value.
 - Start-at-boot reconciliation requires a readable Proxmox guest configuration. When that read is
   unavailable, NetBox retains its current value.
-
-## Release status
-
-`0.0.31rc1` is the release candidate of this version. Package and production availability follow
-the release gates.

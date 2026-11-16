@@ -15,7 +15,7 @@ mudança de dependências.
 
 | Componente | Versão ou contrato |
 | --- | --- |
-| proxbox-api | `0.0.31rc1` |
+| proxbox-api | `0.0.31` |
 | Proxmox SDK | `proxmox-sdk 0.0.15` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 e 3.13 |
@@ -66,7 +66,7 @@ campo no NetBox.
 
 ## Atualização e implantação
 
-Implante o pacote exato `proxbox-api 0.0.31rc1` ou o container candidato pelo workflow de release
+Implante o pacote exato `proxbox-api 0.0.31` ou o container publicado pelo workflow de release
 aprovado e reinicie todos os workers do backend para que cada processo comece com a nova versão e
 um cache em memória vazio do contrato de schema. Implante primeiro este backend e depois a versão pareada
 `netbox-proxbox 0.0.32`; as versões mais recentes dos dois projetos são sempre pareadas. Mantenha
@@ -93,8 +93,3 @@ validar o novo contrato.
   que a sincronização limpe um valor administrado pelo operador.
 - A reconciliação da inicialização automática exige uma configuração legível do guest no Proxmox.
   Quando essa leitura não está disponível, o NetBox mantém o valor atual.
-
-## Status da versão
-
-`0.0.31rc1` é o release candidate desta versão. A disponibilidade do pacote e em produção segue
-os gates de release.
