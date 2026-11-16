@@ -73,6 +73,11 @@ pub fn normalize_current_vm_payload(record: &Value, supports_vm_type: bool) -> M
         "disk",
         object.and_then(|item| item.get("disk")),
     );
+    insert_choice(
+        &mut payload,
+        "start_on_boot",
+        object.and_then(|item| item.get("start_on_boot")),
+    );
     payload.insert(
         "tags".to_string(),
         Value::Array(
@@ -116,6 +121,11 @@ pub fn normalize_desired_vm_payload(
     insert_vm_int(&mut payload, "vcpus", desired_payload.get("vcpus"));
     insert_vm_int(&mut payload, "memory", desired_payload.get("memory"));
     insert_vm_int(&mut payload, "disk", desired_payload.get("disk"));
+    insert_choice(
+        &mut payload,
+        "start_on_boot",
+        desired_payload.get("start_on_boot"),
+    );
     payload.insert(
         "tags".to_string(),
         Value::Array(
@@ -198,6 +208,14 @@ fn insert_relation(payload: &mut Map<String, Value>, key: &str, value: Option<&V
     }
 }
 
+fn insert_choice(payload: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
+    let choice = match value {
+        Some(Value::Object(object)) => object.get("value"),
+        other => other,
+    };
+    insert_raw(payload, key, choice);
+}
+
 fn insert_vm_int(payload: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
     payload.insert(
         key.to_string(),
@@ -264,5 +282,28 @@ mod tests {
             normalize_tags(Some(&json!([3, {"id": 1}, "2", 1]))),
             vec![1, 2, 3]
         );
+    }
+
+    #[test]
+    fn start_on_boot_normalizes_choices_and_omits_unknown_values() {
+        let current = normalize_current_vm_payload(
+            &json!({"start_on_boot": {"value": "on", "label": "On"}}),
+            true,
+        );
+        assert_eq!(current.get("start_on_boot"), Some(&json!("on")));
+
+        for value in [json!("on"), json!("off"), json!("laststate")] {
+            let desired = normalize_desired_vm_payload(
+                json!({"start_on_boot": value}).as_object().unwrap(),
+                true,
+            );
+            assert_eq!(desired.get("start_on_boot"), Some(&value));
+        }
+
+        let omitted = normalize_desired_vm_payload(&Map::new(), true);
+        let null =
+            normalize_desired_vm_payload(json!({"start_on_boot": null}).as_object().unwrap(), true);
+        assert!(!omitted.contains_key("start_on_boot"));
+        assert!(!null.contains_key("start_on_boot"));
     }
 }

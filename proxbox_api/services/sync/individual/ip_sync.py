@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from proxbox_api.netbox_rest import rest_first_async, rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxIpAddressSyncState
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.proxmox_helpers import (
     get_qemu_guest_agent_hostname,
     get_qemu_guest_agent_network_interfaces,
@@ -23,7 +24,10 @@ from proxbox_api.services.sync.individual.helpers import (
     normalize_mac,
     resolve_guest_interface_by_ip,
 )
-from proxbox_api.services.sync.ip_ownership import _reconcile_interface_ip
+from proxbox_api.services.sync.ip_ownership import (
+    _reconcile_interface_ip,
+    ip_address_patchable_fields,
+)
 from proxbox_api.services.sync.vm_helpers import (
     build_guest_mac_index,
     merged_guest_iface_from_mac_index,
@@ -229,6 +233,7 @@ async def sync_ip_individual(
     auto_create_vm: bool = True,
     auto_create_interface: bool = True,
     dry_run: bool = False,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     """Sync a single IP Address from Proxmox to NetBox.
 
@@ -372,6 +377,7 @@ async def sync_ip_individual(
                 now=now,
                 dns_name=dns_name,
                 interface_name=resolved_interface or "",
+                overwrite_flags=overwrite_flags,
             )
             ip_record = (
                 await rest_first_async(
@@ -403,6 +409,10 @@ async def sync_ip_individual(
                     "dns_name": record.get("dns_name"),
                     "tags": record.get("tags"),
                 },
+                patchable_fields=frozenset(
+                    ip_address_patchable_fields(overwrite_flags)
+                    - ({"dns_name"} if dns_name is None else set())
+                ),
             )
 
         netbox_object = (

@@ -25,6 +25,7 @@ def _prepared_vm(
     role: object = 20,
     platform: object | None = None,
     description: str | None = "Synced from Proxmox node pve01",
+    start_on_boot: str | None = None,
 ) -> PreparedVMState:
     desired_payload = {
         "name": name or f"{vm_type}-{vmid}",
@@ -40,6 +41,8 @@ def _prepared_vm(
     }
     if platform is not None:
         desired_payload["platform"] = platform
+    if start_on_boot is not None:
+        desired_payload["start_on_boot"] = start_on_boot
     return PreparedVMState(
         cluster_name=cluster_name,
         resource={"name": desired_payload["name"], "vmid": vmid, "type": vm_type},
@@ -72,6 +75,7 @@ def _snapshot_vm(
     description: str | None = "Synced from Proxmox node pve01",
     include_virtual_machine_type: bool = True,
     virtual_machine_type: object = 55,
+    start_on_boot: object | None = None,
 ) -> dict[str, object]:
     record: dict[str, object] = {
         "id": record_id,
@@ -99,6 +103,8 @@ def _snapshot_vm(
             if isinstance(virtual_machine_type, int)
             else virtual_machine_type
         )
+    if start_on_boot is not None:
+        record["start_on_boot"] = start_on_boot
     return record
 
 
@@ -179,6 +185,57 @@ def test_existing_description_is_not_patched_when_overwrite_description_false() 
 
     assert [op.method for op in queue] == ["GET"]
     assert "description" not in queue[0].patch_payload
+
+
+def test_start_on_boot_values_patch_and_repeat_as_noop() -> None:
+    for vmid, desired, current in (
+        (120, "on", "off"),
+        (121, "off", "on"),
+        (122, "laststate", "off"),
+    ):
+        prepared = _prepared_vm(vmid=vmid, start_on_boot=desired)
+        snapshot = _snapshot_vm(
+            record_id=2200 + vmid,
+            vmid=vmid,
+            name=f"qemu-{vmid}",
+            start_on_boot=current,
+        )
+
+        first = _queue([prepared], [snapshot])
+        assert [operation.method for operation in first] == ["UPDATE"]
+        assert first[0].patch_payload == {"start_on_boot": desired}
+
+        snapshot["start_on_boot"] = desired
+        repeated = _queue([prepared], [snapshot])
+        assert [operation.method for operation in repeated] == ["GET"]
+        assert repeated[0].patch_payload == {}
+
+
+def test_start_on_boot_choice_object_compares_equal() -> None:
+    prepared = [_prepared_vm(vmid=123, start_on_boot="on")]
+    snapshot = [
+        _snapshot_vm(
+            record_id=2323,
+            vmid=123,
+            name="qemu-123",
+            start_on_boot={"value": "on", "label": "On"},
+        )
+    ]
+
+    queue = _queue(prepared, snapshot)
+
+    assert [operation.method for operation in queue] == ["GET"]
+    assert queue[0].patch_payload == {}
+
+
+def test_omitted_start_on_boot_never_patches_old_netbox_record() -> None:
+    prepared = [_prepared_vm(vmid=124)]
+    snapshot = [_snapshot_vm(record_id=2324, vmid=124, name="qemu-124")]
+
+    queue = _queue(prepared, snapshot)
+
+    assert [operation.method for operation in queue] == ["GET"]
+    assert queue[0].patch_payload == {}
 
 
 def test_virtual_machine_type_is_not_patched_when_netbox_lacks_field() -> None:

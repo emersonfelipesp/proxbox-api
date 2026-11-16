@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
+from proxbox_api.proxmox_to_netbox.models import NetBoxIpAddressSyncState
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.network import (
     _resolve_vm_interface_ips,
@@ -25,14 +26,15 @@ def test_build_vm_interface_ip_payload_includes_dns_name():
     assert payload["dns_name"] == "my-vm.example.com"
 
 
-def test_build_vm_interface_ip_payload_defaults_dns_name_to_empty_string():
+def test_build_vm_interface_ip_payload_preserves_unknown_dns_until_validation():
     payload = build_vm_interface_ip_payload(
         address="192.0.2.10/24",
         interface_id=42,
         tag_refs=[],
         now=datetime(2026, 5, 7, tzinfo=timezone.utc),
     )
-    assert payload["dns_name"] == ""
+    assert payload["dns_name"] is None
+    assert NetBoxIpAddressSyncState.model_validate(payload).dns_name == ""
 
 
 def test_build_vm_interface_ip_payload_strips_zone_id():

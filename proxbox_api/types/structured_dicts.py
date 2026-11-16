@@ -81,6 +81,7 @@ class DevicePayloadDict(TypedDict, total=False):
     device_role: int
     site: int
     status: str
+    start_on_boot: NotRequired[str]
     serial: NotRequired[str]
     asset_tag: NotRequired[str]
     comments: NotRequired[str]

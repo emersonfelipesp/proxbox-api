@@ -20,6 +20,7 @@ from proxbox_api.proxmox_to_netbox.description_metadata import (
 )
 from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineCreateBody,
+    ProxmoxVmConfigInput,
 )
 from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.name_collision import resolve_unique_vm_name
@@ -285,6 +286,15 @@ def _build_netbox_vm_payload(
     payload: dict[str, object] = {
         "name": str(resource.get("name", "")),
         "status": status,
+        **(
+            {
+                "start_on_boot": (
+                    "on" if ProxmoxVmConfigInput.model_validate(config).start_at_boot else "off"
+                )
+            }
+            if config
+            else {}
+        ),
         "cluster": cluster_id,
         "device": device_id,
         "site": site_id,

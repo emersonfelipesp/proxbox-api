@@ -34,6 +34,7 @@ from proxbox_api.services.sync.guest_vm_interface import (
 from proxbox_api.services.sync.ip_ownership import (
     _ip_address_current_normalizer,
     _reconcile_interface_ip,
+    ip_address_patchable_fields,
 )
 from proxbox_api.services.sync.stage_result import attach_skips_to_list
 from proxbox_api.services.sync.sync_state_writer import write_vm_interface_sync_state
@@ -349,6 +350,7 @@ async def sync_node_interface_and_ip(
     interface_name: str,
     interface_config: dict,
     tag_refs: list[dict],
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     node_cidr = interface_config.get("cidr") or interface_config.get("address")
     iface_type = interface_config.get("type", "other")
@@ -408,6 +410,7 @@ async def sync_node_interface_and_ip(
                 interface_name=interface_name,
                 assigned_object_type="dcim.interface",
                 interface_lookup_field="interface_id",
+                overwrite_flags=overwrite_flags,
             )
             result["ip_id"] = ip_id
             result["ip_address"] = node_cidr
@@ -598,6 +601,7 @@ async def _sync_node_interface_addresses(
     iface_id: int | None,
     tag_refs: list[dict],
     now: datetime,
+    overwrite_flags: SyncOverwriteFlags | None,
 ) -> list[object]:
     addresses: list[object] = []
     if iface_id is None:
@@ -617,6 +621,7 @@ async def _sync_node_interface_addresses(
                 interface_name=iface,
                 assigned_object_type="dcim.interface",
                 interface_lookup_field="interface_id",
+                overwrite_flags=overwrite_flags,
             )
             if ip_id is None:
                 raise ProxboxException(
@@ -671,6 +676,7 @@ async def _sync_node_network_phase_one(
     entries: list[dict],
     tag_refs: list[dict],
     now: datetime,
+    overwrite_flags: SyncOverwriteFlags | None,
 ) -> tuple[dict[str, int], dict[str, int], list[dict], list[dict]]:
     name_to_id: dict[str, int] = {}
     vlan_ids: dict[str, int] = {}
@@ -693,7 +699,7 @@ async def _sync_node_network_phase_one(
         if vlan_id is not None:
             vlan_ids[iface] = vlan_id
         addresses = await _sync_node_interface_addresses(
-            nb, device, failures, entry, iface, iface_id, tag_refs, now
+            nb, device, failures, entry, iface, iface_id, tag_refs, now, overwrite_flags
         )
         if addresses:
             result["ip_addresses"] = addresses
@@ -786,6 +792,7 @@ async def sync_node_network(
     tag_refs: list[dict],
     *,
     now: datetime | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Reconcile a Proxmox node's full ``/nodes/{node}/network`` config into NetBox.
 
@@ -825,7 +832,7 @@ async def sync_node_network(
         if e.get("iface") and e.get("iface") != "lo" and e.get("type") not in _NODE_IFACE_SKIP_TYPES
     ]
     name_to_id, vlan_ids, results, failures = await _sync_node_network_phase_one(
-        nb, device, entries, tag_refs, now
+        nb, device, entries, tag_refs, now, overwrite_flags
     )
     await _sync_node_network_topology(
         nb, device_id, entries, name_to_id, vlan_ids, _failed_vlan_interfaces(failures)
@@ -1020,7 +1027,7 @@ def build_vm_interface_ip_payload(
         "assigned_object_type": "virtualization.vminterface",
         "assigned_object_id": interface_id,
         "status": "active",
-        "dns_name": dns_name or "",
+        "dns_name": dns_name,
         "tags": tag_refs,
     }
 
@@ -1400,40 +1407,45 @@ async def bulk_reconcile_vm_interface_ips(
     if not ip_payloads:
         return []
 
-    # Never patch assignment fields on existing IPs.  NetBox rejects
-    # reassignment when the IP is the primary IP of the parent object
-    # ("Cannot reassign IP address while it is designated as the primary
-    # IP for the parent object"). Assignment is established at create
-    # time; status, tags, and DNS name are safe to update, gated by the
-    # per-field overwrite_ip_* flags.
-    if overwrite_flags is None:
-        patchable_fields = frozenset({"status", "tags", "dns_name"})
-    else:
-        gated: set[str] = set()
-        if overwrite_flags.overwrite_ip_status:
-            gated.add("status")
-        if overwrite_flags.overwrite_ip_tags:
-            gated.add("tags")
-        if overwrite_flags.overwrite_ip_address_dns_name:
-            gated.add("dns_name")
-        patchable_fields = frozenset(gated)
+    patchable_fields = ip_address_patchable_fields(overwrite_flags)
+    unique_payloads: list[dict] = []
+    seen_lookups: set[tuple[object, object]] = set()
+    for payload in ip_payloads:
+        lookup = (payload.get("address"), payload.get("assigned_object_id"))
+        if lookup in seen_lookups:
+            logger.warning(
+                "Skipping duplicate VM interface IP payload with address=%s and assigned_object_id=%s",
+                lookup[0],
+                lookup[1],
+            )
+            continue
+        seen_lookups.add(lookup)
+        unique_payloads.append(payload)
 
-    result = None
-    try:
-        result = await rest_bulk_reconcile_async(
-            nb,
-            "/api/ipam/ip-addresses/",
-            payloads=ip_payloads,
-            lookup_fields=["address", "assigned_object_id"],
-            schema=NetBoxIpAddressSyncState,
-            current_normalizer=_ip_address_current_normalizer,
-            patchable_fields=patchable_fields,
-            base_query={"assigned_object_type": "virtualization.vminterface"},
-        )
-        return result.records if result and hasattr(result, "records") else []
-    except Exception as e:
-        logger.error("Error during bulk VM interface IP reconciliation: %s", e)
-        return []
+    known_dns = [payload for payload in unique_payloads if payload.get("dns_name") is not None]
+    unknown_dns = [payload for payload in unique_payloads if payload.get("dns_name") is None]
+    records: list = []
+    for payload_group, allowed_fields in (
+        (known_dns, patchable_fields),
+        (unknown_dns, patchable_fields - {"dns_name"}),
+    ):
+        if not payload_group:
+            continue
+        try:
+            result = await rest_bulk_reconcile_async(
+                nb,
+                "/api/ipam/ip-addresses/",
+                payloads=payload_group,
+                lookup_fields=["address", "assigned_object_id"],
+                schema=NetBoxIpAddressSyncState,
+                current_normalizer=_ip_address_current_normalizer,
+                patchable_fields=frozenset(allowed_fields),
+                base_query={"assigned_object_type": "virtualization.vminterface"},
+            )
+            records.extend(result.records if result and hasattr(result, "records") else [])
+        except Exception as e:
+            logger.error("Error during bulk VM interface IP reconciliation: %s", e)
+    return records
 
 
 async def cleanup_stale_ips_for_interface(
@@ -1524,6 +1536,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
     primary_ip_preference: str = "ipv4",
     tag_slug: str = "proxbox",
     dns_name: str | None = None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
     bridge: object | None = None,
     vm_name: str | None = None,
 ) -> list[tuple[int | None, str]]:
@@ -1601,6 +1614,7 @@ async def _resolve_vm_interface_ips(  # noqa: C901
             now=now,
             dns_name=dns_name,
             interface_name=interface_name,
+            overwrite_flags=overwrite_flags,
         )
         if ip_id is not None:
             results.append((ip_id, ip_addr))
@@ -1637,6 +1651,7 @@ async def sync_vm_interface_and_ip(
     device: dict | None = None,
     dns_name: str | None = None,
     vm_interface_sync_strategy: object = "guest_os_model",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -1702,6 +1717,7 @@ async def sync_vm_interface_and_ip(
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         dns_name=dns_name,
+        overwrite_flags=overwrite_flags,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]

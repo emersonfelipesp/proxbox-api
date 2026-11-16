@@ -1086,6 +1086,7 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     vcpus: int | None = None
     memory: int = 0
     disk: int = 0
+    start_on_boot: Literal["on", "off", "laststate"] | None = None
     tags: list[int] = Field(default_factory=list)
     description: str | None = None
     # NetBox ``description`` is a single-line 200-char field; a Proxmox note is
@@ -1093,6 +1094,11 @@ class NetBoxVirtualMachineCreateBody(BaseModel):
     # description never loses operator-authored content. Absent when the note fits in
     # the description, so a one-line note is not duplicated across two fields.
     comments: str | None = None
+
+    @field_validator("start_on_boot", mode="before")
+    @classmethod
+    def normalize_start_on_boot(cls, value: object) -> object:
+        return _choice_value(value)
 
     @field_validator("vcpus", mode="before")
     @classmethod
@@ -1300,6 +1306,12 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             fallback=f"Synced from Proxmox node {self.resource.node}",
         )
 
+    def _start_on_boot_value(self) -> Literal["on", "off"] | None:
+        """Map a fetched Proxmox config to NetBox, preserving unknown state."""
+        if not self.config.model_fields_set and not self.config.model_extra:
+            return None
+        return "on" if self.config.start_at_boot else "off"
+
     def _resolve_description_metadata(
         self,
         *,
@@ -1406,6 +1418,7 @@ class ProxmoxToNetBoxVirtualMachine(BaseModel):
             vcpus=int(self.resource.maxcpu or 0),
             memory=self.resource.memory_mb,
             disk=disk_value,
+            start_on_boot=self._start_on_boot_value(),
             tags=[tag for tag in self.tag_ids if int(tag) > 0],
             description=description_text,
         )

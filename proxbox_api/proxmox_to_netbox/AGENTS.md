@@ -59,6 +59,13 @@ That means:
   returned by NetBox. Keep new relation fields in the shared `mode="before"`
   validator and the positive-ID invariant; otherwise existing-record
   reconciliation can fail before it reaches the diff or write boundary.
+- `NetBoxVirtualMachineCreateBody.start_on_boot` maps a fetched Proxmox guest
+  config to NetBox's native choice field. A truthy `onboot` becomes `"on"`, a
+  fetched config with a missing or false `onboot` becomes `"off"`, and an empty
+  config omits the field because the guest state is unknown. Existing NetBox
+  choice objects such as `{"value": "on", "label": "On"}` normalize to the
+  plain value for drift comparison. The plugin sync-state sidecar continues to
+  use its separate `proxmox_start_at_boot` boolean.
 
 - **The choice and status normalizers unwrap `Enum` members.** `_choice_value`,
   `_status_value`, `_content_type_value`, and `_relation_id` all route through

@@ -7,6 +7,23 @@ from datetime import datetime
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_list_async, rest_reconcile_async
 from proxbox_api.proxmox_to_netbox.models import NetBoxIpAddressSyncState
+from proxbox_api.schemas.sync import SyncOverwriteFlags
+
+
+def ip_address_patchable_fields(
+    overwrite_flags: SyncOverwriteFlags | None,
+) -> frozenset[str]:
+    """Return IP fields allowed to change on an existing NetBox record."""
+    if overwrite_flags is None:
+        return frozenset({"status", "tags", "dns_name"})
+    fields: set[str] = set()
+    if overwrite_flags.overwrite_ip_status:
+        fields.add("status")
+    if overwrite_flags.overwrite_ip_tags:
+        fields.add("tags")
+    if overwrite_flags.overwrite_ip_address_dns_name:
+        fields.add("dns_name")
+    return frozenset(fields)
 
 
 def _ip_address_current_normalizer(record: dict) -> dict:
@@ -66,6 +83,7 @@ async def _reconcile_interface_ip(
     interface_name: str,
     assigned_object_type: str = "virtualization.vminterface",
     interface_lookup_field: str = "vminterface_id",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> int | None:
     """Reconcile a single interface IP without stealing another object's address.
 
@@ -116,6 +134,14 @@ async def _reconcile_interface_ip(
             adoptable_record = record
 
     target = own_record or adoptable_record
+    # The address (host and prefix length) is Proxmox-owned identity, not an
+    # operator-managed field, so a prefix change on a record we own or adopt is
+    # always reconciled. Assignment fields change only when adopting.
+    patchable_fields = set(ip_address_patchable_fields(overwrite_flags)) | {"address"}
+    if dns_name is None:
+        patchable_fields.discard("dns_name")
+    if target is adoptable_record and target is not None:
+        patchable_fields.update({"assigned_object_type", "assigned_object_id"})
     try:
         record_id = (
             _relation_id_or_none(_record_field(target, "id")) if target is not None else None
@@ -131,6 +157,7 @@ async def _reconcile_interface_ip(
                 payload=payload,
                 schema=NetBoxIpAddressSyncState,
                 current_normalizer=_ip_address_current_normalizer,
+                patchable_fields=frozenset(patchable_fields),
                 strict_lookup=True,
             )
         else:
@@ -144,6 +171,7 @@ async def _reconcile_interface_ip(
                 payload=payload,
                 schema=NetBoxIpAddressSyncState,
                 current_normalizer=_ip_address_current_normalizer,
+                patchable_fields=frozenset(patchable_fields),
                 strict_lookup=True,
             )
     except Exception as ip_exc:

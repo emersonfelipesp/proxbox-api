@@ -12,6 +12,7 @@ import pytest
 
 from proxbox_api.app import full_update
 from proxbox_api.exception import ProxboxException
+from proxbox_api.schemas.sync import SyncBehaviorFlags, SyncOverwriteFlags
 from proxbox_api.services.netbox_bootstrap import BootstrapStatus
 
 _OPERATION_ID = "00000000-0000-0000-0000-000000000522"
@@ -237,6 +238,37 @@ def _stage_stub(
         return result
 
     return _stub
+
+
+def test_node_interface_descriptors_forward_resolved_overwrite_flags() -> None:
+    flags = SyncOverwriteFlags(
+        overwrite_ip_status=False,
+        overwrite_ip_tags=False,
+        overwrite_ip_address_dns_name=False,
+    )
+    context = full_update._FullUpdateContext(
+        inputs=full_update._FullUpdateInputs(
+            netbox_session=object(),
+            pxs=[],
+            cluster_status=[],
+            cluster_resources=[],
+            tag=_TAG,
+            overwrite_flags=flags,
+            behavior_flags=SyncBehaviorFlags(),
+            fetch_max_concurrency=4,
+            sweep_endpoint_ids=None,
+        ),
+        operation_id=_OPERATION_ID,
+        tag_refs=[],
+    )
+
+    descriptor = full_update._stage_descriptors(context)["node-interfaces"]
+
+    assert descriptor.rest_kwargs["overwrite_flags"] is flags
+    assert descriptor.stream_kwargs["overwrite_flags"] is flags
+    assert descriptor.rest_kwargs["overwrite_flags"].overwrite_ip_status is False
+    assert descriptor.rest_kwargs["overwrite_flags"].overwrite_ip_tags is False
+    assert descriptor.rest_kwargs["overwrite_flags"].overwrite_ip_address_dns_name is False
 
 
 def _failure_stub(error: BaseException) -> Callable[..., Awaitable[object]]:

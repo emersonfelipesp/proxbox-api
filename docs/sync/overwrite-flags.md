@@ -131,6 +131,15 @@ Setting `overwrite_flags=None` (or omitting it) keeps every key patchable,
 which preserves the historical always-overwrite semantics required by
 older callers.
 
+IP address reconciliation uses one shared allowlist for both the single-record
+and bulk paths. `overwrite_ip_status`, `overwrite_ip_tags`, and
+`overwrite_ip_address_dns_name` control updates to existing records; creation
+still writes the complete desired state. A missing resolved hostname is not an
+instruction to clear operator data: when `dns_name is None`, every path
+preserves an existing `dns_name` regardless of the overwrite flag, while a new
+record receives the NetBox-compatible empty string. Adopting an unassigned IP
+still patches its assignment fields, independently of the overwrite flags.
+
 ## Where the device flags are enforced
 
 The `overwrite_device_role`, `overwrite_device_type`, and

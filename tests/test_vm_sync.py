@@ -1617,7 +1617,7 @@ def test_create_only_vm_ip_addresses_uses_normalized_interface_name(monkeypatch)
         "assigned_object_type": "virtualization.vminterface",
         "assigned_object_id": 66,
         "status": "active",
-        "dns_name": "",
+        "dns_name": None,
         "tags": [{"name": "Proxbox", "slug": "proxbox", "color": "ff5722"}],
     }
     assert result == [{"ip_id": 10, "address": "192.0.2.10/24"}]

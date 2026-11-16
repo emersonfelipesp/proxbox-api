@@ -4,7 +4,12 @@ from typing import Literal
 
 from fastapi import APIRouter, Query
 
-from proxbox_api.dependencies import NetBoxSessionDep, ProxboxTagDep
+from proxbox_api.dependencies import (
+    NetBoxSessionDep,
+    ProxboxTagDep,
+    ResolvedSyncOverwriteFlagsDep,
+)
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 from proxbox_api.services.sync.individual.ip_sync import sync_ip_individual
 from proxbox_api.session.proxmox import ProxmoxSessionsDep
@@ -28,11 +33,21 @@ async def sync_ip(
         None, title="Interface Name", description="Optional interface name"
     ),
     dry_run: bool = Query(default=False, title="Dry Run"),
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Sync a single IP address from Proxmox to NetBox."""
     px = resolve_proxmox_session(pxs, cluster_name)
     if px is None:
         return {"error": f"No Proxmox session found for cluster: {cluster_name}"}
     return await sync_ip_individual(
-        nb, px, tag, node, type, vmid, ip_address, interface_name, dry_run=dry_run
+        nb,
+        px,
+        tag,
+        node,
+        type,
+        vmid,
+        ip_address,
+        interface_name,
+        dry_run=dry_run,
+        overwrite_flags=overwrite_flags,
     )

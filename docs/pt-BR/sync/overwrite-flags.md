@@ -135,6 +135,17 @@ Setting `overwrite_flags=None` (or omitting it) keeps every key patchable,
 which preserves the historical always-overwrite semantics required by
 older callers.
 
+A reconciliação de endereços IP usa uma única lista de campos permitidos nos
+fluxos individual e em lote. `overwrite_ip_status`, `overwrite_ip_tags` e
+`overwrite_ip_address_dns_name` controlam as atualizações de registros
+existentes; a criação continua gravando todo o estado desejado. A ausência de
+um hostname resolvido não instrui a limpeza de dados do operador: quando
+`dns_name is None`, todos os fluxos preservam o `dns_name` existente,
+independentemente da flag de sobrescrita, enquanto um registro novo recebe a
+string vazia compatível com o NetBox. A adoção de um IP não atribuído continua
+atualizando os campos de atribuição, independentemente das flags de
+sobrescrita.
+
 ## Where the device flags are enforced
 
 The `overwrite_device_role`, `overwrite_device_type`, and

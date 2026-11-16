@@ -19,6 +19,7 @@ from proxbox_api.proxmox_to_netbox.models import (
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
 )
+from proxbox_api.schemas.sync import SyncOverwriteFlags
 from proxbox_api.services.sync.guest_vm_interface import (
     normalize_vm_interface_sync_strategy,
     reconcile_guest_vm_interfaces,
@@ -73,6 +74,7 @@ async def sync_vm_interfaces(  # noqa: C901
     device: dict | None = None,
     dns_name: str | None = None,
     vm_interface_sync_strategy: object = "guest_os_model",
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> tuple[list[dict[str, object]], int | None]:
     """Synchronize VM interfaces and IP addresses.
 
@@ -270,6 +272,7 @@ async def sync_vm_interfaces(  # noqa: C901
                 create_ip=True,
                 primary_ip_preference=primary_ip_preference,
                 dns_name=dns_name,
+                overwrite_flags=overwrite_flags,
             )
             if ip_results and first_ip_id is None:
                 first_ip_id = ip_results[0][0]

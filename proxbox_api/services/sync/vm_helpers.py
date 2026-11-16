@@ -99,6 +99,7 @@ def _compute_vm_patchable_fields(
         "memory",
         "disk",
         "status",
+        "start_on_boot",
     }
     if supports_virtual_machine_type_field and (
         overwrite_flags is None or overwrite_flags.overwrite_vm_type
@@ -129,6 +130,7 @@ def normalize_current_virtual_machine_payload(
     payload = {
         "name": record.get("name"),
         "status": record.get("status"),
+        "start_on_boot": record.get("start_on_boot"),
         "cluster": record.get("cluster"),
         "device": record.get("device"),
         "site": record.get("site"),

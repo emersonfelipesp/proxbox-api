@@ -3790,7 +3790,7 @@
 | 3758 | http | GET | /cache/metrics/prometheus | proxbox&#95;api/app/cache&#95;routes.py:55 get&#95;cache&#95;metrics&#95;prometheus | - |
 | 3759 | http | GET | /clear-cache | proxbox&#95;api/app/cache&#95;routes.py:67 clear&#95;cache | - |
 | 3760 | http | GET | /full-update | proxbox&#95;api/app/full&#95;update.py:193 full&#95;update&#95;sync | - |
-| 3761 | http | GET | /full-update/stream | proxbox&#95;api/app/full&#95;update.py:1199 full&#95;update&#95;sync&#95;stream | - |
+| 3761 | http | GET | /full-update/stream | proxbox&#95;api/app/full&#95;update.py:1201 full&#95;update&#95;sync&#95;stream | - |
 | 3762 | websocket |  | / | proxbox&#95;api/app/websockets.py:104 base&#95;websocket | - |
 | 3763 | websocket |  | /ws/virtual-machines | proxbox&#95;api/app/websockets.py:160 websocket&#95;virtual&#95;machines | - |
 | 3764 | websocket |  | /ws | proxbox&#95;api/app/websockets.py:386 websocket&#95;sync&#95;commands | - |
@@ -3950,9 +3950,9 @@
 | 3918 | http | GET | /dcim/devices | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:43 get&#95;devices | - |
 | 3919 | http | GET | /dcim/devices/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:48 create&#95;devices | - |
 | 3920 | http | GET | /dcim/devices/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:67 create&#95;devices&#95;stream | - |
-| 3921 | http | GET | /dcim/devices/{node}/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:372 create&#95;proxmox&#95;device&#95;interfaces | - |
-| 3922 | http | GET | /dcim/devices/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:814 create&#95;all&#95;devices&#95;interfaces | - |
-| 3923 | http | GET | /dcim/devices/interfaces/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:839 create&#95;all&#95;devices&#95;interfaces&#95;stream | - |
+| 3921 | http | GET | /dcim/devices/{node}/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:377 create&#95;proxmox&#95;device&#95;interfaces | - |
+| 3922 | http | GET | /dcim/devices/interfaces/create | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:827 create&#95;all&#95;devices&#95;interfaces | - |
+| 3923 | http | GET | /dcim/devices/interfaces/create/stream | proxbox&#95;api/routes/dcim/&#95;&#95;init&#95;&#95;.py:854 create&#95;all&#95;devices&#95;interfaces&#95;stream | - |
 | 3924 | http | GET | /virtualization/cluster-types/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:15 create&#95;cluster&#95;types | - |
 | 3925 | http | GET | /virtualization/clusters/create | proxbox&#95;api/routes/virtualization/&#95;&#95;init&#95;&#95;.py:20 create&#95;clusters | - |
 | 3926 | http | GET | /virtualization/virtual-machines/ | proxbox&#95;api/routes/virtualization/virtual&#95;machines/read&#95;vm.py:41 get&#95;virtual&#95;machines | - |
@@ -3979,11 +3979,11 @@
 | 3947 | http | GET | /virtualization/virtual-machines/task-history/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/task&#95;history&#95;vm.py:20 create&#95;all&#95;virtual&#95;machine&#95;task&#95;histories&#95;stream | - |
 | 3948 | http | GET | /virtualization/virtual-machines/orphans/sweep | proxbox&#95;api/routes/virtualization/virtual&#95;machines/orphans&#95;vm.py:181 sweep&#95;orphan&#95;virtual&#95;machines | - |
 | 3949 | http | GET | /virtualization/virtual-machines/orphans/sweep/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/orphans&#95;vm.py:211 sweep&#95;orphan&#95;virtual&#95;machines&#95;stream | - |
-| 3950 | http | GET | /virtualization/virtual-machines/create-test | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:2704 create&#95;test | - |
-| 3951 | http | GET | /virtualization/virtual-machines/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4978 create&#95;virtual&#95;machines | - |
-| 3952 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6698 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id | - |
-| 3953 | http | GET | /virtualization/virtual-machines/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6778 create&#95;virtual&#95;machines&#95;stream | - |
-| 3954 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:7104 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id&#95;stream | - |
+| 3950 | http | GET | /virtualization/virtual-machines/create-test | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:2705 create&#95;test | - |
+| 3951 | http | GET | /virtualization/virtual-machines/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:4979 create&#95;virtual&#95;machines | - |
+| 3952 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6699 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id | - |
+| 3953 | http | GET | /virtualization/virtual-machines/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:6779 create&#95;virtual&#95;machines&#95;stream | - |
+| 3954 | http | GET | /virtualization/virtual-machines/{netbox&#95;vm&#95;id}/create/stream | proxbox&#95;api/routes/virtualization/virtual&#95;machines/sync&#95;vm.py:7105 create&#95;virtual&#95;machine&#95;by&#95;netbox&#95;id&#95;stream | - |
 | 3955 | http | GET | /extras/bootstrap-status | proxbox&#95;api/routes/extras/&#95;&#95;init&#95;&#95;.py:12 get&#95;netbox&#95;bootstrap&#95;status | - |
 | 3956 | http | POST | /intent/plan | proxbox&#95;api/routes/intent/plan.py:79 plan | - |
 | 3957 | http | POST | /intent/apply | proxbox&#95;api/routes/intent/apply.py:129 apply&#95;intent | - |
@@ -4024,7 +4024,7 @@
 | 3992 | http | GET | /sync/individual/vm | proxbox&#95;api/routes/sync/individual/vm.py:20 sync&#95;vm | - |
 | 3993 | http | GET | /sync/individual/vm/{cluster&#95;name}/{node}/{type}/{vmid} | proxbox&#95;api/routes/sync/individual/vm.py:43 sync&#95;vm&#95;by&#95;path | - |
 | 3994 | http | GET,POST | /sync/individual/interface | proxbox&#95;api/routes/sync/individual/interface.py:15 sync&#95;interface | - |
-| 3995 | http | GET,POST | /sync/individual/ip | proxbox&#95;api/routes/sync/individual/ip.py:15 sync&#95;ip | - |
+| 3995 | http | GET,POST | /sync/individual/ip | proxbox&#95;api/routes/sync/individual/ip.py:20 sync&#95;ip | - |
 | 3996 | http | GET,POST | /sync/individual/disk | proxbox&#95;api/routes/sync/individual/disk.py:15 sync&#95;disk | - |
 | 3997 | http | GET | /sync/individual/storage | proxbox&#95;api/routes/sync/individual/storage.py:13 sync&#95;storage | - |
 | 3998 | http | GET,POST | /sync/individual/snapshot | proxbox&#95;api/routes/sync/individual/snapshot.py:15 sync&#95;snapshot | - |

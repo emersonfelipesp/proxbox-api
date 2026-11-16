@@ -169,6 +169,13 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   IPs onto a VM and returns `assigned_to_other_object` instead of stealing an
   address owned elsewhere. This prevents the "VM interface wrongly matched to
   another server's IP" defect; both paths stay idempotent across re-syncs.
+  The single and bulk paths derive their existing-record allowlist from
+  `ip_address_patchable_fields()`. The `overwrite_ip_status`,
+  `overwrite_ip_tags`, and `overwrite_ip_address_dns_name` flags therefore
+  apply consistently. When no hostname was resolved (`dns_name is None`), an
+  existing DNS name is always preserved; creation still writes an empty DNS
+  name. Adoption adds only the assignment fields needed to attach an
+  unassigned address and never widens foreign-address ownership.
 - **Node-interface type wire invariant.**
   `network.py::sync_node_interface_and_ip` serializes `NetBoxInterfaceType`
   through `.value` before REST reconciliation. NetBox accepts `bridge`, `lag`,

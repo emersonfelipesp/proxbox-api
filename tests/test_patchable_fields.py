@@ -191,7 +191,7 @@ async def test_vm_interface_ips_default_includes_status_tags_and_dns_name(
 
     await network_module.bulk_reconcile_vm_interface_ips(
         nb=object(),
-        ip_payloads=[{"address": "10.0.0.1/24"}],
+        ip_payloads=[{"address": "10.0.0.1/24", "dns_name": "guest.example"}],
         overwrite_flags=SyncOverwriteFlags(),
     )
 
@@ -220,7 +220,7 @@ async def test_vm_interface_ips_drops_key_when_flag_disabled(
 
     await network_module.bulk_reconcile_vm_interface_ips(
         nb=object(),
-        ip_payloads=[{"address": "10.0.0.1/24"}],
+        ip_payloads=[{"address": "10.0.0.1/24", "dns_name": "guest.example"}],
         overwrite_flags=SyncOverwriteFlags(**{flag_name: False}),
     )
 
@@ -241,7 +241,7 @@ async def test_vm_interface_ips_none_flags_keeps_all_three(
 
     await network_module.bulk_reconcile_vm_interface_ips(
         nb=object(),
-        ip_payloads=[{"address": "10.0.0.1/24"}],
+        ip_payloads=[{"address": "10.0.0.1/24", "dns_name": "guest.example"}],
         overwrite_flags=None,
     )
 
@@ -385,6 +385,7 @@ def test_vm_patchable_defaults_include_all_overwriteable_keys() -> None:
         "memory",
         "disk",
         "status",
+        "start_on_boot",
         "virtual_machine_type",
         "role",
         "tags",
@@ -425,7 +426,16 @@ def test_vm_patchable_drops_vm_type_when_netbox_lacks_native_type_field() -> Non
 
     assert "virtual_machine_type" not in fields
     assert "role" in fields
-    assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
+    assert {
+        "name",
+        "cluster",
+        "device",
+        "vcpus",
+        "memory",
+        "disk",
+        "status",
+        "start_on_boot",
+    }.issubset(fields)
 
 
 @pytest.mark.parametrize(
@@ -443,7 +453,16 @@ def test_vm_patchable_drops_key_when_schema_flag_false(flag_name: str, missing_k
     fields = _compute_vm_patchable_fields(SyncOverwriteFlags(**{flag_name: False}))
 
     assert missing_key not in fields
-    assert {"name", "cluster", "device", "vcpus", "memory", "disk", "status"}.issubset(fields)
+    assert {
+        "name",
+        "cluster",
+        "device",
+        "vcpus",
+        "memory",
+        "disk",
+        "status",
+        "start_on_boot",
+    }.issubset(fields)
 
 
 def test_vm_patchable_keeps_role_when_role_overwrite_is_disabled() -> None:

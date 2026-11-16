@@ -2526,6 +2526,7 @@ async def _create_vm_interface_parallel(
         ignore_ipv6_link_local=ignore_ipv6_link_local_addresses,
         primary_ip_preference=primary_ip_preference,
         dns_name=dns_name,
+        overwrite_flags=overwrite_flags,
     )
     if ip_results:
         first_ip_id, first_ip = ip_results[0]

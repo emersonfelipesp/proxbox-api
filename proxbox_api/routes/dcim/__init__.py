@@ -350,7 +350,11 @@ async def _resolve_netbox_device_by_name(
 
 
 async def create_interface_and_ip(
-    netbox_session: NetBoxAsyncSessionDep, tag: ProxboxTagDep, node_interface, node
+    netbox_session: NetBoxAsyncSessionDep,
+    tag: ProxboxTagDep,
+    node_interface,
+    node,
+    overwrite_flags: SyncOverwriteFlags,
 ):
     node_data = _serialize_record(node)
     iface_name = str(_value_from_record(node_interface, "iface", "") or "").strip()
@@ -366,6 +370,7 @@ async def create_interface_and_ip(
         interface_name=iface_name,
         interface_config=_node_interface_config(node_interface),
         tag_refs=nested_tag_payload(tag),
+        overwrite_flags=overwrite_flags,
     )
 
 
@@ -382,6 +387,7 @@ async def create_proxmox_device_interfaces(
     tag: ProxboxTagDep,
     node_interfaces: ProxmoxNodeInterfacesDep,
     clusters_status: ClusterStatusDep,
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
     cluster_name: Annotated[
         str | None,
         Query(
@@ -401,7 +407,7 @@ async def create_proxmox_device_interfaces(
 
     results = await asyncio.gather(
         *[
-            create_interface_and_ip(netbox_session, tag, node_interface, node_data)
+            create_interface_and_ip(netbox_session, tag, node_interface, node_data, overwrite_flags)
             for node_interface in node_interfaces
         ]
     )
@@ -470,6 +476,7 @@ async def _sync_node_network_topology(
     proxmox_session,
     websocket=None,
     use_websocket: bool = False,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Reconcile a node's full ``/nodes/{node}/network`` topology in one pass.
 
@@ -519,6 +526,7 @@ async def _sync_node_network_topology(
             {"id": device_id, "name": node_name},
             list(raw_network or []),
             tag_refs,
+            overwrite_flags=overwrite_flags,
         )
     except ProxboxException:
         raise
@@ -567,6 +575,7 @@ async def _sync_node_interfaces_for_node(
     use_websocket: bool = False,
     proxmox_session=None,
     sync_full_topology: bool = False,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Sync all interfaces for a single node and emit optional websocket updates.
 
@@ -602,6 +611,7 @@ async def _sync_node_interfaces_for_node(
             proxmox_session=proxmox_session,
             websocket=websocket,
             use_websocket=use_websocket,
+            overwrite_flags=overwrite_flags,
         )
         await _emit_node_interface_event(
             websocket,
@@ -647,6 +657,7 @@ async def _sync_node_interfaces_for_node(
                 interface_name=iface_name,
                 interface_config=_node_interface_config(iface_data),
                 tag_refs=tag_refs,
+                overwrite_flags=overwrite_flags,
             )
             results.append(result)
 
@@ -739,6 +750,7 @@ async def create_all_device_interfaces(
     websocket=None,
     use_websocket: bool = False,
     behavior_flags=None,
+    overwrite_flags: SyncOverwriteFlags | None = None,
 ) -> list[dict]:
     """Sync all Proxmox node interfaces and their IP addresses across all clusters.
 
@@ -801,6 +813,7 @@ async def create_all_device_interfaces(
                 use_websocket=use_websocket,
                 proxmox_session=proxmox_session,
                 sync_full_topology=sync_full_topology,
+                overwrite_flags=overwrite_flags,
             )
             all_results.extend(node_results)
             stage_warnings.extend(result_warnings(node_results))
@@ -818,6 +831,7 @@ async def create_all_devices_interfaces(
     pxs: ProxmoxSessionsDep,
     tag: ProxboxTagDep,
     behavior_flags: ResolvedSyncBehaviorFlagsDep,
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Sync network interfaces for all Proxmox nodes (dcim.Device interfaces).
 
@@ -832,6 +846,7 @@ async def create_all_devices_interfaces(
         clusters_status=clusters_status,
         pxs=pxs,
         behavior_flags=behavior_flags,
+        overwrite_flags=overwrite_flags,
     )
     return response_with_stage_warnings(results, result_key="interfaces")
 
@@ -843,6 +858,7 @@ async def create_all_devices_interfaces_stream(
     pxs: ProxmoxSessionsDep,
     tag: ProxboxTagDep,
     behavior_flags: ResolvedSyncBehaviorFlagsDep,
+    overwrite_flags: ResolvedSyncOverwriteFlagsDep = SyncOverwriteFlags(),
 ):
     """Streaming endpoint for syncing all Proxmox node interfaces.
 
@@ -862,6 +878,7 @@ async def create_all_devices_interfaces_stream(
                     websocket=bridge,
                     use_websocket=True,
                     behavior_flags=behavior_flags,
+                    overwrite_flags=overwrite_flags,
                 )
             finally:
                 await bridge.close()

@@ -1,0 +1,48 @@
+{
+  "prepared_vms": [
+    {
+      "cluster_name": "cluster-a",
+      "resource": {"name": "qemu-120", "vmid": 120, "type": "qemu"},
+      "vm_config": {},
+      "desired_payload": {"name": "qemu-120", "status": "active", "cluster": 1, "device": 10, "role": 20, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "on", "tags": [99], "description": "Synced from Proxmox node pve01"},
+      "lookup": {"id": 0}, "vm_type": "qemu", "sync_state_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 120, "proxmox_vm_type": "qemu"}
+    },
+    {
+      "cluster_name": "cluster-a",
+      "resource": {"name": "qemu-121", "vmid": 121, "type": "qemu"},
+      "vm_config": {},
+      "desired_payload": {"name": "qemu-121", "status": "active", "cluster": 1, "device": 10, "role": 20, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "off", "tags": [99], "description": "Synced from Proxmox node pve01"},
+      "lookup": {"id": 0}, "vm_type": "qemu", "sync_state_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 121, "proxmox_vm_type": "qemu"}
+    },
+    {
+      "cluster_name": "cluster-a",
+      "resource": {"name": "qemu-122", "vmid": 122, "type": "qemu"},
+      "vm_config": {},
+      "desired_payload": {"name": "qemu-122", "status": "active", "cluster": 1, "device": 10, "role": 20, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "laststate", "tags": [99], "description": "Synced from Proxmox node pve01"},
+      "lookup": {"id": 0}, "vm_type": "qemu", "sync_state_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 122, "proxmox_vm_type": "qemu"}
+    },
+    {
+      "cluster_name": "cluster-a",
+      "resource": {"name": "qemu-123", "vmid": 123, "type": "qemu"},
+      "vm_config": {},
+      "desired_payload": {"name": "qemu-123", "status": "active", "cluster": 1, "device": 10, "role": 20, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "on", "tags": [99], "description": "Synced from Proxmox node pve01"},
+      "lookup": {"id": 0}, "vm_type": "qemu", "sync_state_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 123, "proxmox_vm_type": "qemu"}
+    },
+    {
+      "cluster_name": "cluster-a",
+      "resource": {"name": "qemu-124", "vmid": 124, "type": "qemu"},
+      "vm_config": {},
+      "desired_payload": {"name": "qemu-124", "status": "active", "cluster": 1, "device": 10, "role": 20, "vcpus": 2, "memory": 2048, "disk": 30, "tags": [99], "description": "Synced from Proxmox node pve01"},
+      "lookup": {"id": 0}, "vm_type": "qemu", "sync_state_fields": {"proxmox_endpoint_id": 500, "proxmox_vm_id": 124, "proxmox_vm_type": "qemu"}
+    }
+  ],
+  "netbox_snapshot": [
+    {"id": 2120, "name": "qemu-120", "status": "active", "cluster": {"id": 1}, "device": {"id": 10}, "role": {"id": 20}, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "off", "tags": [{"id": 99}], "proxmox_endpoint_id": 500, "proxmox_vm_id": 120, "proxmox_vm_type": "qemu", "description": "Synced from Proxmox node pve01"},
+    {"id": 2121, "name": "qemu-121", "status": "active", "cluster": {"id": 1}, "device": {"id": 10}, "role": {"id": 20}, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "on", "tags": [{"id": 99}], "proxmox_endpoint_id": 500, "proxmox_vm_id": 121, "proxmox_vm_type": "qemu", "description": "Synced from Proxmox node pve01"},
+    {"id": 2122, "name": "qemu-122", "status": "active", "cluster": {"id": 1}, "device": {"id": 10}, "role": {"id": 20}, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": "off", "tags": [{"id": 99}], "proxmox_endpoint_id": 500, "proxmox_vm_id": 122, "proxmox_vm_type": "qemu", "description": "Synced from Proxmox node pve01"},
+    {"id": 2123, "name": "qemu-123", "status": "active", "cluster": {"id": 1}, "device": {"id": 10}, "role": {"id": 20}, "vcpus": 2, "memory": 2048, "disk": 30, "start_on_boot": {"value": "on", "label": "On"}, "tags": [{"id": 99}], "proxmox_endpoint_id": 500, "proxmox_vm_id": 123, "proxmox_vm_type": "qemu", "description": "Synced from Proxmox node pve01"},
+    {"id": 2124, "name": "qemu-124", "status": "active", "cluster": {"id": 1}, "device": {"id": 10}, "role": {"id": 20}, "vcpus": 2, "memory": 2048, "disk": 30, "tags": [{"id": 99}], "proxmox_endpoint_id": 500, "proxmox_vm_id": 124, "proxmox_vm_type": "qemu", "description": "Synced from Proxmox node pve01"}
+  ],
+  "flags": {"overwrite_vm_role": true, "overwrite_vm_type": true, "overwrite_vm_tags": true, "overwrite_vm_description": true, "overwrite_vm_custom_fields": true, "supports_virtual_machine_type_field": true},
+  "expected": {"methods": ["UPDATE", "UPDATE", "UPDATE", "GET", "GET"], "patch_payloads": [{"start_on_boot": "on"}, {"start_on_boot": "off"}, {"start_on_boot": "laststate"}, {}, {}]}
+}

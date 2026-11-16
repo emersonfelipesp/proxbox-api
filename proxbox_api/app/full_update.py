@@ -658,6 +658,7 @@ def _stage_descriptors(context: _FullUpdateContext) -> dict[str, _StageDescripto
                 "pxs": inputs.pxs,
                 "use_websocket": False,
                 "behavior_flags": inputs.behavior_flags,
+                "overwrite_flags": overwrite_flags,
             },
             stream_callable=create_all_device_interfaces,
             stream_kwargs={
@@ -667,6 +668,7 @@ def _stage_descriptors(context: _FullUpdateContext) -> dict[str, _StageDescripto
                 "pxs": inputs.pxs,
                 "use_websocket": True,
                 "behavior_flags": inputs.behavior_flags,
+                "overwrite_flags": overwrite_flags,
             },
             stream_result_mapper=partial(_degraded_list_result, "node-interfaces"),
             warning_phase="node-interfaces",
