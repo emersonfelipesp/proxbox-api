@@ -84,6 +84,12 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
+- The planned `0.0.31` release notes cover endpoint-scoped VM disk and snapshot
+  synchronization, one NetBox schema contract resolution per run, preservation
+  of operator-managed IP address DNS names, and Proxmox start-at-boot reflection.
+  Keep the candidate status, unchanged dependency pins, `netbox-proxbox 0.0.32`
+  pairing, and both language versions aligned; source preparation does not
+  establish package or production availability.
 - The `0.0.30` release notes cover the typed, audited `POST /proxmox/storage/pbs` verb and
   cross-node cloud clones onto non-shared storage with extra NICs. Keep the unchanged
   dependency pins and both language versions aligned; source preparation does not establish
