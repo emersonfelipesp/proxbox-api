@@ -46,6 +46,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from proxbox_api import database as database_module
 from proxbox_api.database import get_async_session, get_session
 from proxbox_api.netbox_rest import _reset_netbox_globals
+from proxbox_api.proxmox_to_netbox.netbox_schema import reset_netbox_schema_contract_cache
 from proxbox_api.routes.proxmox.runtime_generated import (
     clear_generated_proxmox_route_cache,
     clear_generated_proxmox_routes,
@@ -166,7 +167,9 @@ def reset_fastapi_state():
     _reset_netbox_globals()
     invalidate_settings_cache(clear_readiness=True)
     reset_sidecar_reader_availability_cache()
+    reset_netbox_schema_contract_cache()
     yield
+    reset_netbox_schema_contract_cache()
     app.dependency_overrides.clear()
     clear_generated_proxmox_route_cache()
     clear_generated_proxmox_routes(app)

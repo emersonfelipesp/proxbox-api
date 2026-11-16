@@ -410,6 +410,7 @@ Each maps to a key in `ProxboxPluginSettings` and can be edited from the NetBox 
 | `PROXBOX_DEBUG_CACHE` | `debug_cache` | false |
 | `PROXBOX_EXPOSE_INTERNAL_ERRORS` | `expose_internal_errors` | false |
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `netbox_openapi_persist` | true (disable to resolve the NetBox OpenAPI schema fully in-memory — no disk read/write; env or plugin-settings page) |
+| `PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL` | n/a (env only) | 3600 s (how long a resolved NetBox schema contract is reused before `/api/schema/` is fetched again; 0 = resolve on every call; cache and fallback results are reused for at most 60 s) |
 | n/a | `hardware_discovery_sync_nic_macs` | false (plugin-only; requires `hardware_discovery_enabled=true`; a missing field from an older plugin is false) |
 
 ### Task-history sync ownership

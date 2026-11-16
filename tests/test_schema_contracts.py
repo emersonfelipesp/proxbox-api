@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import threading
+import time
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -246,11 +249,13 @@ def test_netbox_schema_resolution_prefers_live_then_cache_then_fallback(
     assert cache_path.exists()
 
     monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None)
+    netbox_schema.reset_netbox_schema_contract_cache()
     cached_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert cached_resolved["source"] == "cache"
     assert cached_resolved["openapi"]["paths"]
 
     cache_path.unlink()
+    netbox_schema.reset_netbox_schema_contract_cache()
     fallback_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert fallback_resolved["source"] == "fallback"
     assert fallback_resolved["contract"]["required_fields"] == [
@@ -285,6 +290,7 @@ def test_netbox_schema_resolution_in_memory_when_persistence_disabled(
 
     # Second resolution with no live endpoint reuses the in-memory document.
     monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", lambda timeout=20: None)
+    netbox_schema.reset_netbox_schema_contract_cache()
     cached_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert cached_resolved["source"] == "cache"
     assert cached_resolved["openapi"]["paths"]
@@ -292,9 +298,246 @@ def test_netbox_schema_resolution_in_memory_when_persistence_disabled(
 
     # Clearing the in-memory store falls back to the docs-derived contract.
     monkeypatch.setattr(netbox_schema, "_in_memory_openapi_cache", None)
+    netbox_schema.reset_netbox_schema_contract_cache()
     fallback_resolved = netbox_schema.resolve_netbox_schema_contract()
     assert fallback_resolved["source"] == "fallback"
     assert not cache_path.exists()
+
+
+class _SchemaFetchCounter:
+    """Counting stand-in for the live NetBox OpenAPI download."""
+
+    def __init__(self, document: dict[str, object] | None, delay: float = 0.0) -> None:
+        self.document = document
+        self.delay = delay
+        self.calls = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, timeout: int = 20) -> dict[str, object] | None:
+        with self._lock:
+            self.calls += 1
+        if self.delay:
+            time.sleep(self.delay)
+        return self.document
+
+
+@pytest.fixture
+def schema_contract_env(monkeypatch, tmp_path):
+    """Isolate contract resolution from disk, the database, and the real clock."""
+
+    clock = {"now": 1000.0}
+    identity = {"value": (1, "https://netbox.example")}
+    monkeypatch.setattr(
+        netbox_schema, "netbox_openapi_cache_path", lambda: tmp_path / "openapi.json"
+    )
+    monkeypatch.setattr(netbox_schema, "_in_memory_openapi_cache", None)
+    monkeypatch.setenv("PROXBOX_NETBOX_OPENAPI_PERSIST", "false")
+    monkeypatch.delenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", raising=False)
+    monkeypatch.setattr(netbox_schema, "_monotonic", lambda: clock["now"])
+    monkeypatch.setattr(netbox_schema, "_netbox_endpoint_identity", lambda: identity["value"])
+    return {"clock": clock, "identity": identity}
+
+
+def test_netbox_schema_contract_is_fetched_once_for_many_resolutions(
+    monkeypatch, schema_contract_env
+):
+    """A sync resolves the contract per VM; that must not mean one download per VM."""
+
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+
+    sources = [netbox_schema.resolve_netbox_schema_contract()["source"] for _ in range(46)]
+
+    assert sources == ["live"] * 46
+    assert fetch.calls == 1
+
+
+def test_netbox_schema_contract_single_flight_across_threads(monkeypatch, schema_contract_env):
+    """Parallel sync workers wait for one download instead of starting their own."""
+
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT, delay=0.05)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+    barrier = threading.Barrier(8)
+
+    def resolve() -> object:
+        barrier.wait(timeout=5)
+        return netbox_schema.resolve_netbox_schema_contract()["source"]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        sources = [future.result(timeout=10) for future in [pool.submit(resolve) for _ in range(8)]]
+
+    assert sources == ["live"] * 8
+    assert fetch.calls == 1
+
+
+def test_netbox_schema_contract_is_resolved_again_after_ttl(monkeypatch, schema_contract_env):
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+    monkeypatch.setenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", "120")
+    clock = schema_contract_env["clock"]
+
+    netbox_schema.resolve_netbox_schema_contract()
+    clock["now"] += 119.0
+    netbox_schema.resolve_netbox_schema_contract()
+    assert fetch.calls == 1
+
+    clock["now"] += 1.0
+    netbox_schema.resolve_netbox_schema_contract()
+    assert fetch.calls == 2
+
+
+def test_netbox_schema_fallback_contract_is_reused_only_briefly(monkeypatch, schema_contract_env):
+    """An unreachable NetBox is not probed per VM, but recovery is picked up fast."""
+
+    fetch = _SchemaFetchCounter(None)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+    clock = schema_contract_env["clock"]
+
+    assert netbox_schema.resolve_netbox_schema_contract()["source"] == "fallback"
+    clock["now"] += netbox_schema.RETRY_CONTRACT_TTL_SECONDS - 1.0
+    assert netbox_schema.resolve_netbox_schema_contract()["source"] == "fallback"
+    assert fetch.calls == 1
+
+    fetch.document = NETBOX_OPENAPI_SNAPSHOT
+    clock["now"] += 1.0
+    assert netbox_schema.resolve_netbox_schema_contract()["source"] == "live"
+    assert fetch.calls == 2
+
+
+def test_netbox_schema_fallback_ttl_never_exceeds_configured_ttl(monkeypatch, schema_contract_env):
+    fetch = _SchemaFetchCounter(None)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+    monkeypatch.setenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", "10")
+    clock = schema_contract_env["clock"]
+
+    netbox_schema.resolve_netbox_schema_contract()
+    clock["now"] += 10.0
+    netbox_schema.resolve_netbox_schema_contract()
+
+    assert fetch.calls == 2
+
+
+def test_netbox_schema_contract_ttl_zero_disables_reuse(monkeypatch, schema_contract_env):
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+    monkeypatch.setenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", "0")
+
+    for _ in range(3):
+        netbox_schema.resolve_netbox_schema_contract()
+
+    assert fetch.calls == 3
+
+
+def test_netbox_schema_contract_is_not_reused_for_another_endpoint(
+    monkeypatch, schema_contract_env
+):
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+
+    netbox_schema.resolve_netbox_schema_contract()
+    schema_contract_env["identity"]["value"] = (1, "https://other-netbox.example")
+    netbox_schema.resolve_netbox_schema_contract()
+
+    assert fetch.calls == 2
+
+
+def test_netbox_schema_cached_contract_is_retried_soon_after_a_failed_live_fetch(
+    monkeypatch, schema_contract_env
+):
+    """A cache result means the live fetch failed, so it must not be pinned for the full TTL.
+
+    This also bounds how long a document cached from a previous endpoint can
+    stand in after the configured endpoint changes and the new one is down.
+    """
+
+    endpoint_a_document = {"paths": {"/a/": {}}}
+    endpoint_b_document = {"paths": {"/b/": {}}}
+    fetch = _SchemaFetchCounter(endpoint_a_document)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+    clock = schema_contract_env["clock"]
+
+    assert netbox_schema.resolve_netbox_schema_contract()["openapi"] is endpoint_a_document
+
+    schema_contract_env["identity"]["value"] = (2, "https://netbox-b.example")
+    fetch.document = None
+    stand_in = netbox_schema.resolve_netbox_schema_contract()
+    assert stand_in["source"] == "cache"
+    assert fetch.calls == 2
+
+    clock["now"] += netbox_schema.RETRY_CONTRACT_TTL_SECONDS - 1.0
+    assert netbox_schema.resolve_netbox_schema_contract()["source"] == "cache"
+    assert fetch.calls == 2
+
+    fetch.document = endpoint_b_document
+    clock["now"] += 1.0
+    recovered = netbox_schema.resolve_netbox_schema_contract()
+    assert recovered["source"] == "live"
+    assert recovered["openapi"] is endpoint_b_document
+    assert fetch.calls == 3
+
+
+def test_netbox_schema_contract_ttl_zero_does_not_serialize_callers(
+    monkeypatch, schema_contract_env
+):
+    """With reuse disabled nothing is shared, so callers must not queue behind a lock."""
+
+    monkeypatch.setenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", "0")
+    inside_fetch = threading.Barrier(4)
+
+    def fetch(timeout: int = 20) -> dict[str, object]:
+        # Passes only when all four callers are inside the fetch at the same time.
+        inside_fetch.wait(timeout=5)
+        return NETBOX_OPENAPI_SNAPSHOT
+
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(netbox_schema.resolve_netbox_schema_contract) for _ in range(4)]
+        sources = [future.result(timeout=10)["source"] for future in futures]
+
+    assert sources == ["live"] * 4
+
+
+def test_netbox_schema_contract_reset_forces_a_new_resolution(monkeypatch, schema_contract_env):
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+
+    netbox_schema.resolve_netbox_schema_contract()
+    netbox_schema.reset_netbox_schema_contract_cache()
+    netbox_schema.resolve_netbox_schema_contract()
+
+    assert fetch.calls == 2
+
+
+def test_netbox_schema_contract_callers_cannot_corrupt_the_reused_result(
+    monkeypatch, schema_contract_env
+):
+    fetch = _SchemaFetchCounter(NETBOX_OPENAPI_SNAPSHOT)
+    monkeypatch.setattr(netbox_schema, "fetch_live_netbox_openapi", fetch)
+
+    first = netbox_schema.resolve_netbox_schema_contract()
+    first["source"] = "tampered"
+
+    assert netbox_schema.resolve_netbox_schema_contract()["source"] == "live"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, netbox_schema.DEFAULT_CONTRACT_TTL_SECONDS),
+        ("900", 900.0),
+        ("0", 0.0),
+        ("-5", 0.0),
+        ("not-a-number", netbox_schema.DEFAULT_CONTRACT_TTL_SECONDS),
+    ],
+)
+def test_netbox_schema_contract_ttl_setting(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", raising=False)
+    else:
+        monkeypatch.setenv("PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL", raw)
+
+    assert netbox_schema.netbox_schema_contract_ttl_seconds() == expected
 
 
 def test_netbox_openapi_persistence_resolves_env_over_plugin_setting(monkeypatch):

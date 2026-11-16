@@ -342,6 +342,7 @@ A handful of variables stay process-level only because they are read before the 
 | `PROXBOX_NETBOX_GET_CACHE_MAX_BYTES` | `52428800` (50 MiB) | Maximum total bytes held in the NetBox GET cache before LRU eviction kicks in. |
 | `PROXBOX_DEBUG_CACHE` | unset | When set to `1`, `true`, or `yes`, the NetBox GET cache emits per-hit/miss debug log lines. |
 | `PROXBOX_NETBOX_OPENAPI_PERSIST` | `true` | Whether the resolved NetBox OpenAPI schema is cached on disk at `proxbox_api/generated/netbox/openapi.json`. Set to `0`/`false`/`no`/`off` to run schema resolution **fully in-memory** — the fetched document is kept in a process-local store instead of being written to (or read from) the filesystem (read-only filesystems, no-disk-write deployments). Maps to the `ProxboxPluginSettings.netbox_openapi_persist` plugin field; resolves env override > plugin setting > default. See [NetBox OpenAPI schema cache](#netbox-openapi-schema-cache) below. |
+| `PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL` | `3600` | Seconds that a resolved NetBox schema contract is reused before proxbox-api requests NetBox `/api/schema/` again. Set `0` to resolve the contract on every call. Environment variable only. |
 | `hardware_discovery_sync_nic_macs` (plugin setting) | `false` | Plugin-only opt-in for native physical-NIC `dcim.MACAddress` and `primary_mac_address` reconciliation. Requires `hardware_discovery_enabled=true`; no environment override. A missing field from an older netbox-proxbox release is treated as `false`. |
 | `PROXBOX_GENERATED_DIR` | `$XDG_DATA_HOME/proxbox/generated/proxmox` | Override output directory for the schema generator CLI (`proxbox-schema generate`). |
 | `PROXBOX_RUNTIME_CODEGEN_ENABLED` | `false` | Development-only process opt-in. When false, the HTTP generation and route-refresh endpoints are absent, and route registration, schema discovery, and Pydantic rendering use bundled schemas only. Production must leave this disabled because provenance sidecars detect corruption but cannot authenticate files writable by the same operating-system user. |
@@ -359,8 +360,27 @@ To validate the payloads it builds, proxbox-api resolves a NetBox OpenAPI
 contract at sync time (`proxbox_api/proxmox_to_netbox/netbox_schema.py`). The
 resolution order is **live NetBox `/api/schema/` → on-disk cache → bundled
 fallback contract**, and a successful live fetch is written to
-`proxbox_api/generated/netbox/openapi.json` so later runs reuse it without
-re-fetching.
+`proxbox_api/generated/netbox/openapi.json` so that a later run can still
+resolve the contract when NetBox does not answer.
+
+The resolved contract is **reused inside the process**. A sync validates every
+virtual machine against the contract, and NetBox's OpenAPI document is large
+(about 16 MB on a production instance), so proxbox-api downloads it one time
+and serves every later validation from memory:
+
+- `PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL` (default `3600` seconds) sets how long a
+  resolved contract is reused. After it expires, the next validation fetches
+  `/api/schema/` one time again. Set `0` to resolve the contract on every call.
+- When NetBox does not answer, the contract comes from the cached document or
+  from the bundled fallback contract. That result is reused for at most 60
+  seconds, so a recovered NetBox is picked up quickly.
+- Parallel sync workers wait for one download instead of each starting their
+  own.
+- Changing the configured NetBox endpoint discards the reused contract.
+- The download and the validation run in worker threads, not on the event
+  loop.
+- After a NetBox upgrade, the new schema is picked up when the time to live
+  expires or when proxbox-api restarts.
 
 `PROXBOX_NETBOX_OPENAPI_PERSIST` (default `true`) controls that on-disk cache.
 Setting it to a falsey value (`0`/`false`/`no`/`off`) makes schema resolution
@@ -368,8 +388,8 @@ run **fully in-memory**:
 
 - The fetched schema is kept only in a process-local, in-memory store —
   `save`/`load` of the cache **never touch the filesystem**.
-- Resolution still avoids repeated live fetches within the same process; only
-  cross-restart persistence is lost (the schema is re-fetched after a restart).
+- The contract reuse described above still applies; only cross-restart
+  persistence is lost (the schema is re-fetched after a restart).
 - Use it for **read-only filesystems** or deployments that must not write any
   generated artifacts to disk.
 

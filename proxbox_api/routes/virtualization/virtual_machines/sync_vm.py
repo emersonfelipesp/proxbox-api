@@ -4090,7 +4090,11 @@ async def _build_vm_task_payload(
         refine_from_guest_agent=bool(context.behavior_flags.sync_vm_platform_from_guest_agent),
         cache=context.platform_cache,
     )
-    payload = build_netbox_virtual_machine_payload(
+    # Off the event loop: payload validation can resolve the NetBox schema
+    # contract, which may download the NetBox OpenAPI document or wait for
+    # another worker that is downloading it.
+    payload = await asyncio.to_thread(
+        build_netbox_virtual_machine_payload,
         proxmox_resource=resource,
         proxmox_config=vm_config,
         cluster_id=int(getattr(dependencies.cluster, "id", 0) or 0),

@@ -144,3 +144,59 @@ async def test_sync_vm_individual_restores_status_for_reappeared_vm(
     )
 
     _assert_restored(patches, "active")
+
+
+async def test_create_or_update_vm_builds_the_payload_off_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Payload validation can block on a NetBox schema download; keep it off the loop."""
+
+    import threading
+
+    from proxbox_api.services.sync import vm_create
+
+    _capture_marker_patch(monkeypatch)
+    loop_thread = threading.current_thread()
+    builder_threads: list[threading.Thread] = []
+    real_builder = vm_create.build_netbox_virtual_machine_payload
+
+    def _recording_builder(**kwargs: object) -> object:
+        builder_threads.append(threading.current_thread())
+        return real_builder(**kwargs)
+
+    async def _reconcile(*_args: object, **_kwargs: object) -> object:
+        return _decommissioned_vm(101)
+
+    monkeypatch.setattr(vm_create, "build_netbox_virtual_machine_payload", _recording_builder)
+    monkeypatch.setattr("proxbox_api.services.sync.vm_create.rest_reconcile_async", _reconcile)
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.sync_state_reader.rest_list_async", _empty_sync_state_sidecars
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_create.write_virtual_machine_sync_state",
+        _skip_vm_sync_state_write,
+    )
+
+    await create_or_update_virtual_machine(
+        _netbox_api("4.5.9"),
+        proxmox_resource={
+            "vmid": 101,
+            "name": "vm-101",
+            "node": "pve01",
+            "type": "qemu",
+            "status": "running",
+            "maxcpu": 2,
+            "maxmem": 2 * 1024**3,
+            "maxdisk": 0,
+        },
+        proxmox_config={},
+        cluster_id=1,
+        device_id=2,
+        role_id=3,
+        tag_id=7,
+        tag_refs=[{"id": 7}],
+        cluster_name="cluster-a",
+    )
+
+    assert len(builder_threads) == 1
+    assert builder_threads[0] is not loop_thread

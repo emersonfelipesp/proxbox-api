@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from proxbox_api.constants import VM_ROLE_MAPPINGS, VM_TYPE_MAPPINGS
@@ -392,7 +393,11 @@ async def create_or_update_virtual_machine(
     resolved_virtual_machine_type_id = virtual_machine_type_id if supports_vm_type else None
     endpoint_lookup_id = normalize_positive_int(endpoint_id)
 
-    payload = build_netbox_virtual_machine_payload(
+    # Off the event loop: payload validation can resolve the NetBox schema
+    # contract, which may download the NetBox OpenAPI document or wait for
+    # another worker that is downloading it.
+    payload = await asyncio.to_thread(
+        build_netbox_virtual_machine_payload,
         proxmox_resource=proxmox_resource,
         proxmox_config=proxmox_config,
         cluster_id=cluster_id,

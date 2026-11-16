@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -18,6 +21,13 @@ from proxbox_api.logger import logger
 from proxbox_api.session.netbox import netbox_config_from_endpoint
 
 PERSIST_ENV = "PROXBOX_NETBOX_OPENAPI_PERSIST"
+CONTRACT_TTL_ENV = "PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL"
+DEFAULT_CONTRACT_TTL_SECONDS = 3600.0
+# A result that did not come from a live fetch (on-disk or in-memory cache, or
+# the bundled fallback) means NetBox did not answer. Keep it only briefly: long
+# enough that an unreachable NetBox is not probed for every object of a sync,
+# short enough that recovery is picked up quickly.
+RETRY_CONTRACT_TTL_SECONDS = 60.0
 
 # In-memory fallback store used when filesystem persistence is disabled. It lets
 # schema resolution reuse a fetched document across calls without ever touching
@@ -184,8 +194,120 @@ def netbox_virtual_machine_fallback_contract() -> dict[str, object]:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedContract:
+    """One resolved schema contract and the conditions under which it is valid."""
+
+    contract: dict[str, object]
+    expires_at: float
+    endpoint_identity: tuple[object, str] | None
+
+
+# Sync workers resolve the contract once per object, from several threads. The
+# resolved contract is kept here so that one NetBox OpenAPI download serves the
+# whole run instead of one download (about 16 MB) per object.
+_resolved_contract: _ResolvedContract | None = None
+_resolved_contract_lock = threading.Lock()
+# Module-level alias so that tests can drive expiry without patching the clock
+# that the standard library itself uses.
+_monotonic = time.monotonic
+
+
+def netbox_schema_contract_ttl_seconds() -> float:
+    """Return how long a resolved live or cached contract is reused, in seconds.
+
+    Set ``PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL`` to change it. ``0`` disables
+    reuse, so every call resolves the contract again.
+    """
+
+    return runtime_settings.get_float(
+        settings_key="netbox_schema_contract_ttl",
+        env=CONTRACT_TTL_ENV,
+        default=DEFAULT_CONTRACT_TTL_SECONDS,
+        minimum=0.0,
+        # Environment-only setting: do not query the NetBox plugin settings.
+        settings_override={},
+    )
+
+
+def reset_netbox_schema_contract_cache() -> None:
+    """Forget the resolved contract so that the next call resolves it again."""
+
+    global _resolved_contract
+
+    with _resolved_contract_lock:
+        _resolved_contract = None
+
+
+def _netbox_endpoint_identity() -> tuple[object, str] | None:
+    endpoint = _extract_netbox_endpoint_from_db()
+    if endpoint is None:
+        return None
+    return (endpoint.id, str(endpoint.url))
+
+
+def _reusable_contract(
+    endpoint_identity: tuple[object, str] | None,
+) -> dict[str, object] | None:
+    resolved = _resolved_contract
+    if resolved is None:
+        return None
+    if resolved.endpoint_identity != endpoint_identity:
+        return None
+    if _monotonic() >= resolved.expires_at:
+        return None
+    return dict(resolved.contract)
+
+
+def _contract_ttl_for_source(source: object, configured_ttl: float) -> float:
+    if source == "live":
+        return configured_ttl
+    return min(RETRY_CONTRACT_TTL_SECONDS, configured_ttl)
+
+
 def resolve_netbox_schema_contract() -> dict[str, object]:
-    """Resolve NetBox schema contract from live OpenAPI, cache, or fallback docs."""
+    """Resolve NetBox schema contract from live OpenAPI, cache, or fallback docs.
+
+    A contract resolved from a live fetch is reused for
+    ``PROXBOX_NETBOX_SCHEMA_CONTRACT_TTL`` seconds while the configured NetBox
+    endpoint stays the same. A contract resolved from the cache or the fallback
+    (NetBox did not answer) is reused for at most 60 seconds. Concurrent callers
+    wait for one resolution instead of each downloading the OpenAPI document.
+
+    This function can block on network and disk I/O. Call it from a worker
+    thread, not from the event loop.
+    """
+
+    global _resolved_contract
+
+    configured_ttl = netbox_schema_contract_ttl_seconds()
+    if configured_ttl <= 0:
+        # Reuse is disabled, so there is no result to share: do not make
+        # callers queue behind each other's downloads.
+        return _resolve_netbox_schema_contract_uncached()
+
+    endpoint_identity = _netbox_endpoint_identity()
+    reusable = _reusable_contract(endpoint_identity)
+    if reusable is not None:
+        return reusable
+
+    with _resolved_contract_lock:
+        reusable = _reusable_contract(endpoint_identity)
+        if reusable is not None:
+            return reusable
+
+        contract = _resolve_netbox_schema_contract_uncached()
+        _resolved_contract = _ResolvedContract(
+            contract=contract,
+            expires_at=_monotonic()
+            + _contract_ttl_for_source(contract.get("source"), configured_ttl),
+            endpoint_identity=endpoint_identity,
+        )
+        return dict(contract)
+
+
+def _resolve_netbox_schema_contract_uncached() -> dict[str, object]:
+    """Resolve the contract from live OpenAPI, cache, or fallback, with no reuse."""
 
     live = fetch_live_netbox_openapi()
     if live:
