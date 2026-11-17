@@ -25,7 +25,7 @@ secret values, and private runner inventories.
 | `.gitea/workflows/artifact-v3-compatibility.yml` | Gitea: pull request / manual dispatch | Runs a bounded, disposable upload/download checksum probe for the Gitea-compatible artifact v3 actions on `ci-untrusted-python312`. |
 | `.gitea/workflows/publish-gitea.yml` | Gitea: authorized manual dispatch from `main` | Publishes an exact tagged package and repository-linked immutable manifest without deploying it. |
 | `.gitea/workflows/deploy-production.yml` | Gitea: `develop` push / authorized manual dispatch from `main` | Deploys reviewed `develop` to staging; production requires exact package/source/artifact binding, green CI with no unsigned bypass, a single-use authorization, signed completion evidence, and unconditional proof cleanup. |
-| `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
+| `ci.yml` | Push to `main` or a `v*` tag; PR to `main`, `develop`, or `testing`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
 | `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Builds the exact tagged source on GitHub, validates its wheel and sdist on Python 3.12/3.13, and publishes the same artifacts. Candidate validation uses two xdist workers with loadgroup isolation; Python 3.13 keeps branch coverage, uploads XML evidence for 14 days, and retains duration telemetry while omitting the terminal missing-lines report. `rcN` versions publish to TestPyPI; final/post releases publish to PyPI, then publish Docker images and run post-publish E2E. |
@@ -34,6 +34,27 @@ secret values, and private runner inventories.
 | `rust-reconcile.yml` | Push / PR to `main`, `testing`, or `v*`; manual dispatch | Runs Rust unit tests for `proxbox-reconcile-rs`, installs the local native extension, runs strict Rust/Python reconciliation parity tests, and builds wheel artifacts across the supported POSIX Linux/macOS runtimes for Python 3.12 and 3.13. Windows is not a supported service runtime because safety-critical state uses POSIX advisory locks. |
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
 | `release-docker-verify.yml` | Called after successful Docker publication / manual dispatch | Pulls and smoke-tests every published standard and experimental Docker tag only after the release publication workflow succeeds. |
+
+## CI Scheduling
+
+Ordinary branch pushes start the full `ci.yml` graph only for `main`. Mirrored
+`develop` and `testing` pushes do not start it. Pull requests targeting `main`,
+`develop`, or `testing` retain the complete checks and compatibility matrix.
+
+Workflow concurrency groups pull-request runs by workflow name and PR number.
+A newer run can cancel an obsolete run for that PR, including its image
+preparation and E2E jobs. Different PRs remain independent. All other events
+use a unique run-id group and disable cancellation, so main, tag, release, and
+manual certification runs do not replace or cancel one another. Keep these
+non-PR groups unique: `cancel-in-progress: false` alone does not prevent the
+platform from replacing an older pending run in a shared group.
+
+Version-tag, published-release, and manual triggers remain enabled. They can
+still certify the same commit independently. Successful-run reuse requires a
+separate design that binds the workflow, selected mode, and dependency inputs;
+the source commit alone does not identify floating development dependencies.
+Do not reduce the supported matrix or change the publication workflows to
+implement this scheduling policy.
 
 ## CI Job Dependencies
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, testing]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main, develop, testing]
@@ -16,6 +16,12 @@ on:
         default: dev
   release:
     types: [published]
+
+# Cancel obsolete validation only within the same pull request. Every other
+# event gets its own group, so certification runs cannot replace one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret

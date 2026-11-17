@@ -8,12 +8,35 @@ NetBox e publicacao em etapas.
 
 | Workflow | Gatilho | Finalidade |
 |---|---|---|
-| `.github/workflows/ci.yml` | Push, pull request, release, dispatch manual | Roda checagens principais e a matriz E2E Docker com NetBox + Proxmox. |
+| `.github/workflows/ci.yml` | Push em main ou tag `v*`; PR para main/develop/testing; release publicada; dispatch manual | Roda checagens principais e a matriz E2E Docker com NetBox + Proxmox. |
 | `.github/workflows/publish-testpypi.yml` | Tag RC ou dispatch manual exclusivo para RC; GitHub Release publicada | Publica RCs imutaveis no TestPyPI e releases finais/post no PyPI, seguidas por imagens Docker e E2E pos-publicacao. |
 | `.github/workflows/docker-hub-publish.yml` | Workflow reutilizavel / dispatch manual | Constroi e publica variantes raw, nginx, granian e experimentais PyO3/Rust da imagem Docker. |
 | `.github/workflows/release-docker-verify.yml` | Chamado apos publicacao Docker bem-sucedida / dispatch manual | Baixa as tags Docker publicadas, incluindo as tags experimentais PyO3/Rust, e verifica startup dos conteineres. |
 | `.github/workflows/docs.yml` | Mudancas de docs em main / PR | Constroi e publica o site MkDocs. |
 | `.github/workflows/nightly-schema-refresh.yml` | Agendamento / dispatch manual | Atualiza schemas Proxmox gerados e abre PR quando houver mudanca. |
+
+## Agendamento do CI
+
+O grafo completo de CI executa em pushes de main e em pull requests para
+main, develop ou testing. Pushes espelhados de develop/testing nao iniciam
+outro grafo completo. Os tipos de evento de PR continuam sendo opened,
+synchronize, reopened e ready_for_review. Todas as versoes suportadas do
+NetBox, transportes, servicos Proxmox, modos de dependencia e seletores de
+teste permanecem iguais.
+
+Uma nova execucao do mesmo PR cancela a execucao obsoleta, incluindo a
+preparacao de imagens e os jobs E2E dependentes. Cada PR tem seu proprio
+grupo de concorrencia do workflow. Execucoes de main, tags de versao,
+releases publicadas e dispatch manual usam grupos exclusivos por run-id e
+desabilitam o cancelamento. Elas nao cancelam nem substituem umas as outras
+pela concorrencia, inclusive quando outra certificacao esta pendente.
+
+Eventos de tag de versao e release publicada continuam executando suas
+checagens completas de CI. O dispatch manual continua executando o modo de
+dependencia solicitado. Esses eventos podem certificar o mesmo commit
+separadamente. Um commit validado nao justifica ignorar outra execucao quando
+dependencias de desenvolvimento podem mudar. Os workflows de publicacao de
+pacotes e imagens continuam separados e mantem suas validacoes existentes.
 
 ## Fluxo do CI
 
