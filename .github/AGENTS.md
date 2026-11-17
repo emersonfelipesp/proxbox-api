@@ -78,7 +78,7 @@ ci.yml (push/PR — dev mode E2E only)
     - NetBox readiness waits up to 20 minutes for migrations/search indexing, then checks `/api/status/` before creating tokens.
     - Docker-backed Proxmox E2E uses pytest marker `mock_http`; the separate in-process MockBackend pass uses `mock_backend`.
 
-`test-free-threaded` is intentionally `continue-on-error`. It creates an isolated
+`test-free-threaded` is a required focused compatibility regression. It creates an isolated
 Python 3.14t environment without installing root project metadata, installs the
 focused dependencies needed to import and run the probe, compiles the package,
 and runs `scripts.verify_free_threaded_auth_heartbeat`. Do not expand it
@@ -142,3 +142,22 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
   `docs/pt-BR/development/ci-e2e-workflows.md` aligned with CI workflow changes.
 - Keep `rust-reconcile.yml` aligned with `proxbox-reconcile-rs/Cargo.toml`,
   `proxbox-reconcile-rs/pyproject.toml`, and `tests/reconciliation/`.
+
+## Complete required quality and documentation publication
+
+The stable `CI complete` check requires all ten original CI jobs and every
+matrix row to succeed, including the required free-threaded regression.
+Failed, cancelled, skipped or missing results refuse admission.
+`Rust reconciliation complete` requires every
+supported test and wheel matrix row.
+
+`Documentation complete` runs for every pull request to main. Its selector
+uses verified Git commits and the original five documentation paths. Only
+a verified unselected change may skip the build; failed or missing selection
+fails the summary. Selected documentation still runs every original command.
+
+Main documentation publication excludes changes consisting only of workflow
+files, root and workflow agent guides, and the two CI workflow guides.
+Normal documentation and mixed changes keep their original gh-pages publication. Manual validation
+still builds documentation without publishing. This guard does not change
+any package, image, release or application deployment workflow.

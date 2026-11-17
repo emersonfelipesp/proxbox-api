@@ -14,12 +14,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/docs.yml"
 
 permissions:
   contents: write
@@ -29,7 +23,89 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select:
+    name: Select documentation and publication scope
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      selected: ${{ steps.scope.outputs.selected }}
+      publish: ${{ steps.scope.outputs.publish }}
+    steps:
+      - name: Checkout complete commit history for exact path selection
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select the original paths and exclude CI-only publication
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CURRENT_SHA: ${{ github.sha }}
+          CURRENT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          admit_commits() {
+            [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "${BASE_SHA}^{commit}"
+            git cat-file -e "${HEAD_SHA}^{commit}"
+          }
+          write_changed_paths() {
+            if [[ "$EVENT_NAME" == pull_request ]]; then
+              git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null
+              git diff --no-ext-diff --no-textconv --no-renames --name-only -z \
+                "${BASE_SHA}...${HEAD_SHA}" > "$changes"
+            else
+              [[ "$CURRENT_REF" == refs/heads/main ]]
+              [[ "$HEAD_SHA" == "$CURRENT_SHA" ]]
+              [[ "$(git rev-parse HEAD)" == "$HEAD_SHA" ]]
+              git diff --no-ext-diff --no-textconv --no-renames --name-only -z \
+                "$BASE_SHA" "$HEAD_SHA" > "$changes"
+            fi
+          }
+          classify_changed_paths() {
+            ci_only=true
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                docs/*|mkdocs.yml|pyproject.toml|uv.lock|.github/workflows/docs.yml)
+                  selected=true
+                  ;;
+              esac
+              case "$path" in
+                .github/workflows/*|.github/AGENTS.md|.github/CLAUDE.md|AGENTS.md|CLAUDE.md|docs/development/ci-e2e-workflows.md|docs/pt-BR/development/ci-e2e-workflows.md) ;;
+                *) ci_only=false ;;
+              esac
+            done < "$changes"
+          }
+          selected=false
+          publish=false
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              selected=true
+              ;;
+            pull_request|push)
+              admit_commits
+              changes="$(mktemp "${RUNNER_TEMP}/proxbox-docs-paths.XXXXXX")"
+              trap 'rm -f -- "$changes"' EXIT
+              write_changed_paths
+              classify_changed_paths
+              if [[ "$EVENT_NAME" == push && "$selected" == true && "$ci_only" == false ]]; then
+                publish=true
+              fi
+              ;;
+            *)
+              printf 'Unsupported documentation event: %s\n' "$EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          printf 'selected=%s\npublish=%s\n' "$selected" "$publish" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: select
+    if: needs.select.outputs.selected == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -48,8 +124,8 @@ jobs:
         run: uv run mkdocs build --strict
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.select.outputs.publish == 'true'
+    needs: [select, build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -73,3 +149,36 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
           publish_dir: ./site
+
+  required-docs:
+    name: Documentation complete
+    if: ${{ always() }}
+    needs: [select, build]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require a valid selector and every applicable documentation check
+        env:
+          SELECT_RESULT: ${{ needs.select.result }}
+          SELECTED: ${{ needs.select.outputs.selected }}
+          PUBLISH: ${{ needs.select.outputs.publish }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          set -euo pipefail
+          [[ "$SELECT_RESULT" == success ]]
+          case "$PUBLISH" in
+            true|false) ;;
+            *) exit 1 ;;
+          esac
+          case "$SELECTED" in
+            true)
+              [[ "$BUILD_RESULT" == success ]]
+              printf 'Selected documentation build succeeded.\n'
+              ;;
+            false)
+              [[ "$BUILD_RESULT" == skipped ]]
+              [[ "$PUBLISH" == false ]]
+              printf 'Documentation was not selected by the original path contract.\n'
+              ;;
+            *) exit 1 ;;
+          esac
