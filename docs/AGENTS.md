@@ -84,6 +84,12 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
+- The `0.0.32` release notes cover the direct-only Talos product type,
+  its explicit image URL requirement, and preservation of Image Factory kernel
+  arguments through an unmodified image import. Keep the
+  unchanged dependency pins, `netbox-proxbox 0.0.32.post2` pairing, and both
+  language versions aligned; source preparation does not establish package or
+  production availability.
 - The `0.0.31` release notes cover endpoint-scoped VM disk and snapshot
   synchronization, one NetBox schema contract resolution per run, preservation
   of operator-managed IP address DNS names, and Proxmox start-at-boot reflection.
