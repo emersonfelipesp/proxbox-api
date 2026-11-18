@@ -75,7 +75,7 @@ jobs:
                   ;;
               esac
               case "$path" in
-                .github/workflows/*|.github/AGENTS.md|.github/CLAUDE.md|AGENTS.md|CLAUDE.md|docs/development/ci-e2e-workflows.md|docs/pt-BR/development/ci-e2e-workflows.md) ;;
+                .github/workflows/*|.github/AGENTS.md|.github/CLAUDE.md|AGENTS.md|CLAUDE.md|tests/test_router_smoke.py|tests/AGENTS.md|tests/CLAUDE.md|docs/development/ci-e2e-workflows.md|docs/pt-BR/development/ci-e2e-workflows.md) ;;
                 *) ci_only=false ;;
               esac
             done < "$changes"

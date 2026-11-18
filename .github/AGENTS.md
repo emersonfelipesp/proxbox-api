@@ -41,6 +41,10 @@ Ordinary branch pushes start the full `ci.yml` graph only for `main`. Mirrored
 `develop` and `testing` pushes do not start it. Pull requests targeting `main`,
 `develop`, or `testing` retain the complete checks and compatibility matrix.
 
+Opened, synchronized and reopened pull requests run the complete CI and Rust
+graphs even when they are drafts. Do not repeat these graphs when an unchanged
+draft becomes ready. Keep the complete required summaries and every producer.
+
 Workflow concurrency groups pull-request runs by workflow name and PR number.
 A newer run can cancel an obsolete run for that PR, including its image
 preparation and E2E jobs. Different PRs remain independent. All other events
@@ -62,7 +66,7 @@ implement this scheduling policy.
 ci.yml (push/PR — dev mode E2E only)
 ├── test
 ├── test-py311-floor
-├── test-free-threaded (continue-on-error)
+├── test-free-threaded (required focused regression)
 ├── docker-bind-smoke  (raw + granian bind-host startup checks)
 ├── setup             (generates E2E matrix)
 ├── build-netbox-image (pulls or source-builds each NetBox version once, then uploads a short-lived image artifact)
@@ -158,6 +162,9 @@ fails the summary. Selected documentation still runs every original command.
 
 Main documentation publication excludes changes consisting only of workflow
 files, root and workflow agent guides, and the two CI workflow guides.
+The exact router smoke test and its scoped agent guides are also CI-only:
+`tests/test_router_smoke.py`, `tests/AGENTS.md`, and `tests/CLAUDE.md`.
+Do not broaden this exception to other tests or documentation.
 Normal documentation and mixed changes keep their original gh-pages publication. Manual validation
 still builds documentation without publishing. This guard does not change
 any package, image, release or application deployment workflow.
