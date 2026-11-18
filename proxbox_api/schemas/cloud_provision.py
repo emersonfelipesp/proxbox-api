@@ -33,12 +33,14 @@ class ProxmoxProductType(str, Enum):
     pfsense = "pfsense"
     opnsense = "opnsense"
     firecracker = "firecracker"
+    talos = "talos"
     PVE = "pve"
     PBS = "pbs"
     PDM = "pdm"
     PFSENSE = "pfsense"
     OPNSENSE = "opnsense"
     FIRECRACKER = "firecracker"
+    TALOS = "talos"
 
 
 class CloudImageBuildProvider(str, Enum):
@@ -100,6 +102,18 @@ def provider_requires_snippets(provider: CloudImageBuildProvider) -> bool:
 
 
 CloudImageProductType = ProxmoxProductType
+
+
+def _validate_talos_direct_fields(request: "CloudImageTemplateBuildRequest") -> None:
+    if request.product_type != ProxmoxProductType.talos:
+        return
+    for field_name in ("execute", "provider", "user_data_yaml"):
+        if getattr(request, field_name) is not None:
+            raise ValueError(f"product_type=talos does not support {field_name}.")
+    # The request default points at a general-purpose Linux cloud image. A Talos
+    # build that omits the URL would import that image and still report success.
+    if "image_url" not in request.model_fields_set or not request.image_url:
+        raise ValueError("product_type=talos requires an explicit image_url.")
 
 
 class ExtraDisk(BaseModel):
@@ -577,6 +591,7 @@ class CloudImageTemplateBuildRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_product_provider_contract(self) -> "CloudImageTemplateBuildRequest":
+        _validate_talos_direct_fields(self)
         if (
             self.product_type == ProxmoxProductType.pve
             and self.provider == CloudImageBuildProvider.debian_cloud_image

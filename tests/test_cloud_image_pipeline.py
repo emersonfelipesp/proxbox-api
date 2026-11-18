@@ -49,6 +49,98 @@ def _fail_if_subprocess_runs(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("cloud image execution must not spawn a subprocess")
 
 
+_TALOS_IMAGE_URL = "https://factory.talos.dev/image/" + "a" * 64 + "/v1.14.6/nocloud-amd64.qcow2"
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    (("execute", False), ("provider", "release_image"), ("user_data_yaml", "#cloud-config\n")),
+)
+@pytest.mark.asyncio
+async def test_talos_rejects_pipeline_only_fields_with_422(
+    client_with_fake_netbox,
+    field_name: str,
+    field_value: object,
+) -> None:
+    status_code, _payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {"product_type": "talos", "image_url": _TALOS_IMAGE_URL, field_name: field_value},
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    (("execute", False), ("provider", "release_image"), ("user_data_yaml", "#cloud-config\n")),
+)
+def test_talos_validation_error_names_rejected_field(
+    field_name: str,
+    field_value: object,
+) -> None:
+    with pytest.raises(
+        ValidationError,
+        match=f"product_type=talos does not support {field_name}",
+    ):
+        CloudImageTemplateBuildRequest(
+            product_type="talos", image_url=_TALOS_IMAGE_URL, **{field_name: field_value}
+        )
+
+
+@pytest.mark.parametrize("payload", ({}, {"image_url": None}))
+def test_talos_requires_an_explicit_image_url(payload: dict[str, object]) -> None:
+    """Omitting the URL must not fall back to the default general-purpose image."""
+    with pytest.raises(ValidationError, match="product_type=talos requires an explicit image_url"):
+        CloudImageTemplateBuildRequest(product_type="talos", **payload)
+
+
+@pytest.mark.asyncio
+async def test_talos_without_image_url_is_rejected_before_any_build(
+    client_with_fake_netbox,
+) -> None:
+    status_code, _payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {"product_type": "talos", "endpoint_id": 1, "target_node": "pve01"},
+        api_key="",
+        include_auth=False,
+    )
+
+    # The same body with product_type "pbs" or "pve" is accepted (201), so 422
+    # here is the Talos rule and not a generic validation failure.
+    assert status_code == 422
+
+
+def test_talos_accepts_explicit_null_pipeline_fields_on_the_direct_path() -> None:
+    request = CloudImageTemplateBuildRequest(
+        product_type="talos",
+        image_url=_TALOS_IMAGE_URL,
+        execute=None,
+        provider=None,
+        user_data_yaml=None,
+    )
+
+    assert request.product_type.value == "talos"
+    assert request.image_url == _TALOS_IMAGE_URL
+    assert request.execute is None
+    assert request.provider is None
+
+
+@pytest.mark.asyncio
+async def test_default_pve_request_still_returns_pipeline_plan(client_with_fake_netbox) -> None:
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {},
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 201
+    assert payload["status"] == "planned"
+    assert payload["product_type"] == "pve"
+
+
 class _FakeStdin:
     def __init__(self) -> None:
         self.data = b""
@@ -1607,6 +1699,122 @@ async def test_direct_build_rejects_disabled_endpoint_before_sdk_session(
     assert status_code == 422
     assert payload["detail"]["code"] == "endpoint_disabled"
     assert payload["detail"]["endpoint_id"] == endpoint.id
+
+
+@pytest.mark.asyncio
+async def test_talos_direct_build_imports_unmodified_without_userdata_or_snippets(
+    sync_route_session,
+    monkeypatch,
+) -> None:
+    endpoint = ProxmoxEndpoint(
+        name="pve-talos-direct",
+        ip_address="93.184.216.34",
+        username="root@pam",
+        allow_writes=True,
+        allow_packer_template_builds=True,
+    )
+    sync_route_session.add(endpoint)
+    sync_route_session.commit()
+    sync_route_session.refresh(endpoint)
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Resource:
+        def __init__(self, kind: str) -> None:
+            self.kind = kind
+
+        async def post(self, **kwargs: object) -> str:
+            calls.append((self.kind, kwargs))
+            return f"UPID:{self.kind}"
+
+        def __call__(self, _vmid: int) -> "Resource":
+            return self
+
+        @property
+        def template(self) -> "Resource":
+            return Resource("template")
+
+    class Node:
+        qemu = Resource("create")
+
+        def storage(self, _path: str) -> Resource:
+            return Resource("download")
+
+    class API:
+        def nodes(self, _node: str) -> Node:
+            return Node()
+
+    class Session:
+        session = API()
+
+        async def aclose(self) -> None:
+            return None
+
+    config_reads = 0
+
+    async def fake_open(_endpoint: ProxmoxEndpoint) -> Session:
+        return Session()
+
+    async def vm_config(*_args: object, **_kwargs: object) -> dict[str, object] | None:
+        nonlocal config_reads
+        config_reads += 1
+        if config_reads == 1:
+            return None
+        return {
+            "template": 1,
+            "name": "talos-template",
+            "scsi0": "local-zfs:vm-9011-disk-0",
+            "ide2": "local-zfs:cloudinit",
+            "boot": "order=scsi0",
+        }
+
+    async def image_missing(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    async def wait_for_task(*_args: object, response: object, **_kwargs: object) -> str:
+        return str(response)
+
+    def fail_userdata(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("Talos must not generate cloud-init user-data")
+
+    monkeypatch.setattr(template_images, "_open_proxmox_session", fake_open)
+    monkeypatch.setattr(template_images, "_vm_config_or_none", vm_config)
+    monkeypatch.setattr(template_images, "_image_exists", image_missing)
+    monkeypatch.setattr(template_images, "_wait_for_task", wait_for_task)
+    monkeypatch.setattr(template_images, "generate_cloud_init_userdata", fail_userdata)
+    monkeypatch.setattr(template_images, "generate_firecracker_userdata", fail_userdata)
+
+    status_code, payload, _text = await _post_json(
+        "/cloud/templates/images",
+        {
+            "endpoint_id": endpoint.id,
+            "target_node": "pve01",
+            "vmid": 9011,
+            "name": "talos-template",
+            "image_url": PUBLIC_IMAGE_URL,
+            "product_type": "talos",
+        },
+        api_key="",
+        include_auth=False,
+    )
+
+    assert status_code == 201
+    assert payload["status"] == "created"
+    assert calls[0] == (
+        "download",
+        {
+            "content": "import",
+            "filename": "cloud.qcow2",
+            "url": PUBLIC_IMAGE_URL,
+            "verify-certificates": 1,
+        },
+    )
+    create_kwargs = calls[1][1]
+    assert create_kwargs["scsi0"] == ("local-zfs:0,import-from=local:import/cloud.qcow2,discard=on")
+    assert create_kwargs["ide2"] == "local-zfs:cloudinit"
+    assert create_kwargs["vga"] == "std"
+    assert "description" not in create_kwargs
+    assert "cicustom" not in create_kwargs
+    assert calls[2] == ("template", {"disk": "scsi0"})
 
 
 @pytest.mark.asyncio

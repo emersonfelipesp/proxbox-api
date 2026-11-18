@@ -287,6 +287,12 @@ Proxmox VE installer ISO media; `debian_cloud_image` is rejected for PVE.
 Generated PVE setup uses graphical VGA for noVNC, while serial-only
 `serial0`/`vga serial0` remains limited to serial appliance products such as
 pfSense and OPNsense.
+Talos uses the direct Proxmox API build path: its nocloud qcow2 is imported
+unmodified with the standard cloud-init drive. The request must name the image
+with an explicit `image_url`; the default image URL is never used for Talos.
+proxbox-api generates no product user-data and writes no snippet. Proxmox still
+writes its own default cloud-config to the drive, which Talos ignores; Talos
+reads only the network configuration from it.
 
 | Method | Path | Purpose |
 |---|---|---|

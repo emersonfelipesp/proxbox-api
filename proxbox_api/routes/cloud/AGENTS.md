@@ -111,7 +111,12 @@ execution does not replace either endpoint write gate.
 1. **Direct Proxmox API build** — when `execute`, `provider`, `user_data_yaml`,
    and `first_boot_script` are all unset and the product is a plain image: requires `endpoint_id`,
    `target_node`, `image_url`; downloads via the Proxmox storage API and builds
-   through the proxmox-sdk session.
+   through the proxmox-sdk session. Talos is a direct-only plain Linux image:
+   its nocloud qcow2 is imported unmodified and receives the standard cloud-init
+   drive. It requires an explicit `image_url` (the default image URL is refused),
+   and proxbox-api generates no product user-data and writes no snippet. Proxmox
+   still writes its default cloud-config to the drive; Talos ignores it and reads
+   only the network configuration.
 2. **Pipeline build** — when `execute is not None`, `provider is not None`,
    `user_data_yaml is not None`, `first_boot_script is not None`, or the product is
    pfSense/OPNsense: routes to
