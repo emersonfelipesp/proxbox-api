@@ -15,7 +15,7 @@ do backend, mudança de dependência nem mudança no schema de resposta.
 
 | Componente | Versão ou contrato |
 | --- | --- |
-| proxbox-api | `0.0.32rc1` |
+| proxbox-api | `0.0.32` |
 | Proxmox SDK | `proxmox-sdk 0.0.15` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 e 3.13 |
@@ -47,7 +47,7 @@ Os tipos de produto existentes e o comportamento de suas requisições permanece
 
 ## Atualização e implantação
 
-Implante o pacote exato `proxbox-api 0.0.32rc1` ou o container candidato pelo workflow de release
+Implante o pacote exato `proxbox-api 0.0.32` ou o container publicado pelo workflow de release
 aprovado. Implante este backend com a versão pareada `netbox-proxbox 0.0.32.post2`; as versões mais
 recentes dos dois projetos são sempre pareadas. Mantenha `proxmox-sdk 0.0.15` e
 `netbox-sdk 0.0.13`; esta versão não exige atualização de dependências nem migração de banco de
@@ -65,8 +65,3 @@ continuam aplicáveis à mutação direta no Proxmox.
   primeiro boot.
 - O proxbox-api não inspeciona nem altera o schematic Talos incorporado na imagem; os chamadores
   continuam responsáveis por selecionar o artefato correto do Image Factory.
-
-## Status da versão
-
-`0.0.32rc1` é o release candidate desta versão. A disponibilidade do pacote e em produção segue
-os gates de release.

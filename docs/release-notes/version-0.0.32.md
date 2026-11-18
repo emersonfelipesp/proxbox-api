@@ -14,7 +14,7 @@ dependency change, or response-schema change.
 
 | Component | Release or contract |
 | --- | --- |
-| proxbox-api | `0.0.32rc1` |
+| proxbox-api | `0.0.32` |
 | Proxmox SDK | `proxmox-sdk 0.0.15` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 and 3.13 |
@@ -46,7 +46,7 @@ their request behavior are unchanged.
 
 ## Upgrade and deployment
 
-Deploy the exact `proxbox-api 0.0.32rc1` package or candidate container through the approved
+Deploy the exact `proxbox-api 0.0.32` package or published container through the approved
 release workflow. Deploy this backend with the paired `netbox-proxbox 0.0.32.post2` release;
 the latest releases of the two projects are always paired. Keep `proxmox-sdk 0.0.15` and
 `netbox-sdk 0.0.13`; this release does not require dependency upgrades or a backend database
@@ -62,8 +62,3 @@ endpoint write and template-build authorization gates still apply to the direct 
 - Talos builds cannot use the SSH pipeline, custom cloud-init user-data, or first-boot scripts.
 - proxbox-api does not inspect or alter the Talos schematic embedded in the image; callers remain
   responsible for selecting the correct Image Factory artifact.
-
-## Release status
-
-`0.0.32rc1` is the release candidate of this version. Package and production availability follow
-the release gates.

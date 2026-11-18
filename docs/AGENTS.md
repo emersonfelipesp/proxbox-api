@@ -84,9 +84,9 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
-- The planned `0.0.32` release notes cover the direct-only Talos product type,
+- The `0.0.32` release notes cover the direct-only Talos product type,
   its explicit image URL requirement, and preservation of Image Factory kernel
-  arguments through an unmodified image import. Keep the candidate status,
+  arguments through an unmodified image import. Keep the
   unchanged dependency pins, `netbox-proxbox 0.0.32.post2` pairing, and both
   language versions aligned; source preparation does not establish package or
   production availability.
