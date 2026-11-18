@@ -19,10 +19,20 @@ NetBox e publicacao em etapas.
 
 O grafo completo de CI executa em pushes de main e em pull requests para
 main, develop ou testing. Pushes espelhados de develop/testing nao iniciam
-outro grafo completo. Os tipos de evento de PR continuam sendo opened,
-synchronize, reopened e ready_for_review. Todas as versoes suportadas do
-NetBox, transportes, servicos Proxmox, modos de dependencia e seletores de
-teste permanecem iguais.
+outro grafo completo. Os eventos opened, synchronize e reopened executam todos
+os produtores obrigatorios, inclusive em PRs de rascunho. Marcar um rascunho
+sem alteracoes como pronto nao repete o mesmo grafo de CI ou Rust. Todas as
+versoes suportadas do NetBox, transportes, servicos Proxmox, modos de
+dependencia e seletores de teste permanecem iguais.
+
+Os testes de smoke dos roteadores preservam cada parametro HTTP isolado de
+autenticacao e verificam que cada requisicao mantem a configuracao das rotas
+e o estado do schema. Um teste dedicado verifica todos os caminhos protegidos
+no documento OpenAPI completo, sem reconstruir o schema em cada caso de
+autenticacao. A publicacao de documentacao exclui alteracoes apenas de CI
+neste teste de smoke e nos seus guias de agente, alem dos workflows e guias de
+CI ja previstos. Outros testes e alteracoes normais ou mistas de documentacao
+mantem a classificacao de publicacao existente.
 
 Uma nova execucao do mesmo PR cancela a execucao obsoleta, incluindo a
 preparacao de imagens e os jobs E2E dependentes. Cada PR tem seu proprio
@@ -45,7 +55,7 @@ flowchart TD
     Push[Push / PR / execucao manual]
     Core[test\nruff + ty + compile + pytest]
     Py311[test-py311-floor\ncompile + pytest core]
-    Free[test-free-threaded\ncontinue-on-error]
+    Free[test-free-threaded\nregressao focada obrigatoria]
     Bind[Docker bind-host smoke\nraw + granian]
     Setup[setup\ngera matriz E2E]
     BuildNB[build-netbox-image\npull ou build NetBox uma vez]

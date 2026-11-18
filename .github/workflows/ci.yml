@@ -6,7 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main, develop, testing]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       netbox_proxbox_mode:
