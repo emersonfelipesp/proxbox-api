@@ -708,6 +708,12 @@ ratchet; 85% remains the long-term target rather than the current gate.
 - Local: `uv run pytest tests/ -n auto --ignore=tests/e2e --ignore=tests/test_generated_proxmox_routes.py --cov=proxbox_api --cov-branch --cov-report=term-missing --cov-report=xml:coverage.xml`
 - CI: the public GitHub `test` job enforces the threshold on protected branches,
   reports missing lines, and retains `coverage.xml`; a regression blocks merge.
+  The full public CI workflow runs on main pushes, version-tag pushes,
+  published releases, manual dispatch, and PRs targeting main/develop/testing.
+  Mirrored develop/testing pushes do not start the full graph. Only obsolete
+  runs for the same PR are cancelled; all other runs remain independent.
+  Preserve the complete matrix and publication triggers. See
+  `.github/AGENTS.md` and `docs/development/ci-e2e-workflows.md` for scheduling.
   The checked-in Gitea workflows include untrusted validation plus audited
   package publication and deployment controls. Documentation must not expose
   private runner inventory, credentials, control-plane addresses, or secret values.
@@ -779,9 +785,23 @@ Type mismatches block merge. Use `# type: ignore` only with justification.
 uv run python -m compileall proxbox_api tests
 uv run ruff check . && uv run ruff format --check .
 uv run ty check proxbox_api/types proxbox_api/utils/retry.py proxbox_api/schemas/sync.py proxbox_api/database_protocols.py proxbox_api/utils/async_compat.py proxbox_api/runtime_settings.py proxbox_api/settings_client.py proxbox_api/ceph/endpoint_binding.py proxbox_api/ceph/timing.py proxbox_api/ceph/v2_schemas.py proxbox_api/ceph/v2_engine.py proxbox_api/ceph/v2_routes.py proxbox_api/ceph/v2_providers/base.py proxbox_api/ceph/v2_providers/proxmox.py proxbox_api/ceph/v2_providers/proxmox_writer.py
-uv run pytest tests --timeout=60
+uv run pytest tests/ -n 4 --dist worksteal \
+  --ignore=tests/e2e \
+  --ignore=tests/test_generated_proxmox_routes.py \
+  --tb=short -qq -rfE --color=no --durations=25 \
+  -p no:cacheprovider --junitxml=junit.xml \
+  --cov=proxbox_api --cov-report=xml:coverage.xml
 ```
 All checks MUST pass before committing.
+
+For CI-workflow and guide changes that preserve all application and executable
+job bodies, the command above is the unchanged native core selection. The
+declared locked environment does not include `pytest-timeout`, so
+`--timeout=60` is unsupported and must not be reported as a passing gate. Do
+not install an unlocked timeout plugin to make that argument available. This
+documentation correction does not change any CI command, test selection, or
+workflow timeout. Native Python 3.12 qualification must still pass for the
+actual candidate; a supported local Python 3.13 run is separate evidence.
 
 ### Configuration Control and Change Management
 

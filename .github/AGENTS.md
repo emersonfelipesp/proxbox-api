@@ -25,7 +25,7 @@ secret values, and private runner inventories.
 | `.gitea/workflows/artifact-v3-compatibility.yml` | Gitea: pull request / manual dispatch | Runs a bounded, disposable upload/download checksum probe for the Gitea-compatible artifact v3 actions on `ci-untrusted-python312`. |
 | `.gitea/workflows/publish-gitea.yml` | Gitea: authorized manual dispatch from `main` | Publishes an exact tagged package and repository-linked immutable manifest without deploying it. |
 | `.gitea/workflows/deploy-production.yml` | Gitea: `develop` push / authorized manual dispatch from `main` | Deploys reviewed `develop` to staging; production requires exact package/source/artifact binding, green CI with no unsigned bypass, a single-use authorization, signed completion evidence, and unconditional proof cleanup. |
-| `ci.yml` | Push / PR to `main`, `testing`, or `v*`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
+| `ci.yml` | Push to `main` or a `v*` tag; PR to `main`, `develop`, or `testing`; Release published; manual dispatch | Lint (ruff), compile, import smoke checks, run the non-E2E core suite with the enforced 65.40% branch-inclusive coverage ratchet and retained XML report, build the real prepared release sdist and its extracted Docker context with `--network=none`, then run the E2E Docker matrix (dev or pypi mode). Docker-backed E2E runs with the `mock_http` marker; the in-process MockBackend pass runs separately. |
 | `docs.yml` | Push to `main` | Builds MkDocs site and deploys to GitHub Pages |
 | `docker-hub-publish.yml` | Called by `publish-testpypi.yml` on Release, or manual dispatch | Builds and pushes Alpine-based Docker images to Docker Hub: raw (uvicorn), nginx (nginx+mkcert+uvicorn), granian (granian+mkcert), plus experimental PyO3/Rust variants |
 | `publish-testpypi.yml` | RC tag push or RC-only manual dispatch; GitHub Release published | Builds the exact tagged source on GitHub, validates its wheel and sdist on Python 3.12/3.13, and publishes the same artifacts. Candidate validation uses two xdist workers with loadgroup isolation; Python 3.13 keeps branch coverage, uploads XML evidence for 14 days, and retains duration telemetry while omitting the terminal missing-lines report. `rcN` versions publish to TestPyPI; final/post releases publish to PyPI, then publish Docker images and run post-publish E2E. |
@@ -35,13 +35,38 @@ secret values, and private runner inventories.
 | `nightly-schema-refresh.yml` | Scheduled (nightly) | Runs `scripts/refresh_schemas.py` and opens a PR if schemas changed |
 | `release-docker-verify.yml` | Called after successful Docker publication / manual dispatch | Pulls and smoke-tests every published standard and experimental Docker tag only after the release publication workflow succeeds. |
 
+## CI Scheduling
+
+Ordinary branch pushes start the full `ci.yml` graph only for `main`. Mirrored
+`develop` and `testing` pushes do not start it. Pull requests targeting `main`,
+`develop`, or `testing` retain the complete checks and compatibility matrix.
+
+Opened, synchronized and reopened pull requests run the complete CI and Rust
+graphs even when they are drafts. Do not repeat these graphs when an unchanged
+draft becomes ready. Keep the complete required summaries and every producer.
+
+Workflow concurrency groups pull-request runs by workflow name and PR number.
+A newer run can cancel an obsolete run for that PR, including its image
+preparation and E2E jobs. Different PRs remain independent. All other events
+use a unique run-id group and disable cancellation, so main, tag, release, and
+manual certification runs do not replace or cancel one another. Keep these
+non-PR groups unique: `cancel-in-progress: false` alone does not prevent the
+platform from replacing an older pending run in a shared group.
+
+Version-tag, published-release, and manual triggers remain enabled. They can
+still certify the same commit independently. Successful-run reuse requires a
+separate design that binds the workflow, selected mode, and dependency inputs;
+the source commit alone does not identify floating development dependencies.
+Do not reduce the supported matrix or change the publication workflows to
+implement this scheduling policy.
+
 ## CI Job Dependencies
 
 ```
 ci.yml (push/PR — dev mode E2E only)
 ├── test
 ├── test-py311-floor
-├── test-free-threaded (continue-on-error)
+├── test-free-threaded (required focused regression)
 ├── docker-bind-smoke  (raw + granian bind-host startup checks)
 ├── setup             (generates E2E matrix)
 ├── build-netbox-image (pulls or source-builds each NetBox version once, then uploads a short-lived image artifact)
@@ -57,7 +82,7 @@ ci.yml (push/PR — dev mode E2E only)
     - NetBox readiness waits up to 20 minutes for migrations/search indexing, then checks `/api/status/` before creating tokens.
     - Docker-backed Proxmox E2E uses pytest marker `mock_http`; the separate in-process MockBackend pass uses `mock_backend`.
 
-`test-free-threaded` is intentionally `continue-on-error`. It creates an isolated
+`test-free-threaded` is a required focused compatibility regression. It creates an isolated
 Python 3.14t environment without installing root project metadata, installs the
 focused dependencies needed to import and run the probe, compiles the package,
 and runs `scripts.verify_free_threaded_auth_heartbeat`. Do not expand it
@@ -121,3 +146,25 @@ All tags also have `sha-<commit>` variants (e.g., `sha-abc1234`, `sha-abc1234-ng
   `docs/pt-BR/development/ci-e2e-workflows.md` aligned with CI workflow changes.
 - Keep `rust-reconcile.yml` aligned with `proxbox-reconcile-rs/Cargo.toml`,
   `proxbox-reconcile-rs/pyproject.toml`, and `tests/reconciliation/`.
+
+## Complete required quality and documentation publication
+
+The stable `CI complete` check requires all ten original CI jobs and every
+matrix row to succeed, including the required free-threaded regression.
+Failed, cancelled, skipped or missing results refuse admission.
+`Rust reconciliation complete` requires every
+supported test and wheel matrix row.
+
+`Documentation complete` runs for every pull request to main. Its selector
+uses verified Git commits and the original five documentation paths. Only
+a verified unselected change may skip the build; failed or missing selection
+fails the summary. Selected documentation still runs every original command.
+
+Main documentation publication excludes changes consisting only of workflow
+files, root and workflow agent guides, and the two CI workflow guides.
+The exact router smoke test and its scoped agent guides are also CI-only:
+`tests/test_router_smoke.py`, `tests/AGENTS.md`, and `tests/CLAUDE.md`.
+Do not broaden this exception to other tests or documentation.
+Normal documentation and mixed changes keep their original gh-pages publication. Manual validation
+still builds documentation without publishing. This guard does not change
+any package, image, release or application deployment workflow.

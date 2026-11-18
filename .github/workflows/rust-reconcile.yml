@@ -5,7 +5,7 @@ on:
     branches: [main, testing, "v*"]
   pull_request:
     branches: [main, testing, "v*"]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 env:
@@ -84,3 +84,20 @@ jobs:
         with:
           name: proxbox-reconcile-rs-${{ matrix.os }}-py${{ matrix.python }}
           path: dist/*
+
+  required-rust:
+    name: Rust reconciliation complete
+    if: ${{ always() }}
+    needs: [test, build-wheels]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require every supported test and wheel row
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          WHEEL_RESULT: ${{ needs['build-wheels'].result }}
+        run: |
+          set -euo pipefail
+          [[ "$TEST_RESULT" == success ]]
+          [[ "$WHEEL_RESULT" == success ]]
+          printf 'Every supported Rust test and wheel matrix row succeeded.\n'

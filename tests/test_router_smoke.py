@@ -10,9 +10,11 @@ does not prove a protected route actually exists — a request to a non-existent
 path under a protected prefix returns ``401`` too. Coverage therefore combines:
 
 1. **Public routes** (``AUTH_EXEMPT_PATHS``): reachable without an API key.
-2. **Protected prefixes**: an unauthenticated request returns ``401`` *and*
-   the path template exists in the live OpenAPI schema (so the route is really
-   registered, not just shadowed by the auth middleware).
+2. **Protected prefixes**: each isolated unauthenticated request returns
+   ``401`` (or the interactive boundary's ``403``). A separate test checks
+   every original path template against the complete live OpenAPI schema, so
+   the auth middleware cannot mask a missing route. The schema is built once
+   for this registration contract instead of once per HTTP parameter.
 3. **Authenticated dispatch smoke**: a handful of safe read endpoints return
    ``200`` with a valid key, proving end-to-end wiring for prefixes that
    previously had no HTTP-level TestClient coverage (``/auth``, ``/cache``,
@@ -25,9 +27,25 @@ Reuses the ``test_client`` (unauthenticated) and ``auth_test_client``
 from __future__ import annotations
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from proxbox_api.main import app
+
+
+def _route_snapshot() -> tuple[tuple[int, str, frozenset[str], object, bool], ...]:
+    """Capture the live route configuration without building its OpenAPI schema."""
+    return tuple(
+        (
+            id(route),
+            route.path,
+            frozenset(route.methods or ()),
+            route.endpoint,
+            route.include_in_schema,
+        )
+        for route in app.routes
+        if isinstance(route, APIRoute)
+    )
 
 
 def _assert_route_in_openapi(path: str) -> None:
@@ -114,15 +132,23 @@ PROTECTED_ROUTES: list[tuple[str, str]] = [
 
 @pytest.mark.parametrize("method,path", PROTECTED_ROUTES)
 def test_protected_route_requires_api_key(test_client: TestClient, method: str, path: str) -> None:
-    """Every protected prefix rejects an unauthenticated request with 401 and
-    is genuinely registered in the OpenAPI schema."""
+    """Every protected prefix rejects an isolated unauthenticated request."""
+    routes_before = _route_snapshot()
+    schema_before = app.openapi_schema
     resp = test_client.request(method, path)
     expected = 403 if path == "/ssh/sessions" else 401
     assert resp.status_code == expected, (
         f"{method} {path} returned {resp.status_code}; expected {expected} "
         f"without an X-Proxbox-API-Key header."
     )
-    _assert_route_in_openapi(path)
+    assert _route_snapshot() == routes_before
+    assert app.openapi_schema is schema_before
+
+
+def test_protected_routes_are_registered_in_live_openapi(test_client: TestClient) -> None:
+    """Check every protected path against the full schema after real startup."""
+    for _, path in PROTECTED_ROUTES:
+        _assert_route_in_openapi(path)
 
 
 # ---------------------------------------------------------------------------

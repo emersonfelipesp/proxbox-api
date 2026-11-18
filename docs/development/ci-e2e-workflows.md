@@ -8,12 +8,43 @@ matrix, and staged package publication.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `.github/workflows/ci.yml` | Push, pull request, release, manual dispatch | Runs core checks and the NetBox + Proxmox Docker E2E matrix. |
+| `.github/workflows/ci.yml` | Push to main or a `v*` tag; PR to main/develop/testing; published release; manual dispatch | Runs core checks and the NetBox + Proxmox Docker E2E matrix. |
 | `.github/workflows/publish-testpypi.yml` | RC tag or RC-only manual dispatch; published GitHub Release | Publishes immutable RCs to TestPyPI and final/post releases to PyPI, followed by Docker images and post-publish E2E. |
 | `.github/workflows/docker-hub-publish.yml` | Reusable workflow / manual dispatch | Builds and publishes raw, nginx, granian, and experimental PyO3/Rust Docker image variants. |
 | `.github/workflows/release-docker-verify.yml` | Called after successful Docker publication / manual dispatch | Pulls the published Docker image tags, including experimental PyO3/Rust tags, and verifies container startup. |
 | `.github/workflows/docs.yml` | Docs changes on main / PR | Builds and publishes the MkDocs site. |
 | `.github/workflows/nightly-schema-refresh.yml` | Schedule / manual dispatch | Refreshes generated Proxmox schemas and opens a PR when they change. |
+
+## CI Scheduling
+
+The full CI graph runs for main pushes and pull requests targeting main,
+develop, or testing. Mirrored develop/testing pushes do not start another
+full graph. PR events opened, synchronize, and reopened run every required
+producer, including on draft PRs. Marking an unchanged draft ready does not
+repeat the same CI or Rust graph. All supported NetBox versions, transports,
+Proxmox services, dependency modes, and test selectors remain unchanged.
+
+Router smoke tests keep every isolated HTTP authentication parameter and check
+that each request preserves the live route configuration and schema state.
+One dedicated test checks all protected paths against the complete live
+OpenAPI schema, so the schema is not rebuilt for every authentication case.
+Documentation publication excludes CI-only changes to this router smoke test
+and its scoped agent guides, as well as the existing workflow and CI guides.
+Other test files and normal or mixed documentation changes retain their
+existing publication classification.
+
+A newer run for the same PR cancels the obsolete run, including its image
+preparation and dependent E2E jobs. Each PR has its own workflow concurrency
+group. Main, version-tag, published-release, and manual runs have unique
+run-id groups and disable cancellation. They neither cancel nor replace one
+another through concurrency, including when another certification is pending.
+
+Version-tag and published-release events still run their existing full CI
+checks. Manual dispatch still runs the requested dependency mode. These
+events can certify the same source commit separately. A successful source
+commit alone cannot justify skipping another run when development
+dependencies can change. Package and image publication workflows remain
+separate and retain their existing validation.
 
 ## CI Job Flow
 
@@ -22,7 +53,7 @@ flowchart TD
     Push[Push / PR / manual run]
     Core[test\nruff + ty + compile + pytest]
     Py311[test-py311-floor\ncompile + core pytest]
-    Free[test-free-threaded\ncontinue-on-error]
+    Free[test-free-threaded\nrequired focused regression]
     Bind[Docker bind-host smoke\nraw + granian]
     Setup[setup\nbuild E2E matrix]
     BuildNB[build-netbox-image\npull or source-build NetBox once]

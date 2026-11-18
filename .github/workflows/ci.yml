@@ -2,11 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, testing]
+    branches: [main]
     tags: ["v*"]
   pull_request:
     branches: [main, develop, testing]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       netbox_proxbox_mode:
@@ -16,6 +16,12 @@ on:
         default: dev
   release:
     types: [published]
+
+# Cancel obsolete validation only within the same pull request. Every other
+# event gets its own group, so certification runs cannot replace one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   PROXBOX_ENCRYPTION_KEY: proxbox-ci-only-encryption-key-not-a-secret
@@ -960,3 +966,35 @@ jobs:
         run: |
           docker rm -f proxbox-e2e netbox-e2e-rqworker netbox-e2e-http netbox-e2e-nginx netbox-e2e-granian proxmox-e2e-mock netbox-e2e-postgres netbox-e2e-redis 2>/dev/null || true
           docker network rm proxbox-e2e 2>/dev/null || true
+
+  required-ci:
+    name: CI complete
+    if: ${{ always() }}
+    needs: [test, release-offline-image, docker-bind-smoke, setup, build-netbox-image, prepare-e2e-service-images, prepare-proxmox-image, build-proxbox-image, e2e-docker, test-free-threaded]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require the complete original CI graph
+        env:
+          CORE: ${{ needs['test'].result }}
+          OFFLINE: ${{ needs['release-offline-image'].result }}
+          BIND: ${{ needs['docker-bind-smoke'].result }}
+          SETUP: ${{ needs['setup'].result }}
+          NETBOX_IMAGES: ${{ needs['build-netbox-image'].result }}
+          SERVICE_IMAGES: ${{ needs['prepare-e2e-service-images'].result }}
+          PROXMOX_IMAGES: ${{ needs['prepare-proxmox-image'].result }}
+          PROXBOX_IMAGES: ${{ needs['build-proxbox-image'].result }}
+          E2E: ${{ needs['e2e-docker'].result }}
+          FREE_THREADED: ${{ needs['test-free-threaded'].result }}
+        run: |
+          set -euo pipefail
+          for dependency in "core=$CORE" "offline=$OFFLINE" "bind=$BIND" "setup=$SETUP" \
+            "netbox_images=$NETBOX_IMAGES" "service_images=$SERVICE_IMAGES" \
+            "proxmox_images=$PROXMOX_IMAGES" "proxbox_images=$PROXBOX_IMAGES" "e2e=$E2E" \
+            "free_threaded=$FREE_THREADED"; do
+            if [[ "${dependency#*=}" != success ]]; then
+              printf 'Required CI dependency did not succeed: %s\n' "$dependency" >&2
+              exit 1
+            fi
+          done
+          printf 'All ten required CI jobs and every matrix row succeeded.\n'
