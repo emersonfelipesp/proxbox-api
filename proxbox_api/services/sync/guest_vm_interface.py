@@ -67,6 +67,27 @@ def _relation_id(value: object) -> int | None:
     return record_id(value)
 
 
+def _tag_slugs(tags: object) -> list[str]:
+    """Return the sorted tag slugs of NetBox nested tags or Proxbox tag refs.
+
+    NetBox returns nested tag objects (``id``, ``url``, ``display``, ``name``,
+    ``slug``, ``color``) while the desired payload carries ``{name, slug,
+    color}`` refs. Comparing them raw never matches, which PATCHed every guest
+    interface on every sync. Slugs identify a tag on both sides.
+    """
+    if not isinstance(tags, list):
+        return []
+    slugs: list[str] = []
+    for tag in tags:
+        if isinstance(tag, dict):
+            slug = tag.get("slug") or tag.get("name")
+        else:
+            slug = tag
+        if slug:
+            slugs.append(str(slug))
+    return sorted(slugs)
+
+
 def _current_guest_interface(record: dict[str, object]) -> dict[str, object]:
     return {
         "virtual_machine": _relation_id(record.get("virtual_machine")),
@@ -75,7 +96,7 @@ def _current_guest_interface(record: dict[str, object]) -> dict[str, object]:
         "mac_address": normalized_mac(record.get("mac_address")),
         "enabled": record.get("enabled"),
         "mtu": record.get("mtu"),
-        "tags": record.get("tags"),
+        "tags": _tag_slugs(record.get("tags")),
     }
 
 

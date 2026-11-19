@@ -61,6 +61,9 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   one worker can verify and proceed before another worker overwrites its claim.
 - `guest_vm_interface.py`: best-effort netbox-proxbox plugin reconciliation for
   guest OS VM interfaces and guest-interface-to-core-IP links.
+  Compare `tags` by slug (`_tag_slugs`): NetBox returns nested tag objects
+  while the desired payload carries `{name, slug, color}` refs, so a raw
+  compare never matches and PATCHes every unchanged guest row each sync.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
   Its list-compatible `DeviceSyncResultList` preserves the combined missing
   reconciliation-record and invalid-name failure count for orchestrators while
