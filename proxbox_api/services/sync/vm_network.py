@@ -15,6 +15,7 @@ from proxbox_api.netbox_rest import (
     rest_reconcile_async,
 )
 from proxbox_api.proxmox_to_netbox.models import (
+    NETBOX_VLAN_PATCHABLE_FIELDS,
     NetBoxVirtualDiskSyncState,
     NetBoxVirtualMachineInterfaceSyncState,
     NetBoxVlanSyncState,
@@ -173,6 +174,7 @@ async def sync_vm_interfaces(  # noqa: C901
                             "tags": tag_refs,
                         },
                         schema=NetBoxVlanSyncState,
+                        patchable_fields=NETBOX_VLAN_PATCHABLE_FIELDS,
                         current_normalizer=lambda record: {
                             "vid": record.get("vid"),
                             "name": record.get("name"),

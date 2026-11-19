@@ -141,6 +141,13 @@ sub-interface cannot be reconciled, the interface keeps its existing NetBox
 being cleared, so a transient failure cannot erase VLAN assignments. Other
 interfaces still have stale topology cleared when Proxmox removes it.
 
+VLAN writes are create-only. Proxmox only knows a VLAN by its VID, so when a
+node or VM interface carries a VID that is missing from NetBox, the sync creates
+`VLAN <vid>`; when a VLAN with that VID already exists, the interface is linked
+to it and the VLAN itself is left untouched (name, status and tags are never
+patched). Every VLAN reconcile passes `NETBOX_VLAN_PATCHABLE_FIELDS` (an empty
+set), and `tests/test_vlan_reconcile_create_only.py` guards new call sites.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:
