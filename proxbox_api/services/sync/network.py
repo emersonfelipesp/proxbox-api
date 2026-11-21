@@ -543,6 +543,9 @@ async def _reconcile_node_interface_scalar(
         payload=_node_interface_payload(device_id, iface, entry, tag_refs),
         current_normalizer=_node_iface_normalizer,
         patchable_fields=frozenset({"device", "name", "status", "enabled", "type", "tags"}),
+        # Every node has the same interface names (vmbr0, eno1...): the looser
+        # name-only reuse candidate would match another node's interface.
+        strict_lookup=True,
     )
 
 
@@ -782,6 +785,7 @@ async def _sync_node_network_topology(
             current_normalizer=_node_iface_normalizer,
             patchable_fields=frozenset(patch),
             nullable_fields=frozenset({"bridge", "lag", "parent", "mode"}),
+            strict_lookup=True,
         )
 
 
