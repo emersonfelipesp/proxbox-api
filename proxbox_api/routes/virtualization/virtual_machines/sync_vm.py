@@ -62,7 +62,9 @@ from proxbox_api.services.name_collision import (
 )
 from proxbox_api.services.proxmox.tag_styles import fetch_tag_color_map
 from proxbox_api.services.proxmox_helpers import (
+    fetch_lxc_network_interfaces,
     fetch_qemu_guest_agent_network_interfaces,
+    get_lxc_network_interfaces,
     get_qemu_guest_agent_hostname,
     get_qemu_guest_agent_network_interfaces,
     sanitize_dns_hostname,
@@ -4291,7 +4293,7 @@ async def _vm_task_guest_interfaces(
     vm_name: str,
     timing_key: str,
 ) -> list[dict]:
-    if vm_type != "qemu" or not vm_config_obj.qemu_agent_enabled:
+    if vm_type != "lxc" and (vm_type != "qemu" or not vm_config_obj.qemu_agent_enabled):
         return []
     proxmox_session = next(
         (
@@ -4303,7 +4305,12 @@ async def _vm_task_guest_interfaces(
     )
     if proxmox_session is None:
         return []
-    result = await fetch_qemu_guest_agent_network_interfaces(
+    fetch_interfaces = (
+        fetch_lxc_network_interfaces
+        if vm_type == "lxc"
+        else fetch_qemu_guest_agent_network_interfaces
+    )
+    result = await fetch_interfaces(
         proxmox_session,
         node=str(resource.get("node")),
         vmid=int(resource.get("vmid")),
@@ -5341,9 +5348,11 @@ async def _fetch_vm_interface_guest_data(
     vmid: object,
     vm_config: dict[str, object],
 ) -> list[dict[str, object]]:
-    if vm_type != "qemu" or not _parse_proxmox_kv_flag(vm_config.get("agent")):
-        return []
     if not proxmox_session or not resource_node:
+        return []
+    if vm_type == "lxc":
+        return await get_lxc_network_interfaces(proxmox_session, resource_node, int(vmid))
+    if vm_type != "qemu" or not _parse_proxmox_kv_flag(vm_config.get("agent")):
         return []
     return (
         await get_qemu_guest_agent_network_interfaces(
@@ -6211,15 +6220,9 @@ async def create_only_vm_ip_addresses(  # noqa: C901
                 "Could not fetch VM config for IP sync %s (vmid=%s): %s", vm_name, vmid, exc
             )
 
-        guest_agent_interfaces: list[dict[str, object]] = []
-        if vm_type == "qemu" and _parse_proxmox_kv_flag(vm_config.get("agent")):
-            if proxmox_session and resource_node:
-                guest_agent_interfaces = (
-                    await get_qemu_guest_agent_network_interfaces(
-                        proxmox_session, resource_node, int(vmid)
-                    )
-                    or []
-                )
+        guest_agent_interfaces = await _fetch_vm_interface_guest_data(
+            proxmox_session, resource_node, vm_type, vmid, vm_config
+        )
 
         guest_by_name = {
             str(iface.get("name", "")).strip().lower(): iface for iface in guest_agent_interfaces

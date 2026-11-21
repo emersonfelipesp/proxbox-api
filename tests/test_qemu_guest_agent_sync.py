@@ -370,13 +370,17 @@ def test_network_sync_scans_role_snapshots_once_for_multiple_vms(monkeypatch):
     assert len(scan_calls) == 1
 
 
-def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
+@pytest.mark.parametrize("vm_type", ["qemu", "lxc"])
+def test_vm_sync_prefers_guest_agent_ip(monkeypatch, vm_type):
     data = _vm_sync_inputs(
         {
             "agent": 1,
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
         }
     )
+    data["cluster_resources"][0]["lab"][0]["type"] = vm_type
+    if vm_type == "lxc":
+        data["vm_config"] = {"net0": "name=eth0,hwaddr=AA:BB:CC:DD:EE:FF,ip=dhcp"}
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
 
@@ -395,8 +399,14 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm."
+        + (
+            "fetch_qemu_guest_agent_network_interfaces"
+            if vm_type == "qemu"
+            else "fetch_lxc_network_interfaces"
+        ),
         _fake_guest_ifaces_with_ip,
+        raising=False,
     )
 
     result = asyncio.run(
@@ -1204,13 +1214,17 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     assert primary_ip_calls[0]["primary_ip_id"] == 77
 
 
-def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch):
+@pytest.mark.parametrize("vm_type", ["qemu", "lxc"])
+def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch, vm_type):
     data = _vm_sync_inputs(
         {
             "agent": 1,
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
         }
     )
+    data["cluster_resources"][0]["lab"][0]["type"] = vm_type
+    if vm_type == "lxc":
+        data["vm_config"] = {"net0": "name=eth0,hwaddr=AA:BB:CC:DD:EE:FF,ip=dhcp"}
     primary_ip_calls: list[dict[str, object]] = []
 
     def _fake_get_vm_config(*args, **kwargs):
@@ -1246,7 +1260,7 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         ]
 
     async def _fake_rest_list(*args, **kwargs):
-        return [{"id": 66, "name": "net0", "virtual_machine": 55}]
+        return [{"id": 66, "name": "eth0" if vm_type == "lxc" else "net0", "virtual_machine": 55}]
 
     async def _fake_rest_first(*args, **kwargs):
         query = kwargs.get("query") or {}
@@ -1287,8 +1301,14 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         _fake_get_vm_config,
     )
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm."
+        + (
+            "get_qemu_guest_agent_network_interfaces"
+            if vm_type == "qemu"
+            else "get_lxc_network_interfaces"
+        ),
         _fake_guest_ifaces,
+        raising=False,
     )
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
