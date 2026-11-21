@@ -218,3 +218,37 @@ def test_ensure_bridge_interfaces_returns_none_when_device_id_missing(monkeypatc
     )
 
     assert result_id is None
+
+
+def test_ensure_node_bridge_interface_fallback_reconcile_is_strict(monkeypatch):
+    """The fallback reconcile must not reuse another node's same-named bridge."""
+    reconcile_kwargs: list[dict] = []
+
+    async def _fake_first(_nb, _path, *, query=None):
+        return _FakeRestRecord({"id": 7, "device": 19, "name": "vmbr0"})
+
+    async def _malformed_existing(*_args, **_kwargs):
+        return {}
+
+    async def _fake_reconcile(_nb, _path, **kwargs):
+        reconcile_kwargs.append(kwargs)
+        return {"id": 7, "device": 19, "name": "vmbr0"}
+
+    module = "proxbox_api.services.sync.bridge_interfaces"
+    monkeypatch.setattr(f"{module}.rest_first_async", _fake_first)
+    monkeypatch.setattr(f"{module}._reconcile_existing_node_bridge", _malformed_existing)
+    monkeypatch.setattr(f"{module}.rest_reconcile_async", _fake_reconcile)
+
+    result = asyncio.run(
+        ensure_node_bridge_interface(
+            nb=object(),
+            device_id=19,
+            bridge_name="vmbr0",
+            tag_refs=[],
+            now=datetime(2026, 4, 9, 20, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    assert result["id"] == 7
+    assert reconcile_kwargs[0]["lookup"] == {"device_id": 19, "name": "vmbr0"}
+    assert reconcile_kwargs[0]["strict_lookup"] is True
