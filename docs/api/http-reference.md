@@ -513,7 +513,7 @@ observed body over the limit, rejects transport-compressed responses, and does
 not follow redirects. Boolean query parameters use the Proxmox-compatible `0`
 and `1` encodings. The
 service adapter delegates to the SDK's public bounded-read method (pinned
-`proxmox-sdk==0.0.15`) and maps its typed failures to secret-safe reasons.
+`proxmox-sdk==0.0.16.post1`) and maps its typed failures to secret-safe reasons.
 
 ### High-Availability (read-only)
 

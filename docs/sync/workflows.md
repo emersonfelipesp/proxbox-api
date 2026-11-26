@@ -141,6 +141,17 @@ sub-interface cannot be reconciled, the interface keeps its existing NetBox
 being cleared, so a transient failure cannot erase VLAN assignments. Other
 interfaces still have stale topology cleared when Proxmox removes it.
 
+The node-interface reconciles in `sync_node_network` and
+`ensure_node_bridge_interface` are scoped to their node device. The phase-one
+and topology writes in `sync_node_network`, and the fallback reconcile in
+`ensure_node_bridge_interface`, look up `dcim.Interface` rows by
+`device_id` and `name` with `strict_lookup=True`, as the legacy per-interface
+path already did. Proxmox nodes usually share interface names
+(`vmbr0`, `eno1`), so a name-only reuse fallback would select another node's
+interface and try to move it, which NetBox refuses with
+`Components cannot be moved to a different device.` When a node's interface
+does not exist yet, the stage creates it on that node.
+
 ## Virtual Machine Sync Flow
 
 Primary endpoint:
@@ -551,8 +562,9 @@ Sync writes reflection values into netbox-proxbox typed sidecars under
 
 Mirrored write sites:
 
-- VM identity/reflection fields (`proxmox_vm_id`, type, status, node, cluster,
-  endpoint raw id, link, agent/start flags, and `proxmox_last_updated`) are
+- VM identity/reflection fields (`proxmox_vm_id`, optional Proxmox VE 9.3 guest
+  and cluster UIDs, type, status, node, cluster, endpoint raw id, link,
+  agent/start flags, and `proxmox_last_updated`) are
   written to `ProxboxVirtualMachineSyncState`.
 - `proxbox_last_run_id` is mirrored to the VM sidecar `last_run_id`.
 - Device and cluster `proxmox_last_updated` stamps are mirrored to
@@ -575,9 +587,20 @@ and verified before the VM is marked failed. This prevents either half of the
 pair from misclassifying the next pass as an operator edit. Deploy the
 netbox-proxbox schema/API addition before this backend consumer.
 
-VM identity lookups query
-`/api/plugins/proxbox/sync-state/virtual-machines/` by `proxmox_vm_id` and
-endpoint. Orphan sweep reads `last_run_id` from the VM sidecar, so a VM touched
+VM identity lookups first query
+`/api/plugins/proxbox/sync-state/virtual-machines/` by the exact stable
+`(proxmox_cluster_uid, proxmox_vm_uid)` pair when both values are available,
+then use the legacy `proxmox_vm_id` and endpoint chain. Returned UID rows are
+verified client-side because older plugins can ignore unknown filters. A stored
+guest UID mismatch rejects VMID reuse only within the same non-empty cluster
+UID; missing UIDs and changed cluster UIDs retain the legacy behavior. UID
+fields are omitted from writes until a non-empty serializer response or bounded
+DRF `OPTIONS` metadata proves support; an empty response is unknown and never
+downgrades positive endpoint/run evidence. A supported cluster UID is written
+independently when the live guest UID is absent. A stored guest UID is retained
+across a cluster transition but cannot drive exact UID-first matching until both
+live values return. Older plugin releases therefore remain compatible. Orphan
+sweep reads `last_run_id` from the VM sidecar, so a VM touched
 by the current run is not deleted. Role ownership is read from
 `ProxboxVirtualMachineSyncState.proxmox_last_synced_role_id`. Full/bulk sync
 loads typed role snapshots once per pass, then the
@@ -788,6 +811,29 @@ Custom exception types provide detailed context:
 - The retry behavior is configurable through `PROXBOX_NETBOX_MAX_RETRIES` and `PROXBOX_NETBOX_RETRY_DELAY`.
 - Failed attempts are logged with context before retry.
 - Final failures bubble up with full error context.
+
+### LXC Runtime Addresses
+
+LXC containers have no QEMU guest agent. For containers, full VM sync, the
+interface-only stage, and the IP-only stage read the runtime addresses from the
+read-only Proxmox `GET /nodes/{node}/lxc/{vmid}/interfaces` endpoint instead,
+so a container configured with `ip=dhcp` gets its leased addresses in NetBox.
+The response is validated with the pinned proxmox-sdk model; both the
+`ip-addresses` list and the older single `inet`/`inet6` CIDR fields are
+accepted. The addresses then go through the same MAC/name matching, address
+filtering (loopback and link-local are dropped), interface ownership, and IP
+reconciliation as QEMU guest-agent data. Because containers now supply guest
+data, the default `guest_os_model` strategy also writes netbox-proxbox
+`GuestVMInterface` and address rows for running containers, and the deprecated
+`legacy_rename` strategy may rename a container's core VMInterface to its
+in-container interface name.
+
+A container that cluster resources report as not running is skipped without a
+request, because Proxmox serves this endpoint only for running containers. When
+the read fails or returns malformed data, the stage logs a warning without the
+upstream error text and falls back to the static addresses in the container
+configuration. The read needs the same `VM.Audit` privilege as the container
+configuration.
 
 ### Interface-Dense Guest Handling
 

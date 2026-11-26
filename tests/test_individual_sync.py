@@ -464,6 +464,114 @@ async def test_sync_vm_individual_uses_real_proxmox_resource(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_sync_vm_individual_propagates_uid_transition_across_runs(monkeypatch):
+    vm_uid = "a234567a234567a23456"
+    cluster_uids = iter(["standalone-uid", "cluster-uid-a", "cluster-uid-a"])
+    resources = iter(
+        [
+            {"vmid": 101, "name": "db01", "node": "pve01", "type": "qemu", "uid": vm_uid},
+            {"vmid": 101, "name": "db01", "node": "pve01", "type": "qemu"},
+            {"vmid": 101, "name": "db01", "node": "pve01", "type": "qemu", "uid": vm_uid},
+        ]
+    )
+    run_index = -1
+    resolver_identities: list[tuple[str | None, str | None]] = []
+    persisted_identities: list[tuple[object, object]] = []
+    existing_vm = {
+        "id": 55,
+        "name": "db01",
+        "cluster": {"id": 10, "name": "lab"},
+        "role": {"id": 17},
+        "tags": [],
+    }
+
+    async def _deps(self, cluster_name, node_name, vm_type):
+        return tuple(SimpleNamespace(id=value) for value in range(10, 19))
+
+    async def _config(*_args, **_kwargs):
+        return {"onboot": 1, "agent": 1}
+
+    async def _resource(*_args, **_kwargs):
+        nonlocal run_index
+        run_index += 1
+        return next(resources)
+
+    async def _cluster_uid(*_args, **_kwargs):
+        return next(cluster_uids)
+
+    async def _resolver(*_args, **kwargs):
+        resolver_identities.append((kwargs.get("cluster_uid"), kwargs.get("vm_uid")))
+        if run_index == 0:
+            return None
+        return SimpleNamespace(record=existing_vm, record_id=55, source="sidecar", sidecar={})
+
+    async def _list(*_args, **_kwargs):
+        return [] if run_index == 0 else [existing_vm]
+
+    async def _reconcile(*_args, **kwargs):
+        return FakeRecord(kwargs["payload"], record_id=55)
+
+    async def _write(*_args, **kwargs):
+        fields = kwargs["custom_fields"]
+        persisted_identities.append(
+            (fields.get("proxmox_cluster_uid"), fields.get("proxmox_vm_uid"))
+        )
+        return {"id": 955}
+
+    async def _snapshot(*_args, **_kwargs):
+        return SimpleNamespace(snapshot_id=17, verified=True)
+
+    async def _none(*_args, **_kwargs):
+        return None
+
+    async def _version(*_args, **_kwargs):
+        return (4, 5, 0)
+
+    monkeypatch.setattr(
+        individual_vm_sync.BaseIndividualSyncService,
+        "_get_or_create_vm_dependencies",
+        _deps,
+    )
+    monkeypatch.setattr(individual_vm_sync, "get_vm_config_individual", _config)
+    monkeypatch.setattr(individual_vm_sync, "get_vm_resource_individual", _resource)
+    monkeypatch.setattr(individual_vm_sync, "fetch_cluster_uid", _cluster_uid)
+    monkeypatch.setattr(individual_vm_sync, "resolve_virtual_machine_by_sync_state", _resolver)
+    monkeypatch.setattr(individual_vm_sync, "rest_list_async", _list)
+    monkeypatch.setattr(individual_vm_sync, "rest_reconcile_async", _reconcile)
+    monkeypatch.setattr(individual_vm_sync, "write_virtual_machine_sync_state", _write)
+    monkeypatch.setattr(individual_vm_sync, "resolve_snapshot_read", _snapshot)
+    monkeypatch.setattr(individual_vm_sync, "ensure_vm_platform", _none)
+    monkeypatch.setattr(individual_vm_sync, "resolve_discovery_tag_id", _none)
+    monkeypatch.setattr(individual_vm_sync, "clear_soft_delete_marker", _none)
+    monkeypatch.setattr(individual_vm_sync, "stamp_vm_last_run_id", _none)
+    monkeypatch.setattr(individual_vm_sync, "detect_netbox_version", _version)
+
+    actions = []
+    for run_id in ("run-1", "run-2", "run-3"):
+        result = await sync_vm_individual(
+            nb=object(),
+            px=SimpleNamespace(name="lab", db_endpoint_id=500),
+            tag=SimpleNamespace(id=7),
+            cluster_name="lab",
+            node="pve01",
+            vm_type="qemu",
+            vmid=101,
+            run_id=run_id,
+        )
+        actions.append(result["action"])
+
+    assert actions == ["created", "updated", "updated"]
+    assert persisted_identities == [
+        ("standalone-uid", vm_uid),
+        ("cluster-uid-a", None),
+        ("cluster-uid-a", vm_uid),
+    ]
+    assert ("standalone-uid", vm_uid) in resolver_identities
+    assert ("cluster-uid-a", None) in resolver_identities
+    assert ("cluster-uid-a", vm_uid) in resolver_identities
+
+
+@pytest.mark.asyncio
 async def test_sync_vm_individual_applies_proxmox_rename_and_writes_sidecar_name(
     monkeypatch,
 ):

@@ -21,8 +21,10 @@ from proxbox_api.netbox_rest import (
     rest_create_async,
     rest_get_fresh_json,
     rest_list_async,
+    rest_patch_async,
     rest_probe_async,
 )
+from proxbox_api.services.sync.guest_uid import extract_cluster_uid
 from proxbox_api.services.sync.vm_helpers import record_id, to_mapping
 
 ENDPOINT_PATH = "/api/plugins/proxbox/endpoints/proxmox/"
@@ -91,6 +93,7 @@ class ClusterClaim:
     # True for the compatibility adoption: callers must not write the native
     # cluster or its sync-state sidecar, because no ownership claim backs it.
     read_only: bool = False
+    proxmox_cluster_id: int | None = None
 
 
 def _value(source: object, key: str) -> object:
@@ -331,6 +334,7 @@ async def claim_endpoint_cluster(
     cluster_type_id: int | None,
     site_id: int | None = None,
     tenant_id: int | None = None,
+    cluster_uid: str | None = None,
 ) -> ClusterClaim:
     """Atomically resolve/create the core cluster before any native metadata write.
 
@@ -359,4 +363,49 @@ async def claim_endpoint_cluster(
     validated = ClusterClaimResponse.model_validate(to_mapping(response))
     native = validated.cluster.model_dump()
     native["url"] = f"{CLUSTER_PATH}{validated.cluster.id}/"
-    return ClusterClaim(RestRecord(nb, CLUSTER_PATH, native), validated.created, validated.changed)
+    await _write_cluster_uid_if_supported(
+        nb,
+        proxmox_cluster_id=validated.proxmox_cluster,
+        cluster_uid=cluster_uid or extract_cluster_uid(source),
+    )
+    return ClusterClaim(
+        RestRecord(nb, CLUSTER_PATH, native),
+        validated.created,
+        validated.changed,
+        proxmox_cluster_id=validated.proxmox_cluster,
+    )
+
+
+async def _write_cluster_uid_if_supported(
+    nb: object,
+    *,
+    proxmox_cluster_id: int,
+    cluster_uid: str | None,
+) -> None:
+    """Patch the plugin tracking row only when its serializer exposes the field."""
+
+    if not cluster_uid:
+        return
+    try:
+        rows = await rest_list_async(
+            nb,
+            TRACKING_PATH,
+            query={"id": proxmox_cluster_id, "limit": 2},
+        )
+        matches = [to_mapping(row) for row in rows if record_id(row) == proxmox_cluster_id]
+        if len(matches) != 1 or "proxmox_cluster_uid" not in matches[0]:
+            return
+        if str(matches[0].get("proxmox_cluster_uid") or "").strip() == cluster_uid:
+            return
+        await rest_patch_async(
+            nb,
+            TRACKING_PATH,
+            proxmox_cluster_id,
+            {"proxmox_cluster_uid": cluster_uid},
+        )
+    except Exception as error:  # noqa: BLE001 - compatibility reflection is best-effort
+        logger.warning(
+            "Could not persist Proxmox cluster UID on plugin cluster id=%s: %s",
+            proxmox_cluster_id,
+            error,
+        )

@@ -138,6 +138,7 @@ async def upsert_cluster(
     mode: str,
     tag_refs: list[dict[str, object]],
     endpoint_source: object | None = None,
+    cluster_uid: str | None = None,
 ) -> UpsertResult:
     """Claim the endpoint's native cluster, then reconcile its metadata by ID."""
     claim = await claim_endpoint_cluster(
@@ -146,6 +147,7 @@ async def upsert_cluster(
         cluster_name=cluster_name,
         mode=mode,
         cluster_type_id=cluster_type_id,
+        cluster_uid=cluster_uid,
     )
     if getattr(claim, "read_only", False) is True:
         # Adopted without the plugin's ownership claim: never write it.

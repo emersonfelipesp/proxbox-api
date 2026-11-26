@@ -23,6 +23,10 @@ from proxbox_api.services.proxmox_helpers import (
     get_cluster_status as get_typed_cluster_status,
 )
 from proxbox_api.services.sync.backup_routines import sync_all_backup_routines
+from proxbox_api.services.sync.guest_uid import (
+    cluster_uid_from_status_items,
+    extract_guest_uid,
+)
 from proxbox_api.session.netbox import NetBoxSessionDep
 from proxbox_api.session.proxmox import ProxmoxSession, ProxmoxSessionsDep
 from proxbox_api.utils.streaming import WebSocketSSEBridge, sse_stream_generator
@@ -44,6 +48,7 @@ def _cluster_item_defaults(
     node_count: int,
     mode: str,
     proxmox_object: ProxmoxSession | None = None,
+    cluster_uid: str | None = None,
 ) -> dict[str, object]:
     """Normalize sparse Proxmox cluster payloads to the route schema."""
     name = str(item_data.get("name") or cluster_name)
@@ -56,6 +61,7 @@ def _cluster_item_defaults(
         "quorate": bool(quorate) if quorate is not None else bool(node_count > 0),
         "version": int(item_data.get("version") or 0),
         "mode": mode,
+        "cluster_uid": cluster_uid,
     }
     if proxmox_object is not None:
         payload["endpoint_name"] = getattr(proxmox_object, "endpoint_name", None)
@@ -94,6 +100,35 @@ def _node_item_defaults(item_data: dict[str, object]) -> dict[str, object]:
         "nodeid": int(item_data.get("nodeid") or 0),
         "online": bool(item_data.get("online") or False),
     }
+
+
+def _parse_cluster_status(
+    proxmox_object: ProxmoxSession,
+    data: list[object],
+) -> ClusterStatusSchema:
+    """Normalize clustered and standalone status payloads, including PVE 9.3 identity."""
+
+    node_list: list[ClusterNodeStatusSchema] = []
+    cluster_item: dict[str, object] | None = None
+    for item in data:
+        item_data = item.model_dump(mode="python", by_alias=True, exclude_none=True)
+        item_data["mode"] = proxmox_object.mode
+        if item_data.get("type") == "node":
+            node_list.append(ClusterNodeStatusSchema(**_node_item_defaults(item_data)))
+        elif item_data.get("type") == "cluster":
+            cluster_item = item_data
+
+    cluster_payload = _cluster_item_defaults(
+        cluster_item or {},
+        cluster_name=proxmox_object.name,
+        node_count=len(node_list),
+        mode=proxmox_object.mode,
+        proxmox_object=proxmox_object,
+        cluster_uid=cluster_uid_from_status_items(data),
+    )
+    cluster = ClusterStatusSchema(**cluster_payload)
+    cluster.node_list = node_list
+    return cluster
 
 
 # /proxmox/cluster/ API Endpoints
@@ -144,37 +179,9 @@ async def cluster_status(pxs: ProxmoxSessionsDep) -> ClusterStatusSchemaList:
     ```
     """
 
-    async def parse_cluster_status(
-        proxmox_object: ProxmoxSession, data: list
-    ) -> ClusterStatusSchema:
-        node_list: list[ClusterNodeStatusSchema] = []
-        cluster_item: dict[str, object] | None = None
-
-        for item in data:
-            item_data = item.model_dump(mode="python", by_alias=True, exclude_none=True)
-            item_data["mode"] = proxmox_object.mode
-
-            if item_data.get("type") == "node":
-                node_list.append(ClusterNodeStatusSchema(**_node_item_defaults(item_data)))
-                continue
-
-            if item_data.get("type") == "cluster":
-                cluster_item = item_data
-
-        cluster_payload = _cluster_item_defaults(
-            cluster_item or {},
-            cluster_name=proxmox_object.name,
-            node_count=len(node_list),
-            mode=proxmox_object.mode,
-            proxmox_object=proxmox_object,
-        )
-        cluster = ClusterStatusSchema(**cluster_payload)
-        cluster.node_list = node_list
-        return cluster
-
     return ClusterStatusSchemaList(
         [
-            await parse_cluster_status(
+            _parse_cluster_status(
                 proxmox_object=px,
                 data=await get_typed_cluster_status(px),
             )
@@ -242,9 +249,13 @@ async def cluster_resources(
             if resource_id in seen_resource_ids:
                 continue
             seen_resource_ids.add(resource_id)
-            cluster_resource_map[cluster_name].append(
-                resource.model_dump(mode="python", by_alias=True, exclude_none=True)
-            )
+            resource_data = resource.model_dump(mode="python", by_alias=True, exclude_none=True)
+            vm_uid = extract_guest_uid(resource)
+            if vm_uid is not None:
+                resource_data["uid"] = vm_uid
+            else:
+                resource_data.pop("uid", None)
+            cluster_resource_map[cluster_name].append(resource_data)
 
     return [{name: items} for name, items in cluster_resource_map.items()]
 

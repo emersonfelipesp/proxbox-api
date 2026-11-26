@@ -39,7 +39,7 @@ These are required for deterministic VM payload generation.
 
 For each VM candidate, sync prepares an in-memory state object containing:
 
-- Cluster + VM identity
+- Cluster + VM identity, including the optional Proxmox VE 9.3 cluster and guest UIDs
 - Proxmox VM resource record
 - Proxmox VM config
 - Normalized desired NetBox VM payload
@@ -50,8 +50,10 @@ Preparation runs with bounded concurrency using `asyncio.gather` + semaphore.
 
 ### Phase 3: NetBox Read Snapshot (In-Memory)
 
-The sync reads all NetBox VMs in paginated batches (`limit/offset`) and builds an in-memory index keyed by:
+The sync reads all NetBox VMs and their typed sync-state sidecars in paginated
+batches. It builds indexes keyed by:
 
+- `(proxmox_cluster_uid, proxmox_vm_uid)` when both stable UIDs are present
 - `(cluster_id, proxmox_vm_id, proxmox_vm_type)`
 
 This avoids repeated NetBox list/filter calls during per-VM comparison.
@@ -77,6 +79,61 @@ sidecar match is reconciled as the existing NetBox VM, so an incomplete core
 snapshot does not produce duplicates. If the sidecar API is unavailable or its
 identity is ambiguous, dispatch fails closed.
 The VM type segment prevents QEMU VM 100 and LXC CT 100 in the same cluster from colliding.
+
+#### Stable Proxmox guest identity
+
+Proxmox VE 9.3 exposes a guest `uid` in `/cluster/resources` and a `cluster-id`
+in `/cluster/status`. This backend uses those values as an additive identity
+reform; it does not remove the legacy VMID identity path. The `proxmox-sdk`
+model may expose these values as typed attributes, aliases, or Pydantic extra
+fields, and all three representations are accepted. A guest UID must match
+`[a-z2-7]{20}`. Malformed values are logged at DEBUG and treated as absent.
+
+Lookup precedence is:
+
+1. If both live UIDs are present, resolve an exact
+   `(proxmox_cluster_uid, proxmox_vm_uid)` sidecar match. Every response is
+   checked client-side because an older NetBox plugin can ignore unknown query
+   filters and return an unfiltered list. A UID match binds only inside the
+   live endpoint and a verified NetBox cluster: a row stored under another
+   endpoint id is skipped (the legacy chain and its stale-endpoint adoption
+   rules decide instead), a VM whose NetBox cluster cannot be verified is
+   refused, and no UID lookup runs without a resolved NetBox cluster.
+2. Apply the existing endpoint, VMID, guest-type, and NetBox-cluster chain.
+3. Refuse a legacy-chain candidate as VMID reuse only when the stored and live
+   cluster UIDs are equal, both guest UIDs are present, and the guest UIDs
+   differ. The live guest is then created as a new NetBox VM.
+
+An exact UID match updates the stored VMID, node, and cluster reflection
+state in place. It never re-binds a row owned by a different endpoint on its
+own; an endpoint that was removed and registered again is re-bound through the
+stale-endpoint adoption rules, which require that the old endpoint id is no
+longer configured. It does not bypass the NetBox cross-cluster guard:
+the VM must already belong to the cluster being synchronized, so stable UID
+identity never silently moves a VM between NetBox clusters. When the cluster
+UID changed, such as a standalone node joining a cluster, a different guest UID
+does not trigger VMID-reuse refusal; the legacy chain remains authoritative and
+the new cluster UID is written after reconciliation. If either UID is missing,
+behavior is identical to the pre-9.3 path.
+
+When the plugin supports the fields, an available cluster UID is written even
+if the live guest UID is absent. A guest UID already stored on the sidecar is
+left unchanged across a cluster UID transition because Proxmox preserves it
+during migration. Exact UID-first matching still requires both live values, so
+the retained guest UID cannot drive that transition's lookup; a later run with
+both live values resumes stable matching.
+
+UID fields are written only after bounded DRF `OPTIONS` metadata or a non-empty
+sidecar response proves that the installed plugin serializer exposes
+`proxmox_vm_uid`. An empty response is unknown and cannot downgrade positive
+evidence cached for the NetBox endpoint and sync run. Older plugins receive no
+UID fields. A uniqueness conflict on the UID pair is verified client-side for
+both CREATE and PATCH;
+the backend warns and retries that VM's sidecar write without the UID fields so
+the overall VM reconciliation can finish without rebinding the conflict row.
+The orphan sweep includes a present guest UID in its live key, allowing an old
+row to become orphaned when a new guest reuses its VMID. Legacy rows without a
+UID retain the previous cluster, VMID, and type key semantics.
 
 #### Cross-cluster guard and stale endpoint ids
 
@@ -144,7 +201,8 @@ endpoint id and adopts the VM only when every condition below holds:
    and NetBox plugin endpoints, enabled or not), not only this run's sessions, so
    a run scoped to one endpoint cannot take a VM owned by another configured
    endpoint. If the inventory cannot be loaded, nothing is adopted;
-5. the live Proxmox VM name equals, case-insensitively, the NetBox VM name or the
+5. when stable UID identity is unavailable, the live Proxmox VM name equals,
+   case-insensitively, the NetBox VM name or the
    Proxmox name stored on the sidecar. This is a best-effort guard against a
    replacement VM that reuses the VMID: a VM recreated under the same name and
    VMID is an accepted residual risk.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import ipaddress
 import re
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
@@ -682,6 +683,86 @@ async def get_qemu_guest_agent_network_interfaces(
     structured variant so they can surface a diagnostic to the user.
     """
     result = await fetch_qemu_guest_agent_network_interfaces(session, node, vmid)
+    return result.interfaces
+
+
+def _normalize_lxc_interfaces(payload: object) -> list[dict[str, object]]:
+    """Adapt validated LXC runtime addresses to the shared guest-interface shape."""
+    model = generated_models.GetNodesNodeLxcVmidInterfacesResponse.model_validate(payload)
+    interfaces = []
+    for item in model.root:
+        interface = _model_dump(item)
+        interface["hardware-address"] = item.hardware_address or item.hwaddr
+        # Older PVE versions expose only one CIDR per family, without ip-addresses.
+        if not item.ip_addresses:
+            addresses = []
+            for cidr in (item.inet, item.inet6):
+                if not cidr:
+                    continue
+                try:
+                    address = ipaddress.ip_interface(cidr)
+                except ValueError:
+                    continue
+                addresses.append(
+                    {
+                        "ip-address": str(address.ip),
+                        "prefix": address.network.prefixlen,
+                        "ip-address-type": "ipv4" if address.version == 4 else "ipv6",
+                    }
+                )
+            interface["ip-addresses"] = addresses
+        else:
+            interface["ip-addresses"] = [
+                _with_guest_agent_address_type(address) for address in interface["ip-addresses"]
+            ]
+        interfaces.append(interface)
+    return _normalize_guest_agent_interfaces(interfaces)
+
+
+_LXC_ADDRESS_TYPES = {"inet": "ipv4", "inet6": "ipv6"}
+
+
+def _with_guest_agent_address_type(address: object) -> object:
+    """Relabel PVE 9 LXC ``inet``/``inet6`` families as guest-agent ``ipv4``/``ipv6``."""
+    if not isinstance(address, dict):
+        return address
+    label = _LXC_ADDRESS_TYPES.get(str(address.get("ip-address-type") or "").lower())
+    return {**address, "ip-address-type": label} if label else address
+
+
+@_dual_mode
+async def fetch_lxc_network_interfaces(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+) -> GuestAgentFetchResult:
+    """Read live container addresses, including DHCP, without a QEMU guest agent."""
+    try:
+        payload = await resolve_async(session.session.nodes(node).lxc(vmid).interfaces.get())
+        return GuestAgentFetchResult(interfaces=_normalize_lxc_interfaces(payload), diagnostic=None)
+    except Exception as error:
+        # Stopped containers and restricted tokens may not expose runtime interfaces.
+        # Never log upstream exception text, which can contain credential material.
+        logger.warning(
+            "Unable to fetch LXC runtime interfaces for node=%s vmid=%s (%s)",
+            node,
+            vmid,
+            type(error).__name__,
+        )
+        return GuestAgentFetchResult(
+            interfaces=[],
+            diagnostic="LXC runtime interfaces unavailable; check container state and API permissions.",
+        )
+
+
+@_dual_mode
+async def get_lxc_network_interfaces(
+    session: ProxmoxSession,
+    node: str,
+    vmid: int,
+) -> list[dict[str, object]]:
+    """Return normalized LXC runtime interfaces, or config fallback on failure."""
+    result = await fetch_lxc_network_interfaces(session, node, vmid)
     return result.interfaces
 
 

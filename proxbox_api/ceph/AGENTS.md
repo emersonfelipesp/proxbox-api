@@ -134,7 +134,7 @@ endpoint `allow_writes` values.
 - v2 is additive; do not change v1 `/ceph` behavior.
 - The Proxmox adapter now executes PVE Ceph writes through `proxmox_writer` +
   proxmox-sdk `CephWrite` (#12 part 1 / #224). The current `proxmox-sdk`
-  pin (`0.0.15`) ships the `CephWrite` domain, so the adapter advertises
+  pin (`0.0.16.post1`) ships the `CephWrite` domain, so the adapter advertises
     the SDK write surface, but live execution remains default-off behind the two
     Ceph safety flags. An older pin without `CephWrite` degrades cleanly via
     `cephwrite_importable()` to `apply=False` and blocks writes with a clear

@@ -270,7 +270,7 @@ before JSON decoding. Identity encoding is required and automatic transport
 decompression is disabled. Redirects are rejected before an authenticated
 request can leave the selected endpoint, and boolean query parameters are
 encoded as Proxmox-compatible `0` or `1` values. The service reads through the
-pinned SDK's public bounded-read method (`proxmox-sdk==0.0.15`), which owns the
+pinned SDK's public bounded-read method (`proxmox-sdk==0.0.16.post1`), which owns the
 byte limit, encoding, and redirect guarantees.
 
 This transport contract is intentionally separate from any metric-server

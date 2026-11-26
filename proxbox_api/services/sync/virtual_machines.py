@@ -9,6 +9,11 @@ from proxbox_api.proxmox_to_netbox.mappers.virtual_machine import (
     map_proxmox_vm_to_netbox_vm_body,
 )
 from proxbox_api.proxmox_to_netbox.models import ProxmoxVmConfigInput, ProxmoxVmResourceInput
+from proxbox_api.services.sync.guest_uid import (
+    extract_guest_uid,
+    normalize_cluster_uid,
+    normalize_guest_uid,
+)
 from proxbox_api.types import VMPayloadDict
 
 
@@ -68,6 +73,8 @@ def build_virtual_machine_sync_state_fields(
     cluster_name: str | None = None,
     proxmox_url: str | None = None,
     endpoint_id: int | None = None,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
 ) -> dict[str, object]:
     """Build the live values persisted to the typed VM sync-state sidecar."""
     resource = (
@@ -94,6 +101,12 @@ def build_virtual_machine_sync_state_fields(
     }
     if cluster_name:
         fields["proxmox_cluster"] = cluster_name
+    live_vm_uid = normalize_guest_uid(vm_uid) or extract_guest_uid(proxmox_resource)
+    live_cluster_uid = normalize_cluster_uid(cluster_uid)
+    if live_vm_uid is not None:
+        fields["proxmox_vm_uid"] = live_vm_uid
+    if live_cluster_uid is not None:
+        fields["proxmox_cluster_uid"] = live_cluster_uid
     if proxmox_url:
         fields["proxmox_link"] = f"{proxmox_url}/#v1:0:={vm_type}/{resource.vmid}"
     if last_updated:

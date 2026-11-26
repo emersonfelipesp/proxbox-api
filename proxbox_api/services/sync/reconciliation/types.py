@@ -25,6 +25,8 @@ class PreparedVMState:
     now: datetime
     vm_type: str
     sync_state_fields: dict[str, object] = field(default_factory=dict)
+    cluster_uid: str | None = None
+    vm_uid: str | None = None
     desired_state: NetBoxVirtualMachineCreateBody | None = None
 
 

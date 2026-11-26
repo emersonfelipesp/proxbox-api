@@ -10,13 +10,13 @@ proxbox_api = ["static/*", "static/**/*", "generated/**/*.json", "generated/**/*
 
 [project]
 name = "proxbox_api"
-version = "0.0.32"
+version = "0.0.33rc1"
 description = "Proxbox API service made using FastAPI"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi[standard]==0.143.0",
-    "proxmox-sdk==0.0.15",
+    "proxmox-sdk==0.0.16.post1",
     "netbox-sdk==0.0.13",
     "sqlmodel==0.0.38",
     "pydantic==2.13.3",
@@ -58,10 +58,10 @@ granian = [
     "granian>=2.7.4",
 ]
 pbs = [
-    "proxmox-sdk[pbs]==0.0.15",
+    "proxmox-sdk[pbs]==0.0.16.post1",
 ]
 pdm = [
-    "proxmox-sdk[pdm]==0.0.15",
+    "proxmox-sdk[pdm]==0.0.16.post1",
 ]
 
 [dependency-groups]

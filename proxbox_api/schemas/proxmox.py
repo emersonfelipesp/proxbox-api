@@ -104,6 +104,8 @@ class Resources(ProxboxLenientModel):
     status: ProxmoxVMStatus | str | None = None
     storage: str | None = None
     type: ResourceType | str
+    uid: str | None = None
+    rtime: int | None = None
     uptime: int | None = None
     vmid: int | None = None
 
@@ -112,6 +114,7 @@ class Resources(ProxboxLenientModel):
         "maxdisk",
         "maxmem",
         "mem",
+        "rtime",
         "uptime",
         "vmid",
         mode="before",
@@ -244,6 +247,7 @@ class ClusterStatusSchema(BaseClusterStatusSchema):
     quorate: bool
     version: int
     mode: str
+    cluster_uid: str | None = None
     endpoint_name: str | None = None
     node_device_name_template: str = "{node}"
     db_endpoint_id: int | None = None

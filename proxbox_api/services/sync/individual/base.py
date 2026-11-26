@@ -87,6 +87,7 @@ class BaseIndividualSyncService:
             _ensure_cluster,
             _ensure_cluster_type,
         )
+        from proxbox_api.services.sync.guest_uid import fetch_cluster_uid
 
         mode = mode or getattr(self.px, "mode", None) or "cluster"
         site = await self._get_or_create_site(cluster_name)
@@ -106,6 +107,7 @@ class BaseIndividualSyncService:
             tenant_id=getattr(tenant, "id", None),
             overwrite_flags=self.overwrite_flags,
             endpoint_source=self.px,
+            cluster_uid=await fetch_cluster_uid(self.px),
         )
         return cluster
 

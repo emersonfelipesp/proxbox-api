@@ -97,7 +97,7 @@ class FakePve9AuthRejectedAPI(FakePve9ProxmoxAPI):
 
 
 class FakePve9RedirectingAPI(FakePve9ProxmoxAPI):
-    """SDK fake that refuses a redirect on the version probe (proxmox-sdk >= 0.0.15)."""
+    """SDK fake that refuses a redirect on the version probe (proxmox-sdk >= 0.0.16.post1)."""
 
     def __init__(self, host, **kwargs):
         super().__init__(host, **kwargs)

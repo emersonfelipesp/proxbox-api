@@ -344,3 +344,57 @@ uv sync --frozen --extra test --group dev
 # Verificar imports
 uv run python -c "from proxbox_api.testing import MockProxmoxContext"
 ```
+
+## Contrato REST do netbox-proxbox
+
+`tests/test_plugin_rest_contract.py` analisa `proxbox_api/` com o módulo `ast`
+do Python e verifica os caminhos de rota e as chaves de consulta do plugin
+contra `tests/fixtures/netbox_proxbox_0_0_32_post1_contract.json`. O fixture é
+gerado por `manage.py spectacular` dentro do appliance de testes publicado do
+netbox-proxbox, depois de uma migração real do banco do NetBox. Ele não é
+derivado do código Python do plugin, porque os filtros base do NetBox e os
+sufixos de lookup são montados em tempo de execução.
+
+O extrator usa uma tabela de contrato explícita para cada helper compatível de
+`netbox_rest`. A tabela expande operações de coleção e de detalhe: por exemplo,
+os helpers de reconciliação exigem GET e POST na coleção e PATCH no detalhe; a
+exclusão em lote exige DELETE tanto na coleção quanto no detalhe, porque a
+escolha em tempo de execução depende do tamanho do lote após a deduplicação; e
+a criação exige seu GET de recuperação na coleção somente quando recebe um
+lookup. Helpers desconhecidos falham de forma fechada. O fixture registra todos
+os métodos servidos de cada
+caminho do plugin. Uma chamada precisa corresponder a um caminho exato e a cada
+operação que o helper pode emitir. Não há correspondência por prefixo: uma
+ação ou subcaminho ausente do fixture falha. Sondagens de capacidade
+(`rest_probe_async`) não verificam o método, porque fazem GET de propósito em
+rotas que podem aceitar apenas POST. As chaves de filtro e de controle são
+verificadas contra os parâmetros GET do caminho; não existe exceção geral para
+paginação ou projeção.
+
+O teste contabiliza cada literal `/api/plugins/proxbox/` em `proxbox_api/`,
+inclusive literais passados por variáveis locais e construtores simples de URL.
+Os caminhos executáveis de urllib e da limpeza E2E emitem operações GET e DELETE
+verificadas. As exceções restantes de literais são separadas entre strings não
+executáveis de documentação/modelos e constantes de rota. Cada exceção de
+constante de rota é vinculada a operações específicas de
+`(arquivo, função, rota, método)`; uma entrada não consumida ou obsoleta falha.
+
+O extrator reconhece estaticamente um conjunto mantido de wrappers locais do
+projeto. Ele substitui caminhos e chaves de lookup concretos dos chamadores,
+aplica remapeamentos declarados e derivações do campo-pai, e coleta de forma
+independente as chaves literais de consulta dos corpos reais dos wrappers e da
+cadeia de encaminhamento declarada, incluindo as chaves que um wrapper adiciona
+a um dicionário de consulta local por atribuição de índice, `update`,
+`setdefault` ou `|=`; uma chave que não se resolve em literal de texto falha.
+Ele não executa Python nem prova que um ramo
+será percorrido em tempo de execução. Caminhos, helpers, expressões de consulta
+ou expansões de dicionários não resolvidos falham, exceto quando existe uma
+exceção dinâmica exata; atualmente não há exceções dinâmicas. O piso original
+de rotas e filtros do commit `127df044` permanece, e um conjunto mínimo gerado
+de contratos `(arquivo, função, rota, método, filtro)` impede que um local de
+chamada masque a perda de cobertura de outro.
+
+Gere o fixture novamente para cada versão pareada do netbox-proxbox com
+`scripts/generate_plugin_contract_fixture.py` (os argumentos estão na versão em
+inglês desta página) e atualize os metadados fixados no teste. Nunca edite o
+fixture à mão.

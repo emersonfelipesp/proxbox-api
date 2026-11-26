@@ -9,6 +9,14 @@ from typing import cast
 from proxbox_api.exception import ProxboxException
 from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async, rest_list_async, rest_list_paginated_async
+from proxbox_api.services.sync.guest_uid import (
+    legacy_candidate_has_uid_conflict,
+    note_vm_uid_feature_support,
+    record_uid_identity,
+    reset_vm_uid_feature_cache,
+    uid_candidate_endpoint_conflict,
+    uid_identity_key,
+)
 from proxbox_api.services.sync.sync_state_writer import (
     VM_SYNC_STATE_PATH,
     _is_sidecar_unavailable,
@@ -29,6 +37,7 @@ class SyncStateVMResolution:
     record: object
     record_id: int
     source: str
+    sidecar: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +56,8 @@ class StaleEndpointAdoption:
     cluster_name: str
     vm_name: str
     configured_endpoint_ids: frozenset[int]
+    cluster_uid: str | None = None
+    vm_uid: str | None = None
     """Every configured endpoint id (a superset of this run's sessions)."""
 
 
@@ -106,6 +117,7 @@ class VMRoleSnapshotScan:
 def reset_sidecar_reader_availability_cache() -> None:
     """Clear the current sync-run memo of unavailable optional sidecar read routes."""
     _UNAVAILABLE_READER_SIDECAR_PATHS.clear()
+    reset_vm_uid_feature_cache()
 
 
 def _as_positive_int(value: object) -> int | None:
@@ -305,12 +317,192 @@ async def _list_sidecar_vm_identity_candidates(
     return candidates, refused
 
 
-async def _resolve_unique_vm_identity_candidate(
+async def _list_sidecar_vm_uid_candidates(
+    nb: object,
+    *,
+    cluster_uid: str,
+    vm_uid: str,
+    endpoint_id: int | None,
+    cluster_id: int,
+) -> tuple[list[_VMIdentityCandidate] | None, bool]:
+    """Find exact UID rows and verify every server-filtered result client-side.
+
+    A UID row is bound only inside the live endpoint and the verified NetBox
+    cluster. Rows of another endpoint are skipped so the legacy chain (and its
+    stale-endpoint adoption rules) decides; an unverifiable cluster refuses.
+    """
+
+    sidecars, sidecar_read_failed = await _scan_sidecars(
+        nb,
+        query={"proxmox_cluster_uid": cluster_uid, "proxmox_vm_uid": vm_uid},
+        page_size=200,
+    )
+    if sidecars is None:
+        return None, sidecar_read_failed
+    note_vm_uid_feature_support(nb, sidecars)
+    expected = (cluster_uid, vm_uid)
+    candidates: list[_VMIdentityCandidate] = []
+    refused = False
+    for sidecar in sidecars:
+        data = _record_to_dict(sidecar)
+        if data is None or record_uid_identity(data) != expected:
+            continue
+        vm_id = _relation_id_from_field(data, "virtual_machine")
+        if vm_id is None:
+            continue
+        if uid_candidate_endpoint_conflict(data.get("proxmox_endpoint_raw_id"), endpoint_id):
+            logger.warning(
+                "Not binding Proxmox UID sidecar match for cluster_uid=%s vm_uid=%s: "
+                "NetBox VM id=%s is stored under endpoint id %s, live endpoint id is %s",
+                cluster_uid,
+                vm_uid,
+                vm_id,
+                data.get("proxmox_endpoint_raw_id"),
+                endpoint_id,
+            )
+            continue
+        record = await _fetch_vm_by_id(nb, vm_id)
+        resolved_cluster_id = _record_cluster_id(record)
+        if resolved_cluster_id is None:
+            refused = True
+            logger.warning(
+                "Refusing Proxmox UID sidecar match for cluster_uid=%s vm_uid=%s because "
+                "NetBox VM id=%s cluster could not be verified",
+                cluster_uid,
+                vm_uid,
+                vm_id,
+            )
+            continue
+        if resolved_cluster_id != cluster_id:
+            logger.warning(
+                "Rejecting Proxmox UID sidecar match for cluster_uid=%s vm_uid=%s: "
+                "NetBox VM id=%s is not in cluster_id=%s",
+                cluster_uid,
+                vm_uid,
+                vm_id,
+                cluster_id,
+            )
+            continue
+        candidates.append(
+            _VMIdentityCandidate(record_id=vm_id, source="sidecar_uid", record=record, sidecar=data)
+        )
+    return candidates, refused
+
+
+async def _resolve_vm_uid_candidate(
+    nb: object,
+    *,
+    cluster_uid: str | None,
+    vm_uid: str | None,
+    endpoint_id: int | None,
+    cluster_id: int | None,
+) -> tuple[SyncStateVMResolution | None, bool]:
+    live_uid_key = uid_identity_key(cluster_uid, vm_uid)
+    if live_uid_key is None or cluster_id is None:
+        # Without a verified NetBox cluster the UID alone never binds a record.
+        return None, False
+    candidates, refused = await _list_sidecar_vm_uid_candidates(
+        nb,
+        cluster_uid=live_uid_key[0],
+        vm_uid=live_uid_key[1],
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+    )
+    if candidates is None:
+        return None, refused
+    if refused and not candidates:
+        return None, True
+    candidates_by_id = {candidate.record_id: candidate for candidate in candidates}
+    if len(candidates_by_id) > 1:
+        logger.warning(
+            "Proxbox VM UID lookup was ambiguous for cluster_uid=%s vm_uid=%s; "
+            "matched NetBox VM ids=%s",
+            live_uid_key[0],
+            live_uid_key[1],
+            sorted(candidates_by_id),
+        )
+        return None, True
+    if not candidates_by_id:
+        return None, False
+    candidate = next(iter(candidates_by_id.values()))
+    if candidate.record is None:
+        return None, True
+    return (
+        SyncStateVMResolution(
+            record=candidate.record,
+            record_id=candidate.record_id,
+            source=candidate.source,
+            sidecar=candidate.sidecar,
+        ),
+        False,
+    )
+
+
+def _legacy_vm_identity_candidates(
+    candidates: list[_VMIdentityCandidate],
+    *,
+    cluster_uid: str | None,
+    vm_uid: str | None,
+) -> list[_VMIdentityCandidate]:
+    return [
+        candidate
+        for candidate in candidates
+        if not legacy_candidate_has_uid_conflict(
+            candidate.sidecar or {},
+            cluster_uid=cluster_uid,
+            vm_uid=vm_uid,
+        )
+    ]
+
+
+async def _materialize_unique_vm_identity_candidate(
+    nb: object,
+    *,
+    candidates: list[_VMIdentityCandidate],
+    proxmox_vm_id: int,
+    endpoint_id: int | None,
+    cluster_id: int | None,
+) -> tuple[SyncStateVMResolution | None, bool]:
+    candidates_by_id = {candidate.record_id: candidate for candidate in candidates}
+    if len(candidates_by_id) > 1:
+        logger.warning(
+            "Proxbox VM sync-state lookup was ambiguous for vmid=%s endpoint_id=%s "
+            "cluster_id=%s; matched NetBox VM ids=%s",
+            proxmox_vm_id,
+            endpoint_id,
+            cluster_id,
+            sorted(candidates_by_id),
+        )
+        return None, True
+    if not candidates_by_id:
+        return None, False
+
+    record_id = next(iter(candidates_by_id))
+    matching = [candidate for candidate in candidates if candidate.record_id == record_id]
+    sidecar_candidate = matching[0]
+    hydrated = next((candidate for candidate in matching if candidate.record is not None), None)
+    record = hydrated.record if hydrated is not None else await _fetch_vm_by_id(nb, record_id)
+    if record is None:
+        return None, False
+    return (
+        SyncStateVMResolution(
+            record=record,
+            record_id=record_id,
+            source=sidecar_candidate.source,
+            sidecar=sidecar_candidate.sidecar,
+        ),
+        False,
+    )
+
+
+async def _resolve_legacy_vm_identity_candidate(
     nb: object,
     *,
     proxmox_vm_id: int,
     endpoint_id: int | None = None,
     cluster_id: int | None = None,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
 ) -> tuple[SyncStateVMResolution | None, bool]:
     sidecar_candidates, sidecar_refused = await _list_sidecar_vm_identity_candidates(
         nb,
@@ -338,43 +530,52 @@ async def _resolve_unique_vm_identity_candidate(
         )
         return None, True
 
-    candidates = sidecar_candidates or []
-    candidates_by_id = {candidate.record_id: candidate for candidate in candidates}
-    if len(candidates_by_id) > 1:
-        logger.warning(
-            "Proxbox VM sync-state lookup was ambiguous for vmid=%s endpoint_id=%s "
-            "cluster_id=%s; matched NetBox VM ids=%s",
+    candidates = _legacy_vm_identity_candidates(
+        sidecar_candidates or [],
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+    )
+    if sidecar_candidates and not candidates:
+        logger.info(
+            "Refusing legacy VMID binding for vmid=%s because the stored guest UID "
+            "differs within the same Proxmox cluster UID",
             proxmox_vm_id,
-            endpoint_id,
-            cluster_id,
-            sorted(candidates_by_id),
         )
-        return None, True
-    if not candidates_by_id:
-        return None, False
+    return await _materialize_unique_vm_identity_candidate(
+        nb,
+        candidates=candidates,
+        proxmox_vm_id=proxmox_vm_id,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+    )
 
-    record_id = next(iter(candidates_by_id))
-    sidecar_candidate = next(
-        (candidate for candidate in candidates if candidate.record_id == record_id),
-        None,
+
+async def _resolve_unique_vm_identity_candidate(
+    nb: object,
+    *,
+    proxmox_vm_id: int,
+    endpoint_id: int | None = None,
+    cluster_id: int | None = None,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
+) -> tuple[SyncStateVMResolution | None, bool]:
+    uid_resolution, uid_refused = await _resolve_vm_uid_candidate(
+        nb,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
     )
-    hydrated_sidecar_candidate = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate.record_id == record_id and candidate.record is not None
-        ),
-        None,
+    if uid_resolution is not None or uid_refused:
+        return uid_resolution, uid_refused
+    return await _resolve_legacy_vm_identity_candidate(
+        nb,
+        proxmox_vm_id=proxmox_vm_id,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
     )
-    source = sidecar_candidate.source if sidecar_candidate is not None else "sidecar"
-    record = (
-        hydrated_sidecar_candidate.record
-        if hydrated_sidecar_candidate is not None
-        else await _fetch_vm_by_id(nb, record_id)
-    )
-    if record is None:
-        return None, False
-    return SyncStateVMResolution(record=record, record_id=record_id, source=source), False
 
 
 def _sidecar_choice_text(value: object) -> str:
@@ -424,6 +625,12 @@ def _stale_adoption_rejection(
     raw_endpoint_id = _as_positive_int(sidecar.get("proxmox_endpoint_raw_id"))
     if raw_endpoint_id is not None and raw_endpoint_id in adoption.configured_endpoint_ids:
         return f"sidecar endpoint id {raw_endpoint_id} identifies a configured endpoint"
+    if legacy_candidate_has_uid_conflict(
+        sidecar,
+        cluster_uid=adoption.cluster_uid,
+        vm_uid=adoption.vm_uid,
+    ):
+        return "stored guest UID differs within the same Proxmox cluster UID"
     return _stale_adoption_name_rejection(sidecar, record, adoption)
 
 
@@ -505,6 +712,8 @@ async def resolve_virtual_machine_by_sync_state(
     endpoint_id: int | None = None,
     cluster_id: int | None = None,
     fail_on_ambiguous: bool = False,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
 ) -> SyncStateVMResolution | None:
     """Resolve a NetBox VM only when the typed sidecar match is unique."""
     vmid = _as_positive_int(proxmox_vm_id)
@@ -516,6 +725,8 @@ async def resolve_virtual_machine_by_sync_state(
         proxmox_vm_id=vmid,
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
     )
     if _ambiguous and fail_on_ambiguous:
         raise ProxboxException(
@@ -736,6 +947,7 @@ async def load_vm_sync_state_identities(
         )
 
     rows = tuple(row for sidecar in sidecars if (row := _record_to_dict(sidecar)) is not None)
+    note_vm_uid_feature_support(nb, rows)
     return VMSyncStateIdentityScan(rows=rows)
 
 
@@ -881,6 +1093,7 @@ async def scan_vm_sidecar_orphan_candidates(
         vm_data["_proxmox_vm_id"] = data.get("proxmox_vm_id")
         vm_data["_proxmox_vm_type"] = data.get("proxmox_vm_type")
         vm_data["_proxmox_cluster_name"] = data.get("proxmox_cluster_name")
+        vm_data["_proxmox_vm_uid"] = data.get("proxmox_vm_uid")
         candidates_by_id[vm_id] = vm_data
     return SidecarVMOrphanScan(
         stale_candidates=list(candidates_by_id.values()),

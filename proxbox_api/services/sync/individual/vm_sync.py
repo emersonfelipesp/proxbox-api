@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from proxbox_api.enum.status_mapping import ProxmoxToNetBoxVMStatus
@@ -34,6 +35,7 @@ from proxbox_api.services.sync.discovery_tags import (
     resolve_discovery_tag_id,
     vm_discovery_tag_slug,
 )
+from proxbox_api.services.sync.guest_uid import extract_guest_uid, fetch_cluster_uid
 from proxbox_api.services.sync.individual.base import BaseIndividualSyncService
 from proxbox_api.services.sync.individual.interface_sync import sync_interface_individual
 from proxbox_api.services.sync.orphan_sweep import (
@@ -46,6 +48,7 @@ from proxbox_api.services.sync.role_resolution import (
     resolve_snapshot_read,
 )
 from proxbox_api.services.sync.sync_state_reader import (
+    SyncStateVMResolution,
     load_vm_last_synced_name,
     resolve_virtual_machine_by_sync_state,
 )
@@ -115,6 +118,8 @@ async def _apply_name_collision_resolution(
     vmid: int,
     netbox_vm_payload: dict,
     endpoint_id: int | None,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
 ) -> None:
     """Resolve VM name collisions in-place on `netbox_vm_payload`.
 
@@ -137,6 +142,8 @@ async def _apply_name_collision_resolution(
         vmid=vmid,
         netbox_vm_payload=netbox_vm_payload,
         endpoint_id=endpoint_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
     )
     if sidecar_existing:
         existing_vm_by_vmid[vmid] = sidecar_existing
@@ -198,13 +205,17 @@ async def _resolve_sidecar_existing_vm_for_name_collision(
     vmid: int,
     netbox_vm_payload: dict,
     endpoint_id: int | None,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
 ) -> dict[str, object] | None:
     try:
         existing_resolution = await resolve_virtual_machine_by_sync_state(
             nb,
             proxmox_vm_id=vmid,
             endpoint_id=endpoint_id,
-            cluster_id=cluster_id if endpoint_id is None else None,
+            cluster_id=cluster_id,
+            cluster_uid=cluster_uid,
+            vm_uid=vm_uid,
         )
     except Exception as exc:  # noqa: BLE001 - collision handling remains best effort
         logger.debug(
@@ -228,6 +239,8 @@ async def _lookup_existing_vm_for_dry_run(
     cluster_name: str,
     vmid: int,
     endpoint_id: int | None = None,
+    cluster_uid: str | None = None,
+    vm_uid: str | None = None,
 ) -> object | None:
     """Resolve an existing VM for dry-run output without guessing ambiguous vmids."""
     cluster_id = await resolve_netbox_cluster_id_by_name(nb, cluster_name)
@@ -236,6 +249,8 @@ async def _lookup_existing_vm_for_dry_run(
         proxmox_vm_id=vmid,
         endpoint_id=endpoint_id,
         cluster_id=cluster_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
     )
     return existing.record if existing is not None else None
 
@@ -336,6 +351,479 @@ async def _require_vm_resource(px: object, node: str, vm_type: str, vmid: int) -
     return dict(resource)
 
 
+async def _individual_vm_tag_ids(
+    nb: object,
+    px: object,
+    *,
+    proxmox_config: dict[str, object],
+    overwrite_flags: SyncOverwriteFlags | None,
+    vm_type: str,
+    existing_vms: list[object],
+    base_tag_ids: list[int],
+) -> list[int]:
+    """Merge managed, discovery, Proxmox, and existing operator tags."""
+
+    existing_tag_ids: list[int] = []
+    if existing_vms:
+        raw_record = existing_vms[0]
+        raw_tags = (
+            raw_record.get("tags")
+            if isinstance(raw_record, dict)
+            else getattr(raw_record, "tags", None)
+        ) or []
+        for tag in raw_tags:
+            tag_id = tag.get("id") if isinstance(tag, dict) else tag
+            try:
+                existing_tag_ids.append(int(tag_id))
+            except (TypeError, ValueError):
+                continue
+    else:
+        discovery_id = await resolve_discovery_tag_id(nb, vm_discovery_tag_slug(vm_type))
+        if discovery_id is not None:
+            base_tag_ids.append(discovery_id)
+    proxmox_tag_ids = await _resolve_individual_proxmox_tag_ids(
+        nb, px, proxmox_config, overwrite_flags
+    )
+    return sorted(set(base_tag_ids) | set(existing_tag_ids) | set(proxmox_tag_ids))
+
+
+async def _persist_individual_vm_state(
+    nb: object,
+    *,
+    virtual_machine: object,
+    proxmox_resource: dict[str, object],
+    proxmox_config: dict[str, object],
+    now: datetime,
+    cluster_name: str,
+    px_url: str | None,
+    endpoint_id: int | None,
+    cluster_uid: str | None,
+    vm_uid: str | None,
+    overwrite_flags: SyncOverwriteFlags | None,
+    role_decision: object,
+    existing_record: dict[str, object] | None,
+    snapshot_read: object | None,
+    run_id: str,
+) -> None:
+    """Persist the VM sidecar, role compensation evidence, and run marker."""
+
+    virtual_machine_id = (
+        virtual_machine.get("id")
+        if isinstance(virtual_machine, dict)
+        else getattr(virtual_machine, "id", None)
+    )
+    sync_state_fields = build_virtual_machine_sync_state_fields(
+        proxmox_resource=proxmox_resource,
+        proxmox_config=proxmox_config,
+        last_updated=now,
+        cluster_name=cluster_name,
+        proxmox_url=px_url,
+        endpoint_id=endpoint_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+    )
+    write_snapshot = bool(getattr(role_decision, "write_snapshot", False))
+    snapshot_value = getattr(role_decision, "snapshot_value", None)
+    await persist_sync_state_with_role_compensation(
+        nb,
+        persistence=write_virtual_machine_sync_state(
+            nb,
+            virtual_machine_id=virtual_machine_id,
+            custom_fields=sync_state_fields,
+            overwrite_custom_fields=(
+                overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
+            ),
+            proxmox_vm_name=proxmox_resource.get("name"),
+            proxmox_last_synced_role_id=(snapshot_value if write_snapshot else None),
+        ),
+        virtual_machine_id=(int(virtual_machine_id) if virtual_machine_id is not None else None),
+        previous_role_id=(
+            relation_id(existing_record.get("role")) if existing_record is not None else None
+        ),
+        previous_snapshot_id=(
+            getattr(snapshot_read, "snapshot_id", None) if snapshot_read is not None else None
+        ),
+        expected_snapshot_id=(snapshot_value if write_snapshot else None),
+        role_write_applied=bool(getattr(role_decision, "write_role", False)),
+    )
+    await stamp_vm_last_run_id(nb, virtual_machine, run_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _IndividualVMContext:
+    cluster_id: int
+    device_id: int | None
+    role_id: int | None
+    vm_type_id: int | None
+    site_id: int | None
+    px_url: str | None
+    existing_resolution: SyncStateVMResolution | None
+
+
+@dataclass(frozen=True, slots=True)
+class _IndividualVMPlan:
+    payload: dict[str, object]
+    patchable_fields: set[str]
+    supports_vm_type: bool
+    role_decision: object
+    existing_record: dict[str, object] | None
+    snapshot_read: object | None
+
+
+async def _resolve_individual_vm_context(
+    nb: object,
+    px: object,
+    service: BaseIndividualSyncService,
+    *,
+    cluster_name: str,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    endpoint_id: int | None,
+    cluster_uid: str | None,
+    vm_uid: str | None,
+) -> _IndividualVMContext:
+    dependencies = await service._get_or_create_vm_dependencies(cluster_name, node, vm_type)
+    cluster, _cluster_type, _manufacturer, _device_type, _node_role, site = dependencies[:6]
+    device, vm_role, vm_type_obj = dependencies[6:]
+    cluster_id = int(getattr(cluster, "id", 0) or 0)
+    px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
+    clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
+    existing_resolution = await resolve_virtual_machine_by_sync_state(
+        nb,
+        proxmox_vm_id=vmid,
+        endpoint_id=endpoint_id,
+        cluster_id=cluster_id,
+        fail_on_ambiguous=True,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+    )
+    return _IndividualVMContext(
+        cluster_id=cluster_id,
+        device_id=int(getattr(device, "id", 0) or 0) if device else None,
+        role_id=int(getattr(vm_role, "id", 0) or 0) if vm_role else None,
+        vm_type_id=int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None,
+        site_id=_effective_cluster_site_id(
+            cluster,
+            fallback_site_id=getattr(site, "id", None),
+        ),
+        px_url=(f"https://{px_domain}:{getattr(px, 'http_port', 8006)}" if px_domain else None),
+        existing_resolution=existing_resolution,
+    )
+
+
+async def _build_individual_vm_plan(
+    nb: object,
+    px: object,
+    *,
+    context: _IndividualVMContext,
+    cluster_name: str,
+    vm_type: str,
+    vmid: int,
+    proxmox_resource: dict[str, object],
+    proxmox_config: dict[str, object],
+    endpoint_id: int | None,
+    cluster_uid: str | None,
+    vm_uid: str | None,
+    overwrite_flags: SyncOverwriteFlags | None,
+    tag_ids: list[int],
+) -> _IndividualVMPlan:
+    existing_vms = (
+        [context.existing_resolution.record] if context.existing_resolution is not None else []
+    )
+    merged_tag_ids = await _individual_vm_tag_ids(
+        nb,
+        px,
+        proxmox_config=proxmox_config,
+        overwrite_flags=overwrite_flags,
+        vm_type=vm_type,
+        existing_vms=existing_vms,
+        base_tag_ids=tag_ids,
+    )
+    platform_id = await ensure_vm_platform(
+        nb,
+        ostype=proxmox_config.get("ostype"),
+        tag_refs=[],
+    )
+    payload = _build_netbox_vm_payload(
+        resource=proxmox_resource,
+        config=proxmox_config,
+        cluster_id=context.cluster_id,
+        device_id=context.device_id,
+        role_id=context.role_id,
+        tag_ids=merged_tag_ids,
+        virtual_machine_type_id=context.vm_type_id,
+        site_id=context.site_id,
+        platform_id=platform_id,
+    )
+    supports_vm_type = supports_virtual_machine_type(await detect_netbox_version(nb))
+    await _apply_name_collision_resolution(
+        nb,
+        cluster_id=context.cluster_id,
+        cluster_name=cluster_name,
+        vmid=vmid,
+        netbox_vm_payload=payload,
+        endpoint_id=endpoint_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+    )
+    existing_record = (
+        to_mapping(context.existing_resolution.record)
+        if context.existing_resolution is not None
+        else None
+    )
+    snapshot_read = (
+        await resolve_snapshot_read(nb, existing_record) if existing_record is not None else None
+    )
+    payload, patchable_fields, role_decision = apply_role_snapshot_policy(
+        existing_record=existing_record,
+        existing_snapshot_id=getattr(snapshot_read, "snapshot_id", None),
+        desired_payload=payload,
+        patchable_fields=_compute_vm_patchable_fields(
+            overwrite_flags,
+            supports_virtual_machine_type_field=supports_vm_type,
+        ),
+        overwrite_vm_role=(
+            overwrite_flags.overwrite_vm_role if overwrite_flags is not None else True
+        ),
+        snapshot_read_verified=getattr(snapshot_read, "verified", True),
+    )
+    return _IndividualVMPlan(
+        payload=payload,
+        patchable_fields=patchable_fields,
+        supports_vm_type=supports_vm_type,
+        role_decision=role_decision,
+        existing_record=existing_record,
+        snapshot_read=snapshot_read,
+    )
+
+
+async def _reconcile_individual_vm(
+    nb: object,
+    *,
+    context: _IndividualVMContext,
+    plan: _IndividualVMPlan,
+) -> object:
+    return await rest_reconcile_async(
+        nb,
+        "/api/virtualization/virtual-machines/",
+        lookup={"id": 0},
+        payload=plan.payload,
+        schema=NetBoxVirtualMachineCreateBody,
+        patchable_fields=plan.patchable_fields,
+        current_normalizer=lambda record: normalize_current_virtual_machine_payload(
+            record,
+            supports_virtual_machine_type_field=plan.supports_vm_type,
+        ),
+        strict_lookup=True,
+        existing_record=(
+            context.existing_resolution.record if context.existing_resolution is not None else None
+        ),
+    )
+
+
+def _individual_vm_result(
+    *,
+    virtual_machine: object,
+    proxmox_resource: dict[str, object],
+    cluster_name: str,
+    node: str,
+    created: bool,
+) -> dict[str, object]:
+    action = "created" if created else "updated"
+    return {
+        "object_type": "vm",
+        "action": action,
+        "proxmox_resource": proxmox_resource,
+        "netbox_object": (
+            virtual_machine.serialize() if hasattr(virtual_machine, "serialize") else None
+        ),
+        "dry_run": False,
+        "dependencies_synced": [
+            {
+                "object_type": "cluster",
+                "name": cluster_name,
+                "cluster_name": cluster_name,
+                "action": action,
+            },
+            {"object_type": "node", "name": node, "cluster_name": cluster_name, "action": action},
+        ],
+        "error": None,
+    }
+
+
+async def _sync_vm_individual_live(
+    nb: object,
+    px: object,
+    service: BaseIndividualSyncService,
+    *,
+    cluster_name: str,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    proxmox_resource: dict[str, object],
+    proxmox_config: dict[str, object],
+    now: datetime,
+    endpoint_id: int | None,
+    cluster_uid: str | None,
+    vm_uid: str | None,
+    overwrite_flags: SyncOverwriteFlags | None,
+    tag_ids: list[int],
+    run_id: str,
+) -> dict[str, object]:
+    """Reconcile one non-dry-run guest after its live inputs are loaded."""
+
+    context = await _resolve_individual_vm_context(
+        nb,
+        px,
+        service,
+        cluster_name=cluster_name,
+        node=node,
+        vm_type=vm_type,
+        vmid=vmid,
+        endpoint_id=endpoint_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+    )
+    plan = await _build_individual_vm_plan(
+        nb,
+        px,
+        context=context,
+        cluster_name=cluster_name,
+        vm_type=vm_type,
+        vmid=vmid,
+        proxmox_resource=proxmox_resource,
+        proxmox_config=proxmox_config,
+        endpoint_id=endpoint_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+        overwrite_flags=overwrite_flags,
+        tag_ids=tag_ids,
+    )
+    virtual_machine = await _reconcile_individual_vm(nb, context=context, plan=plan)
+    await clear_soft_delete_marker(
+        nb,
+        virtual_machine,
+        restored_status=reappeared_vm_status(plan.payload.get("status")),
+    )
+    await _persist_individual_vm_state(
+        nb,
+        virtual_machine=virtual_machine,
+        proxmox_resource=proxmox_resource,
+        proxmox_config=proxmox_config,
+        now=now,
+        cluster_name=cluster_name,
+        px_url=context.px_url,
+        endpoint_id=endpoint_id,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
+        overwrite_flags=overwrite_flags,
+        role_decision=plan.role_decision,
+        existing_record=plan.existing_record,
+        snapshot_read=plan.snapshot_read,
+        run_id=run_id,
+    )
+    return _individual_vm_result(
+        virtual_machine=virtual_machine,
+        proxmox_resource=proxmox_resource,
+        cluster_name=cluster_name,
+        node=node,
+        created=context.existing_resolution is None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _IndividualVMSource:
+    resource: dict[str, object]
+    config: dict[str, object]
+    cluster_uid: str | None
+    vm_uid: str | None
+
+
+async def _load_individual_vm_source(
+    px: object,
+    *,
+    node: str,
+    vm_type: str,
+    vmid: int,
+    now: datetime,
+) -> _IndividualVMSource:
+    try:
+        config = await get_vm_config_individual(px, node, vm_type, vmid)
+    except Exception as exc:
+        logger.warning(
+            "Failed to fetch Proxmox config for %s/%s vmid=%s: %s",
+            node,
+            vm_type,
+            vmid,
+            exc,
+        )
+        raise ProxboxException(
+            message=(
+                f"Failed to fetch Proxmox config for {vm_type} vmid={vmid} on node {node}; "
+                "refusing to sync with empty config to avoid overwriting NetBox values."
+            ),
+            python_exception=str(exc),
+        ) from exc
+    raw_resource = await _require_vm_resource(px, node, vm_type, vmid)
+    vm_uid = extract_guest_uid(raw_resource)
+    resource = {
+        "vmid": vmid,
+        "name": raw_resource.get("name") or f"vm-{vmid}",
+        "node": raw_resource.get("node") or node,
+        "type": raw_resource.get("type") or vm_type,
+        "status": raw_resource.get("status") or "unknown",
+        "maxcpu": raw_resource.get("maxcpu") or 0,
+        "maxmem": raw_resource.get("maxmem") or 0,
+        "maxdisk": raw_resource.get("maxdisk") or 0,
+        "config": config,
+        "proxmox_last_updated": now.isoformat(),
+        **({"uid": vm_uid} if vm_uid else {}),
+    }
+    return _IndividualVMSource(
+        resource=resource,
+        config=config,
+        cluster_uid=await fetch_cluster_uid(px),
+        vm_uid=vm_uid,
+    )
+
+
+async def _individual_vm_dry_run_result(
+    nb: object,
+    *,
+    source: _IndividualVMSource,
+    cluster_name: str,
+    node: str,
+    vmid: int,
+    endpoint_id: int | None,
+) -> dict[str, object]:
+    existing_vm = await _lookup_existing_vm_for_dry_run(
+        nb,
+        cluster_name=cluster_name,
+        vmid=vmid,
+        endpoint_id=endpoint_id,
+        cluster_uid=source.cluster_uid,
+        vm_uid=source.vm_uid,
+    )
+    netbox_object = (
+        existing_vm.serialize()
+        if existing_vm is not None and hasattr(existing_vm, "serialize")
+        else None
+    )
+    return {
+        "object_type": "vm",
+        "action": "dry_run",
+        "proxmox_resource": source.resource,
+        "netbox_object": netbox_object,
+        "dry_run": True,
+        "dependencies_synced": [
+            {"object_type": "cluster", "name": cluster_name, "cluster_name": cluster_name},
+            {"object_type": "node", "name": node, "cluster_name": cluster_name},
+        ],
+        "error": None,
+    }
+
+
 async def sync_vm_individual(
     nb: object,
     px: object,
@@ -377,287 +865,48 @@ async def sync_vm_individual(
     tag_id = int(getattr(tag, "id", 0) or 0)
     tag_ids = [tag_id] if tag_id > 0 else []
 
-    try:
-        proxmox_config = await get_vm_config_individual(px, node, vm_type, vmid)
-    except Exception as exc:
-        logger.warning(
-            "Failed to fetch Proxmox config for %s/%s vmid=%s: %s",
-            node,
-            vm_type,
-            vmid,
-            exc,
-        )
-        raise ProxboxException(
-            message=(
-                f"Failed to fetch Proxmox config for {vm_type} vmid={vmid} on node {node}; "
-                "refusing to sync with empty config to avoid overwriting NetBox values."
-            ),
-            python_exception=str(exc),
-        )
-
-    proxmox_resource = await _require_vm_resource(px, node, vm_type, vmid)
-    proxmox_resource = {
-        "vmid": vmid,
-        "name": proxmox_resource.get("name") or f"vm-{vmid}",
-        "node": proxmox_resource.get("node") or node,
-        "type": proxmox_resource.get("type") or vm_type,
-        "status": proxmox_resource.get("status") or "unknown",
-        "maxcpu": proxmox_resource.get("maxcpu") or 0,
-        "maxmem": proxmox_resource.get("maxmem") or 0,
-        "maxdisk": proxmox_resource.get("maxdisk") or 0,
-        "config": proxmox_config,
-        "proxmox_last_updated": now.isoformat(),
-    }
+    source = await _load_individual_vm_source(
+        px,
+        node=node,
+        vm_type=vm_type,
+        vmid=vmid,
+        now=now,
+    )
 
     if dry_run:
-        existing_vm = await _lookup_existing_vm_for_dry_run(
+        return await _individual_vm_dry_run_result(
             nb,
+            source=source,
             cluster_name=cluster_name,
+            node=node,
             vmid=vmid,
             endpoint_id=endpoint_id,
         )
-        netbox_object = None
-        if existing_vm is not None:
-            netbox_object = existing_vm.serialize() if hasattr(existing_vm, "serialize") else None
-
-        cluster_dep: dict[str, object] = {
-            "object_type": "cluster",
-            "name": cluster_name,
-            "cluster_name": cluster_name,
-        }
-        node_dep: dict[str, object] = {
-            "object_type": "node",
-            "name": node,
-            "cluster_name": cluster_name,
-        }
-        return {
-            "object_type": "vm",
-            "action": "dry_run",
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": True,
-            "dependencies_synced": [cluster_dep, node_dep],
-            "error": None,
-        }
 
     try:
-        (
-            cluster,
-            _cluster_type,
-            _manufacturer,
-            _device_type,
-            _node_role,
-            _site,
-            device,
-            vm_role,
-            vm_type_obj,
-        ) = await service._get_or_create_vm_dependencies(cluster_name, node, vm_type)
-
-        cluster_id = int(getattr(cluster, "id", 0) or 0)
-        device_id = int(getattr(device, "id", 0) or 0) if device else None
-        role_id = int(getattr(vm_role, "id", 0) or 0) if vm_role else None
-        vm_type_id = int(getattr(vm_type_obj, "id", 0) or 0) if vm_type_obj else None
-        site_id = _effective_cluster_site_id(
-            cluster,
-            fallback_site_id=getattr(_site, "id", None),
-        )
-
-        px_domain = getattr(px, "domain", None) or getattr(px, "ip_address", None) or ""
-        px_port = getattr(px, "http_port", 8006)
-        px_url = f"https://{px_domain}:{px_port}" if px_domain else None
-
-        clear_rest_get_cache_for_path(nb, "/api/virtualization/virtual-machines/")
-        vm_lookup = {"id": 0}
-        existing_resolution = await resolve_virtual_machine_by_sync_state(
+        return await _sync_vm_individual_live(
             nb,
-            proxmox_vm_id=vmid,
-            endpoint_id=endpoint_id,
-            cluster_id=cluster_id,
-            fail_on_ambiguous=True,
-        )
-        existing_vms = [existing_resolution.record] if existing_resolution is not None else []
-
-        # Merge proxbox tag with any existing user tags so sync never erases them.
-        existing_tag_ids: list[int] = []
-        if existing_vms:
-            raw_record = existing_vms[0]
-            raw_tags = (
-                raw_record.get("tags")
-                if isinstance(raw_record, dict)
-                else getattr(raw_record, "tags", None)
-            ) or []
-            for t in raw_tags:
-                tid = t.get("id") if isinstance(t, dict) else t
-                try:
-                    existing_tag_ids.append(int(tid))
-                except (TypeError, ValueError):
-                    continue
-        else:
-            # First-discovery audit tag (issue #362) — stamp only on create.
-            # The merge below preserves it on subsequent syncs, and operator
-            # removal from NetBox is permanent because this branch is no
-            # longer reached once the VM exists.
-            discovery_id = await resolve_discovery_tag_id(nb, vm_discovery_tag_slug(vm_type))
-            if discovery_id is not None:
-                tag_ids.append(discovery_id)
-
-        proxmox_tag_ids = await _resolve_individual_proxmox_tag_ids(
-            nb, px, proxmox_config, overwrite_flags
-        )
-        merged_tag_ids = sorted(set(tag_ids) | set(existing_tag_ids) | set(proxmox_tag_ids))
-
-        # Guest OS -> NetBox platform. The per-VM path has no behavior-flag plumbing of
-        # its own, so it takes the ostype-derived value only; the guest-agent refinement
-        # stays on the flag-carrying stage paths where the operator's opt-in is visible.
-        platform_id = await ensure_vm_platform(
-            nb,
-            ostype=proxmox_config.get("ostype") if isinstance(proxmox_config, dict) else None,
-            tag_refs=[],
-        )
-
-        netbox_vm_payload = _build_netbox_vm_payload(
-            resource=proxmox_resource,
-            config=proxmox_config,
-            cluster_id=cluster_id,
-            device_id=device_id,
-            role_id=role_id,
-            tag_ids=merged_tag_ids,
-            virtual_machine_type_id=vm_type_id,
-            site_id=site_id,
-            platform_id=platform_id,
-        )
-        netbox_version = await detect_netbox_version(nb)
-        supports_vm_type = supports_virtual_machine_type(netbox_version)
-
-        await _apply_name_collision_resolution(
-            nb,
-            cluster_id=cluster_id,
+            px,
+            service,
             cluster_name=cluster_name,
+            node=node,
+            vm_type=vm_type,
             vmid=vmid,
-            netbox_vm_payload=netbox_vm_payload,
+            proxmox_resource=source.resource,
+            proxmox_config=source.config,
+            now=now,
             endpoint_id=endpoint_id,
+            cluster_uid=source.cluster_uid,
+            vm_uid=source.vm_uid,
+            overwrite_flags=overwrite_flags,
+            tag_ids=tag_ids,
+            run_id=effective_run_id,
         )
-
-        existing_record = (
-            to_mapping(existing_resolution.record) if existing_resolution is not None else None
-        )
-        snapshot_read = (
-            await resolve_snapshot_read(nb, existing_record)
-            if existing_record is not None
-            else None
-        )
-        netbox_vm_payload, patchable_fields, role_decision = apply_role_snapshot_policy(
-            existing_record=existing_record,
-            existing_snapshot_id=(snapshot_read.snapshot_id if snapshot_read is not None else None),
-            desired_payload=netbox_vm_payload,
-            patchable_fields=_compute_vm_patchable_fields(
-                overwrite_flags,
-                supports_virtual_machine_type_field=supports_vm_type,
-            ),
-            overwrite_vm_role=(
-                overwrite_flags.overwrite_vm_role if overwrite_flags is not None else True
-            ),
-            snapshot_read_verified=(snapshot_read.verified if snapshot_read is not None else True),
-        )
-
-        virtual_machine = await rest_reconcile_async(
-            nb,
-            "/api/virtualization/virtual-machines/",
-            lookup=vm_lookup,
-            payload=netbox_vm_payload,
-            schema=NetBoxVirtualMachineCreateBody,
-            patchable_fields=patchable_fields,
-            current_normalizer=lambda record: normalize_current_virtual_machine_payload(
-                record,
-                supports_virtual_machine_type_field=supports_vm_type,
-            ),
-            strict_lookup=True,
-            existing_record=(
-                existing_resolution.record if existing_resolution is not None else None
-            ),
-        )
-        await clear_soft_delete_marker(
-            nb,
-            virtual_machine,
-            restored_status=reappeared_vm_status(netbox_vm_payload.get("status")),
-        )
-
-        virtual_machine_id = (
-            virtual_machine.get("id")
-            if isinstance(virtual_machine, dict)
-            else getattr(virtual_machine, "id", None)
-        )
-        sync_state_fields = build_virtual_machine_sync_state_fields(
-            proxmox_resource=proxmox_resource,
-            proxmox_config=proxmox_config,
-            last_updated=now,
-            cluster_name=cluster_name,
-            proxmox_url=px_url,
-            endpoint_id=endpoint_id,
-        )
-        await persist_sync_state_with_role_compensation(
-            nb,
-            persistence=write_virtual_machine_sync_state(
-                nb,
-                virtual_machine_id=virtual_machine_id,
-                custom_fields=sync_state_fields,
-                overwrite_custom_fields=(
-                    overwrite_flags is None or overwrite_flags.overwrite_vm_custom_fields
-                ),
-                proxmox_vm_name=proxmox_resource.get("name"),
-                proxmox_last_synced_role_id=(
-                    role_decision.snapshot_value if role_decision.write_snapshot else None
-                ),
-            ),
-            virtual_machine_id=(
-                int(virtual_machine_id) if virtual_machine_id is not None else None
-            ),
-            previous_role_id=(
-                relation_id(existing_record.get("role")) if existing_record is not None else None
-            ),
-            previous_snapshot_id=(snapshot_read.snapshot_id if snapshot_read is not None else None),
-            expected_snapshot_id=(
-                role_decision.snapshot_value if role_decision.write_snapshot else None
-            ),
-            role_write_applied=role_decision.write_role,
-        )
-        await stamp_vm_last_run_id(nb, virtual_machine, effective_run_id)
-
-        netbox_object = (
-            virtual_machine.serialize() if hasattr(virtual_machine, "serialize") else None
-        )
-        action = "updated" if existing_vms else "created"
-
-        dependencies: list[dict] = [
-            {
-                "object_type": "cluster",
-                "name": cluster_name,
-                "cluster_name": cluster_name,
-                "action": action,
-            },
-            {
-                "object_type": "node",
-                "name": node,
-                "cluster_name": cluster_name,
-                "action": action,
-            },
-        ]
-
-        return {
-            "object_type": "vm",
-            "action": action,
-            "proxmox_resource": proxmox_resource,
-            "netbox_object": netbox_object,
-            "dry_run": False,
-            "dependencies_synced": dependencies,
-            "error": None,
-        }
-
     except Exception as error:
         return {
             "object_type": "vm",
             "action": "error",
-            "proxmox_resource": proxmox_resource,
+            "proxmox_resource": source.resource,
             "netbox_object": None,
             "dry_run": False,
             "dependencies_synced": [],

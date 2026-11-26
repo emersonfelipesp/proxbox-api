@@ -622,6 +622,10 @@ def _assert_prepared_vm_state(
     assert captured_payload_kwargs["tag_ids"] == [5, 7]
     assert prepared.sync_state_fields["proxmox_link"] == "https://pve.example:8006/#v1:0:=qemu/101"
     assert prepared.sync_state_fields["proxmox_endpoint_id"] == 1
+    assert prepared.cluster_uid == "cluster-uid-a"
+    assert prepared.vm_uid == "a234567a234567a23456"
+    assert prepared.sync_state_fields["proxmox_cluster_uid"] == "cluster-uid-a"
+    assert prepared.sync_state_fields["proxmox_vm_uid"] == "a234567a234567a23456"
 
 
 def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkeypatch):
@@ -667,6 +671,7 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     monkeypatch.setattr(sync_vm, "rest_reconcile_async", _fake_reconcile)
 
     resource = dict(PROXMOX_VM_RESOURCE)
+    resource["uid"] = "a234567a234567a23456"
     vm_config = {**PROXMOX_VM_CONFIG, "tags": "critical;prod"}
     context = sync_vm._VMPreparationContext(
         nb=object(),
@@ -694,7 +699,13 @@ def test_prepare_vm_from_config_builds_prepared_state_from_fetched_config(monkey
     )
 
     prepared = asyncio.run(
-        sync_vm._prepare_vm_from_config("cluster-a", resource, vm_config, context)
+        sync_vm._prepare_vm_from_config(
+            "cluster-a",
+            resource,
+            vm_config,
+            context,
+            cluster_source=SimpleNamespace(cluster_uid="cluster-uid-a"),
+        )
     )
 
     _assert_prepared_vm_state(

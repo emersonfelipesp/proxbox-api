@@ -648,6 +648,7 @@ async def _reconcile_cluster_dependencies(
             tenant_id=_relation_id_or_none(getattr(tenant, "id", None)),
             overwrite_flags=overwrite_flags,
             endpoint_source=status,
+            cluster_uid=getattr(status, "cluster_uid", None),
         )
         endpoint_id = _relation_id_or_none(getattr(status, "db_endpoint_id", None))
         clusters[(endpoint_id, name)] = cluster
@@ -1633,6 +1634,7 @@ async def _ensure_cluster(
     tenant_id: int | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
     endpoint_source: object | None = None,
+    cluster_uid: str | None = None,
 ) -> NetBoxRecord:
     # Establish endpoint ownership before inspecting or modifying native metadata.
     claim = await claim_endpoint_cluster(
@@ -1643,6 +1645,7 @@ async def _ensure_cluster(
         cluster_type_id=cluster_type_id,
         site_id=site_id,
         tenant_id=tenant_id,
+        cluster_uid=cluster_uid,
     )
     existing_cluster = claim.record
     if getattr(claim, "read_only", False) is True:

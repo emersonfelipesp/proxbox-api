@@ -19,6 +19,7 @@ from proxbox_api.logger import logger
 from proxbox_api.netbox_rest import rest_first_async, rest_patch_async
 from proxbox_api.runtime_settings import get_bool
 from proxbox_api.schemas.stream_messages import ErrorCategory, ItemOperation
+from proxbox_api.services.sync.guest_uid import extract_guest_uid, normalize_guest_uid
 from proxbox_api.services.sync.sync_state_reader import (
     SidecarVMOrphanScan,
     resolve_vm_sidecar_by_parent_id,
@@ -41,8 +42,8 @@ SKIP_REASON_ALREADY_SWEPT = "already_swept"
 ITEM_SKIP_STILL_PRESENT = "still_present_in_proxmox"
 ITEM_SKIP_IDENTITY_INCOMPLETE = "identity_incomplete"
 
-# (casefolded cluster name, Proxmox vmid, vm type "qemu"/"lxc")
-LiveVmKey = tuple[str, int, str]
+# Legacy keys have three fields. UID-bearing guests append the stable guest UID.
+LiveVmKey = tuple[str, int, str] | tuple[str, int, str, str]
 
 _RecordT = TypeVar("_RecordT")
 
@@ -100,13 +101,21 @@ def _tag_slugs(record: dict[str, object]) -> list[str]:
     return sorted(dict.fromkeys(slugs))
 
 
-def _live_key(cluster: object, vmid: object, vm_type: object) -> LiveVmKey | None:
+def _live_key(
+    cluster: object,
+    vmid: object,
+    vm_type: object,
+    vm_uid: object = None,
+) -> LiveVmKey | None:
     cluster_name = str(cluster or "").strip().casefold()
     vm_id = _coerce_int(vmid)
     kind = str(vm_type or "").strip().lower()
     if not cluster_name or vm_id is None or kind not in {"qemu", "lxc"}:
         return None
-    return (cluster_name, vm_id, kind)
+    normalized_uid = normalize_guest_uid(vm_uid, context="orphan sidecar")
+    if normalized_uid is None:
+        return (cluster_name, vm_id, kind)
+    return (cluster_name, vm_id, kind, normalized_uid)
 
 
 class LiveInventoryError(ValueError):
@@ -159,7 +168,7 @@ def build_live_vm_keys(cluster_resources: object) -> frozenset[LiveVmKey]:
                 identity = _guest_row_identity(data) if data is not None else None
                 if identity is None:
                     continue
-                key = _live_key(cluster_name, identity[1], identity[0])
+                key = _live_key(cluster_name, identity[1], identity[0], extract_guest_uid(data))
                 if key is None:
                     raise LiveInventoryError("guest resource row cannot be identified")
                 keys.add(key)
@@ -177,10 +186,18 @@ def _live_presence_skip_reason(
         candidate.get("_proxmox_cluster_name"),
         candidate.get("_proxmox_vm_id"),
         candidate.get("_proxmox_vm_type"),
+        candidate.get("_proxmox_vm_uid"),
     )
     if key is None:
         return ITEM_SKIP_IDENTITY_INCOMPLETE
-    return ITEM_SKIP_STILL_PRESENT if key in live_vm_keys else None
+    if len(key) == 4:
+        return ITEM_SKIP_STILL_PRESENT if key in live_vm_keys else None
+    legacy_key = key[:3]
+    return (
+        ITEM_SKIP_STILL_PRESENT
+        if any(live_key[:3] == legacy_key for live_key in live_vm_keys)
+        else None
+    )
 
 
 def extract_touched_vm_ids(value: object) -> set[int]:

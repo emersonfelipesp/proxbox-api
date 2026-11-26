@@ -89,10 +89,10 @@ Provenance sidecars detect corruption; they do not authenticate an artifact,
 because another process running as the same operating-system user can forge the
 artifact and its digest. Production therefore keeps runtime code generation off.
 
-- **`netbox-proxbox` 0.0.29.post6 (paired release)** — the NetBox plugin that
+- **`netbox-proxbox` 0.0.33 (paired release)** — the NetBox plugin that
   consumes this backend. Source:
   <https://github.com/emersonfelipesp/netbox-proxbox>. The current release
-  pairing is `netbox-proxbox 0.0.29.post6 ... proxbox-api 0.0.27.post4 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
+  pairing is `netbox-proxbox 0.0.33 ... proxbox-api 0.0.33rc1 ... proxmox-sdk 0.0.16.post1 ... netbox-sdk 0.0.13`.
   `proxbox-api 0.0.19` ships Proxmox SDN sync collectors, NetBox L2VPN,
   RouteTarget, Prefix reconcile, plugin inventory reconciliation, and
   VM-interface reconcile idempotency hardening. Operational-verb routes (start/stop/snapshot/migrate)
@@ -101,6 +101,13 @@ artifact and its digest. Production therefore keeps runtime code generation off.
   Firecracker Cloud uses the plugin for host pools, host-agent inventory, image
   templates, and `FirecrackerMicroVM` rows while this backend calls the selected
   host-agent through `/cloud/firecracker/*`.
+  `tests/test_plugin_rest_contract.py` also checks every statically resolvable
+  backend call under `/api/plugins/proxbox/` against a fixture generated from a
+  real NetBox OpenAPI schema. Regenerate
+  `tests/fixtures/netbox_proxbox_<version>_contract.json` with
+  `scripts/generate_plugin_contract_fixture.py` and update the pinned metadata
+  whenever the paired plugin release changes; never hand-maintain its filter
+  names from plugin source.
 - **Workspace note**:
   `personal-context/claude-reference/proxbox-api.md` (deep-dive index of this
   repo) and `personal-context/claude-reference/netbox-proxbox.md` (deep-dive
@@ -177,7 +184,7 @@ Open the nearest scoped guide for the code you are changing.
 
 - `proxbox_api/`: FastAPI package, session factories, schemas, routes, sync services, code generation, and shared utilities.
 - `proxbox-reconcile-rs/`: optional PyO3/maturin Rust package for VM operation-queue reconciliation parity testing and opt-in execution.
-- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.15` in `pyproject.toml`), not a local subdirectory.
+- `proxmox-mock/`: Standalone `proxmox-mock-api` dev-dependency package (editable install from `pyproject.toml` `[tool.uv.sources]`). Used in tests as the mock Proxmox server. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.16.post1` in `pyproject.toml`), not a local subdirectory.
 - `nextjs-ui/`: Next.js frontend used to manage one NetBox endpoint and multiple Proxmox endpoints.
 - `tests/`: Unit, integration, and end-to-end tests for the backend package.
 - `benchmarks/`: local benchmark helpers, including VM reconciliation queue datasets and timers.
@@ -266,7 +273,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 - **Datacenter** (`routes/proxmox/datacenter.py`, `/proxmox/datacenter/*`): custom CPU models CRUD + datacenter options (PVE 9.2+).
 - **Access** (`routes/proxmox/access.py`, `/proxmox/access/*`): token info GET and token regeneration PUT (PVE 9.2+).
 - **Service monitoring** (`routes/proxmox/services.py`, `/proxmox/services/*`): `GET /proxmox/services/systemd` reads systemd unit status (`Id`, `LoadState`, `ActiveState`, `SubState`, `Result`, `MainPID`, `ExecMainCode`, `ExecMainStatus`, `NRestarts`, `ActiveEnterTimestamp`, `UnitFileState`) for a Proxmox endpoint over SSH, using the endpoint's own registered SSH credential (agentless — no Proxmox-side agent required). Gated on: NetBox `ProxmoxEndpoint` enabled, `service_monitoring_enabled`, `allow_writes`, `access_methods=api_ssh`, complete SSH credentials, and netbox-rpc not disabled for the endpoint. Bounded 10s SSH command timeout; unit names are validated (`^[A-Za-z0-9_][A-Za-z0-9_.@:-]*$`, no `..`, ≤100 chars, ≤32 units/request) and `shlex.quote`'d as defense in depth before the fixed-argv `systemctl show` command runs. `reachable=False` (SSH unreachable) is returned as HTTP 200 — a legitimate monitoring result — while unknown endpoint id / missing or disabled SSH credential / malformed unit request surface as 4xx. Called by the RPC executor's `@rpc_handler("os.linux_proxmox.show_systemctl_services")` via the matching netbox-rpc procedure, not meant to be called directly by end users. See `routes/proxmox/CLAUDE.md`.
-- **Metrics queries** (`routes/proxmox/metrics.py`, `/proxmox/metrics/*`): authenticated bounded routes provide structured InfluxDB v2 queries and direct Proxmox pulls. The Influx route constructs escaped Flux server-side, accepts no arbitrary Flux, and bounds both upstream and normalized output bytes. The pull route resolves one configured endpoint and calls only `cluster/metrics/export`, with no caller-supplied path. Both enforce response and row bounds and map failures to secret-safe reasons. Pull response bytes are bounded during the authenticated upstream stream, boolean parameters use Proxmox-compatible encodings, and redirects are rejected; `services/proxmox_bounded.py` calls the SDK's public `get_bounded()` (proxmox-sdk >= 0.0.15), encodes booleans as `0`/`1` because the SDK forwards query values verbatim, and maps `ResponseTooLargeError`/`UnsupportedResponseEncodingError` to backend-typed errors. See `routes/proxmox/CLAUDE.md`.
+- **Metrics queries** (`routes/proxmox/metrics.py`, `/proxmox/metrics/*`): authenticated bounded routes provide structured InfluxDB v2 queries and direct Proxmox pulls. The Influx route constructs escaped Flux server-side, accepts no arbitrary Flux, and bounds both upstream and normalized output bytes. The pull route resolves one configured endpoint and calls only `cluster/metrics/export`, with no caller-supplied path. Both enforce response and row bounds and map failures to secret-safe reasons. Pull response bytes are bounded during the authenticated upstream stream, boolean parameters use Proxmox-compatible encodings, and redirects are rejected; `services/proxmox_bounded.py` calls the SDK's public `get_bounded()` (proxmox-sdk >= 0.0.16.post1), encodes booleans as `0`/`1` because the SDK forwards query values verbatim, and maps `ResponseTooLargeError`/`UnsupportedResponseEncodingError` to backend-typed errors. See `routes/proxmox/CLAUDE.md`.
 - **Cloud** (`routes/cloud/`, `/cloud/*`): live QEMU Cloud-Init template discovery (`GET /cloud/vm/templates`), image factory, PVE templates, catalog, provision (REST + SSE stream), Firecracker provision (REST + SSE stream), versions, the **Cloud Image Build Pipeline** (`POST /cloud/templates/images`): bakes a Proxmox VM template from a base image and either a verbatim `user_data_yaml` `#cloud-config` written as a `cicustom user=` snippet or a mutually exclusive caller-supplied `first_boot_script` written as a non-secret `cicustom vendor=` snippet. The caller vendor path accepts only `release_image` and `debian_cloud_image`; the keyed recipe digest binds its exact content. The **Azure VHD Import Pipeline** (`POST /cloud/azure/vhd-imports`) preflights the destination node/storage/bridge/VMID, downloads an Azure-exported VHD, validates and converts it to QCOW2, creates the VM shell, imports the disk, and attaches the imported volid parsed from `qm importdisk` output with Linux or Windows-safe defaults. PVE catalog builds must use `provider="proxmox_iso"` with official Proxmox VE installer ISO media and must reject `debian_cloud_image`; generated PVE setup uses graphical VGA for noVNC, while `serial0` + `vga serial0` is reserved for intentional serial appliance products such as pfSense and OPNsense. QEMU provisioning accepts optional `sockets`, `bridge`, `vlan_tag`, `disk_gb`, and `enable_agent` (default `True`) overrides plus a `cloud_init.password` (written as Proxmox `cipassword` for username+password SSH) and applies them through the Proxmox API during clone configuration. `enable_agent` forces `agent=enabled=1` on the clone regardless of the source template. The Cloud Image Build Pipeline SSH execution path also sets `qm ... --agent enabled=1` before templating so clones inherit Proxmox-side QEMU guest agent support. Execution remains gated by `PROXBOX_ENABLE_CLOUD_IMAGE_EXECUTION=true`; `execute=true` requires `endpoint_id`, `ProxmoxEndpoint.allow_writes=True`, and `ProxmoxEndpoint.access_methods="api_ssh"` before any SSH script can run. SSH identities stay restricted to `PROXBOX_SSH_KEY_DIR`; the runtime image bakes in `openssh-client`. Called by `netbox-packer` (cloud_config installer) and the management route `/cloud/azure-to-proxbox-migration`. See `routes/cloud/CLAUDE.md`.
   Talos is a direct-only product whose nocloud qcow2 is imported unmodified
   with a cloud-init drive. It requires an explicit `image_url`; proxbox-api
@@ -337,7 +344,7 @@ Key route groups mounted in `proxbox_api/app/factory.py`:
 
 ## Dependencies
 
-- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.15` (external PyPI package), `netbox-sdk==0.0.13` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`. The service continues to pass `NETBOX_SCHEMA_VERSION = "4.6"` explicitly because its certified deployment matrix ends at NetBox 4.6.6; the SDK's 4.7 fallback default is therefore not selected.
+- Runtime: `fastapi[standard]`, `proxmox-sdk==0.0.16.post1` (external PyPI package), `netbox-sdk==0.0.13` (external PyPI package), `sqlmodel`, `aiosqlite`, `cryptography`, `bcrypt`, `asyncssh>=2.20.0,<3.0.0`. The service continues to pass `NETBOX_SCHEMA_VERSION = "4.6"` explicitly because its certified deployment matrix ends at NetBox 4.6.6; the SDK's 4.7 fallback default is therefore not selected.
 - Tests: `pytest`, `httpx`, `playwright`, `pytest-cov`, `pytest-asyncio`, `pytest-xdist`
 - Docs: `mkdocs`, `mkdocs-material`, `mkdocs-static-i18n`
 
@@ -564,6 +571,36 @@ def build_vm_payload(...) -> VMPayloadDict:
 ```
 
 See `proxbox_api/types/CLAUDE.md` for complete typing guidelines.
+
+## Proxmox VE 9.3 Guest Identity
+
+VM reconciliation uses the Proxmox VE 9.3 `(cluster-id, uid)` pair before the
+legacy endpoint, VMID, type, and NetBox-cluster chain when both values are
+available. Guest UIDs must match `[a-z2-7]{20}`; malformed values are treated as
+absent. Extraction must remain compatible with `proxmox-sdk==0.0.16.post1` Pydantic
+extras and later typed attributes or `cluster_id` aliases.
+
+An exact stable-UID match remains subject to the existing NetBox cross-cluster
+guard and never silently moves a VM to another NetBox cluster. On the legacy
+chain, reject a candidate as VMID reuse only when stored and live cluster UIDs
+are equal and their non-empty guest UIDs differ. Missing UIDs preserve the
+legacy behavior. A changed cluster UID, including a standalone node joining a
+cluster, also preserves the legacy match and overwrites the stored cluster UID
+after reconciliation. The supported cluster UID is persisted independently
+when the live guest UID is absent. A previously stored guest UID is retained
+across that cluster transition because Proxmox preserves it during migration;
+it does not participate in exact UID-first matching until both live UID values
+are available again.
+
+Never trust server-side UID filtering alone: older NetBox plugins ignore
+unknown filters and may return an unfiltered list. Verify both UID values on
+every returned sidecar. Send UID fields only after the plugin serializer proves
+support through DRF `OPTIONS` metadata or a non-empty response containing the
+`proxmox_vm_uid` key. An empty response is unknown and never downgrades positive
+evidence cached for that NetBox endpoint and sync run. A verified UID uniqueness
+conflict must warn and retry the affected sidecar write without UID fields,
+rather than rebinding another VM or failing the full VM run. Orphan live keys
+include the guest UID when present; rows without a UID keep the legacy key.
 
 ## Rust-Python FFI Reference
 
@@ -948,7 +985,7 @@ by installing a replacement package that bundles the updated schema.
 
 ## Certified Stack Pairing
 
-Current release pairing: `netbox-proxbox 0.0.29.post6 ... proxbox-api 0.0.27.post4 ... proxmox-sdk 0.0.15 ... netbox-sdk 0.0.13`.
+Current release pairing: `netbox-proxbox 0.0.33 ... proxbox-api 0.0.33rc1 ... proxmox-sdk 0.0.16.post1 ... netbox-sdk 0.0.13`.
 
 Proxmox node Device names use the effective endpoint/global
 `node_device_name_template`. Keep the Proxmox short node name in API paths and
@@ -1063,7 +1100,7 @@ Benchmark fixtures must retain `sync_state_fields` so endpoint-first identity is
 actually exercised. Treat synthetic timings as planner evidence only; cache,
 executor, and concurrency changes require complete staging measurements.
 
-If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.15`); there is no local `proxmox-sdk/` subdirectory in this repo.
+If you edit `proxmox-mock/` (the local `proxmox-mock-api` dev package), run its own tests inside that directory. Note: `proxmox-sdk` is an **external pinned package** (`proxmox-sdk==0.0.16.post1`); there is no local `proxmox-sdk/` subdirectory in this repo.
 
 SDN support lives in `proxbox_api/routes/proxmox/sdn.py` and
 `proxbox_api/services/sync/sdn.py`. Keep it read-only against Proxmox: the

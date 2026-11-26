@@ -115,6 +115,248 @@ async def test_vm_sidecar_create_uses_live_payload_when_parent_has_no_custom_fie
 
 
 @pytest.mark.asyncio
+async def test_old_plugin_sidecar_write_omits_uid_fields(
+    recorder: _Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _old_plugin_list(*_args, **_kwargs):
+        return [{"id": 1, "virtual_machine": {"id": 999}, "proxmox_vm_id": 999}]
+
+    monkeypatch.setattr(writer, "rest_list_async", _old_plugin_list)
+
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=123,
+        custom_fields={
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+            "proxmox_cluster_uid": "cluster-uid-a",
+            "proxmox_vm_uid": "a234567a234567a23456",
+        },
+        overwrite_custom_fields=True,
+    )
+
+    post_payload = next(call["payload"] for call in recorder.calls if call["method"] == "POST")
+    assert "proxmox_cluster_uid" not in post_payload
+    assert "proxmox_vm_uid" not in post_payload
+
+
+@pytest.mark.asyncio
+async def test_empty_sidecar_table_discovers_uid_fields_from_options(
+    recorder: _Recorder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _empty(*_args, **_kwargs):
+        return []
+
+    async def _options(*_args, **_kwargs):
+        return {
+            "actions": {
+                "POST": {
+                    "proxmox_cluster_uid": {"type": "string"},
+                    "proxmox_vm_uid": {"type": "string"},
+                }
+            }
+        }
+
+    monkeypatch.setattr(writer, "rest_list_async", _empty)
+    monkeypatch.setattr(writer, "rest_options_async", _options)
+
+    await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=123,
+        custom_fields={
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+            "proxmox_cluster_uid": "cluster-uid-a",
+            "proxmox_vm_uid": "a234567a234567a23456",
+        },
+        overwrite_custom_fields=True,
+    )
+
+    post_payload = next(call["payload"] for call in recorder.calls if call["method"] == "POST")
+    assert post_payload["proxmox_cluster_uid"] == "cluster-uid-a"
+    assert post_payload["proxmox_vm_uid"] == "a234567a234567a23456"
+
+
+@pytest.mark.asyncio
+async def test_uid_uniqueness_conflict_retries_sidecar_write_without_uid_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads: list[dict[str, object]] = []
+
+    async def _supported(_nb: object) -> bool:
+        return True
+
+    async def _upsert(*_args, payload: dict[str, object], **_kwargs):
+        payloads.append(dict(payload))
+        if len(payloads) == 1:
+            raise writer.VMUIDIdentityConflict("duplicate UID")
+        return {"id": 2, **payload}
+
+    monkeypatch.setattr(writer, "_vm_uid_fields_supported", _supported)
+    monkeypatch.setattr(writer, "_upsert_parent_sidecar", _upsert)
+
+    result = await writer.write_virtual_machine_sync_state(
+        object(),
+        virtual_machine_id=123,
+        custom_fields={
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+            "proxmox_cluster_uid": "cluster-uid-a",
+            "proxmox_vm_uid": "a234567a234567a23456",
+        },
+        overwrite_custom_fields=True,
+    )
+
+    assert result is not None
+    assert payloads[0]["proxmox_vm_uid"] == "a234567a234567a23456"
+    assert "proxmox_vm_uid" not in payloads[1]
+    assert "proxmox_cluster_uid" not in payloads[1]
+
+
+@pytest.mark.asyncio
+async def test_uid_conflict_refetch_verifies_unfiltered_rows_client_side(monkeypatch) -> None:
+    rows = [
+        {
+            "proxmox_cluster_uid": "other-cluster",
+            "proxmox_vm_uid": "b234567b234567b23456",
+        }
+    ]
+
+    async def _unfiltered(*_args, **_kwargs):
+        return rows
+
+    monkeypatch.setattr(writer, "rest_list_paginated_async", _unfiltered)
+    payload = {
+        "proxmox_cluster_uid": "cluster-uid-a",
+        "proxmox_vm_uid": "a234567a234567a23456",
+    }
+
+    assert await writer._uid_conflict_exists(object(), payload, parent_id=123) is False
+    rows.append({"virtual_machine": {"id": 999}, **payload})
+    assert await writer._uid_conflict_exists(object(), payload, parent_id=123) is True
+
+
+def test_cluster_uid_persists_independently_across_standalone_join_transition() -> None:
+    standalone = writer.vm_sidecar_payload_from_custom_fields(
+        {"proxmox_vm_uid": "a234567a234567a23456"},
+        include_uid_fields=True,
+    )
+    joined_without_guest_uid = writer.vm_sidecar_payload_from_custom_fields(
+        {"proxmox_cluster_uid": "cluster-uid-a"},
+        include_uid_fields=True,
+    )
+    later_uid_bearing = writer.vm_sidecar_payload_from_custom_fields(
+        {
+            "proxmox_cluster_uid": "cluster-uid-a",
+            "proxmox_vm_uid": "a234567a234567a23456",
+        },
+        include_uid_fields=True,
+    )
+
+    assert "proxmox_vm_uid" not in standalone
+    assert joined_without_guest_uid == {"proxmox_cluster_uid": "cluster-uid-a"}
+    assert later_uid_bearing == {
+        "proxmox_cluster_uid": "cluster-uid-a",
+        "proxmox_vm_uid": "a234567a234567a23456",
+    }
+
+
+@pytest.mark.parametrize("conflict_status", [400, 409])
+@pytest.mark.asyncio
+async def test_vm_sidecar_patch_uid_conflict_retries_without_uid_fields(
+    conflict_status: int,
+) -> None:
+    patch_payloads: list[dict[str, object]] = []
+
+    class _Api:
+        def __init__(self) -> None:
+            self.client = self
+
+        async def request_bounded(self, method: str, _path: str, **_kwargs: object) -> ApiResponse:
+            assert method == "OPTIONS"
+            return ApiResponse(
+                status=200,
+                text=json.dumps(
+                    {
+                        "actions": {
+                            "POST": {
+                                "proxmox_cluster_uid": {"type": "string"},
+                                "proxmox_vm_uid": {"type": "string"},
+                            }
+                        }
+                    }
+                ),
+            )
+
+        async def request(
+            self,
+            method: str,
+            _path: str,
+            **kwargs: object,
+        ) -> ApiResponse:
+            if method == "GET":
+                query = kwargs.get("query")
+                if isinstance(query, dict) and "proxmox_vm_uid" in query:
+                    row = {
+                        "id": 66,
+                        "virtual_machine": {"id": 999},
+                        "proxmox_cluster_uid": "cluster-uid-a",
+                        "proxmox_vm_uid": "a234567a234567a23456",
+                    }
+                else:
+                    row = {
+                        "id": 55,
+                        "virtual_machine": {"id": 123},
+                        "proxmox_cluster_uid": None,
+                        "proxmox_vm_uid": None,
+                    }
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"count": 1, "next": None, "results": [row]}),
+                )
+            if method == "PATCH":
+                payload = dict(kwargs.get("payload") or {})
+                patch_payloads.append(payload)
+                if "proxmox_vm_uid" in payload:
+                    return ApiResponse(
+                        status=conflict_status,
+                        text=json.dumps(
+                            {
+                                "non_field_errors": [
+                                    "The fields proxmox_cluster_uid, proxmox_vm_uid "
+                                    "must make a unique set."
+                                ]
+                            }
+                        ),
+                    )
+                return ApiResponse(
+                    status=200,
+                    text=json.dumps({"id": 55, "virtual_machine": {"id": 123}, **payload}),
+                )
+            raise AssertionError(method)
+
+    netbox_rest._reset_netbox_globals()
+    writer.reset_sidecar_availability_cache()
+    result = await writer.write_virtual_machine_sync_state(
+        _Api(),
+        virtual_machine_id=123,
+        custom_fields={
+            "proxmox_vm_id": 101,
+            "proxmox_vm_type": "qemu",
+            "proxmox_cluster_uid": "cluster-uid-a",
+            "proxmox_vm_uid": "a234567a234567a23456",
+        },
+        overwrite_custom_fields=True,
+    )
+
+    assert result is not None
+    assert patch_payloads[0]["proxmox_vm_uid"] == "a234567a234567a23456"
+    assert patch_payloads[1] == {"proxmox_vm_id": 101, "proxmox_vm_type": "qemu"}
+
+
+@pytest.mark.asyncio
 async def test_vm_sidecar_patches_existing_retrecord_parent_row(recorder: _Recorder) -> None:
     recorder.existing = RestRecord(
         object(),
@@ -1062,6 +1304,7 @@ async def test_create_or_update_vm_accepts_typed_resource_and_writes_live_sideca
                 "maxcpu": 2,
                 "maxmem": 2_147_483_648,
                 "maxdisk": 10_737_418_240,
+                "uid": "a234567a234567a23456",
             }
         ),
         proxmox_config={"onboot": 1, "agent": 1},
@@ -1072,6 +1315,7 @@ async def test_create_or_update_vm_accepts_typed_resource_and_writes_live_sideca
         tag_refs=[{"id": 44}],
         cluster_name="cluster-a",
         endpoint_id=55,
+        cluster_uid="cluster-uid-a",
     )
 
     assert captured["virtual_machine_id"] == 123
@@ -1081,6 +1325,8 @@ async def test_create_or_update_vm_accepts_typed_resource_and_writes_live_sideca
     assert custom_fields["proxmox_node"] == "pve-a"
     assert custom_fields["proxmox_cluster"] == "cluster-a"
     assert custom_fields["proxmox_endpoint_id"] == 55
+    assert custom_fields["proxmox_cluster_uid"] == "cluster-uid-a"
+    assert custom_fields["proxmox_vm_uid"] == "a234567a234567a23456"
 
 
 @pytest.fixture

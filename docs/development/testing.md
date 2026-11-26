@@ -34,6 +34,75 @@ For the current route and docs contract surface:
 pytest tests/test_generated_proxmox_routes.py tests/test_proxmox_codegen_docs.py tests/test_api_routes.py tests/test_stub_routes.py tests/test_admin_logs.py
 ```
 
+## netbox-proxbox REST contract
+
+`tests/test_plugin_rest_contract.py` parses `proxbox_api/` with Python's `ast`
+module and checks plugin route paths and query keys against
+`tests/fixtures/netbox_proxbox_0_0_32_post1_contract.json`. The fixture comes
+from `manage.py spectacular` inside the published netbox-proxbox testing
+appliance, after a real NetBox database migration. It is not derived from the
+plugin's Python source because NetBox base filter sets and lookup suffixes are
+assembled at runtime.
+
+Regenerate the fixture for every paired netbox-proxbox release:
+
+```bash
+docker exec <running-appliance> /bin/sh -c \
+  'cd /opt/netbox/netbox && python manage.py spectacular --format openapi-json --file /var/tmp/netbox-openapi.json --skip-checks'
+docker cp <running-appliance>:/var/tmp/netbox-openapi.json .cache/netbox-openapi.json
+uv run python scripts/generate_plugin_contract_fixture.py \
+  .cache/netbox-openapi.json \
+  tests/fixtures/netbox_proxbox_<version>_contract.json \
+  --plugin-version <version> \
+  --plugin-wheel-sha256 <sha256> \
+  --image <repository:tag> \
+  --image-digest <sha256:digest> \
+  --netbox-version <version> \
+  --generation-command <recorded-command>
+```
+
+The extractor uses an explicit contract table for every supported
+`netbox_rest` helper. The table expands collection and detail operations: for
+example, reconcile helpers require collection GET and POST plus detail PATCH;
+bulk delete requires both collection and detail DELETE because the runtime
+choice depends on the deduplicated batch size; and create requires its
+collection recovery GET only when a lookup is supplied. Unknown helpers fail
+closed.
+The fixture records every served method for each plugin path, so a call must
+match an exact path and every operation the helper can issue.
+There is no prefix fallback: an action or sub-path missing from the fixture
+fails. Capability probes (`rest_probe_async`) are method-agnostic because they
+deliberately GET routes that may be POST-only. Filter and control keys are
+checked against the path's GET parameters.
+
+The OpenAPI evidence for NetBox 4.7.0 includes `limit`, `offset`, `ordering`,
+`brief`, and `fields` where the route supports them. It exposes `omit`, not
+`exclude`. The test therefore grants no blanket pagination or projection-key
+exception: every extracted control key must appear on that exact route in the
+fixture.
+
+The test accounts for every `/api/plugins/proxbox/` string literal under
+`proxbox_api/`, including literals passed through local variables and simple URL
+builders. Executable urllib and E2E cleanup paths emit checked GET and DELETE
+operations. Remaining literal exceptions are split into non-executable
+documentation/model strings and route constants. Every route-constant exception
+is bound to specific emitted `(file, function, route, method)` operations; an
+unconsumed or stale entry fails.
+
+The extractor statically recognizes a maintained set of project-local wrappers.
+It substitutes concrete caller paths and lookup keys, applies declared remaps
+and parent-field derivations, and independently collects literal query keys from
+the real wrapper bodies and their declared forwarding chain, including keys a
+wrapper adds to a local query dictionary by subscript assignment, `update`,
+`setdefault`, or `|=`; a key that cannot be resolved to a string literal fails.
+It does not execute
+Python or prove that a runtime branch is taken. Unresolved paths, helpers, query
+expressions, or dictionary unpacking fail unless an exact dynamic exception is
+present; there are currently no dynamic exceptions. The original route/filter
+floor from commit `127df044` remains, and a generated minimum set of
+`(file, function, route, method, filter)` contracts prevents one call site from
+masking lost coverage at another site.
+
 ## Coverage gate
 
 The required non-E2E core suite measures branch coverage for `proxbox_api` and

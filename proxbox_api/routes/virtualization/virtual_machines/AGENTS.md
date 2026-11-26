@@ -121,7 +121,24 @@ Main synchronization endpoints for virtual machines and related resources.
   the Python planner reuses it. Never populate this field before a mutation that
   can change the desired payload, and never dispatch a result from cancelled
   executor work.
-- **VM lookups are scoped by `(proxmox_endpoint_id, vmid)` first (issue #255).**
+- **VM lookups prefer stable Proxmox guest identity.** Proxmox VE 9.3 guests
+  may provide a validated `[a-z2-7]{20}` `uid`, paired with the live
+  `cluster-id`. An exact `(cluster_uid, vm_uid)` typed-sidecar match is resolved
+  before endpoint and VMID identity and updates the existing row after the
+  usual NetBox cross-cluster guard. It never silently moves a VM between
+  NetBox clusters. A legacy endpoint/VMID candidate is rejected as VMID reuse
+  only when both sides have the same non-empty cluster UID and different
+  non-empty guest UIDs. A changed cluster UID, or a missing UID on either side,
+  preserves legacy matching. Every server-filtered UID response must be
+  verified client-side because an older plugin can ignore unknown filters.
+  Older plugins are detected from non-empty serializer rows or bounded DRF
+  `OPTIONS` metadata and must never receive the new UID fields. Empty rows are
+  unknown and never downgrade positive evidence for the NetBox endpoint and
+  run. The cluster UID is persisted when available even if the guest UID is
+  absent; a stored guest UID survives a cluster transition and is reused only
+  when live UID identity becomes complete again. Name-collision and
+  operator-rename behavior remains separate and unchanged.
+- **Legacy VM lookups are scoped by `(proxmox_endpoint_id, vmid)` (issue #255).**
   Proxmox `vmid` values can repeat across standalone endpoints, even when those
   endpoints have no shared NetBox cluster identity. The VM snapshot index is
   keyed by `(proxmox_endpoint_id, proxmox_vm_id)` via
@@ -425,3 +442,22 @@ Main synchronization endpoints for virtual machines and related resources.
 - Do not reintroduce VM operation diffing in the route. Update
   `proxbox_api/services/sync/reconciliation/` and `tests/reconciliation/`
   instead.
+
+## LXC DHCP runtime address discovery
+
+LXC interfaces now use the read-only Proxmox
+`GET /nodes/{node}/lxc/{vmid}/interfaces` endpoint in full VM network sync,
+interface-only sync, and IP-only sync. Unlike QEMU, containers do not require
+a guest agent. `services/proxmox_helpers.py` validates responses with the pinned
+proxmox-sdk models and adapts both `ip-addresses` and legacy `inet`/`inet6` CIDRs
+to the existing guest-interface shape. Existing MAC/name matching, IP filtering,
+NetBox interface ownership, and core IP reconciliation remain authoritative.
+Unavailable or malformed runtime data logs a secret-free warning and preserves
+static-config fallback; cancellation propagates. No new API parameters, settings,
+database migrations, or netbox-proxbox compatibility-floor changes are required.
+Regression coverage: `tests/test_lxc_runtime_interfaces.py` and the LXC cases in
+`tests/test_qemu_guest_agent_sync.py`.
+
+Containers that cluster resources report as not running are skipped before the
+request (`_lxc_runtime_readable`), so stopped containers cost no request,
+warning, or progress diagnostic; an unknown status still attempts the read.

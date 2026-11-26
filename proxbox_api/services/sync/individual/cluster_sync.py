@@ -14,6 +14,7 @@ from proxbox_api.services.sync.cluster_links import (
     NativeClusterResponse,
     resolve_plugin_endpoint_id,
 )
+from proxbox_api.services.sync.guest_uid import fetch_cluster_uid
 from proxbox_api.services.sync.individual.helpers import resolve_proxmox_session
 from proxbox_api.services.sync.vm_helpers import to_mapping
 
@@ -114,6 +115,7 @@ async def sync_cluster_individual(
             mode=mode,
             tag_refs=tag_refs,
             endpoint_source=px,
+            cluster_uid=await fetch_cluster_uid(px),
         )
 
         netbox_object = (

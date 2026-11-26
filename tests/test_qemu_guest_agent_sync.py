@@ -370,13 +370,17 @@ def test_network_sync_scans_role_snapshots_once_for_multiple_vms(monkeypatch):
     assert len(scan_calls) == 1
 
 
-def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
+@pytest.mark.parametrize("vm_type", ["qemu", "lxc"])
+def test_vm_sync_prefers_guest_agent_ip(monkeypatch, vm_type):
     data = _vm_sync_inputs(
         {
             "agent": 1,
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
         }
     )
+    data["cluster_resources"][0]["lab"][0]["type"] = vm_type
+    if vm_type == "lxc":
+        data["vm_config"] = {"net0": "name=eth0,hwaddr=AA:BB:CC:DD:EE:FF,ip=dhcp"}
     ip_payloads: list[dict] = []
     _install_common_sync_patches(monkeypatch, vm_config=data["vm_config"], ip_payloads=ip_payloads)
 
@@ -395,7 +399,12 @@ def test_vm_sync_prefers_guest_agent_ip(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.fetch_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm."
+        + (
+            "fetch_qemu_guest_agent_network_interfaces"
+            if vm_type == "qemu"
+            else "fetch_lxc_network_interfaces"
+        ),
         _fake_guest_ifaces_with_ip,
     )
 
@@ -786,7 +795,6 @@ def test_vm_sync_can_disable_task_history_for_dedicated_followup_stage(monkeypat
     monkeypatch.setattr(
         "proxbox_api.routes.virtualization.virtual_machines.sync_vm.sync_all_virtual_machine_task_histories",
         _unexpected_task_history,
-        raising=False,
     )
 
     result = asyncio.run(
@@ -1204,13 +1212,138 @@ def test_vm_only_ip_sync_uses_resolved_netbox_vm_id(monkeypatch):
     assert primary_ip_calls[0]["primary_ip_id"] == 77
 
 
-def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch):
+def test_vm_only_ip_sync_raises_bulk_reconcile_error_after_primary_ip_stage(monkeypatch):
+    """A failed bulk IP write is never reported as an empty success.
+
+    Primary-IP assignment and the end event still run, as before the stage was
+    split into helpers, and then the original NetBox error propagates.
+    """
+    data = _vm_sync_inputs(
+        {
+            "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0,ip=10.0.0.20/24",
+        }
+    )
+    primary_ip_calls: list[dict] = []
+
+    def _fake_get_vm_config(*args, **kwargs):
+        return data["vm_config"]
+
+    async def _fake_bulk_reconcile_ips(nb, payloads, **_kwargs):
+        raise RuntimeError("bulk reconcile failed")
+
+    async def _fake_rest_list(*args, **kwargs):
+        # Return mock interface for the VM
+        return [{"id": 66, "name": "net0", "virtual_machine": 55}]
+
+    async def _fake_rest_first(*args, **kwargs):
+        # Return mock IP record for primary IP lookup
+        return {"id": 77, "address": "10.0.0.20/24"}
+
+    async def _fake_set_primary_ip(**kwargs):
+        primary_ip_calls.append(kwargs)
+        return True
+
+    async def _fake_guest_plugin_first(*args, **kwargs):
+        return None
+
+    async def _fake_guest_plugin_create(_nb, path, payload, **_kwargs):
+        if path == "/api/plugins/proxbox/guest-vm-interfaces/":
+            return {"id": 901, **payload}
+        if path == "/api/plugins/proxbox/guest-vm-interface-addresses/":
+            return {"id": 902, **payload}
+        return {"id": 999, **payload}
+
+    async def _fake_guest_plugin_patch(_nb, path, record_id, payload, **_kwargs):
+        return {"id": record_id, **payload}
+
+    async def _fake_resolve_netbox_vm(*args, **kwargs):
+        return {"id": 55, "name": "vm01"}
+
+    async def _fake_load_snapshot(nb):
+        return [
+            {"id": 55, "name": "vm01", "proxmox_vm_id": 101, "cluster": {"id": 11, "name": "lab"}}
+        ]
+
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_vm_config",
+        _fake_get_vm_config,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.resolve_vm_sync_concurrency",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._resolve_netbox_virtual_machine_by_proxmox_id",
+        _fake_resolve_netbox_vm,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm._load_netbox_virtual_machine_snapshot",
+        _fake_load_snapshot,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_list_async",
+        _fake_rest_list,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.netbox_rest.rest_first_async",
+        _fake_rest_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.network.bulk_reconcile_vm_interface_ips",
+        _fake_bulk_reconcile_ips,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.vm_network.set_primary_ip",
+        _fake_set_primary_ip,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.guest_vm_interface.rest_first_async",
+        _fake_guest_plugin_first,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.guest_vm_interface.rest_create_async",
+        _fake_guest_plugin_create,
+    )
+    monkeypatch.setattr(
+        "proxbox_api.services.sync.guest_vm_interface.rest_patch_async",
+        _fake_guest_plugin_patch,
+    )
+
+    sent_events: list[dict] = []
+
+    class _RecordingWebSocket:
+        async def send_json(self, payload):
+            sent_events.append(payload)
+
+    with pytest.raises(RuntimeError, match="bulk reconcile failed"):
+        asyncio.run(
+            create_only_vm_ip_addresses(
+                netbox_session=data["netbox_session"],
+                pxs=data["pxs"],
+                cluster_status=data["cluster_status"],
+                cluster_resources=data["cluster_resources"],
+                tag=data["tag"],
+                websocket=_RecordingWebSocket(),
+                use_websocket=True,
+            )
+        )
+
+    assert len(primary_ip_calls) == 1
+    assert primary_ip_calls[0]["primary_ip_id"] == 77
+    assert sent_events[-1] == {"object": "vm_ip", "end": True}
+
+
+@pytest.mark.parametrize("vm_type", ["qemu", "lxc"])
+def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monkeypatch, vm_type):
     data = _vm_sync_inputs(
         {
             "agent": 1,
             "net0": "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
         }
     )
+    data["cluster_resources"][0]["lab"][0]["type"] = vm_type
+    if vm_type == "lxc":
+        data["vm_config"] = {"net0": "name=eth0,hwaddr=AA:BB:CC:DD:EE:FF,ip=dhcp"}
     primary_ip_calls: list[dict[str, object]] = []
 
     def _fake_get_vm_config(*args, **kwargs):
@@ -1246,7 +1379,7 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         ]
 
     async def _fake_rest_list(*args, **kwargs):
-        return [{"id": 66, "name": "net0", "virtual_machine": 55}]
+        return [{"id": 66, "name": "eth0" if vm_type == "lxc" else "net0", "virtual_machine": 55}]
 
     async def _fake_rest_first(*args, **kwargs):
         query = kwargs.get("query") or {}
@@ -1287,7 +1420,12 @@ def test_vm_only_ip_sync_prefers_ipv4_primary_when_guest_reports_ipv6_first(monk
         _fake_get_vm_config,
     )
     monkeypatch.setattr(
-        "proxbox_api.routes.virtualization.virtual_machines.sync_vm.get_qemu_guest_agent_network_interfaces",
+        "proxbox_api.routes.virtualization.virtual_machines.sync_vm."
+        + (
+            "get_qemu_guest_agent_network_interfaces"
+            if vm_type == "qemu"
+            else "get_lxc_network_interfaces"
+        ),
         _fake_guest_ifaces,
     )
     monkeypatch.setattr(

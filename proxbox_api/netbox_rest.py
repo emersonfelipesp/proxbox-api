@@ -1571,6 +1571,18 @@ async def rest_get_fresh_json(
     return _extract_payload(response)
 
 
+async def rest_options_async(nb: object, path: str) -> object:
+    """Return bounded DRF metadata for one exact NetBox route."""
+    api = _unwrap_api(nb)
+    async with _get_netbox_semaphore():
+        response = await api.client.request_bounded(
+            "OPTIONS",
+            _normalize_path(path),
+            max_response_bytes=_PROBE_MAX_RESPONSE_BYTES,
+        )
+    return _extract_payload(response)
+
+
 async def rest_create_async(
     nb: object,
     path: str,

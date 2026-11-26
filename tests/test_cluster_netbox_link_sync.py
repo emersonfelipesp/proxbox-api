@@ -140,6 +140,54 @@ async def test_claim_targets_resolved_plugin_endpoint_and_returns_native_primary
     ]
 
 
+async def test_cluster_uid_is_written_only_when_plugin_serializer_supports_it(monkeypatch):
+    patches: list[tuple[int, dict[str, object]]] = []
+
+    async def read(_nb, path, *, query):
+        assert path == cluster_links.TRACKING_PATH
+        assert query == {"id": 19, "limit": 2}
+        return [
+            {"id": 999, "proxmox_cluster_uid": "wrong-row"},
+            {"id": 19, "proxmox_cluster_uid": ""},
+        ]
+
+    async def patch(_nb, path, record_id, payload):
+        assert path == cluster_links.TRACKING_PATH
+        patches.append((record_id, payload))
+
+    monkeypatch.setattr(cluster_links, "rest_list_async", read)
+    monkeypatch.setattr(cluster_links, "rest_patch_async", patch)
+
+    await cluster_links._write_cluster_uid_if_supported(
+        object(), proxmox_cluster_id=19, cluster_uid="cluster-uid-a"
+    )
+
+    assert patches == [(19, {"proxmox_cluster_uid": "cluster-uid-a"})]
+
+
+async def test_cluster_uid_is_omitted_for_old_plugin_and_never_erased(monkeypatch):
+    calls: list[str] = []
+
+    async def old_plugin_read(*_args, **_kwargs):
+        calls.append("read")
+        return [{"id": 19, "name": "lab"}]
+
+    async def patch(*_args, **_kwargs):
+        pytest.fail("an old plugin or absent live UID must not be patched")
+
+    monkeypatch.setattr(cluster_links, "rest_list_async", old_plugin_read)
+    monkeypatch.setattr(cluster_links, "rest_patch_async", patch)
+
+    await cluster_links._write_cluster_uid_if_supported(
+        object(), proxmox_cluster_id=19, cluster_uid="cluster-uid-a"
+    )
+    await cluster_links._write_cluster_uid_if_supported(
+        object(), proxmox_cluster_id=19, cluster_uid=None
+    )
+
+    assert calls == ["read"]
+
+
 @pytest.mark.parametrize(
     "body",
     [

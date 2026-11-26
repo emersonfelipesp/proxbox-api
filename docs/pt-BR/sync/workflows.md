@@ -145,6 +145,17 @@ vez de serem limpos, entao uma falha transitoria nao apaga atribuicoes de VLAN.
 As demais interfaces continuam tendo a topologia obsoleta limpa quando o Proxmox
 a remove.
 
+As reconciliacoes de interface de node em `sync_node_network` e
+`ensure_node_bridge_interface` ficam restritas ao device do proprio node. As
+escritas da fase um e da topologia em `sync_node_network`, e a reconciliacao
+de fallback em `ensure_node_bridge_interface`, procuram linhas
+`dcim.Interface` por `device_id` e `name` com `strict_lookup=True`, como o
+caminho legado por interface ja fazia. Nodes Proxmox normalmente tem interfaces com os
+mesmos nomes (`vmbr0`, `eno1`), entao um fallback de reuso apenas por nome
+selecionaria a interface de outro node e tentaria move-la, o que o NetBox recusa
+com `Components cannot be moved to a different device.` Quando a interface de um
+node ainda nao existe, o estagio a cria nesse node.
+
 ## Fluxo de Sync de VM
 
 Endpoint principal:
@@ -653,6 +664,30 @@ Tipos de excecao customizados fornecem contexto detalhado:
 - O comportamento e configuravel por `PROXBOX_NETBOX_MAX_RETRIES` e `PROXBOX_NETBOX_RETRY_DELAY`.
 - Tentativas falhas sao logadas com contexto antes de tentar novamente.
 - A falha final sobe com contexto completo.
+
+### Enderecos em tempo de execucao de LXC
+
+Containers LXC nao tem guest agent do QEMU. Para containers, o sync completo de
+VM, o estagio apenas de interfaces e o estagio apenas de IPs leem os enderecos
+em tempo de execucao pelo endpoint somente leitura do Proxmox
+`GET /nodes/{node}/lxc/{vmid}/interfaces`, entao um container configurado com
+`ip=dhcp` tem seus enderecos concedidos no NetBox. A resposta e validada com o
+modelo fixado do proxmox-sdk; tanto a lista `ip-addresses` quanto os campos
+antigos de CIDR unico `inet`/`inet6` sao aceitos. Os enderecos passam pelo mesmo
+casamento por MAC/nome, filtragem de enderecos (loopback e link-local sao
+descartados), propriedade de interface e reconciliacao de IP que os dados do
+guest agent do QEMU. Como os containers agora fornecem dados de guest, a
+estrategia padrao `guest_os_model` tambem grava linhas `GuestVMInterface` e de
+endereco do netbox-proxbox para containers em execucao, e a estrategia
+depreciada `legacy_rename` pode renomear a VMInterface core de um container para
+o nome da interface dentro do container.
+
+Um container que os recursos do cluster informam como parado e ignorado sem
+requisicao, porque o Proxmox serve esse endpoint apenas para containers em
+execucao. Quando a leitura falha ou retorna dados malformados, o estagio registra
+um aviso sem o texto do erro upstream e volta aos enderecos estaticos da
+configuracao do container. A leitura exige o mesmo privilegio `VM.Audit` da
+configuracao do container.
 
 ### Guests com muitas interfaces
 

@@ -33,6 +33,7 @@ from proxbox_api.services.sync.devices import (
 from proxbox_api.services.sync.devices import (
     _ensure_device_role as _ensure_proxmox_node_role,
 )
+from proxbox_api.services.sync.guest_uid import extract_guest_uid
 from proxbox_api.services.sync.orphan_sweep import (
     clear_soft_delete_marker,
     reappeared_vm_status,
@@ -120,6 +121,7 @@ async def ensure_vm_dependencies(
             tenant_id=getattr(tenant, "id", None),
             overwrite_flags=overwrite_flags,
             endpoint_source=cluster_state,
+            cluster_uid=getattr(cluster_state, "cluster_uid", None),
         )
         site_id = _effective_cluster_site_id(
             cluster,
@@ -346,6 +348,7 @@ async def create_or_update_virtual_machine(
     tenant_id: int | None = None,
     overwrite_flags: SyncOverwriteFlags | None = None,
     endpoint_id: int | None = None,
+    cluster_uid: str | None = None,
 ) -> dict:
     """Create or update a virtual machine in NetBox.
 
@@ -392,6 +395,7 @@ async def create_or_update_virtual_machine(
     supports_vm_type = supports_virtual_machine_type(netbox_version)
     resolved_virtual_machine_type_id = virtual_machine_type_id if supports_vm_type else None
     endpoint_lookup_id = normalize_positive_int(endpoint_id)
+    vm_uid = extract_guest_uid(proxmox_resource)
 
     # Off the event loop: payload validation can resolve the NetBox schema
     # contract, which may download the NetBox OpenAPI document or wait for
@@ -416,6 +420,8 @@ async def create_or_update_virtual_machine(
         endpoint_id=endpoint_lookup_id,
         cluster_id=cluster_id,
         fail_on_ambiguous=True,
+        cluster_uid=cluster_uid,
+        vm_uid=vm_uid,
     )
 
     existing_record = (
@@ -474,6 +480,8 @@ async def create_or_update_virtual_machine(
             last_updated=now,
             cluster_name=cluster_name,
             endpoint_id=endpoint_id,
+            cluster_uid=cluster_uid,
+            vm_uid=vm_uid,
         )
         await persist_sync_state_with_role_compensation(
             netbox_session,

@@ -61,6 +61,12 @@ Synchronization services responsible for NetBox object creation from Proxmox dat
   one worker can verify and proceed before another worker overwrites its claim.
 - `guest_vm_interface.py`: best-effort netbox-proxbox plugin reconciliation for
   guest OS VM interfaces and guest-interface-to-core-IP links.
+- `guest_uid.py`: tolerant extraction and validation for Proxmox VE 9.3 guest
+  `uid` and cluster `cluster-id` values, stable UID identity comparison, and
+  per-NetBox-endpoint/run plugin feature detection. Empty serializer results are
+  unknown and cannot erase positive evidence; an empty sidecar table is probed
+  through bounded DRF `OPTIONS` metadata. It accepts current SDK Pydantic extras
+  and future typed attributes or aliases without changing the `proxmox-sdk` pin.
 - `devices.py`: device synchronization from Proxmox nodes to NetBox.
   Its list-compatible `DeviceSyncResultList` preserves the combined missing
   reconciliation-record and invalid-name failure count for orchestrators while
@@ -514,6 +520,7 @@ sweep itself and the VM stage must not filter them, so re-adoption still works.
 - **Stale-id self-heal.** The sidecar endpoint id is a database id (or a plugin
   primary key with `source=netbox`); those id spaces are independent and are
   reassigned when the proxbox-api database is recreated. When the
+  stable `(cluster_uid, vm_uid)` resolution is unavailable and the
   `(endpoint, cluster, vmid)` sidecar lookup finds nothing,
   `sync_vm._resolve_vm_sidecar_identity` (only when that lookup proved the VM
   absent, never when it was ambiguous or unverifiable) calls
@@ -525,7 +532,8 @@ sweep itself and the VM stage must not filter them, so re-adoption still works.
   by `_ConfiguredEndpointIds`; a load failure means no adoption), and the live
   Proxmox name equals (casefolded) the NetBox VM name or the sidecar's
   `proxmox_vm_name`. The name match is a best-effort heuristic against a
-  replacement VM reusing the VMID; a VM recreated under the same name is an
+  replacement VM reusing the VMID on legacy rows; a VM recreated under the
+  same name is an
   accepted residual risk. It then
   rewrites the sidecar with `sync_state_writer.write_vm_endpoint_raw_id`; an
   unpersisted rewrite means no adoption. Anything ambiguous keeps the previous

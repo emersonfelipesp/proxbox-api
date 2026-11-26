@@ -145,6 +145,7 @@ async def ensure_node_bridge_interface(  # noqa: C901
                 schema=NetBoxInterfaceSyncState,
                 current_normalizer=_normalize_node_interface_record,
                 patchable_fields=fallback_patchable,
+                strict_lookup=True,
             )
             record = _record_dict(record)
         return record or {}

@@ -10,7 +10,19 @@ from proxbox_api.netbox_rest import (
     clear_rest_get_cache_for_path,
     rest_create_async,
     rest_first_async,
+    rest_list_async,
+    rest_list_paginated_async,
+    rest_options_async,
     rest_patch_async,
+)
+from proxbox_api.services.sync.guest_uid import (
+    cache_vm_uid_feature_support,
+    cached_vm_uid_feature_support,
+    normalize_cluster_uid,
+    note_vm_uid_feature_support,
+    record_uid_identity,
+    reset_vm_uid_feature_cache,
+    uid_identity_key,
 )
 
 VM_SYNC_STATE_PATH = "/api/plugins/proxbox/sync-state/virtual-machines/"
@@ -42,6 +54,10 @@ class DeviceSyncStateOwnershipConflict(RuntimeError):
             f"device_id={device_id!r}: endpoint {actual_endpoint_id!r} owns the row, "
             f"not endpoint {expected_endpoint_id!r}"
         )
+
+
+class VMUIDIdentityConflict(RuntimeError):
+    """A sidecar UID uniqueness conflict belongs to another VM parent."""
 
 
 def _int_record_id(value: object) -> int | None:
@@ -213,6 +229,7 @@ def _is_endpoint_ownership_conflict(error: Exception) -> bool:
 def reset_sidecar_availability_cache() -> None:
     """Clear the current sync-run memo of unavailable optional sidecar routes."""
     _UNAVAILABLE_SIDECAR_PATHS.clear()
+    reset_vm_uid_feature_cache()
     try:
         from proxbox_api.services.sync.sync_state_reader import (
             reset_sidecar_reader_availability_cache,
@@ -294,6 +311,101 @@ def _is_sidecar_duplicate_conflict(error: Exception) -> bool:
     )
 
 
+async def _vm_uid_fields_supported(nb: object) -> bool:
+    cached = cached_vm_uid_feature_support(nb)
+    if cached is not None:
+        return cached
+    try:
+        rows = await rest_list_async(nb, VM_SYNC_STATE_PATH, query={"limit": 1})
+    except Exception as error:  # noqa: BLE001 - optional compatibility probe
+        if _is_sidecar_unavailable(error):
+            _UNAVAILABLE_SIDECAR_PATHS.add(VM_SYNC_STATE_PATH)
+        return False
+    note_vm_uid_feature_support(nb, rows)
+    cached = cached_vm_uid_feature_support(nb)
+    if cached is not None:
+        return cached
+    try:
+        options = await rest_options_async(nb, VM_SYNC_STATE_PATH)
+    except Exception as error:  # noqa: BLE001 - optional compatibility probe
+        if _is_sidecar_unavailable(error):
+            _UNAVAILABLE_SIDECAR_PATHS.add(VM_SYNC_STATE_PATH)
+        return False
+    actions = options.get("actions") if isinstance(options, Mapping) else None
+    post_fields = actions.get("POST") if isinstance(actions, Mapping) else None
+    supported = isinstance(post_fields, Mapping) and {
+        "proxmox_cluster_uid",
+        "proxmox_vm_uid",
+    }.issubset(post_fields)
+    return cache_vm_uid_feature_support(nb, supported=supported)
+
+
+async def _uid_conflict_exists(
+    nb: object,
+    payload: Mapping[str, object],
+    *,
+    parent_id: int,
+) -> bool:
+    expected = uid_identity_key(
+        payload.get("proxmox_cluster_uid"),
+        payload.get("proxmox_vm_uid"),
+    )
+    if expected is None:
+        return False
+    rows = await rest_list_paginated_async(
+        nb,
+        VM_SYNC_STATE_PATH,
+        base_query={
+            "proxmox_cluster_uid": expected[0],
+            "proxmox_vm_uid": expected[1],
+        },
+        page_size=200,
+    )
+    return any(
+        record_uid_identity(row) == expected
+        and _record_id(row.get("virtual_machine")) not in {None, parent_id}
+        for value in rows
+        if (row := _record_to_dict(value)) is not None
+    )
+
+
+def _is_uid_uniqueness_response(error: Exception) -> bool:
+    return getattr(error, "http_status_code", None) in {400, 409}
+
+
+async def _raise_verified_uid_conflict(
+    nb: object,
+    *,
+    path: str,
+    parent_id: int,
+    payload: Mapping[str, object],
+    error: Exception,
+) -> None:
+    if (
+        path != VM_SYNC_STATE_PATH
+        or not _is_uid_uniqueness_response(error)
+        or uid_identity_key(
+            payload.get("proxmox_cluster_uid"),
+            payload.get("proxmox_vm_uid"),
+        )
+        is None
+    ):
+        return
+    try:
+        conflict_exists = await _uid_conflict_exists(nb, payload, parent_id=parent_id)
+    except Exception as verification_error:  # noqa: BLE001 - preserve original write failure
+        logger.warning(
+            "Could not verify VM UID sidecar conflict for virtual_machine_id=%s: %s",
+            parent_id,
+            getattr(verification_error, "detail", str(verification_error)),
+        )
+        return
+    if conflict_exists:
+        raise VMUIDIdentityConflict(
+            "Proxmox guest UID is already attached to another VM sidecar"
+        ) from error
+
+
 async def _lookup_parent_sidecar(
     nb: object,
     *,
@@ -326,7 +438,18 @@ async def _patch_parent_sidecar(
             parent_id,
         )
         return None
-    return _record_to_dict(await rest_patch_async(nb, path, existing_id, payload))
+    try:
+        patched = await rest_patch_async(nb, path, existing_id, payload)
+    except Exception as error:
+        await _raise_verified_uid_conflict(
+            nb,
+            path=path,
+            parent_id=parent_id,
+            payload=payload,
+            error=error,
+        )
+        raise
+    return _record_to_dict(patched)
 
 
 def _normalize_parent_id(*, path: str, parent_id: object, required: bool) -> int | None:
@@ -340,6 +463,8 @@ def _handle_sidecar_write_failure(*, path: str, error: Exception, required: bool
     if isinstance(error, DeviceSyncStateOwnershipConflict):
         raise error
     if _is_endpoint_ownership_conflict(error):
+        raise error
+    if isinstance(error, VMUIDIdentityConflict):
         raise error
     if _is_sidecar_unavailable(error):
         _UNAVAILABLE_SIDECAR_PATHS.add(path)
@@ -361,6 +486,57 @@ def _handle_sidecar_write_failure(*, path: str, error: Exception, required: bool
         )
     if required:
         raise error
+
+
+async def _create_or_refetch_parent_sidecar(
+    nb: object,
+    *,
+    path: str,
+    parent_field: str,
+    parent_id: int,
+    payload: dict[str, object],
+    existing_validator: Callable[[object], None],
+) -> dict[str, object] | None:
+    try:
+        created = await rest_create_async(
+            nb,
+            path,
+            {parent_field: {"id": parent_id}, **payload},
+            lookup={f"{parent_field}_id": parent_id},
+        )
+        existing_validator(created)
+        return _record_to_dict(created)
+    except Exception as create_exc:
+        if not _is_sidecar_duplicate_conflict(create_exc):
+            raise
+        try:
+            clear_rest_get_cache_for_path(nb, path)
+        except Exception:  # noqa: BLE001 - cache invalidation must not hide the upsert
+            pass
+        existing = await _lookup_parent_sidecar(
+            nb,
+            path=path,
+            parent_field=parent_field,
+            parent_id=parent_id,
+        )
+        if existing is None:
+            await _raise_verified_uid_conflict(
+                nb,
+                path=path,
+                parent_id=parent_id,
+                payload=payload,
+                error=create_exc,
+            )
+            raise
+        existing_validator(existing)
+        return await _patch_parent_sidecar(
+            nb,
+            path=path,
+            parent_field=parent_field,
+            parent_id=parent_id,
+            existing=existing,
+            payload=payload,
+        )
 
 
 async def _upsert_parent_sidecar(
@@ -403,39 +579,16 @@ async def _upsert_parent_sidecar(
                 payload=payload,
             )
 
-        try:
-            created = await rest_create_async(
-                nb,
-                path,
-                {parent_field: {"id": normalized_parent_id}, **payload},
-                lookup={f"{parent_field}_id": normalized_parent_id},
-            )
-            existing_validator(created)
-            return _record_to_dict(created)
-        except Exception as create_exc:
-            if not _is_sidecar_duplicate_conflict(create_exc):
-                raise
-            try:
-                clear_rest_get_cache_for_path(nb, path)
-            except Exception:  # noqa: BLE001 - cache invalidation must not hide the upsert
-                pass
-            existing = await _lookup_parent_sidecar(
-                nb,
-                path=path,
-                parent_field=parent_field,
-                parent_id=normalized_parent_id,
-            )
-            if existing is None:
-                raise
-            existing_validator(existing)
-            return await _patch_parent_sidecar(
-                nb,
-                path=path,
-                parent_field=parent_field,
-                parent_id=normalized_parent_id,
-                existing=existing,
-                payload=payload,
-            )
+        return await _create_or_refetch_parent_sidecar(
+            nb,
+            path=path,
+            parent_field=parent_field,
+            parent_id=normalized_parent_id,
+            payload=payload,
+            existing_validator=existing_validator,
+        )
+    except VMUIDIdentityConflict:
+        raise
     except Exception as exc:  # noqa: BLE001 - optional sidecar writes remain best-effort
         _handle_sidecar_write_failure(path=path, error=exc, required=required)
         return None
@@ -443,6 +596,8 @@ async def _upsert_parent_sidecar(
 
 def vm_sidecar_payload_from_custom_fields(
     custom_fields: Mapping[str, object],
+    *,
+    include_uid_fields: bool = False,
 ) -> dict[str, object]:
     """Build the VM sidecar payload from the live VM custom-field payload."""
     payload: dict[str, object] = _without_none(
@@ -463,6 +618,13 @@ def vm_sidecar_payload_from_custom_fields(
         payload["proxmox_node_name"] = _text_or_blank(custom_fields.get("proxmox_node"))
     if "proxmox_cluster" in custom_fields:
         payload["proxmox_cluster_name"] = _text_or_blank(custom_fields.get("proxmox_cluster"))
+    if include_uid_fields:
+        cluster_uid = normalize_cluster_uid(custom_fields.get("proxmox_cluster_uid"))
+        if cluster_uid:
+            payload["proxmox_cluster_uid"] = cluster_uid
+        uid_key = uid_identity_key(cluster_uid, custom_fields.get("proxmox_vm_uid"))
+        if uid_key is not None:
+            payload["proxmox_vm_uid"] = uid_key[1]
     raw_role_snapshot_id = custom_fields.get("proxmox_last_synced_role_id")
     role_snapshot_id = (
         None if isinstance(raw_role_snapshot_id, bool) else _record_id(raw_role_snapshot_id)
@@ -521,6 +683,78 @@ def _warn_incomplete_vm_identity(
     )
 
 
+def _without_vm_uid_identity(payload: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"proxmox_cluster_uid", "proxmox_vm_uid"}
+    }
+
+
+async def _upsert_vm_sidecar_with_uid_recovery(
+    nb: object,
+    *,
+    virtual_machine_id: object,
+    payload: dict[str, object],
+    required: bool,
+) -> dict[str, object] | None:
+    try:
+        return await _upsert_parent_sidecar(
+            nb,
+            path=VM_SYNC_STATE_PATH,
+            parent_field="virtual_machine",
+            parent_id=virtual_machine_id,
+            payload=payload,
+            required=required,
+        )
+    except VMUIDIdentityConflict:
+        logger.warning(
+            "VM UID sidecar uniqueness conflict for virtual_machine_id=%s; "
+            "retrying without proxmox_cluster_uid/proxmox_vm_uid",
+            virtual_machine_id,
+        )
+        return await _upsert_parent_sidecar(
+            nb,
+            path=VM_SYNC_STATE_PATH,
+            parent_field="virtual_machine",
+            parent_id=virtual_machine_id,
+            payload=_without_vm_uid_identity(payload),
+            required=required,
+        )
+
+
+async def _write_vm_sidecar_with_retries(
+    nb: object,
+    *,
+    virtual_machine_id: object,
+    payload: dict[str, object],
+    role_snapshot_required: bool,
+) -> dict[str, object] | None:
+    attempts = 3 if role_snapshot_required else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            result = await _upsert_vm_sidecar_with_uid_recovery(
+                nb,
+                virtual_machine_id=virtual_machine_id,
+                payload=payload,
+                required=role_snapshot_required,
+            )
+            if result is not None or not role_snapshot_required:
+                return result
+            raise RuntimeError("Required VM role snapshot write returned no sidecar record")
+        except Exception:
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "Retrying required VM role snapshot write for virtual_machine_id=%s "
+                "after attempt %s/%s failed",
+                virtual_machine_id,
+                attempt,
+                attempts,
+            )
+    raise AssertionError("unreachable VM sync-state retry state")
+
+
 async def write_virtual_machine_sync_state(
     nb: object,
     *,
@@ -550,8 +784,12 @@ async def write_virtual_machine_sync_state(
         overwrite_custom_fields=overwrite_custom_fields,
     )
     should_write_custom_field_state = overwrite_custom_fields and custom_fields is not None
+    supports_uid = await _vm_uid_fields_supported(nb) if should_write_custom_field_state else False
     payload = (
-        vm_sidecar_payload_from_custom_fields(custom_fields)
+        vm_sidecar_payload_from_custom_fields(
+            custom_fields,
+            include_uid_fields=supports_uid,
+        )
         if should_write_custom_field_state
         else {}
     )
@@ -567,32 +805,12 @@ async def write_virtual_machine_sync_state(
         payload["proxmox_last_synced_role_id"] = role_id
     if not payload:
         return None
-    role_snapshot_required = role_id is not None
-    attempts = 3 if role_snapshot_required else 1
-    for attempt in range(1, attempts + 1):
-        try:
-            result = await _upsert_parent_sidecar(
-                nb,
-                path=VM_SYNC_STATE_PATH,
-                parent_field="virtual_machine",
-                parent_id=virtual_machine_id,
-                payload=payload,
-                required=role_snapshot_required,
-            )
-            if result is not None or not role_snapshot_required:
-                return result
-            raise RuntimeError("Required VM role snapshot write returned no sidecar record")
-        except Exception:
-            if attempt >= attempts:
-                raise
-            logger.warning(
-                "Retrying required VM role snapshot write for virtual_machine_id=%s "
-                "after attempt %s/%s failed",
-                virtual_machine_id,
-                attempt,
-                attempts,
-            )
-    raise AssertionError("unreachable VM sync-state retry state")
+    return await _write_vm_sidecar_with_retries(
+        nb,
+        virtual_machine_id=virtual_machine_id,
+        payload=payload,
+        role_snapshot_required=role_id is not None,
+    )
 
 
 async def write_vm_role_snapshot_exact(
