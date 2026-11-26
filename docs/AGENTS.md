@@ -84,9 +84,9 @@ uv run mkdocs build
 ## Content Guidelines
 
 - Keep English (`docs/`) and Portuguese (`docs/pt-BR/`) files in sync when updating content.
-- The planned `0.0.33` release notes cover stable Proxmox VE 9.3 guest UID
+- The `0.0.33` release notes cover stable Proxmox VE 9.3 guest UID
   identity, node-scoped network-interface reconciliation, and LXC runtime DHCP
-  address synchronization. Keep the candidate status,
+  address synchronization. Keep the
   `proxmox-sdk 0.0.16.post1` pin, backend-first `netbox-proxbox 0.0.33` pairing, and both
   language versions aligned; source preparation does not establish package or
   production availability.

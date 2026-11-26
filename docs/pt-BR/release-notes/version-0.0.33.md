@@ -16,7 +16,7 @@ detecção de recursos.
 
 | Componente | Versão ou contrato |
 | --- | --- |
-| proxbox-api | `0.0.33rc1` |
+| proxbox-api | `0.0.33` |
 | Proxmox SDK | `proxmox-sdk 0.0.16.post1` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 e 3.13 |
@@ -64,15 +64,10 @@ Philipp Schwab.
 
 ## Atualização e implantação
 
-Implante o pacote exato `proxbox-api 0.0.33rc1` ou o container candidato pelo workflow de release
+Implante o pacote exato `proxbox-api 0.0.33` ou o container publicado pelo workflow de release
 aprovado. Implante primeiro este backend, depois a versão pareada `netbox-proxbox 0.0.33` e aplique
 a migração `0109`. A implantação do backend primeiro é segura porque os campos de UID são
 detectados como recurso e omitidos para plugins anteriores.
 
 O pin do SDK muda de `proxmox-sdk 0.0.15` para `proxmox-sdk 0.0.16.post1` para suportar o schema do
 Proxmox VE 9.3. Este repositório não tem migração de banco de dados para esta versão.
-
-## Status da versão
-
-`0.0.33rc1` é o release candidate desta versão. A disponibilidade do pacote e em produção segue
-os gates de release.

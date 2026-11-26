@@ -15,7 +15,7 @@ first; older plugin releases continue to work through feature detection.
 
 | Component | Release or contract |
 | --- | --- |
-| proxbox-api | `0.0.33rc1` |
+| proxbox-api | `0.0.33` |
 | Proxmox SDK | `proxmox-sdk 0.0.16.post1` |
 | NetBox SDK | `netbox-sdk 0.0.13` |
 | Python | 3.12 and 3.13 |
@@ -60,15 +60,10 @@ containers now also receive `netbox-proxbox` guest interface rows under the defa
 
 ## Upgrade and deployment
 
-Deploy the exact `proxbox-api 0.0.33rc1` package or candidate container through the approved
+Deploy the exact `proxbox-api 0.0.33` package or published container through the approved
 release workflow. Deploy this backend first, then deploy the paired `netbox-proxbox 0.0.33`
 release and apply its migration `0109`. Backend-first deployment is safe because UID fields are
 feature-detected and omitted for older plugins.
 
 The SDK pin changes from `proxmox-sdk 0.0.15` to `proxmox-sdk 0.0.16.post1` for Proxmox VE 9.3
 schema support. This repository has no database migration for this release.
-
-## Release status
-
-`0.0.33rc1` is the release candidate of this version. Package and production availability follow
-the release gates.

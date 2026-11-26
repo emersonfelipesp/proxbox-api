@@ -8,7 +8,7 @@ from pathlib import Path
 from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PROXBOX_API_VERSION = "0.0.33rc1"
+PROXBOX_API_VERSION = "0.0.33"
 RELEASE_NOTES_VERSION = "0.0.33"
 PROXMOX_SDK_VERSION = "0.0.16.post1"
 NETBOX_SDK_VERSION = "0.0.13"
